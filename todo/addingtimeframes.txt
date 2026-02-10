@@ -1,0 +1,331 @@
+Multi-Timeframe Execution Model
+
+Regime Monitoring on 15m / 1h with 1m / 5m Entry Execution
+
+Purpose
+
+This document proposes and defines a multi-timeframe execution model designed to:
+
+Increase trade frequency without weakening signal quality
+
+Prevent over-filtering and confluence deadlock
+
+Preserve strong regime discipline
+
+Fit cleanly into the existing bot architecture (StrategyManager, MarketRegimeDetector, RiskManager)
+
+The key change is decoupling market context from entry execution.
+
+High-Level Concept
+Layer	Timeframes	Responsibility
+Market Context / Regime	1h (primary), 15m (secondary)	Determine whether strategies are allowed to trade
+Structure & Setup	15m	Confirm local market structure aligns with regime
+Entry & Execution	5m + 1m	Precise trade entries, stops, and execution timing
+
+Critical Principle:
+
+Lower timeframes may trigger trades, but they must never control regime state or strategy enablement.
+
+Why This Change Is Needed
+Current Problem
+
+Trade frequency is low due to:
+
+Regime detection and signal confirmation happening on the same timeframes
+
+Excessive multi-TF confluence requirements
+
+Signals that are valid on lower timeframes are blocked because higher-TF indicators do not align at the same moment
+
+Proposed Solution
+
+Use higher timeframes for permission
+
+Use lower timeframes for opportunity
+
+This is standard professional practice and materially reduces trade starvation.
+
+Timeframe Responsibilities (Strict Separation)
+1 Hour (Primary Regime Timeframe)
+
+Purpose: Market regime authority
+
+Used for:
+
+ADX / volatility regime detection
+
+Trend vs range classification
+
+Strategy enable / disable decisions
+
+Grid activation eligibility
+
+Rules:
+
+Regime state updates on a slow cadence (e.g. every 15–60 min)
+
+Regime changes trigger lifecycle actions (enable, disable, unwind)
+
+1h signals never trigger entries directly
+
+15 Minute (Secondary Context / Structure)
+
+Purpose: Local confirmation and structural sanity
+
+Used for:
+
+Detecting intraday chop vs impulse
+
+Validating mean-reversion structure
+
+Confirming pullback validity in trends
+
+Filtering noisy 1m / 5m signals
+
+Rules:
+
+15m cannot override 1h regime
+
+15m refines how a strategy trades, not whether it trades
+
+5 Minute (Entry Setup)
+
+Purpose: Tactical setup validation
+
+Used for:
+
+Indicator alignment (RSI, BB, structure)
+
+Short-term momentum confirmation
+
+Reducing false entries from pure 1m noise
+
+Rules:
+
+5m signals are entry-eligible only if higher-TF context allows
+
+5m does not affect strategy enablement
+
+1 Minute (Execution Only)
+
+Purpose: Precision entry & execution
+
+Used for:
+
+Exact order placement
+
+Wick / volume spike confirmation
+
+Tight stop placement
+
+Grid fill tracking
+
+Liquidation capture triggers
+
+Rules:
+
+1m never affects regime or strategy state
+
+1m is stateless beyond execution context
+
+All 1m entries must inherit permission from higher TFs
+
+Strategy-Specific Behavior
+Grid Trading
+
+Regime: 1h
+
+Spacing & sizing: 1h ATR
+
+Order placement & fills: 1m
+
+Result: Same grid, more fills, better execution, no added risk
+
+Mean Reversion
+
+Permission: 1h regime = ranging
+
+Structure: 15m
+
+Setup: 5m
+
+Entry: 1m
+
+This avoids requiring extreme RSI values on high TFs while preserving safety.
+
+Liquidation Capture
+
+Market sanity: 1h
+
+Volatility awareness: 15m
+
+Trigger detection: 1m / 5m
+
+Liquidations occur on low TFs — this change materially increases opportunity.
+
+Trend / MA-Based Strategies
+
+Bias & trend detection: 1h
+
+Pullback structure: 15m
+
+Entry timing: 5m / 1m
+
+Avoid pure 1m MA signals (too noisy).
+
+Implementation Guidance
+MarketRegimeDetector
+
+Input: 1h + 15m
+
+Output:
+
+regime
+
+trend_bias
+
+volatility_score
+
+Update slowly and centrally
+
+StrategyManager
+
+Uses regime output to:
+
+enable / disable strategies
+
+select strategy modes
+
+Must not require multi-TF signal agreement
+
+Passes context down to strategies
+
+Strategies
+
+Consume:
+
+Regime context (1h)
+
+Structural context (15m)
+
+Generate entries on:
+
+5m + 1m
+
+Return signals more frequently, but only when allowed
+
+RiskManager
+
+No fundamental changes required
+
+Consider:
+
+shorter cooldowns for 1m/5m entries
+
+per-strategy trade caps per hour
+
+volatility-scaled limits
+
+Explicit “Do Not” Rules (Important)
+
+❌ Do not run regime detection on 1m or 5m
+
+❌ Do not require all timeframes to agree
+
+❌ Do not let 1m flip strategy state
+
+❌ Do not stack confluence checks across all TFs
+
+This is how systems become “too tight” again.
+
+Expected Outcomes
+
+Higher trade frequency without loosening risk controls
+
+More stable regime behavior
+
+Cleaner architecture (clear TF ownership)
+
+Better debuggability (fewer hidden blockers)
+
+Recommended Rollout
+
+Implement TF separation (no parameter loosening yet)
+
+Observe trade frequency changes
+
+Adjust thresholds only if needed
+
+Add 4h later only as advisory, not gating
+
+Final Verdict
+
+This is a reasonable, professional, and low-risk evolution of the system.
+
+It increases opportunity density by improving where entries are sourced, not by weakening what qualifies as a valid trade.
+
+Add lower-timeframe data (1m / 5m) — FIRST
+
+Effort: Low
+Risk: Very low
+Payoff: Immediate visibility + trade frequency increase
+Refactor risk: Minimal
+
+Why this comes first
+
+You can add data without changing logic
+
+No behavior change unless consumed
+
+Unlocks future steps
+
+Lets you test infra, caching, WS stability
+
+What to do (minimal)
+
+Extend MultiTimeframeFetcher to include 1m and 5m
+
+Do not wire them into StrategyManager yet
+
+Log availability only
+
+This gives you:
+
+confidence the data pipeline works
+
+zero strategy risk
+
+no rollback cost
+
+✅ 2. Use 1m / 5m ONLY for execution (no logic changes yet)
+
+Effort: Low–medium
+Risk: Low
+Payoff: Measurable trade frequency increase
+Refactor risk: Contained
+
+Why second
+
+Still avoids touching StrategyManager
+
+Uses new data downstream
+
+Keeps regime logic intact
+
+What changes
+
+Execution logic (TradingBot) pulls entry prices from:
+
+1m (price, wick, volume)
+
+Stops / fills tracked on 1m
+
+Regime still from 1h / 15m
+
+Even if StrategyManager is still “too tight”, this step:
+
+reduces missed entries
+
+improves fill quality
+
+is easy to revert

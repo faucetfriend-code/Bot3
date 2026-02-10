@@ -1,0 +1,5 @@
+{
+  "python.analysis.extraPaths": ["${workspaceFolder}/core_logic", "${workspaceFolder}/trading_bot_v2"],
+  "python.analysis.typeCheckingMode": "basic",
+  "python.defaultInterpreterPath": "python"
+}

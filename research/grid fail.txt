@@ -1,0 +1,268 @@
+Below is a Grid Spec Compliance Review against your stated requirements, based on the current versions of:
+
+trading_bot.py
+
+risk_manager.py
+
+strategy_manager.py
+
+market_regime.py
+
+I am treating the Grid Trading Brief as authoritative and applying hard enforcement, not intent.
+
+1. Hard Checks (Pass / Fail)
+1️⃣ Single grid per symbol enforcement
+
+Status: ❌ FAIL (spec-breaking)
+
+Where
+
+trading_bot.py
+
+_execute_grid_signal()
+
+_active_grids is created but never checked before creating a new grid
+
+Problem
+
+There is no hard guard preventing a second grid from being created on the same symbol.
+
+RiskManager.grid_exposure[symbol] is overwritten and then incremented, not used as a lock.
+
+_active_grids exists but is write-only, never enforced.
+
+Why this breaks spec
+
+Grid Trading Brief: Exactly one grid per symbol. No stacking.
+
+Concrete fix
+
+# trading_bot.py – _execute_grid_signal()
+
+if hasattr(self, '_active_grids') and symbol in self._active_grids:
+    logging.warning(f"Grid already active for {symbol}, refusing new grid")
+    return
+
+
+Also delete _active_grids[symbol] on:
+
+emergency stop trigger
+
+full grid unwind
+
+regime auto-disable (see below)
+
+2️⃣ Grid capital sourced only from RiskManager
+
+Status: ⚠️ PASS, but risky
+
+Where
+
+trading_bot.py → _execute_grid_signal()
+
+if not self.risk_manager.validate_grid_exposure(symbol, signal.grid_capital, current_exposure):
+
+
+Issue
+
+signal.grid_capital is trusted input
+
+There is no forced call to:
+
+grid_capital = self.risk_manager.get_grid_capital(...)
+
+
+Why this is risky
+
+A future strategy change or bug could inject arbitrary grid capital
+
+Spec requires RiskManager to be the allocator, not a validator
+
+Concrete fix
+
+# Replace use of signal.grid_capital
+grid_capital = self.risk_manager.get_grid_capital(
+    account_balance, current_exposure, symbol
+)
+
+
+Then overwrite:
+
+signal.grid_capital = grid_capital
+
+3️⃣ Per-level sizing math correctness
+
+Status: ⚠️ PASS, but incomplete
+
+Where
+
+trading_bot.py
+
+capital_per_level = signal.grid_capital / signal.grid_levels
+
+
+What’s correct
+
+Equal sizing
+
+No martingale
+
+Fixed capital per level
+
+What’s missing
+
+No rounding / minimum order size enforcement
+
+Quantity calculation per level is hidden in _calculate_grid_levels() (not validated here)
+
+Exposure is double-counted:
+
+self.risk_manager.grid_exposure[symbol] = signal.grid_capital
+self.risk_manager.grid_exposure[symbol] += level_exposure
+
+
+This inflates exposure incorrectly
+
+Concrete fix
+
+Initialize exposure to 0
+
+Increment only per placed order
+
+self.risk_manager.grid_exposure[symbol] = 0.0
+
+4️⃣ Emergency stop placement + unwind on failure
+
+Status: ❌ FAIL (spec-breaking)
+
+Where
+
+_execute_grid_signal()
+
+What you did right
+
+Emergency stop is placed before grid orders ✅
+
+Hard abort if emergency stop fails ✅
+
+What’s missing
+
+Emergency stop is:
+
+a limit, not guaranteed
+
+never monitored
+
+never triggers an unwind
+
+No handler calls:
+
+risk_manager.on_grid_emergency_exit(symbol)
+
+
+Spec violation
+
+Emergency stop must flatten all grid exposure and cancel open orders
+
+Concrete fix
+
+Add a grid monitor loop (or reuse _monitor_risk)
+
+On emergency stop fill OR breach:
+
+self.client.cancel_all_orders(symbol)
+self._close_all_positions(symbol)
+self.risk_manager.on_grid_emergency_exit(symbol)
+del self._active_grids[symbol]
+
+5️⃣ Regime auto-disable → order cancel + flatten
+
+Status: ❌ FAIL (hard)
+
+Where
+
+strategy_manager.py correctly disables grid signal generation
+
+BUT
+
+trading_bot.py never:
+
+cancels existing grid orders
+
+flattens positions
+
+clears grid exposure
+
+Why this is critical
+
+A grid can continue trading inside a TRENDING_STRONG regime
+
+This violates the core safety model
+
+Concrete fix
+When regime transitions out of allowed grid regimes:
+
+if symbol in self._active_grids:
+    self.client.cancel_all_orders(symbol)
+    self._close_all_positions(symbol)
+    self.risk_manager.on_grid_emergency_exit(symbol)
+    del self._active_grids[symbol]
+
+
+This should live in:
+
+_monitor_risk() or
+
+a new _handle_regime_transition()
+
+6️⃣ No legacy or direct-execution bypass paths
+
+Status: ⚠️ PASS, with one concern
+
+Good
+
+All executions route through _execute_signal()
+
+Grid routes only via _execute_grid_signal()
+
+RiskManager used for sizing and validation
+
+Concern
+
+signal.grid_capital, signal.grid_levels, signal.quantity
+are strategy-controlled, not normalized centrally
+
+Fix (recommended)
+
+Normalize grid parameters inside RiskManager
+
+Treat strategy values as hints, not authority
+
+Final Classification
+❌ SPEC-BREAKING (must fix before live)
+
+Blocking issues
+
+No single-grid-per-symbol lock
+
+No regime-based grid unwind
+
+Emergency stop does not flatten or clean up
+
+Grid exposure accounting is incorrect
+
+Live-Readiness Verdict
+
+🚫 NOT SAFE FOR LIVE CAPITAL
+
+You are very close structurally, but grid trading is a stateful strategy, and right now:
+
+state is not enforced
+
+exits are not guaranteed
+
+regime violations persist silently
+
+Fixing the above will move this to:
+
+⚠️ Spec-compliant but risky → then → ✅ Spec-compliant

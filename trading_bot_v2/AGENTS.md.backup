@@ -1,0 +1,178 @@
+# Agent Guidelines for Trading Bot v2
+
+## Build/Lint/Test Commands
+- **Lint (Modern)**: `ruff check .` (Python linting with auto-fix - preferred)
+- **Lint (Legacy)**: `flake8 .` (Traditional Python linting)
+- **Type Check**: `mypy .` (Python type checking)
+- **Format**: `black .` (Python code formatting)
+- **Format (Alt)**: `ruff format .` (Fast alternative to black)
+- **Test**: `pytest` (run all tests)
+- **Single Test**: `pytest path/to/test_file.py::TestClass::test_method`
+- **Coverage**: `pytest --cov=. --cov-report=html`
+- **Performance**: `pytest tests/test_performance.py -v`
+- **E2E Tests**: `npm test` (from project root - Playwright tests)
+- **API Testing**: `python ../test_api_endpoints.py` (from project root)
+
+## Code Style Guidelines
+
+### Python Conventions
+- **Imports**: Standard library → third-party → relative imports (alphabetized)
+- **Types**: Type hints required for all function parameters and return values
+- **Naming**: PascalCase classes, snake_case functions/methods, UPPER_CASE constants
+- **Error Handling**: Specific exception types in try/except blocks
+- **Async**: Use async/await for I/O operations, asyncio for concurrency
+- **Docstrings**: Google/NumPy style docstrings for public functions/classes
+- **Line Length**: 88 characters (Black default)
+- **String Quotes**: Single quotes for code, double quotes for docstrings
+- **Path Handling**: Use `pathlib.Path` instead of `os.path`
+
+### General Patterns
+- **Classes**: Inherit from ABC for abstract classes, use descriptive method names
+- **Documentation**: Docstrings required for public methods/classes
+- **Security**: Never expose secrets, use environment variables for sensitive data
+- **Imports**: Group with blank lines between standard/third-party/relative
+- **Circuit Breaker**: Implement resilience patterns for external dependencies
+
+### Agent-Specific Guidelines
+- **Generator**: Respect existing code style and context when generating code
+- **Reviewer**: Focus on security, performance, and maintainability
+- **Tester**: Write comprehensive pytest/playwright tests
+- **Security**: Run bandit and detect-secrets scans regularly
+- **Documentation**: Update API docs and README when making changes
+
+### Project-Specific Requirements
+- **Core Logic Imports**: Use absolute imports from `core_logic` package
+- **Component Interfaces**: Implement ABC-based interfaces for all major components
+- **WebSocket Integration**: Follow hub system patterns for real-time communication
+- **Testing**: Maintain 80%+ code coverage with comprehensive E2E tests
+- **Performance**: Monitor critical paths with dedicated performance tests
+
+## Current Trading System Status (Jan 2026)
+
+### Multi-Strategy Implementation (OPERATIONAL ✅)
+
+**Active Strategies with Jan 2026 Updates**:
+- **Mean Reversion**: RSI 35/65 (loosened), confidence 0.45 (down from 0.6)
+- **MA Crossover**: 50/200 MA with pullback, confidence 0.65 (unchanged)
+- **Grid Trading**: 0.4x ATR spacing (tighter), 8 levels (reduced from 10)
+- **Liquidation Capture**: 2.5% price move, 2.5x volume spike (loosened)
+
+**Enhanced Market Regime Detection**:
+- **TRENDING_STRONG**: ADX > 30.0 (up from 28.0)
+- **TRENDING_MODERATE**: ADX 25.0-30.0 (NEW regime)
+- **RANGING_VOLATILE**: ADX ≤ 25.0, volatility > 65% (down from 75%)
+- **RANGING_CALM**: ADX ≤ 25.0, volatility ≤ 65%
+- **INDECISIVE**: Transitional conditions
+
+### Risk Management (PRODUCTION-READY ✅)
+
+**Kelly Criterion Position Sizing**:
+- Fractional Kelly (0.5x) with 10% maximum position cap
+- 50-trade minimum history requirement
+- Strategy-specific fallback percentages
+
+**Circuit Breaker Protection**:
+- 10% portfolio loss trigger (configurable)
+- 80% warning threshold with automatic halt
+- Percentage-based calculation (not fixed dollar)
+
+**Grid Trading Safeguards**:
+- Maximum 10 positions per symbol
+- ADX > 25.0 emergency stop
+- Partial unwind on regime changes
+- 5% portfolio emergency stop
+
+### Hub System Architecture (OPERATIONAL ✅)
+
+**Implemented Components**:
+- **DataHub**: Thread-safe data management with circuit breaker
+- **ConnectionManager**: WebSocket pooling and authentication
+- **Component Registry**: Interface-based discovery and health monitoring
+- **Event System**: Decoupled communication between components
+- **Circuit Breaker**: Database failure protection with exponential backoff
+
+**Communication Patterns**:
+1. Real-time WebSocket broadcasts
+2. Event-driven component communication
+3. Interface-based method calls
+4. Circuit breaker protection for external calls
+5. Centralized dependency injection
+
+### Web Interface Integration (FULLY OPERATIONAL ✅)
+
+**Working Features**:
+- ✅ Bot start/stop controls with state management
+- ✅ Real-time status updates (30s intervals)
+- ✅ Position and trade history display
+- ✅ WebSocket live updates with reconnection
+- ✅ Professional Bootstrap UI with dark theme
+- ✅ Error handling with user-friendly messages
+- ✅ Cross-browser compatibility (Chrome, Firefox, Safari)
+
+### Testing Infrastructure (COMPREHENSIVE ✅)
+
+**Available Test Suites**:
+- **Unit Tests**: `pytest tests/` - Comprehensive unit test coverage
+- **Integration Tests**: API endpoint testing with error scenarios
+- **Performance Tests**: `pytest tests/test_performance.py` - Critical path benchmarks
+- **Hub System Tests**: Component orchestration and communication testing
+- **E2E Tests**: `npm test` from project root - Playwright web interface tests
+
+**Test Quality Features**:
+- ✅ Auto-fixing linting with ruff
+- ✅ Coverage reporting with HTML output
+- ✅ Missing line indicators in coverage
+- ✅ Cross-browser E2E testing
+- ✅ API error scenario coverage
+- ✅ WebSocket reconnection testing
+
+## Development Workflow
+
+### Before Making Changes
+1. **Run Baseline**: `ruff check .`, `mypy .`, `pytest`
+2. **Create Feature Branch**: Use descriptive branch names
+3. **Update Tests**: Add/modify tests for new functionality
+4. **Implement Changes**: Follow existing code patterns
+
+### Quality Assurance Checklist
+- [ ] All linting checks pass (`ruff check . --fix`)
+- [ ] Type checking passes (`mypy .`)
+- [ ] All tests pass (`pytest`)
+- [ ] Coverage maintained or improved
+- [ ] Documentation updated
+- [ ] Security scan passes (`bandit -r .`)
+
+### Strategy Development
+When adding new trading strategies:
+
+1. **File Creation**: Create in `strategies/your_strategy.py`
+2. **Import Pattern**: Use absolute imports from `core_logic`
+3. **Interface Compliance**: Implement required methods with proper signatures
+4. **Confidence Scoring**: Include confidence calculation (0-1 range)
+5. **Test Coverage**: Create comprehensive test scenarios
+6. **Registration**: Add to StrategyType enum and StrategyManager
+7. **Configuration**: Add .env parameters as needed
+8. **Validation**: Test with all market regimes
+
+### Risk Management Integration
+- **Signal Validation**: All 8 validation flags must pass
+- **Position Sizing**: Use Kelly Criterion or fallback percentages
+- **Stop Losses**: Always include ATR-based stop losses
+- **Circuit Breaker**: Monitor and respect circuit breaker status
+- **Grid Limits**: Respect per-symbol and portfolio limits
+
+### Common Pitfalls to Avoid
+- **Hardcoded Values**: Use environment variables for all parameters
+- **Import Errors**: Use absolute imports, avoid sys.path manipulation
+- **Missing Error Handling**: Wrap external API calls in try/except
+- **Insufficient Testing**: Test edge cases and error conditions
+- **Documentation Drift**: Keep docs in sync with implementation
+
+### Performance Considerations
+- **Async Operations**: Use async/await for I/O operations
+- **Caching**: Implement appropriate caching for expensive operations
+- **Resource Management**: Properly close connections and clean up resources
+- **Monitoring**: Add logging for performance-critical operations
+- **Profiling**: Use profiling tools to identify bottlenecks
+
+All major systems are operational and the project maintains high standards for code quality, testing, and documentation.

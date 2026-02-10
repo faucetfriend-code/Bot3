@@ -1,0 +1,91 @@
+# Pre-commit hooks configuration for trading bot
+# Ensures code quality and prevents untested changes from being committed
+
+repos:
+  # Python code quality
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: debug-statements
+      - id: check-ast
+
+  # Python formatting and linting
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3.11
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile", "black"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.1.1
+    hooks:
+      - id: flake8
+        args: [--max-line-length=88, --extend-ignore=E203,W503]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        additional_dependencies: [types-all]
+        args: [--ignore-missing-imports]
+
+  # Critical tests - must pass before commit
+  - repo: local
+    hooks:
+      - id: critical-tests
+        name: Run critical path tests
+        entry: python scripts/run-critical-tests.sh
+        language: system
+        pass_filenames: false
+        files: ^(api_server\.py|database\.py|main\.py|config\.py)$
+        description: "Run critical tests that must pass before committing core files"
+
+  # Full test suite for all Python files
+  - repo: local
+    hooks:
+      - id: full-tests
+        name: Run full test suite
+        entry: python -m pytest tests/ -x --tb=short --disable-warnings
+        language: system
+        pass_filenames: false
+        files: \.(py)$
+        description: "Run full test suite for Python files"
+
+  # Security scanning
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.0
+    hooks:
+      - id: bandit
+        args: [-c, pyproject.toml]
+        exclude: ^tests/
+
+  # JavaScript/Node.js checks
+  - repo: https://github.com/pre-commit/mirrors-eslint
+    rev: v9.13.0
+    hooks:
+      - id: eslint
+        files: \.(js|jsx|ts|tsx)$
+        types: [file]
+        additional_dependencies:
+          - eslint@^8.57.0
+          - "@typescript-eslint/parser@^8.0.0"
+          - "@typescript-eslint/eslint-plugin@^8.0.0"
+
+  # Check for secrets
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: ^(tests/|\.secrets\.baseline)

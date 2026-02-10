@@ -1,0 +1,3 @@
+-- PostgreSQL initialization script
+-- This would contain schema setup if using PostgreSQL
+-- Currently the bot uses SQLite, so this is empty

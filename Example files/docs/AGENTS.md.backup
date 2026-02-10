@@ -1,0 +1,134 @@
+# Agent Guidelines for Trading Bot
+
+## Build Commands
+- **Install Dependencies**: `pip install -r ../../trading_bot_v2/requirements.txt` | `npm install` (from root)
+- **Run Dev Server**: `cd ../../ && python -m trading_bot_v2.api_server` (FastAPI on 0.0.0.0:8000)
+- **Run Tests**: `pytest ../../trading_bot_v2/` (all) | `pytest ../../trading_bot_v2/test_file.py` (single)
+- **Lint**: `ruff check ../../trading_bot_v2/` (modern) | `flake8 ../../trading_bot_v2/` (legacy)
+- **Type Check**: `mypy ../../trading_bot_v2/` | `npx tsc --noEmit` (if TypeScript)
+- **Format**: `black ../../trading_bot_v2/` | `ruff format ../../trading_bot_v2/` (fast alternative)
+- **Security**: `bandit -r ../../trading_bot_v2/` | `detect-secrets scan ../../trading_bot_v2/`
+- **E2E Tests**: `npm test` (from project root - Playwright)
+
+## Code Style Guidelines
+
+### Python
+- **Types**: Type hints on all functions/methods, Pydantic BaseModel for data structures
+- **Imports**: Group stdlib → third-party → core_logic → local, blank lines between groups
+- **Import Resolution**: Use absolute imports from `core_logic` package, avoid `sys.path.insert()`
+- **Naming**: PascalCase (classes), snake_case (functions/vars), UPPER_SNAKE_CASE (constants)
+- **Async**: Use async/await for I/O operations (FastAPI, DB, external APIs)
+- **Error Handling**: Try-catch for external calls, custom exceptions for domain errors
+- **Logging**: Loguru with structured logging (logger.info/warning/error/critical)
+- **Docstrings**: Google-style for public functions/classes
+- **Line Length**: 88 characters (Black default)
+- **Path Handling**: Use `pathlib.Path` instead of `os.path`
+
+### Additional Notes
+- **Security**: Never log/commit secrets; use environment variables
+- **Testing**: Run lint/typecheck after changes; use pytest-asyncio for async tests
+- **Database**: Use async operations for I/O; sync via context managers
+- **Ruff Integration**: Use `ruff check . --fix` for auto-fixing linting issues
+- **Coverage**: Maintain 80%+ test coverage with `pytest --cov=. --cov-report=html`
+- **Performance**: Monitor critical paths with dedicated performance tests
+
+## Current Trading Bot Status (Jan 2026)
+
+### Production-Ready Multi-Strategy System ✅
+
+**Implemented Trading Strategies**:
+- **Mean Reversion**: RSI + Bollinger Bands, optimized for RANGING_CALM markets
+- **MA Crossover**: 50/200 MA crossover with pullback entries for trending markets
+- **Grid Trading**: ATR-spaced grid with partial unwind and regime protection
+- **Liquidation Capture**: Bidirectional cascade detection across all market regimes
+
+**Enhanced Market Detection**:
+- **5 Market Regimes**: TRENDING_STRONG, TRENDING_MODERATE, RANGING_VOLATILE, RANGING_CALM, INDECISIVE
+- **ADX-Based Classification**: ADX > 30 (strong), 25-30 (moderate), ≤ 25 (ranging)
+- **Volatility Integration**: Bollinger Band width and ATR percentile for ranging classification
+
+### Advanced Risk Management ✅
+
+**Kelly Criterion Position Sizing**:
+- Last 50 trades per strategy for optimal sizing
+- Fractional Kelly (0.5x) with 10% maximum position cap
+- Strategy-specific fallback percentages when insufficient history
+
+**Comprehensive Circuit Breaker**:
+- 10% portfolio loss trigger with percentage-based calculation
+- 80% warning threshold with automatic trading halt
+- Grid-specific emergency stops and regime change protection
+
+### Hub-Based Architecture ✅
+
+**Operational Components**:
+- **DataHub**: Centralized data management with circuit breaker protection
+- **ConnectionManager**: WebSocket connection pooling and authentication
+- **Component Registry**: Interface-based component discovery and health monitoring
+- **Event System**: Decoupled event-driven communication
+- **Circuit Breaker**: Database failure protection with exponential backoff
+
+### Professional Web Interface ✅
+
+**Fully Functional Features**:
+- Real-time bot controls with start/stop functionality
+- WebSocket-based live data updates every 30 seconds
+- Professional Bootstrap UI with dark theme support
+- Position and trade history with comprehensive filtering
+- Error handling with user-friendly messages and recovery
+- Cross-browser compatibility verified with Playwright tests
+
+### Comprehensive Testing Infrastructure ✅
+
+**Multi-Layer Testing**:
+- **Unit Tests**: Comprehensive pytest suite with fixtures and mocks
+- **Integration Tests**: API endpoint testing with error scenarios
+- **Performance Tests**: Critical path benchmarking and monitoring
+- **E2E Tests**: Playwright-based web interface testing
+- **Hub System Tests**: Component orchestration and communication testing
+
+## Recent Improvements (Jan 2026)
+
+### Parameter Optimization
+- **Loosened Confidence Thresholds**: Mean reversion and grid trading to 0.45
+- **Enhanced Regime Detection**: Added TRENDING_MODERATE for better adaptation
+- **Improved Grid Parameters**: Tighter 0.4x ATR spacing, 8 levels (down from 10)
+- **Expanded Signal Ranges**: RSI 35/65 for mean reversion (from 30/70)
+
+### Architecture Enhancements
+- **Hub System**: Centralized communication with circuit breaker protection
+- **Import Refactoring**: Removed sys.path.insert(), now using absolute imports
+- **Web Interface**: Fixed API integration, added loading states and error recovery
+- **Testing**: Expanded Playwright suite with cross-browser compatibility
+
+### Development Toolchain
+- **Modern Linting**: Integrated ruff with auto-fix capabilities
+- **Enhanced Coverage**: Missing line indicators and HTML reporting
+- **Performance Testing**: Dedicated benchmark test suite
+- **Error Handling**: Improved user feedback and error messages
+
+## Development Best Practices
+
+### Code Quality Standards
+- **Type Safety**: Strict mypy configuration with comprehensive type hints
+- **Error Handling**: Specific exception types, avoid generic except blocks
+- **Documentation**: Docstrings required for all public interfaces
+- **Testing**: 80%+ minimum coverage with integration test requirements
+- **Security**: Regular vulnerability scanning and secret detection
+
+### Strategy Development Guidelines
+1. **Market Analysis**: Understand target market conditions and regime behavior
+2. **Signal Generation**: Implement robust indicator calculations with validation
+3. **Confidence Scoring**: Provide 0-1 confidence based on signal strength
+4. **Multi-Timeframe**: Align signals across multiple timeframes when applicable
+5. **Risk Management**: Always include stop losses and position sizing logic
+6. **Comprehensive Testing**: Test across all market regimes and edge cases
+
+### Integration Requirements
+- **Hub Compatibility**: Implement required interfaces for hub system integration
+- **Event Publishing**: Publish appropriate events for component communication
+- **Circuit Breaker**: Respect circuit breaker status and implement fallbacks
+- **Configuration**: Use environment variables for all configurable parameters
+- **Logging**: Structured logging with appropriate log levels
+
+The trading bot system is production-ready with comprehensive multi-strategy implementation, advanced risk management, professional web interface, and robust testing infrastructure. All development should follow established patterns for quality, security, and maintainability.

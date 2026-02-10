@@ -1,0 +1,271 @@
+2026-01-14 00:34:34.695 | DEBUG    | strategy_manager:generate_signals_for_market:310 - SUI: No signals from any strategy in ranging_calm regime
+[TICKER_WS] _get_ticker_ws called for ADA
+[TICKER_WS] SUCCESS - WebSocket price for ADA: $0.4219
+2026-01-14 00:34:34.695 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ADA 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:35.137 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:35.138 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:35.138 | WARNING  | multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for ADA 15m
+2026-01-14 00:34:35.138 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ADA 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:35.326 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:35.326 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:35.327 | WARNING  | multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for ADA 1h
+2026-01-14 00:34:35.327 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('ADA', '4h') (age: 65.9s)
+2026-01-14 00:34:35.327 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ADA 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:35.504 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:35.504 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:35.505 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 2 candles: close range 0.41 - 0.46
+2026-01-14 00:34:35.505 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 2 candles for ADA 4h (range: 1765339200000 - 1765684800000)
+2026-01-14 00:34:35.505 | ERROR    | strategy_manager:generate_signals_for_market:259 - Regime detection failed for ADA: Insufficient data for regime detection. Need at least 29 candles, got 2
+2026-01-14 00:34:35.505 | DEBUG    | market_regime:get_active_strategies:356 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 00:34:35.505 | WARNING  | strategies.liquidation_capture:generate_signals:126 - Missing 15m timeframe for ADA
+2026-01-14 00:34:35.506 | DEBUG    | strategy_manager:generate_signals_for_market:310 - ADA: No signals from any strategy in indecisive regime
+[TICKER_WS] _get_ticker_ws called for LTC
+[TICKER_WS] SUCCESS - WebSocket price for LTC: $78.631882
+2026-01-14 00:34:35.506 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('LTC', '15m') (age: 65.9s)
+2026-01-14 00:34:35.506 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: LTC 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:35.688 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:35.688 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:35.689 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 75.55 - 81.04
+2026-01-14 00:34:35.689 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for LTC 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:35.689 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('LTC', '1h') (age: 65.8s)
+2026-01-14 00:34:35.690 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: LTC 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:35.867 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:35.868 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:35.869 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 75.55 - 84.15
+2026-01-14 00:34:35.869 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for LTC 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:35.869 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('LTC', '4h') (age: 65.8s)
+2026-01-14 00:34:35.869 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: LTC 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:36.050 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:36.050 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:36.051 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 71.67 - 86.25
+2026-01-14 00:34:36.051 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for LTC 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:36.052 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for LTC: trending_strong (3.8h old)
+2026-01-14 00:34:36.052 | DEBUG    | market_regime:get_active_strategies:356 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 00:34:36.052 | DEBUG    | strategy_manager:generate_signals_for_market:277 - LTC: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:36.058 | DEBUG    | strategies.ma_crossover:generate_signals:143 - LTC 4h indicators: Fast MA=80.53, Slow MA=79.14, MACD=-0.77, Signal=-1.03, Volume ratio=0.40x
+2026-01-14 00:34:36.058 | DEBUG    | strategy_manager:generate_signals_for_market:310 - LTC: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for XRP
+[TICKER_WS] SUCCESS - WebSocket price for XRP: $2.157961
+2026-01-14 00:34:36.058 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('XRP', '15m') (age: 65.8s)
+2026-01-14 00:34:36.058 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: XRP 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:36.238 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:36.238 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:36.240 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 2.03 - 2.18
+2026-01-14 00:34:36.240 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for XRP 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:36.240 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('XRP', '1h') (age: 65.8s)
+2026-01-14 00:34:36.240 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: XRP 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:36.421 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:36.421 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:36.423 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 2.00 - 2.40
+2026-01-14 00:34:36.423 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for XRP 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:36.423 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('XRP', '4h') (age: 65.8s)
+2026-01-14 00:34:36.423 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: XRP 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:36.606 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:36.606 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:36.607 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 1.80 - 2.38
+2026-01-14 00:34:36.607 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for XRP 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:36.608 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for XRP: ranging_calm (3.8h old)
+2026-01-14 00:34:36.608 | DEBUG    | market_regime:get_active_strategies:356 - Regime ranging_calm -> Active strategies: ['MeanReversion', 'GridTrading']
+2026-01-14 00:34:36.608 | DEBUG    | strategy_manager:generate_signals_for_market:277 - XRP: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:36.609 | DEBUG    | strategies.mean_reversion:generate_signals:125 - XRP indicators: RSI_15m=47.64, RSI_1h=64.76, BB=(2.16, 2.17, 2.19), Price=2.16, SMA=2.17
+2026-01-14 00:34:36.609 | DEBUG    | strategies.grid_trading:generate_signals:106 - XRP: Grid trading restricted to ['SUI', 'DOGE'] only
+2026-01-14 00:34:36.609 | DEBUG    | strategy_manager:generate_signals_for_market:310 - XRP: No signals from any strategy in ranging_calm regime
+[TICKER_WS] _get_ticker_ws called for SOL
+[TICKER_WS] SUCCESS - WebSocket price for SOL: $144.74
+2026-01-14 00:34:36.609 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('SOL', '15m') (age: 65.8s)
+2026-01-14 00:34:36.609 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: SOL 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:36.828 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:36.828 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:36.829 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 137.91 - 147.21
+2026-01-14 00:34:36.829 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for SOL 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:36.829 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('SOL', '1h') (age: 65.9s)
+2026-01-14 00:34:36.830 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: SOL 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.008 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.008 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.010 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 132.11 - 146.92
+2026-01-14 00:34:37.010 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for SOL 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:37.010 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('SOL', '4h') (age: 65.9s)
+2026-01-14 00:34:37.010 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: SOL 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.188 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.188 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.190 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 119.64 - 146.13
+2026-01-14 00:34:37.190 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for SOL 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:37.190 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for SOL: trending_strong (3.7h old)
+2026-01-14 00:34:37.190 | DEBUG    | market_regime:get_active_strategies:356 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 00:34:37.191 | DEBUG    | strategy_manager:generate_signals_for_market:277 - SOL: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:37.196 | DEBUG    | strategies.ma_crossover:generate_signals:143 - SOL 4h indicators: Fast MA=138.81, Slow MA=130.05, MACD=1.95, Signal=1.47, Volume ratio=0.17x
+2026-01-14 00:34:37.197 | DEBUG    | strategy_manager:generate_signals_for_market:310 - SOL: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for WLD
+[TICKER_WS] SUCCESS - WebSocket price for WLD: $0.611042
+2026-01-14 00:34:37.197 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: WLD 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.375 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.376 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.376 | WARNING  | multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for WLD 15m
+2026-01-14 00:34:37.376 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: WLD 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.553 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.554 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.555 | WARNING  | multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for WLD 1h
+2026-01-14 00:34:37.555 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('WLD', '4h') (age: 65.9s)
+2026-01-14 00:34:37.555 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: WLD 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.731 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.731 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.732 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 6 candles: close range 0.51 - 0.63
+2026-01-14 00:34:37.732 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 6 candles for WLD 4h (range: 1764792000000 - 1765987200000)
+2026-01-14 00:34:37.732 | ERROR    | strategy_manager:generate_signals_for_market:259 - Regime detection failed for WLD: Insufficient data for regime detection. Need at least 29 candles, got 6
+2026-01-14 00:34:37.733 | DEBUG    | market_regime:get_active_strategies:356 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 00:34:37.733 | WARNING  | strategies.liquidation_capture:generate_signals:126 - Missing 15m timeframe for WLD
+2026-01-14 00:34:37.733 | DEBUG    | strategy_manager:generate_signals_for_market:310 - WLD: No signals from any strategy in indecisive regime
+[TICKER_WS] _get_ticker_ws called for BTC
+[TICKER_WS] SUCCESS - WebSocket price for BTC: $95090.230522
+2026-01-14 00:34:37.733 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('BTC', '15m') (age: 97.2s)
+2026-01-14 00:34:37.733 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: BTC 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:37.956 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:37.956 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:37.958 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 90186.00 - 95812.00
+2026-01-14 00:34:37.958 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for BTC 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:37.958 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('BTC', '1h') (age: 66.1s)
+2026-01-14 00:34:37.958 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: BTC 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:38.145 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:38.145 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:38.147 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 89917.00 - 95812.00
+2026-01-14 00:34:38.147 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for BTC 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:38.147 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('BTC', '4h') (age: 97.4s)
+2026-01-14 00:34:38.147 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: BTC 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:38.328 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:38.329 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:38.330 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 84660.00 - 95608.00
+2026-01-14 00:34:38.330 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for BTC 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:38.330 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for BTC: trending_strong (3.8h old)
+2026-01-14 00:34:38.331 | DEBUG    | market_regime:get_active_strategies:356 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 00:34:38.331 | DEBUG    | strategy_manager:generate_signals_for_market:277 - BTC: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:38.337 | DEBUG    | strategies.ma_crossover:generate_signals:143 - BTC 4h indicators: Fast MA=91720.12, Slow MA=89378.38, MACD=1005.75, Signal=537.31, Volume ratio=0.06x
+2026-01-14 00:34:38.337 | DEBUG    | strategy_manager:generate_signals_for_market:310 - BTC: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for DOGE
+[TICKER_WS] SUCCESS - WebSocket price for DOGE: $0.147764
+2026-01-14 00:34:38.337 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('DOGE', '15m') (age: 97.2s)
+2026-01-14 00:34:38.337 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: DOGE 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:38.517 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:38.517 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:38.518 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 0.14 - 0.15
+2026-01-14 00:34:38.519 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for DOGE 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:38.519 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: DOGE 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:38.699 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:38.699 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:38.700 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 0.14 - 0.15
+2026-01-14 00:34:38.700 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for DOGE 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:38.700 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('DOGE', '4h') (age: 97.4s)
+2026-01-14 00:34:38.701 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: DOGE 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:38.885 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:38.885 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:38.887 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 0.12 - 0.15
+2026-01-14 00:34:38.887 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for DOGE 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:38.887 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for DOGE: ranging_calm (3.8h old)
+2026-01-14 00:34:38.887 | DEBUG    | market_regime:get_active_strategies:356 - Regime ranging_calm -> Active strategies: ['MeanReversion', 'GridTrading']
+2026-01-14 00:34:38.887 | DEBUG    | strategy_manager:generate_signals_for_market:277 - DOGE: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:38.888 | DEBUG    | strategies.mean_reversion:generate_signals:125 - DOGE indicators: RSI_15m=46.98, RSI_1h=65.50, BB=(0.15, 0.15, 0.15), Price=0.15, SMA=0.15
+2026-01-14 00:34:38.889 | ERROR    | strategies.grid_trading:generate_signals:155 - DOGE: No RiskManager available for grid capital allocation
+2026-01-14 00:34:38.889 | DEBUG    | strategy_manager:generate_signals_for_market:310 - DOGE: No signals from any strategy in ranging_calm regime
+[TICKER_WS] _get_ticker_ws called for ETH
+[TICKER_WS] SUCCESS - WebSocket price for ETH: $3330.254
+2026-01-14 00:34:38.889 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('ETH', '15m') (age: 97.2s)
+2026-01-14 00:34:38.889 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.072 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.073 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:39.074 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 3072.00 - 3350.50
+2026-01-14 00:34:39.074 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 15m (range: 1768144500000 - 1768368600000)
+2026-01-14 00:34:39.074 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.267 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.268 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:39.269 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 3068.30 - 3347.80
+2026-01-14 00:34:39.269 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 1h (range: 1767470400000 - 1768366800000)
+2026-01-14 00:34:39.269 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.452 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.452 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:39.453 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 2770.90 - 3384.40
+2026-01-14 00:34:39.454 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 4h (range: 1764777600000 - 1768363200000)
+2026-01-14 00:34:39.454 | DEBUG    | market_regime:detect_regime_cached:200 - Using cached regime for ETH: trending_strong (3.8h old)
+2026-01-14 00:34:39.454 | DEBUG    | market_regime:get_active_strategies:356 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 00:34:39.454 | DEBUG    | strategy_manager:generate_signals_for_market:277 - ETH: Added LiquidationCapture (runs in all regimes)
+2026-01-14 00:34:39.460 | DEBUG    | strategies.ma_crossover:generate_signals:143 - ETH 4h indicators: Fast MA=3152.09, Slow MA=3041.50, MACD=45.04, Signal=18.49, Volume ratio=0.04x
+2026-01-14 00:34:39.461 | DEBUG    | strategy_manager:generate_signals_for_market:310 - ETH: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for TRUMP
+[TICKER_WS] SUCCESS - WebSocket price for TRUMP: $5.7188
+2026-01-14 00:34:39.461 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 15m - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.639 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.639 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:39.639 | WARNING  | multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for TRUMP 15m
+2026-01-14 00:34:39.640 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 1h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.812 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.813 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 429
+2026-01-14 00:34:39.814 | ERROR    | pacifica_client:_make_request:401 - Network error: Expecting value: line 1 column 1 (char 0)
+2026-01-14 00:34:39.814 | ERROR    | pacifica_client:_make_request:402 - URL: https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.814 | ERROR    | multi_timeframe_fetcher:get_candles_multi_tf:115 - Error fetching TRUMP 1h: Network error: Expecting value: line 1 column 1 (char 0)
+2026-01-14 00:34:39.814 | DEBUG    | multi_timeframe_fetcher:_is_cache_valid:188 - Cache expired for ('TRUMP', '4h') (age: 97.1s)
+2026-01-14 00:34:39.815 | DEBUG    | multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 4h - fetching from API
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:39.999 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 00:34:39.999 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+2026-01-14 00:34:40.001 | DEBUG    | multi_timeframe_fetcher:_parse_candles:229 - Parsed 2 candles: close range 5.04 - 6.05
+2026-01-14 00:34:40.001 | INFO     | multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 2 candles for TRUMP 4h (range: 1764792000000 - 1766419200000)
+2026-01-14 00:34:40.001 | ERROR    | strategy_manager:generate_signals_for_market:259 - Regime detection failed for TRUMP: Insufficient data for regime detection. Need at least 29 candles, got 2
+2026-01-14 00:34:40.001 | DEBUG    | market_regime:get_active_strategies:356 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 00:34:40.002 | WARNING  | strategies.liquidation_capture:generate_signals:126 - Missing 15m timeframe for TRUMP
+2026-01-14 00:34:40.002 | DEBUG    | strategy_manager:generate_signals_for_market:310 - TRUMP: No signals from any strategy in indecisive regime
+C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\urllib3\connectionpool.py:1097: InsecureRequestWarning: Unverified HTTPS request is being made to host 'test-api.pacifica.fi'. Adding certificate verification is strongly advised. See: https://urllib3.readthedocs.io/en/latest/advanced-usage.html#tls-warnings
+  warnings.warn(
+2026-01-14 00:34:40.177 | DEBUG    | pacifica_client:_make_request:356 - API Request: GET https://test-api.pacifica.fi/api/v1/account
+2026-01-14 00:34:40.177 | DEBUG    | pacifica_client:_make_request:357 - Response Status: 200
+ERROR:root:Error monitoring risk: 'StrategyManager' object has no attribute 'enable_grid_trading'

@@ -1,0 +1,330 @@
+# Trading Bot Development Guidelines
+
+This document provides comprehensive guidelines for AI agents and human developers working on trading bot system. It covers build processes, code standards, system architecture, and development workflows.
+
+## Build/Lint/Test Commands
+
+### Dependencies & Installation
+- `pip install -r trading_bot_v2/requirements.txt` - Install Python dependencies
+- `npm install` - Install Node.js dependencies for E2E tests
+- `npm run install-browsers` - Install Playwright browsers for E2E testing
+- `pip install -e .` - Install project in development mode (for core_logic imports)
+
+### Development Commands
+- **Dev server**: `python -m trading_bot_v2.api_server` - Start FastAPI server (recommended)
+- **Alternative**: `python trading_bot_v2/api_server.py` - Direct script execution
+- **E2E Tests**: `npm test` - Run Playwright end-to-end tests
+- **API Testing**: `python test_api_endpoints.py` - Test all API endpoints
+
+### Quality Assurance
+- **Lint (Modern)**: `ruff check trading_bot_v2/` - Modern Python linting with auto-fix (preferred)
+- **Lint (Legacy)**: `flake8 trading_bot_v2/` - Traditional Python linting
+- **Type check**: `mypy trading_bot_v2/` - Python type checking
+- **Format**: `black trading_bot_v2/` - Code formatting (88 char lines)
+- **Format (Alt)**: `ruff format trading_bot_v2/` - Fast alternative to black (if available)
+- **Security**: `bandit -r trading_bot_v2/` - Security vulnerability scanning
+- **Secrets**: `detect-secrets scan trading_bot_v2/` - Secret detection
+
+### Testing
+- **Unit tests**: `pytest trading_bot_v2/` - Run Python test suite
+- **Single test**: `pytest trading_bot_v2/test_file.py::TestClass::test_method`
+- **Coverage**: `pytest --cov=trading_bot_v2 --cov-report=html`
+- **Coverage Report**: `pytest --cov=trading_bot_v2 --cov-report=term-missing` - Terminal coverage with missing lines
+- **E2E Tests**: `npm test` - Playwright end-to-end tests
+- **E2E Debug**: `npm run test:debug` - Debug mode with browser UI
+- **E2E Headed**: `npm run test:headed` - Run tests with visible browser
+- **E2E Report**: `npm run report` - View test results
+- **Performance Tests**: `pytest trading_bot_v2/tests/test_performance.py -v` - Performance benchmarks
+
+## Code Style Guidelines
+
+### Python
+- **Imports**: Use absolute imports from `core_logic` package - NO `sys.path.insert()`
+- **Import Groups**: stdlib → third-party → core_logic → local (alphabetized within groups)
+- **Types**: Type hints required for all public function params and return values
+- **Naming**: PascalCase classes, snake_case functions/methods/variables, UPPER_CASE constants
+- **Error Handling**: Specific exception types in try/except blocks, avoid bare except
+- **Async**: Use async/await for I/O operations, asyncio for concurrency
+- **Docstrings**: Google/NumPy style docstrings for all public functions/classes
+- **Line Length**: 88 characters (Black default)
+- **String Quotes**: Double quotes for docstrings, single quotes for code
+- **Path Handling**: Use `pathlib.Path` instead of `os.path`
+
+### Project-Specific Patterns
+- **Import Resolution**: All cross-directory imports must use absolute imports from `core_logic`
+- **ABC Inheritance**: Abstract base classes for component interfaces
+- **Environment Config**: No hardcoded values, use env vars for sensitive data
+- **Logging**: Structured logging with loguru for better performance
+- **Testing**: 80%+ code coverage, integration tests for critical paths
+- **Ruff Integration**: Use `ruff check . --fix` for auto-fixing linting issues
+- **Type Safety**: Strict mypy configuration enabled for better type checking
+
+## Current Trading System Architecture
+
+### Multi-Strategy Trading System (OPERATIONAL ✅)
+
+The bot implements **regime-based strategy selection** with ADX-driven market classification:
+
+**Core Trading Strategies (All Implemented and Working)**:
+- **Mean Reversion** (`RANGING_CALM`): RSI + Bollinger Bands with multi-timeframe alignment
+- **MA Crossover** (`TRENDING_STRONG/MODERATE`): 50/200 MA crossover with pullback entry
+- **Grid Trading** (`RANGING_VOLATILE/CALM`): ATR-spaced grid with partial unwind on regime change
+- **Liquidation Capture** (`ALL regimes`): Bidirectional cascade detection with volume confirmation
+
+**Market Regime Classification (Updated Jan 2026)**:
+- **TRENDING_STRONG**: ADX > 30.0 (loosened from 28.0)
+- **TRENDING_MODERATE**: ADX 25.0-30.0 (new regime)
+- **RANGING_VOLATILE**: ADX ≤ 25.0, volatility > 65% (lowered from 75%)
+- **RANGING_CALM**: ADX ≤ 25.0, volatility ≤ 65%
+- **INDECISIVE**: Transitional conditions
+
+**Enhanced Signal Parameters (Jan 2026 Updates)**:
+- **Mean Reversion**: RSI 35/65 (loosened from 30/70), min confidence 0.45 (down from 0.6)
+- **Grid Trading**: Spacing 0.4x ATR (tighter from 0.5x), levels 8 (reduced from 10)
+- **Liquidation Capture**: Price move 2.5% (down from 3%), volume spike 2.5x (down from 3x)
+- **MA Crossover**: Maintains high confidence 0.65 for trend confirmation
+
+### Position Sizing & Risk Management (PRODUCTION-READY ✅)
+
+**Kelly Criterion Position Sizer**:
+- Uses last 50 closed trades per strategy for optimal sizing
+- Fractional Kelly (0.5x) with 10% maximum position cap
+- Falls back to conservative percentages when insufficient history:
+  - Trend Following/MA Crossover: 2.0%
+  - Mean Reversion: 1.5%
+  - Grid Trading: 0.5%
+  - Liquidation Capture: 2.5%
+
+**Circuit Breaker System**:
+- Triggers at 10% portfolio loss (configurable)
+- Percentage-based calculation (not fixed dollar amount)
+- Warning at 80% of threshold with automatic trading halt
+
+### Advanced Risk Features
+
+**Grid Trading Safeguards**:
+- Maximum 10 grid positions per symbol
+- Emergency stop if ADX rises above 25.0 (regime change protection)
+- Partial grid unwind on regime changes (keep trend-aligned positions)
+- 5% portfolio emergency stop with automatic position closure
+
+**Signal Validation (8-Flag System)**:
+Every signal passes through comprehensive validation:
+1. Volume confirmation check
+2. Multi-timeframe alignment validation
+3. Support/resistance level proximity
+4. Risk-reward ratio ≥ 2:1 verification
+5. Liquidation buffer safety check
+6. Account risk limit validation
+7. Margin drawdown assessment
+8. Forbidden market conditions filter
+
+### Hub-Based Communication System (OPERATIONAL ✅)
+
+The system uses a centralized hub architecture for all component communication:
+
+**Core Components (Implemented and Working)**:
+- **DataHub**: Thread-safe data management with circuit breaker protection
+- **ConnectionManager**: WebSocket connection pooling and authentication
+- **Component Registry**: Interface-based component discovery and health monitoring
+- **Event System**: Decoupled event-driven communication between components
+- **Circuit Breaker**: Failure protection with exponential backoff retry
+
+**Communication Patterns (All Working)**:
+1. **Real-Time Updates**: WebSocket broadcasts for instant trade notifications
+2. **Event Publishing**: Components publish events via event system
+3. **Interface-Based Calls**: Components interact through defined interfaces
+4. **Circuit Breaker Protection**: Prevents cascading failures in component communication
+5. **Component Orchestration**: Centralized dependency injection and lifecycle management
+
+### Web Interface Status (FULLY OPERATIONAL ✅)
+
+**Frontend Capabilities**:
+- **API Integration**: All API calls work with proper error handling
+- **Button Controls**: Start/Stop buttons with loading states and feedback
+- **Real-time Updates**: WebSocket-based live data updates
+- **Error Handling**: Comprehensive error messages and toast notifications
+- **Professional UI**: Bootstrap-based responsive design with dark theme support
+- **Status Monitoring**: Real-time bot status and performance metrics
+
+**Working Features**:
+- ✅ Bot start/stop controls with state management
+- ✅ Status monitoring with real-time updates (30s intervals)
+- ✅ Position and trade history display
+- ✅ Market data integration
+- ✅ WebSocket live updates with reconnection handling
+- ✅ Error recovery and user feedback
+- ✅ Cross-browser compatibility testing
+
+### Testing Infrastructure (COMPREHENS
+
+## Current Trading System Architecture
+
+### Multi-Strategy Trading System (OPERATIONAL ✅)
+
+The bot implements **regime-based strategy selection** with ADX-driven market classification:
+
+**Core Trading Strategies (All Implemented and Working)**:
+- **Mean Reversion** (`RANGING_CALM`): RSI + Bollinger Bands with multi-timeframe alignment
+- **MA Crossover** (`TRENDING_STRONG/MODERATE`): 50/200 MA crossover with pullback entry
+- **Grid Trading** (`RANGING_VOLATILE/CALM`): ATR-spaced grid with partial unwind on regime change
+- **Liquidation Capture** (`ALL regimes`): Bidirectional cascade detection with volume confirmation
+
+**Market Regime Classification (Updated Jan 2026)**:
+- **TRENDING_STRONG**: ADX > 30.0 (loosened from 28.0)
+- **TRENDING_MODERATE**: ADX 25.0-30.0 (new regime)
+- **RANGING_VOLATILE**: ADX ≤ 25.0, volatility > 65% (lowered from 75%)
+- **RANGING_CALM**: ADX ≤ 25.0, volatility ≤ 65%
+- **INDECISIVE**: Transitional conditions
+
+**Enhanced Signal Parameters (Jan 2026 Updates)**:
+- **Mean Reversion**: RSI 35/65 (loosened from 30/70), min confidence 0.45 (down from 0.6)
+- **Grid Trading**: Spacing 0.4x ATR (tighter from 0.5x), levels 8 (reduced from 10)
+- **Liquidation Capture**: Price move 2.5% (down from 3%), volume spike 2.5x (down from 3x)
+- **MA Crossover**: Maintains high confidence 0.65 for trend confirmation
+
+### Position Sizing & Risk Management (PRODUCTION-READY ✅)
+
+**Kelly Criterion Position Sizer**:
+- Uses last 50 closed trades per strategy for optimal sizing
+- Fractional Kelly (0.5x) with 10% maximum position cap
+- Falls back to conservative percentages when insufficient history:
+  - Trend Following/MA Crossover: 2.0%
+  - Mean Reversion: 1.5%
+  - Grid Trading: 0.5%
+  - Liquidation Capture: 2.5%
+
+**Circuit Breaker System**:
+- Triggers at 10% portfolio loss (configurable)
+- Percentage-based calculation (not fixed dollar amount)
+- Warning at 80% of threshold with automatic trading halt
+
+### Advanced Risk Features
+
+**Grid Trading Safeguards**:
+- Maximum 10 grid positions per symbol
+- Emergency stop if ADX rises above 25.0 (regime change protection)
+- Partial grid unwind on regime changes (keep trend-aligned positions)
+- 5% portfolio emergency stop with automatic position closure
+
+**Signal Validation (8-Flag System)**:
+Every signal passes through comprehensive validation:
+1. Volume confirmation check
+2. Multi-timeframe alignment validation
+3. Support/resistance level proximity
+4. Risk-reward ratio ≥ 2:1 verification
+5. Liquidation buffer safety check
+6. Account risk limit validation
+7. Margin drawdown assessment
+8. Forbidden market conditions filter
+
+### Hub-Based Communication System (OPERATIONAL ✅)
+
+The system uses a centralized hub architecture for all component communication:
+
+**Core Components (Implemented and Working)**:
+- **DataHub**: Thread-safe data management with circuit breaker protection
+- **ConnectionManager**: WebSocket connection pooling and authentication
+- **Component Registry**: Interface-based component discovery and health monitoring
+- **Event System**: Decoupled event-driven communication between components
+- **Circuit Breaker**: Failure protection with exponential backoff retry
+
+**Communication Patterns (All Working)**:
+1. **Real-Time Updates**: WebSocket broadcasts for instant trade notifications
+2. **Event Publishing**: Components publish events via event system
+3. **Interface-Based Calls**: Components interact through defined interfaces
+4. **Circuit Breaker Protection**: Prevents cascading failures in component communication
+5. **Component Orchestration**: Centralized dependency injection and lifecycle management
+
+### Web Interface Status (FULLY OPERATIONAL ✅)
+
+**Frontend Capabilities**:
+- **API Integration**: All API calls work with proper error handling
+- **Button Controls**: Start/Stop buttons with loading states and feedback
+- **Real-time Updates**: WebSocket-based live data updates
+- **Error Handling**: Comprehensive error messages and toast notifications
+- **Professional UI**: Bootstrap-based responsive design with dark theme support
+- **Status Monitoring**: Real-time bot status and performance metrics
+
+**Working Features**:
+- ✅ Bot start/stop controls with state management
+- ✅ Status monitoring with real-time updates (30s intervals)
+- ✅ Position and trade history display
+- ✅ Market data integration
+- ✅ WebSocket live updates with reconnection handling
+- ✅ Error recovery and user feedback
+- ✅ Cross-browser compatibility testing
+
+### Testing Infrastructure (COMPREHENSIVE ✅)
+
+**Test Categories**:
+- **Unit Tests**: Comprehensive pytest suite with fixtures and mocks
+- **Integration Tests**: API endpoint testing with error scenarios
+- **E2E Tests**: Playwright-based web interface testing
+- **Performance Tests**: Benchmarking for critical operations
+- **WebSocket Tests**: Real-time communication testing
+- **Hub System Tests**: Component orchestration and data flow testing
+
+**Test Features**:
+- ✅ Auto-fixing linting with ruff
+- ✅ Coverage reporting with HTML output
+- ✅ Parallel test execution support
+- ✅ Cross-browser E2E testing (Chrome, Firefox, Safari)
+- ✅ API error scenario coverage
+- ✅ WebSocket reconnection testing
+
+## Recent System Improvements (2026)
+
+### ✅ Parameter Optimization (Latest Jan 2026)
+- **Loosened Confidence Thresholds**: Mean reversion and grid trading lowered to 0.45 (from 0.6)
+- **Enhanced Regime Detection**: Added TRENDING_MODERATE regime for better market adaptation
+- **Improved Grid Spacing**: Reduced to 0.4x ATR for tighter grid formation
+- **Expanded RSI Ranges**: Mean reversion now uses 35/65 (from 30/70) for more signals
+- **Lowered Liquidation Triggers**: Price move 2.5% and volume spike 2.5x for faster detection
+
+### ✅ Grid Trading Enhancements (Jan 2026)
+- **Partial Grid Unwind**: Keep trend-aligned positions when regime changes
+- **Dynamic Grid Sizing**: Reduced levels to 8 for faster deployment and management
+- **Enhanced Safety**: Stricter ADX monitoring with 25.0 threshold for regime change detection
+- **Multi-Regime Support**: Now active in RANGING_VOLATILE, RANGING_CALM, and optionally INDECISIVE
+
+### ✅ Modern Development Toolchain (Latest)
+- **Integrated Ruff**: Added modern Python linting with auto-fix capabilities
+- **Enhanced Coverage**: Improved test coverage reporting with missing line indicators
+- **Performance Testing**: Added dedicated performance benchmark test suite
+- **Better Error Handling**: Enhanced error messages and user feedback mechanisms
+
+### ✅ Hub System Enhancements (Jan 2026)
+- **Circuit Breaker**: Resilience patterns for database operations
+- **Component Registry**: Advanced dependency injection with interface support
+- **Event System**: Decoupled communication with proper error handling
+- **Connection Pooling**: Optimized WebSocket connection management
+
+### ✅ Web Interface Improvements (Jan 13, 2026)
+- **Fixed "Failed to fetch" errors** with enhanced error handling
+- **Added loading states** for better user feedback
+- **Implemented comprehensive error messages** instead of generic failures
+- **Added real-time status updates** every 30 seconds
+- **All buttons now work correctly** with proper API communication
+- **Cross-browser compatibility** verified with Playwright
+
+### ✅ Import System Refactoring (Jan 2026)
+- **Removed all forbidden `sys.path.insert()` calls** throughout codebase
+- **Replaced with absolute imports** from `core_logic` package
+- **Fixed LSP compatibility** while maintaining runtime functionality
+- **Standardized import patterns** across all modules
+- **Enhanced development mode** with `pip install -e .` support
+
+### ✅ Testing Infrastructure Expansion
+- **Comprehensive Playwright test suite** for web interface
+- **API endpoint testing** with comprehensive error scenarios
+- **WebSocket testing** for real-time features
+- **Performance monitoring** and benchmarks
+- **Component orchestration** testing for hub system
+- **Cross-browser compatibility** testing
+
+## Current System Status: **PRODUCTION-READY** ✅
+
+The trading bot system is now **production-ready** with:
+- **Working web interface** with professional UX and cross-browser support
+-

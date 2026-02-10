@@ -1,0 +1,600 @@
+Grid Spec Compliance Review
+1️⃣ Single grid per symbol enforcement
+
+Status: ✅ PASS
+
+Where enforced
+
+grid_lifecycle_manager.py
+
+GridLifecycleManager.has_active_grid()
+
+GridLifecycleManager.register_new_grid()
+
+if symbol in self._grids:
+    raise RuntimeError(f"Grid already active for {symbol}")
+
+
+trading_bot.py
+
+_execute_grid_signal()
+
+if self.grid_lifecycle.has_active_grid(symbol):
+    logging.warning("Grid already active...")
+    return
+
+
+Assessment
+
+Enforcement exists at two layers (bot + lifecycle manager).
+
+Lifecycle manager is authoritative → correct design.
+
+Risk
+
+None.
+
+2️⃣ Grid capital sourced only from RiskManager
+
+Status: ⚠️ SPEC-COMPLIANT BUT RISKY
+
+Correct behavior
+
+trading_bot.py::_execute_grid_signal()
+
+grid_capital = self.risk_manager.get_grid_capital(
+    account_balance, current_exposure, symbol
+)
+signal.grid_capital = grid_capital  # overrides strategy value
+
+
+Risky detail
+
+RiskManager.validate_grid_exposure() uses:
+
+account_balance = getattr(self, '_account_balance', 10000)
+
+
+This is not guaranteed to be the real account balance and can drift.
+
+Why this matters
+
+Exposure math can silently pass when it should fail.
+
+This is a latent capital limit violation risk, not theoretical.
+
+Concrete fix
+
+# risk_manager.py
+def validate_grid_exposure(self, symbol, proposed_grid_capital, account_balance, current_exposure):
+    ...
+
+
+Then call it from TradingBot with real balance:
+
+self.risk_manager.validate_grid_exposure(
+    symbol, grid_capital, account_balance, current_exposure
+)
+
+3️⃣ Per-level sizing math correctness
+
+Status: ⚠️ SPEC-COMPLIANT BUT INCOMPLETE
+
+What’s correct
+
+Equal allocation enforced:
+
+capital_per_level = grid_capital / signal.grid_levels
+
+
+No martingale behavior.
+
+Levels are normalized in RiskManager.normalize_grid_params().
+
+Missing guarantee
+
+There is no hard assertion that:
+
+Σ(level notionals) ≤ grid_capital
+
+
+Concrete fix
+Add a post-build check before placing orders:
+
+total_allocated = sum(level["notional"] for level in grid_levels)
+if total_allocated > grid_capital:
+    raise RuntimeError("Grid allocation exceeds approved capital")
+
+4️⃣ Emergency stop placement + unwind on failure
+
+Status: ❌ SPEC-BREAKING
+
+Problem A — Emergency stop not proven FIRST
+
+In trading_bot.py::_execute_grid_signal() the file cuts off before:
+
+Stop placement confirmation
+
+GridLifecycleManager.register_new_grid() call
+
+You intend to do:
+
+“PLACE EMERGENCY STOP FIRST (MANDATORY)”
+
+But no hard fail is visible that aborts grid creation if stop placement fails.
+
+Problem B — Lifecycle not registered atomically
+
+Spec requires:
+
+Grid exists only after emergency stop is live
+
+That means:
+
+place emergency stop → confirm → register grid → place grid orders
+
+
+Concrete fix
+Enforce this order strictly:
+
+stop_order = place_emergency_stop(...)
+if not stop_order or not stop_order["id"]:
+    raise RuntimeError("Emergency stop placement failed")
+
+self.grid_lifecycle.register_new_grid(symbol, grid_capital, stop_price)
+
+
+No grid orders should exist before this succeeds.
+
+5️⃣ Regime auto-disable → cancel orders + flatten
+
+Status: ⚠️ PARTIALLY WIRED
+
+Correct implementation
+
+GridLifecycleManager.on_regime_disallowed()
+
+Cancels orders
+
+Flattens positions
+
+Clears exposure
+
+Missing link
+
+MarketRegimeDetector does not call GridLifecycleManager.on_regime_disallowed()
+
+TradingBot does not enforce regime → lifecycle transitions
+
+Concrete fix
+In trading loop (or signal loop):
+
+if regime not in ALLOWED_GRID_REGIMES:
+    self.grid_lifecycle.on_regime_disallowed(symbol)
+
+
+Right now, grids can continue running silently through a bad regime.
+
+6️⃣ No legacy or direct-execution bypass paths
+
+Status: ❌ SPEC-BREAKING
+
+Critical violation
+
+TradingBot._execute_signal() allows non-grid strategies to:
+
+Place orders
+
+Open positions
+
+Without checking GridLifecycleManager
+
+This means:
+
+A grid can be active and other strategies can open conflicting exposure.
+
+Concrete fix
+Add a hard gate:
+
+if self.grid_lifecycle.has_active_grid(symbol) and signal.strategy != GRID_TRADING:
+    return
+
+
+Grid must be exclusive owner of symbol execution.
+
+Final Verdict
+❌ SPEC-BREAKING (MUST FIX BEFORE LIVE)
+Blocking issues
+
+Emergency stop is not proven to be placed before grid activation
+
+Regime → grid shutdown not enforced
+
+Other strategies can bypass grid exclusivity
+
+RiskManager uses stale balance in grid validation
+
+Grid Execution Sequence Diagram (Authoritative)
+
+┌──────────────┐
+│ Market Data  │
+└──────┬───────┘
+       │
+       ▼
+┌────────────────────┐
+│ StrategyManager    │
+│ (GridTrading only) │
+└──────┬─────────────┘
+       │ generates grid signal (HINTS ONLY)
+       ▼
+┌────────────────────────┐
+│ TradingBot._execute_   │
+│ grid_signal()          │
+└──────┬─────────────────┘
+       │
+       │ 1️⃣ SINGLE GRID CHECK
+       │─────────────────────────────
+       │ if GridLifecycle.has_active_grid(symbol):
+       │     ABORT (HARD FAIL)
+       ▼
+┌────────────────────────┐
+│ RiskManager            │
+│ get_grid_capital()     │
+└──────┬─────────────────┘
+       │ returns APPROVED grid capital
+       ▼
+┌────────────────────────┐
+│ RiskManager            │
+│ validate_grid_exposure │
+└──────┬─────────────────┘
+       │
+       │ if FAIL → ABORT
+       ▼
+┌────────────────────────┐
+│ RiskManager            │
+│ normalize_grid_params  │
+└──────┬─────────────────┘
+       │
+       │ (levels, qty, spacing normalized)
+       ▼
+┌────────────────────────┐
+│ TradingBot             │
+│ calculate_grid_levels  │
+└──────┬─────────────────┘
+       │
+       │ Σ(level notionals) ≤ grid_capital
+       │ if FAIL → ABORT
+       ▼
+┌────────────────────────┐
+│ TradingBot             │
+│ PLACE EMERGENCY STOP   │
+│ (MARKET or STOP)       │
+└──────┬─────────────────┘
+       │
+       │ if STOP FAILS → ABORT (NO GRID EXISTS)
+       ▼
+┌────────────────────────┐
+│ GridLifecycleManager   │
+│ register_new_grid()    │
+└──────┬─────────────────┘
+       │
+       │ GRID NOW EXISTS (AUTHORITATIVE)
+       ▼
+┌────────────────────────┐
+│ TradingBot             │
+│ PLACE GRID ORDERS      │
+│ (LIMITS ONLY)          │
+└──────┬─────────────────┘
+       │
+       │ grid orders live
+       ▼
+┌────────────────────────┐
+│ Runtime Monitoring     │
+│ (tick / loop)          │
+└──────┬─────────────────┘
+       │
+       │───────────────┬──────────────────────────┐
+       │               │                          │
+       ▼               ▼                          ▼
+┌──────────────┐ ┌──────────────┐        ┌────────────────────┐
+│ Price Hits   │ │ Regime Change │        │ Manual / System    │
+│ Emergency    │ │ Disallowed    │        │ Shutdown           │
+│ Stop         │ │ Regime        │        │                    │
+└──────┬───────┘ └──────┬───────┘        └─────────┬──────────┘
+       │               │                          │
+       ▼               ▼                          ▼
+┌────────────────────────┐
+│ GridLifecycleManager   │
+│ _force_exit()          │
+└──────┬─────────────────┘
+       │
+       │ Cancel ALL orders
+       │ Close ALL positions (market)
+       │ Reset RiskManager exposure
+       │ Clear grid state
+       ▼
+┌────────────────────────┐
+│ SYSTEM FLAT & CLEAN    │
+└────────────────────────┘
+
+Grid Pre-Trade Assertion Checklist
+
+(Mandatory — block execution on failure)
+
+1️⃣ Symbol & Lifecycle Authority
+☐ 1.1 No existing grid for symbol
+
+Assert
+
+assert not grid_lifecycle.has_active_grid(symbol)
+
+
+Failure impact
+→ Duplicate grid risk / capital over-allocation
+
+☐ 1.2 No non-grid positions exist for symbol
+
+Assert
+
+assert no_open_positions(symbol) or all_positions_owned_by_grid(symbol)
+
+
+Failure impact
+→ Grid cannot safely flatten or control exposure
+
+2️⃣ Regime Safety Gate
+☐ 2.1 Current regime explicitly allows grid
+
+Allowed
+
+RANGING_CALM
+
+RANGING_VOLATILE
+
+(optionally) INDECISIVE
+
+Assert
+
+assert regime in ALLOWED_GRID_REGIMES
+
+
+Failure impact
+→ Grid deployed into trend → runaway loss risk
+
+☐ 2.2 Regime source is authoritative
+
+Assert
+
+assert regime_source == MarketRegimeDetector
+
+
+Failure impact
+→ Stale or spoofed regime state
+
+3️⃣ Capital & Risk Authority
+☐ 3.1 Grid capital sourced ONLY from RiskManager
+
+Assert
+
+assert grid_capital == risk_manager.get_grid_capital(...)
+
+
+Failure impact
+→ Spec breach, silent over-risking
+
+☐ 3.2 Grid capital validated against exposure limits
+
+Assert
+
+assert risk_manager.validate_grid_exposure(
+    symbol,
+    grid_capital,
+    account_balance,
+    current_exposure
+)
+
+
+Failure impact
+→ Portfolio-level risk breach
+
+☐ 3.3 Approved grid capital > 0
+
+Assert
+
+assert grid_capital > 0
+
+
+Failure impact
+→ Undefined sizing / divide-by-zero behavior
+
+4️⃣ Grid Structure Integrity
+☐ 4.1 Grid levels normalized and bounded
+
+Assert
+
+assert 2 <= grid_levels <= 10
+
+
+Failure impact
+→ Over-fragmentation or runaway order count
+
+☐ 4.2 Spacing within safety bounds
+
+Assert
+
+assert 0.001 <= spacing <= 0.05
+
+
+Failure impact
+→ Orders too tight (fees) or too wide (ineffective)
+
+☐ 4.3 Equal capital per level (no martingale)
+
+Assert
+
+assert all(level.capital == capital_per_level for level in grid_levels)
+
+
+Failure impact
+→ Convex loss profile
+
+☐ 4.4 Total grid allocation ≤ approved capital
+
+Assert
+
+assert sum(level.capital for level in grid_levels) <= grid_capital
+
+
+Failure impact
+→ Capital overrun
+
+5️⃣ Emergency Stop (CRITICAL)
+☐ 5.1 Emergency stop price calculated and sane
+
+Assert
+
+assert emergency_stop_price > 0
+assert emergency_stop_price < grid_midpoint_price
+
+
+Failure impact
+→ Invalid protection
+
+☐ 5.2 Emergency stop placed FIRST
+
+Assert
+
+assert emergency_stop_order is not None
+assert emergency_stop_order.id is not None
+
+
+Failure impact
+→ Unprotected exposure
+
+☐ 5.3 Stop placement failure aborts grid
+
+Assert
+
+if not emergency_stop_order:
+    abort_grid_creation()
+
+
+Failure impact
+→ Hard spec violation
+
+6️⃣ Lifecycle Registration (Atomic)
+☐ 6.1 Grid registered ONLY after stop confirmed
+
+Assert
+
+assert emergency_stop_confirmed is True
+grid_lifecycle.register_new_grid(...)
+
+
+Failure impact
+→ Phantom grid state / orphan orders
+
+☐ 6.2 RiskManager exposure initialized
+
+Assert
+
+assert risk_manager.grid_exposure[symbol] == 0.0
+
+
+Failure impact
+→ Exposure tracking corruption
+
+7️⃣ Order Placement Constraints
+☐ 7.1 Only LIMIT orders for grid levels
+
+Assert
+
+assert order.type == "limit"
+
+
+Failure impact
+→ Slippage / uncontrolled fills
+
+☐ 7.2 No orders placed outside lifecycle
+
+Assert
+
+assert execution_path == GridLifecycleManager
+
+
+Failure impact
+→ Bypass of safety controls
+
+8️⃣ Exclusivity & Isolation
+☐ 8.1 No other strategy allowed to trade symbol
+
+Assert
+
+assert grid_lifecycle.owns_symbol(symbol)
+
+
+Failure impact
+→ Conflicting exits / double exposure
+
+9️⃣ Post-Placement Sanity Check
+☐ 9.1 All expected grid orders present
+
+Assert
+
+assert open_grid_orders_count == expected_levels * 2
+
+
+Failure impact
+→ Partial grid / asymmetry risk
+
+☐ 9.2 Emergency stop still active
+
+Assert
+
+assert emergency_stop_order.is_open()
+
+
+Failure impact
+→ Naked grid
+
+10️⃣ Kill-Switch Readiness
+☐ 10.1 Cancel-all works for symbol
+
+Assert
+
+assert client.can_cancel_all(symbol)
+
+
+Failure impact
+→ Inability to unwind
+
+☐ 10.2 Market close works for symbol
+
+Assert
+
+assert client.can_place_market_order(symbol)
+
+
+Failure impact
+→ Emergency exit failure
+
+Minimum Pass Requirement
+
+ALL boxes must pass
+Any single failure ⇒ NO GRID
+
+Recommended Implementation Pattern
+def assert_grid_pre_trade(...):
+    for check in CHECKS:
+        if not check():
+            raise RuntimeError("GRID PRE-TRADE ASSERTION FAILED")
+
+
+Run this once and only once, immediately before:
+
+place_emergency_stop()
+
+Final Note (Blunt)
+
+If you cannot prove these assertions at runtime,
+you do not have a grid — you have hope with leverage.

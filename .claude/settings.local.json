@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(test:*)",
+      "Bash(echo:*)",
+      "Skill(run-prompt)",
+      "Bash(grep:*)",
+      "Bash(\"C:\\\\Users\\\\z_shi\\\\Desktop\\\\N8NPROJECTS\\\\Bot 3\\\\run_bot.bat\")",
+      "Bash(start cmd /c \"python api_server.py\")",
+      "Bash(ls:*)",
+      "Bash(xargs:*)",
+      "Bash(PYTHONPATH=\"$PWD\" python -m trading_bot_v2.api_server)",
+      "Bash(wmic process where \"name=''python.exe''\" get processid,commandline)",
+      "Bash(start /B python:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(Select-String -Pattern \"Signal|MeanReversion|MACrossover|Liquidation|regime|GridTrading\")",
+      "Bash(Select-Object -Last 30)",
+      "Bash(wmic process:*)",
+      "Bash(more:*)"
+    ]
+  },
+  "outputStyle": "default"
+}

@@ -1,0 +1,436 @@
+{\rtf1\ansi\deff0\nouicompat{\fonttbl{\f0\fnil\fcharset0 Calibri;}{\f1\fnil\fcharset1 Cambria Math;}{\f2\fnil Calibri;}}
+{\*\generator Riched20 10.0.19041}{\*\mmathPr\mmathFont1\mwrapIndent1440 }\viewkind4\uc1 
+\pard\sa200\sl276\slmult1\f0\fs22\lang9 Bot Issue \f1\u8594?\f0  Grid signal handling & replenishment logic integrity\par
+Risk / State Management Issue \f1\u8594?\f0  Potential staleness or inaccuracy in grid state if new grid signals are blindly rejected without incorporating updated market information\par
+Yes \f2\emdash  your observation is valid and points to a subtle but important design tension in the current grid implementation.\par
+The existing behavior (hard reject on new grid signals when a grid is already active) is safe and prevents chaos, but it is also somewhat rigid and can lead to grids becoming increasingly misaligned with current market conditions over time \emdash  especially in longer-running grids during volatile or slowly drifting markets.\par
+Current Behavior (Pros & Cons)\par
+AspectPro (why it's currently good)Con (where it hurts accuracy)Prevents multiple overlapping gridsAvoids duplicate orders, double-sizing, race conditionsNo way to \ldblquote refresh\rdblquote  grid levels when volatility / mean changes significantlyGrid remains simple state machineEasy to reason about lifecycle (create \f1\u8594?\f0  replenish \f1\u8594?\f0  exit)Grid anchors (center price, spacing) can drift far from current fair valueReplenishment only reacts to fillsKeeps trading reactive and low-frequencyDoes not proactively adapt to new regime signals or stronger mean-reversion levelsRisk/exposure stays predictableRiskManager sees one coherent grid allocationMissed opportunity to tighten / recenter grid when new high-conviction mean levels appear\par
+What \ldblquote keeping the new information\rdblquote  could mean\par
+There are several graduated ways to let newer grid signals influence an existing grid without throwing safety out the window. Here are the most common (and increasingly safe) patterns used in production grid bots:\par
+ApproachDescriptionSafety LevelComplexityRecommended?1. Hard reject (current)New grid signal \f1\u8594?\f0  discardedVery HighLowSafe default2. Replace if betterIf new signal has meaningfully higher confidence / better center price \f1\u8594?\f0  cancel old grid + create new oneHighMediumGood middle ground3. Re-center / resize existing gridKeep existing orders, but shift the entire grid center toward the new VWAP/mean level (partial cancel + replace)Medium-HighMedium-HighAdvanced but powerful4. Adaptive spacing onlyKeep center, but dynamically adjust spacing multiplier based on latest ATR/volatility from new signalHighMediumOften enough for most cases5. Merge signals (weighted)Take weighted average of old center + new proposed center; only apply if difference > thresholdMediumHighComplex, risk of oscillation6. Allow multiple co-existing grids (very rare)Track multiple grid instances per symbol with sub-allocationsVery LowVery HighAlmost never recommended\par
+Most Practical & Safe Upgrade Path (Recommended)\par
+Option 2 + Option 4 hybrid \f2\emdash  this gives you most of the benefit with controlled risk:\par
+Proposed Rule Set\par
+New grid signal arrives while grid is active\par
+Compute distance between:\par
+Current grid center (e.g. average entry price of open legs or last placed mid-point)\par
+New proposed grid center (from signal.entry_price or VWAP at signal time)\par
+Also compare confidence and regime compatibility\par
+If any of these thresholds are met \f1\u8594?\f0  treat as \ldblquote upgrade opportunity\rdblquote :\par
+Center moved > 1.5\f2\endash 2.0 \f0\'d7 current ATR(14)\par
+New signal confidence \f1\u8805?\f0  current grid avg confidence + 0.10\par
+Regime still allows grid AND new signal has higher quality (HIGH vs STANDARD)\par
+Then:\par
+Log clearly:\par
+"Grid refresh opportunity detected: center drift \{drift_atr:.1f\}x ATR, new conf \{new_conf:.0%\} vs old \{old_conf:.0%\}"\par
+Re-center (soft version) \f2\emdash  preferred first step:\par
+Calculate shift delta = new_center - old_center\par
+For every existing unfilled limit order: cancel + replace at old_price + delta\par
+For filled positions: leave them (they are legacy), but new replenishment legs use updated center\par
+Update GridLifecycleManager metadata with new center price\par
+\par
+Fallback: full replace (if drift very large, e.g. > 3\endash 4 ATR)\par
+Trigger emergency-style flatten of grid (or partial unwind)\par
+Create brand new grid from the new signal\par
+This is more aggressive \emdash  use only when drift is extreme\par
+\par
+Always cap frequency:\par
+Minimum time between refreshes: 30\endash 120 minutes (configurable)\par
+Max 2\endash 3 refreshes per day per symbol\par
+\par
+\par
+Quick Code Location Suggestions\par
+In trading_bot.py around line ~1318 (the skip log):\par
+Pythonelse:  # grid already active\par
+    current_orders = grid_manager.get_orders_placed(signal.asset)\par
+    current_center = grid_lifecycle.get_grid_center(signal.asset)  # you'd need to add this method\par
+    proposed_center = signal.entry_price  # or better: derived from proposed levels\par
+    \par
+    drift_pct = abs(proposed_center - current_center) / current_center\par
+    drift_atr = abs(proposed_center - current_center) / current_atr\par
+    \par
+    if drift_atr > config.GRID_REFRESH_MIN_ATR_DRIFT and signal.confidence > 0.75:\par
+        logger.info(f"Grid refresh triggered: drift \{drift_atr:.1f\}x ATR | new conf \{signal.confidence:.0%\}")\par
+        # Option A: soft recenter\par
+        grid_lifecycle.recenter_grid(signal.asset, proposed_center)\par
+        # Option B: full replace (more aggressive)\par
+        # grid_lifecycle.on_emergency_stop_triggered(signal.asset)  # flatten first\par
+        # then let normal signal flow create new grid\par
+    else:\par
+        logger.info(f"Grid already active for \{signal.asset\} with \{current_orders\} orders - skipping (drift too small)")\par
+You would need to add helper methods to GridLifecycleManager:\par
+\par
+get_grid_center(symbol) \f1\u8594?\f0  return current reference price\par
+recenter_grid(symbol, new_center) \f1\u8594?\f0  shift unfilled orders\par
+\par
+Bottom Line Recommendation\par
+Yes \f2\emdash  it would be better (more accurate, more adaptive) to allow new grid signals to influence existing grids, but not by blindly accepting them.\par
+The cleanest incremental improvement is:\par
+\par
+Keep the rejection as default (safety first)\par
+Add a controlled refresh path for high-conviction, large-drift new signals\par
+Start with soft recentering of unfilled orders (safest)\par
+Add cooldown between refreshes\par
+Log every refresh attempt clearly (audit trail)\par
+\par
+This keeps the grid \ldblquote accurate\rdblquote  to new information without risking the overlapping-chaos nightmare.\par
+Let me know your risk tolerance on this one \emdash  grids are one of the more dangerous parts to make \ldblquote too smart\rdblquote .2.1sDetailed recenter logic skeletonBot Issue \f1\u8594?\f0  Grid state staleness & adaptation to new market information\par
+Risk Management / State Management Issue \f1\u8594?\f0  Need controlled mechanism to refresh/recenter existing grid without breaking exclusivity or exposure rules\par
+Here is a detailed, production-oriented skeleton for implementing soft recentering of an existing grid when a new high-conviction grid signal arrives.\par
+This approach tries to keep most of the safety properties of the current system while allowing meaningful updates when the market has drifted significantly.\par
+Design Goals of this Implementation\par
+Preserve exclusivity \f2\emdash  still only one active grid instance per symbol\par
+Only unfilled orders are adjusted \emdash  filled legs (actual positions) remain untouched\par
+Atomic-ish operation \emdash  cancel + replace in quick sequence with locking\par
+Safety gates \emdash  minimum drift, confidence improvement, cooldown, max frequency\par
+Audit trail \emdash  very clear logging of every change\par
+No new positions created during recenter \emdash  only modifies existing structure\par
+RiskManager exposure unchanged \emdash  total allocated capital stays the same\par
+\par
+1. New/Updated Methods in GridLifecycleManager\par
+Python# grid_lifecycle_manager.py\par
+\par
+class GridLifecycleManager:\par
+    # ... existing code ...\par
+\par
+    def get_grid_center(self, symbol: str) -> Optional[float]:\par
+        """Return the current reference center price of the active grid."""\par
+        if not self.has_active_grid(symbol):\par
+            return None\par
+        grid = self._grids[symbol]\par
+        # Option A: use average of all placed limit prices (most common)\par
+        if "placed_orders" in grid and grid["placed_orders"]:\par
+            prices = [o["price"] for o in grid["placed_orders"].values()]\par
+            return sum(prices) / len(prices)\par
+        # Option B: fallback to initial center or last known mid\par
+        return grid.get("center_price", None)  # you may need to store this at creation\par
+\par
+    def get_last_refresh_time(self, symbol: str) -> Optional[datetime]:\par
+        """Track when grid was last recentered / refreshed."""\par
+        if symbol not in self._grids:\par
+            return None\par
+        return self._grids[symbol].get("last_refresh", None)\par
+\par
+    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh"):\par
+        """\par
+        Soft recenter: shift UNFILLED limit orders toward new center price.\par
+        Does NOT touch filled positions.\par
+        """\par
+        if not self.has_active_grid(symbol):\par
+            logger.warning(f"Cannot recenter - no active grid for \{symbol\}")\par
+            return False\par
+\par
+        grid = self._grids[symbol]\par
+        current_center = self.get_grid_center(symbol)\par
+        if current_center is None:\par
+            logger.error(f"Cannot recenter \{symbol\} - no current center price")\par
+            return False\par
+\par
+        # Safety: enforce minimum time between refreshes (e.g. 45 minutes)\par
+        last_refresh = self.get_last_refresh_time(symbol)\par
+        if last_refresh and (datetime.now() - last_refresh).total_seconds() < 2700:  # 45 min\par
+            logger.info(f"Refresh skipped for \{symbol\} - too soon since last (\{last_refresh\})")\par
+            return False\par
+\par
+        drift_abs = abs(new_center - current_center)\par
+        logger.info(f"Recentering \{symbol\} | old center $\{current_center:.4f\} \f1\u8594?\f0  new $\{new_center:.4f\} "\par
+                    f"(drift $\{drift_abs:.4f\}) - reason: \{reason\}")\par
+\par
+        try:\par
+            # 1. Lock / critical section (use existing _data_lock if shared)\par
+            with self._data_lock:  # assuming you expose or pass lock from TradingBot\par
+\par
+                # 2. Get current unfilled orders\par
+                unfilled_orders = \{\}  # order_id \f1\u8594?\f0  \{price, side, quantity, ...\}\par
+                for order_id, order_info in grid.get("placed_orders", \{\}).items():\par
+                    if order_info.get("status") == "open":  # or check via API if needed\par
+                        unfilled_orders[order_id] = order_info\par
+\par
+                if not unfilled_orders:\par
+                    logger.info(f"No unfilled orders to recenter for \{symbol\}")\par
+                    # Still update metadata\par
+                    grid["center_price"] = new_center\par
+                    grid["last_refresh"] = datetime.now()\par
+                    return True\par
+\par
+                # 3. Calculate shift delta\par
+                delta = new_center - current_center\par
+\par
+                # 4. For each unfilled order: cancel \f1\u8594?\f0  place new at adjusted price\par
+                for order_id, info in unfilled_orders.items():\par
+                    old_price = info["price"]\par
+                    new_price = old_price + delta\par
+\par
+                    # Optional: clamp to prevent insane moves\par
+                    if abs(new_price - old_price) / old_price > 0.08:  # >8% single jump\par
+                        logger.warning(f"Price shift too large for \{symbol\} order \{order_id\} "\par
+                                       f"- skipping this leg")\par
+                        continue\par
+\par
+                    side = info["side"]\par
+                    quantity = info["quantity"]\par
+\par
+                    # Cancel old\par
+                    try:\par
+                        self.client.cancel_order(symbol, order_id)\par
+                        logger.debug(f"Cancelled old order \{order_id\} @ $\{old_price:.4f\}")\par
+                    except Exception as e:\par
+                        logger.error(f"Cancel failed for \{order_id\}: \{e\}")\par
+                        continue  # don't place new if cancel failed\par
+\par
+                    # Place new\par
+                    try:\par
+                        new_order = self.client.place_order(\par
+                            symbol=symbol,\par
+                            side=side,\par
+                            quantity=quantity,\par
+                            price=new_price,\par
+                            type="limit"\par
+                        )\par
+                        new_order_id = new_order.get("id")\par
+                        logger.info(f"Replaced order \{order_id\} \f1\u8594?\f0  \{new_order_id\} "\par
+                                    f"@ $\{new_price:.4f\} (\{side\})")\par
+\par
+                        # Update internal tracking\par
+                        grid["placed_orders"][new_order_id] = \{\par
+                            **info,\par
+                            "order_id": new_order_id,\par
+                            "price": new_price,\par
+                            "placed_at": datetime.now()\par
+                        \}\par
+                        del grid["placed_orders"][order_id]  # remove old\par
+\par
+                    except Exception as e:\par
+                        logger.error(f"Replace failed for \{symbol\} \{side\} \{quantity\}: \{e\}")\par
+\par
+                # 5. Update grid metadata\par
+                grid["center_price"] = new_center\par
+                grid["last_refresh"] = datetime.now()\par
+                grid["last_refresh_reason"] = reason\par
+\par
+                logger.info(f"Grid recenter completed for \{symbol\} - \{len(unfilled_orders)\} legs adjusted")\par
+\par
+                return True\par
+\par
+        except Exception as e:\par
+            logger.critical(f"Recentering FAILED for \{symbol\}: \{e\}")\par
+            # Optional: emergency flatten if partial failure?\par
+            return False\par
+2. Integration Point in TradingBot (where you currently skip)\par
+Around the place where you log \ldblquote Grid already active ... skipping\rdblquote :\par
+Python# trading_bot.py - inside _execute_grid_signal_coordinated or similar\par
+\par
+if self.grid_lifecycle.has_active_grid(signal.asset):\par
+    current_orders = self.grid_lifecycle.get_orders_placed(signal.asset)\par
+    \par
+    current_center = self.grid_lifecycle.get_grid_center(signal.asset)\par
+    proposed_center = signal.entry_price  # or better: average of proposed levels\par
+    \par
+    if current_center is None:\par
+        logger.warning(f"Active grid but no center price for \{signal.asset\} - skipping")\par
+        return\par
+\par
+    atr_current = self.multi_tf_fetcher.get_latest_atr(signal.asset, timeframe="5m")\par
+    drift_atr = abs(proposed_center - current_center) / atr_current if atr_current > 0 else 0\par
+\par
+    # Configurable thresholds\par
+    MIN_DRIFT_ATR = 1.8          # from config.GRID_REFRESH_MIN_ATR_DRIFT\par
+    MIN_CONF_IMPROVE = 0.08      # new signal must be noticeably better\par
+\par
+    should_refresh = (\par
+        drift_atr >= MIN_DRIFT_ATR and\par
+        signal.confidence >= 0.72 and  # high conviction required\par
+        (signal.confidence - 0.65) >= MIN_CONF_IMPROVE  # relative improvement\par
+    )\par
+\par
+    if should_refresh:\par
+        logger.info(\par
+            f"Grid refresh OPPORTUNITY \{signal.asset\}: "\par
+            f"drift \{drift_atr:.1f\}\'d7ATR | conf \{signal.confidence:.0%\} "\par
+            f"(current center $\{current_center:.4f\} \f1\u8594?\f0  proposed $\{proposed_center:.4f\})"\par
+        )\par
+        success = self.grid_lifecycle.recenter_grid(\par
+            symbol=signal.asset,\par
+            new_center=proposed_center,\par
+            reason=f"high_conf_refresh_drift_\{drift_atr:.1f\}x"\par
+        )\par
+        if success:\par
+            # Optional: update any signal metadata or journal\par
+            self.db.log_grid_event(\par
+                symbol=signal.asset,\par
+                event_type="recenter",\par
+                details=\{\par
+                    "old_center": current_center,\par
+                    "new_center": proposed_center,\par
+                    "drift_atr": drift_atr,\par
+                    "signal_conf": signal.confidence\par
+                \}\par
+            )\par
+    else:\par
+        logger.info(\par
+            f"Grid already active for \{signal.asset\} with \{current_orders\} orders - "\par
+            f"skipping (drift \{drift_atr:.1f\}\'d7ATR too small or conf too low)"\par
+        )\par
+Summary \f2\endash  Safety / Trade-offs\par
+Pros\par
+\par
+Grid stays more relevant to current market mean/vol\par
+Still only one grid structure\par
+Filled positions protected\par
+Very explicit logging & audit trail\par
+\par
+Cons / Risks to watch\par
+\par
+Partial failure possible (some legs replaced, some not) \f1\u8594?\f0  needs monitoring\par
+Increased API calls during refresh \f1\u8594?\f0  rate-limit aware\par
+If delta very large \f1\u8594?\f0  may create temporarily unbalanced book \f1\u8594?\f0  consider max shift % cap\par
+\par
+Next incremental steps if you implement this\par
+\par
+Add unit test simulating recenter (mock client)\par
+Add config params: GRID_REFRESH_MIN_ATR_DRIFT, GRID_REFRESH_COOLDOWN_MINUTES, GRID_MAX_REFRESH_PER_DAY\par
+Add frontend indicator: \ldblquote Grid last refreshed X min ago \f2\endash  drift Y%\rdblquote\par
+Start with very conservative thresholds (e.g. 2.5\f0\'d7 ATR, 45 min cooldown)\par
+\par
+Let me know your preferred direction or risk appetite on this feature.3.7sDynamic grid spacingBot Issue \f1\u8594?\f0  Grid strategy adaptation & parameter flexibility\par
+Feature Enhancement Request \f1\u8594?\f0  Implement dynamic / adaptive grid spacing to improve performance in varying volatility regimes (RANGING_CALM vs RANGING_VOLATILE especially)\par
+Yes \f2\emdash  making grid spacing dynamic (adjusted based on current volatility) is one of the highest-value upgrades you can make to the GridTradingStrategy. Static spacing works in narrow regimes but underperforms when volatility expands/contracts, leading to:\par
+\par
+Too-tight grids in high-vol \f1\u8594?\f0  excessive trades, fee bleed, whipsaw losses\par
+Too-wide grids in low-vol \f1\u8594?\f0  missed small oscillations, low fill rate\par
+\par
+Dynamic spacing directly addresses this \f2\emdash  it's a common evolution in production grid bots (ATR-multiplier or Bollinger-based adjustment is standard in 2025\endash 2026 crypto bots).\par
+Recommended Approach: ATR-Based Dynamic Spacing\par
+Why ATR?\par
+\par
+Directly measures average price range \f1\u8594?\f0  perfect proxy for "how far can price realistically move before mean-reversion likely kicks in"\par
+Already calculated in your codebase (calculate_atr)\par
+Regime-aware: high ATR \f1\u8594?\f0  widen spacing (protect against whipsaws), low ATR \f1\u8594?\f0  tighten (capture more oscillations)\par
+Simple, low-latency, no extra dependencies\par
+\par
+Core Rule:\par
+textcurrent_spacing = base_spacing_multiplier \'d7 ATR(period=14, timeframe=5m or 15m)\par
+\par
+base_spacing_multiplier: configurable (e.g. 0.8\f2\endash 2.0)\par
+Recalculate spacing periodically (every 15\endash 60 min or on regime shift / new grid signal)\par
+Apply to new replenishment legs (existing unfilled orders can optionally be adjusted via recenter)\par
+\par
+Two Variants to Consider (pick one or make configurable)\par
+VariantSpacing FormulaWhen to UseProsConsATR Multiplier (simplest & recommended)spacing = k \f0\'d7 ATR(14)  (k = 0.8\f2\endash 1.8)All ranging regimesFast, robust, volatility-normalizedLinear \emdash  may need k adjustment per symbolBollinger Width Hybridspacing = (BB_upper - BB_lower) / (num_levels \f0\'d7 factor)When you want bands to define the entire rangeNaturally fits mean-reversion zonesSlightly slower calc, more params to tuneVolatility Percentilespacing = base \'d7 (current_ATR / ATR_50th_percentile)Advanced regime filterCaps extreme expansionNeeds historical ATR buffer\par
+Start with ATR Multiplier \f2\emdash  it's battle-tested in crypto grid bots.\par
+Implementation Skeleton (GridTradingStrategy)\par
+Add to strategies/grid_trading.py (or wherever your GridTradingStrategy lives):\par
+Python# strategies/grid_trading.py\par
+from typing import Optional, Dict\par
+from loguru import logger\par
+# ... existing imports ...\par
+from core_logic.indicators import calculate_atr\par
+\par
+class GridTradingStrategy(BaseStrategy):\par
+    def __init__(self,\par
+                 grid_levels: int = 8,\par
+                 base_spacing_multiplier: float = 1.2,     # k in spacing = k \f0\'d7 ATR\par
+                 min_spacing_pct: float = 0.003,           # floor 0.3%\par
+                 max_spacing_pct: float = 0.08,            # cap 8%\par
+                 atr_period: int = 14,\par
+                 atr_timeframe: str = "5m",                # or "15m" for smoother\par
+                 refresh_interval_min: int = 30,           # how often to re-eval spacing\par
+                 **kwargs):\par
+        super().__init__()\par
+        self.strategy_type = StrategyType.GRID_TRADING\par
+        self.grid_levels = grid_levels\par
+        self.base_k = base_spacing_multiplier\par
+        self.min_spacing_pct = min_spacing_pct\par
+        self.max_spacing_pct = max_spacing_pct\par
+        self.atr_period = atr_period\par
+        self.atr_tf = atr_timeframe\par
+        self.last_spacing_refresh = \{\}  # symbol \f1\u8594?\f0  last refresh timestamp\par
+        self.current_spacing = \{\}       # symbol \f1\u8594?\f0  current spacing value (absolute or %)\par
+        # ... existing params (emergency_stop_pct, adx_threshold, etc.)\par
+\par
+    def get_dynamic_spacing(self, symbol: str, market_data: Dict[str, Any]) -> float:\par
+        """\par
+        Compute current grid spacing (as decimal, e.g. 0.015 = 1.5%)\par
+        Uses latest ATR from requested timeframe\par
+        """\par
+        if symbol not in self.last_spacing_refresh or \\\par
+           (datetime.now() - self.last_spacing_refresh.get(symbol, datetime.min)).total_seconds() > (self.refresh_interval_min * 60):\par
+            \par
+            df = market_data.get(self.atr_tf)\par
+            if df is None or len(df) < self.atr_period + 10:\par
+                logger.warning(f"Insufficient \{self.atr_tf\} data for \{symbol\} - using fallback spacing")\par
+                spacing = 0.015  # 1.5% fallback\par
+            else:\par
+                atr_values = calculate_atr(df['high'], df['low'], df['close'], period=self.atr_period)\par
+                current_atr = atr_values[-1]\par
+                current_price = df['close'].iloc[-1]\par
+                \par
+                # ATR as % of price\par
+                atr_pct = current_atr / current_price if current_price > 0 else 0.01\par
+                \par
+                # Apply multiplier & clamps\par
+                spacing_pct = self.base_k * atr_pct\par
+                spacing_pct = max(self.min_spacing_pct, min(self.max_spacing_pct, spacing_pct))\par
+                \par
+                logger.debug(f"\{symbol\} dynamic spacing: \{spacing_pct:.3%\} (ATR $\{current_atr:.4f\} \f1\u8594?\f0  \{atr_pct:.3%\} \'d7 k=\{self.base_k\})")\par
+                self.current_spacing[symbol] = spacing_pct\par
+                self.last_spacing_refresh[symbol] = datetime.now()\par
+        \par
+        return self.current_spacing.get(symbol, 0.015)  # default fallback\par
+\par
+    def generate_signal(self, symbol: str, timeframe_data: Dict[str, Any], **kwargs) -> Optional[Signal]:\par
+        # ... existing regime / ADX checks ...\par
+\par
+        # Get dynamic spacing instead of fixed\par
+        spacing = self.get_dynamic_spacing(symbol, timeframe_data)\par
+        \par
+        # Use spacing to define levels (example arithmetic grid)\par
+        current_price = timeframe_data.get("1m", timeframe_data.get("5m"))['close'].iloc[-1]\par
+        grid_center = current_price  # or VWAP / EMA if you want anchored\par
+        \par
+        proposed_levels = []\par
+        for i in range(1, self.grid_levels // 2 + 1):\par
+            buy_price = grid_center * (1 - i * spacing)\par
+            sell_price = grid_center * (1 + i * spacing)\par
+            proposed_levels.append(\{"side": "buy", "price": buy_price, "level": -i\})\par
+            proposed_levels.append(\{"side": "sell", "price": sell_price, "level": i\})\par
+\par
+        # Build Signal with dynamic info\par
+        signal = Signal(\par
+            strategy=self.strategy_type,\par
+            asset=symbol,\par
+            # ... other fields ...\par
+            notes=f"Dynamic spacing \{spacing:.3%\} (k=\{self.base_k\} \'d7 ATR%) | levels centered @ $\{grid_center:.4f\}",\par
+            # pass proposed_levels or spacing in indicators dict if needed\par
+            indicators=\{"grid_spacing": spacing, "atr_pct": ...\}\par
+        )\par
+        return signal\par
+\par
+    # In replenishment logic (when a leg fills)\par
+    def _replenish_order(self, symbol: str, filled_side: str, filled_price: float, ...):\par
+        spacing = self.get_dynamic_spacing(symbol, ...)  # re-eval on each fill too?\par
+        # place counter leg at filled_price \'b1 spacing (or adjusted based on current center)\par
+        # ...\par
+Config & Tuning Recommendations\par
+Add to config.py / env:\par
+PythonGRID_DYNAMIC_SPACING = True                # toggle\par
+GRID_BASE_K = 1.2                          # 1.0\f2\endash 1.8 typical\par
+GRID_MIN_SPACING_PCT = 0.003               # 0.3%\par
+GRID_MAX_SPACING_PCT = 0.06                # 6% cap (crypto perps)\par
+GRID_ATR_PERIOD = 14\par
+GRID_ATR_TIMEFRAME = "5m"                  # "15m" for less noise\par
+GRID_REFRESH_MIN = 30                      # minutes\par
+Starting Values (Solana perps context):\par
+\par
+Low vol (RANGING_CALM, ATR ~0.5\endash 1.5%): spacing \f1\u8776?\f0  0.6\f2\endash 1.8%\par
+High vol (RANGING_VOLATILE, ATR ~3\endash 6%): spacing \f1\u8776?\f0  3\f2\endash 7% (capped)\par
+\par
+Safety & Monitoring Additions\par
+\par
+Log spacing changes: "Grid spacing updated for \{symbol\}: \{old:.3%\} \f1\u8594?\f0  \{new:.3%\}"\par
+DB event: log "spacing_adjust" with old/new/ATR value\par
+Alert if spacing hits max cap repeatedly (volatility regime change?)\par
+Test: dry-run with historical vol spikes \f2\emdash  ensure no over-dense grids\f0\lang9\par
+}
+ 

@@ -1,0 +1,81 @@
+1. Volume Profile & Order Flow
+What: Analyze where the most trading volume occurred at specific price levels.
+Implementation:
+
+Identify Point of Control (POC): Price with highest volume = strong support/resistance
+Value Area: 70% of day's volume range = fair value zone
+Enter near value area extremes, target POC
+
+Why it works: Institutional traders leave footprints in volume. High-volume nodes = areas where big money accumulated/distributed.
+
+3. Previous Day High/Low (PDH/PDL)
+What: Use yesterday's extremes as key levels.
+Implementation:
+
+Enter on breakout above PDH (bullish continuation)
+Enter on breakdown below PDL (bearish continuation)
+Or fade at PDH/PDL if signs of rejection appear
+
+Why it works: Market has memory. Previous extremes are psychological levels where orders cluster.
+4. VWAP (Volume-Weighted Average Price)
+What: Average price weighted by volume—shows "fair value."
+Implementation:
+
+Price above VWAP = bullish bias, buy dips to VWAP
+Price below VWAP = bearish bias, sell rallies to VWAP
+Strong moves away from VWAP often revert
+
+Why it works: Institutional benchmark. Many algos and traders use VWAP for execution.
+5. Smart Money Concepts (SMC) - Order Blocks
+What: Identify the last bullish candle before a drop (bearish order block) or last bearish candle before rally (bullish order block).
+Implementation:
+
+Mark the order block zone
+Enter when price returns to test that zone
+Confirms institutional "unfilled orders" at that level
+
+Why it works: Institutions leave limit orders that get filled on retests, creating reliable support/resistance.
+6. Multi-Timeframe MA Confluence
+What: Stack multiple moving averages (20/50/200) and trade bounces when aligned.
+Implementation:
+
+When 20 > 50 > 200 = strong uptrend
+Buy when price pulls back to 20 MA
+Stop below 50 MA
+Exit if price closes below 50 MA
+
+Why it works: MA stacking shows trend strength. Institutions respect major MAs (especially 200).
+7. Gap Fill Strategy
+What: Markets tend to "fill" overnight gaps (return to previous close).
+Implementation:
+
+If gap up >1%, short when price shows weakness, target gap fill
+If gap down >1%, long when price shows strength, target gap fill
+70%+ of gaps fill within 5 days
+
+Why it works: Gaps create imbalances; markets seek equilibrium.
+8. Time-Based Patterns
+What: Certain times have predictable behavior.
+Implementation:
+
+9:30-10:00 AM: Avoid (choppy, institutional positioning)
+10:00-11:30 AM: Best trend-following window
+2:00-3:00 PM: Reversal window (position squaring)
+3:00-4:00 PM: Trend continuation or reversal
+
+Why it works: Institutional trading flows follow schedules.
+
+Best Fits for Your Strategy
+Primary additions:
+
+VWAP - Simple, reliable, works on 15-min charts
+Opening Range Breakout - Complements your breakout strategy
+Volume Profile POC - Enhances support/resistance identification
+
+Implementation priority:
+
+Start with VWAP (easiest to code, immediate value)
+Add ORB as secondary qualifier for morning trades
+Layer in Volume Profile once comfortable with first two
+
+All three integrate cleanly with your existing framework without major rule changes. They add confluence factors that improve entry timing and reduce false signals.

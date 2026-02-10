@@ -1,0 +1,281 @@
+StrategyManager Review
+Over-Confirmation & Trade Starvation Analysis
+Executive Summary
+
+Yes, StrategyManager is currently over-confirming.
+Not because any single check is wrong — but because too many checks are treated as hard AND-gates at the same decision layer.
+
+The core issue is:
+
+StrategyManager mixes “permission”, “setup”, and “execution” validation into one pass.
+
+This causes:
+
+trade starvation
+
+false confidence (appears “safe” but untested)
+
+difficulty identifying which gate is actually blocking trades
+
+What StrategyManager should do (role clarity)
+
+StrategyManager should answer one question only:
+
+“Is this strategy allowed to attempt entries right now?”
+
+It should not:
+
+decide where to enter
+
+require entry-level indicators to align
+
+enforce micro-structure conditions
+
+That belongs to strategies and execution logic.
+
+Where over-confirmation is happening
+1️⃣ Regime + confidence + multi-TF alignment stacked together
+
+Typical current flow (conceptual):
+
+if not regime_allowed:
+    reject
+if confidence < threshold:
+    reject
+if multi_tf_alignment fails:
+    reject
+if volume filter fails:
+    reject
+if cooldown active:
+    reject
+
+
+Problem:
+Each of these is reasonable alone — together they form a near-impossible gate.
+
+Especially harmful:
+
+regime detection already embeds volatility + ADX
+
+confidence already aggregates multiple indicators
+
+multi-TF alignment repeats the same signal check on different scales
+
+This is triple-counting the same information.
+
+2️⃣ StrategyManager validating indicators it didn’t compute
+
+StrategyManager currently:
+
+inspects indicator-derived confidence
+
+rejects signals based on structure it doesn’t own
+
+enforces thresholds that strategies already validated internally
+
+This breaks separation of concerns.
+
+Symptom:
+Lower-TF entries never even get attempted because higher-TF filters already vetoed them.
+
+3️⃣ “Confidence” treated as a hard gate instead of a weight
+
+Right now:
+
+confidence < X → reject outright
+
+This is a design error in a multi-strategy system.
+
+Confidence should:
+
+influence sizing
+
+influence priority
+
+influence cooldowns
+
+It should not usually be a binary kill-switch.
+
+4️⃣ Cooldowns applied before opportunity density exists
+
+Cooldowns are currently checked:
+
+before a strategy has proven it can fire frequently
+
+before lower-TF entries are considered
+
+This results in:
+
+one rejected signal → long idle period
+
+false perception that the strategy is “running”
+
+Why this creates “too tight” behavior
+
+Let’s be blunt:
+
+You currently require:
+
+a clean regime
+
+strong confidence
+
+alignment across timeframes
+
+structural agreement
+
+no recent trades
+
+All at the same time.
+
+Markets almost never give you that — especially on crypto perps.
+
+The correct architectural fix (not a hack)
+Principle: Layered permission, not stacked confirmation
+
+Split StrategyManager logic into three explicit phases:
+
+Phase 1 — Regime Permission (StrategyManager owns this)
+
+Hard gate — binary
+
+Checks:
+
+Is the strategy allowed in the current regime?
+
+Is global risk within limits?
+
+Is the strategy enabled?
+
+That’s it.
+
+Example:
+
+if not regime_allows(strategy):
+    return DISABLED
+
+
+No indicators. No confidence. No structure.
+
+Phase 2 — Strategy Attempt (Strategy owns this)
+
+Soft gate — internal
+
+Each strategy:
+
+evaluates its own indicators
+
+decides if an entry attempt exists
+
+returns a Signal or None
+
+StrategyManager does not second-guess this.
+
+Phase 3 — Execution Filtering (TradingBot / RiskManager)
+
+Final safety
+
+Checks:
+
+exposure
+
+sizing
+
+order validity
+
+execution timing
+
+per-TF cooldowns
+
+No market interpretation here — just safety.
+
+Concrete changes to StrategyManager (actionable)
+✅ REMOVE from StrategyManager
+
+multi-TF indicator alignment checks
+
+RSI / BB / MA validation
+
+signal confidence hard thresholds
+
+structure validation
+
+These belong in strategies.
+
+✅ KEEP in StrategyManager
+
+regime enable / disable
+
+strategy routing
+
+max concurrent strategies
+
+global cooldown sanity (not per-entry)
+
+🔁 CHANGE how confidence is used
+
+Instead of:
+
+if signal.confidence < 0.6:
+    reject
+
+
+Use:
+
+sizing adjustment
+
+cooldown scaling
+
+priority ordering
+
+Example:
+
+effective_size = base_size * signal.confidence
+
+🔁 CHANGE cooldown semantics
+
+Cooldowns should be:
+
+per-strategy
+
+per-timeframe
+
+1m / 5m entries need much shorter cooldowns
+
+StrategyManager should only enforce macro cooldowns
+
+How this interacts with your 1m / 5m entry plan
+
+This refactor is required for that plan to work.
+
+Without it:
+
+StrategyManager will continue blocking lower-TF signals
+
+You’ll add 1m data and see no change in behavior
+
+With it:
+
+regime stays stable (1h / 15m)
+
+strategies get many attempts
+
+execution frequency increases naturally
+
+Diagnostics you should add immediately
+
+To prove this empirically, log rejection reasons:
+
+rejected_by_regime
+
+rejected_by_confidence
+
+rejected_by_cooldown
+
+rejected_by_execution
+
+You will almost certainly see:
+
+confidence + alignment dominating rejections
+
+That’s your smoking gun.

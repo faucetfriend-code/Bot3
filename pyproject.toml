@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-bot"
+version = "2.1.0"
+description = "Trading bot with multiple strategies"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["core_logic*"]

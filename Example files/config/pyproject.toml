@@ -1,0 +1,61 @@
+[project]
+name = "trading-bot"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "faucetfriend-code",email = "faucetfriend@gmail.com"}
+]
+readme = "README.md"
+requires-python = "^3.11"
+package-mode = false
+dependencies = [
+    "fastapi (>=0.122.0,<0.123.0)",
+    "uvicorn[standard] (>=0.29.0,<0.32.0)",
+    "pydantic (>=2.12.5,<3.0.0)",
+    "python-dotenv (>=1.2.1,<2.0.0)",
+    "aiosqlite (>=0.21.0,<0.22.0)",
+    "websockets (>=13.1.0,<16.0.0)",
+    "aiohttp (>=3.13.2,<4.0.0)",
+    "python-jose[cryptography] (>=3.5.0,<4.0.0)",
+    "passlib[bcrypt] (>=1.7.4,<2.0.0)",
+    "python-multipart (>=0.0.18,<0.0.21)",
+    "cryptography (>=46.0.3,<47.0.0)",
+    "loguru (>=0.7.3,<0.8.0)",
+    "structlog (>=25.5.0,<26.0.0)",
+    "numpy (>=2.3.5,<3.0.0)",
+    "pandas (>=2.3.3,<3.0.0)",
+    "ccxt (>=4.5.22,<5.0.0)",
+    "python-dateutil (>=2.9.0.post0,<3.0.0)",
+    "requests (>=2.32.5,<3.0.0)",
+    "psutil (>=5.9.8,<8.0.0)",
+    "solders (>=0.27.1,<0.28.0)",
+    "langchain (>=1.1.0,<2.0.0)",
+    "langchain-anthropic (>=1.2.0,<2.0.0)",
+    "langchain-community (>=0.4.1,<0.5.0)",
+    "anthropic (>=0.75.0,<0.76.0)",
+    "pyyaml (>=6.0.3,<7.0.0)",
+    "opentelemetry-api (>=1.38.0,<2.0.0)",
+    "opentelemetry-sdk (>=1.38.0,<2.0.0)",
+    "agentlightning (>=0.2.0,<0.3.0)",
+    # API rate limiting
+    "slowapi (>=0.1.9,<0.2.0)",
+    # Solana dependencies
+    "base58 (>=2.1.1,<3.0.0)",
+    # Technical analysis (optional, requires C library)
+    "TA-Lib (>=0.4.32,<0.5.0)"
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[dependency-groups]
+dev = [
+    "pytest (>=9.0.1,<10.0.0)",
+    "pytest-asyncio (>=1.3.0,<2.0.0)",
+    "pytest-cov (>=7.0.0,<8.0.0)",
+    "black (>=25.11.0,<26.0.0)",
+    "flake8 (>=7.3.0,<8.0.0)",
+    "mypy (>=1.18.2,<2.0.0)"
+]

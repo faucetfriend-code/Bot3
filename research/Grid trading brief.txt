@@ -1,0 +1,270 @@
+Grid Trading Strategy – Risk & Execution Specification
+Purpose
+
+This document defines mandatory risk controls, sizing logic, and execution rules for the Grid Trading strategy.
+Its goal is to prevent runaway exposure, silent leverage accumulation, and account liquidation during volatility spikes.
+
+Grid trading is inherently dangerous if not tightly constrained.
+This spec makes the grid capital-aware, regime-aware, and fail-safe.
+
+Core Principles (Non-Negotiable)
+
+RiskManager is the single source of truth
+
+Grid trading must be net exposure capped
+
+Every grid level must be pre-risked
+
+No grid order may exist without a stop-loss or emergency exit
+
+Grid trading must auto-disable outside valid regimes
+
+Regime Constraints
+
+Grid Trading is allowed ONLY in the following regimes:
+
+Regime	Grid Allowed	Notes
+RANGING_CALM	✅ Yes	Primary grid environment
+RANGING_VOLATILE	✅ Yes	Smaller size, wider spacing
+INDECISIVE	⚠️ Optional	Conservative mode only
+TRENDING_MODERATE	❌ No	Trend risk too high
+TRENDING_STRONG	❌ No	Hard disable
+
+Enforcement point:
+StrategyManager.generate_signals_for_market()
+Grid signals must not be emitted outside allowed regimes.
+
+Grid Exposure Model
+Portfolio-Level Limits (via RiskManager)
+
+These limits are absolute:
+
+Max total grid exposure:
+
+≤ 30–40% of max_portfolio_exposure_pct
+
+
+Max grid risk per symbol:
+
+≤ 50% of allowed grid exposure
+
+
+Max grid levels per symbol:
+From config (e.g. GRID_MAX_POSITIONS_PER_SYMBOL)
+
+Grid Capital Allocation Formula
+Step 1: Request Capital From RiskManager
+
+GridTradingStrategy must request notional capital, not quantity:
+
+grid_capital = risk_manager.get_grid_capital(
+    account_balance,
+    current_exposure,
+    symbol
+)
+
+
+Recommended default:
+
+grid_capital = account_balance * 0.03 – 0.05
+
+Step 2: Divide Capital Across Grid Levels
+
+Capital per level:
+
+capital_per_level = grid_capital / grid_levels
+
+
+⚠️ This is not optional — no martingale, no pyramiding.
+
+Step 3: Convert Capital → Quantity Per Level
+
+For each grid order:
+
+quantity = capital_per_level / grid_price
+
+
+All quantities must be rounded to exchange precision.
+
+Grid Order Placement Rules
+Initial Grid Construction
+
+Anchor grid around:
+
+VWAP or
+
+Midpoint of recent range
+
+Place symmetric buy/sell orders:
+
+No directional bias
+
+Grid spacing:
+
+ATR-based (preferred)
+
+OR fixed percentage
+
+Example:
+
+Grid spacing = ATR * GRID_SPACING_ATR_MULTIPLIER
+
+Order Requirements (Hard Rules)
+
+Every grid order must include:
+
+✅ Defined entry price
+
+✅ Defined take-profit (next grid level)
+
+❌ No independent stop-loss per leg
+
+✅ Symbol-level emergency stop
+
+Emergency Stop (MANDATORY)
+
+Each grid must define one emergency stop per symbol:
+
+Emergency Stop Distance = X% from grid midpoint
+
+
+Triggered when:
+
+Price breaks range
+
+OR ADX > threshold
+
+OR regime changes to TRENDING_*
+
+On trigger:
+
+Cancel all open grid orders
+
+Close all grid positions at market
+
+Disable grid for symbol until next regime recalculation
+
+This is non-optional.
+
+Dynamic Grid Controls
+Volatility-Based Adjustments
+
+If volatility increases:
+
+Increase grid spacing
+
+Reduce max active levels
+
+Reduce capital per level
+
+If volatility exceeds threshold:
+
+Flatten grid immediately
+
+Cooldown & Re-entry Rules
+
+After a grid is stopped:
+
+Enforce cooldown:
+
+cooldown ≥ 2 × grid lookback period
+
+
+Grid cannot re-arm unless:
+
+Regime still valid
+
+Volatility normalized
+
+No residual positions exist
+
+RiskManager Extensions (Required)
+New Required Methods
+get_grid_capital(account_balance, current_exposure, symbol) -> float
+
+validate_grid_exposure(
+    symbol,
+    proposed_grid_capital,
+    current_exposure
+) -> bool
+
+on_grid_emergency_exit(symbol)
+
+
+RiskManager must:
+
+Track grid exposure separately
+
+Prevent overlapping grids on same symbol
+
+Enforce portfolio-level grid caps
+
+Failure Scenarios & Required Behavior
+Stop Placement Failure
+
+If emergency stop cannot be placed:
+
+❌ Do not place grid
+
+Log CRITICAL
+
+Abort immediately
+
+Partial Fill Handling
+
+If only some grid orders fill:
+
+Exposure must still remain ≤ grid_capital
+
+Cancel remaining orders if exposure cap hit
+
+Exchange Disconnect
+
+On WS disconnect:
+
+Freeze new grid orders
+
+Allow only exits
+
+Resume only after fresh regime check
+
+Logging & Observability (Required)
+
+Every grid must log:
+
+Grid ID
+
+Symbol
+
+Regime
+
+Total grid capital
+
+Levels placed
+
+Emergency stop level
+
+Exit reason (TP / emergency / regime change)
+
+Absolute Prohibitions
+
+🚫 No martingale
+🚫 No doubling down
+🚫 No grid without regime validation
+🚫 No grid without emergency stop
+🚫 No bypassing RiskManager
+
+Summary
+
+This spec ensures:
+
+Grid trading cannot spiral
+
+Exposure is known before entry
+
+Trend breakouts cause automatic disengage
+
+Grid risk is bounded and observable
+
+Without this spec, grid trading will eventually blow up the account.
+With it, grid trading becomes a controlled, regime-specific tool.

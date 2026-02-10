@@ -1,0 +1,156 @@
+⚠️ WARNINGS (QUALITY / ROBUSTNESS ISSUES)
+5. Duplicate / Conflicting Methods Still Exist
+
+You still have old legacy methods present alongside new ones:
+
+_validate_position_size() appears in multiple forms
+
+_calculate_position_size() appears in multiple places
+
+Some versions still reference leverage logic directly
+
+Examples:
+
+Legacy _validate_position_size(symbol, quantity) 
+
+trading_bot
+
+New _validate_position_size(quantity) 
+
+trading_bot
+
+⚠️ Risk: future devs may call the wrong one.
+
+Fix:
+
+Delete or hard-deprecate legacy versions
+
+Leave only RiskManager-backed versions
+
+Add a comment:
+# DO NOT ADD RISK LOGIC HERE – USE RiskManager
+
+6. RiskManager Uses Percentage-Based Sizing but Bot Uses “Quantity”
+
+In RiskManager.get_position_size():
+
+position_size = adjusted_risk / stop_distance_pct
+
+
+risk_manager
+
+This returns notional size, but later you treat it as quantity/contracts.
+
+⚠️ If instruments have different contract sizes, this will drift.
+
+Fix (recommended):
+
+Rename variable to position_notional
+
+Convert to quantity explicitly using price:
+
+quantity = position_notional / signal.entry_price
+
+7. Strategy Risk Profile Keys Are Case-Sensitive
+
+This mapping:
+
+strategy_profiles = {
+    'mean_reversion': ...
+}
+
+
+risk_manager
+
+But you pass:
+
+signal.strategy.value
+
+
+Which may be "MeanReversion" / "MACrossover".
+
+⚠️ Silent fallback to MEDIUM risk possible.
+
+Fix:
+Normalize:
+
+strategy_type = strategy_type.lower()
+
+❌ MUST FIX BEFORE LIVE TRADING
+8. Bracket Order Failure = Open Naked Position
+
+In _execute_standard_signal():
+
+order = self.client.place_order(...)
+...
+stop_order = self.client.place_order(...)
+
+
+trading_bot
+
+If stop-loss placement fails after entry, you log but do not unwind.
+
+❌ This is the most dangerous remaining flaw.
+
+Required Fix:
+If stop fails:
+
+self.client.close_position(symbol)
+raise RuntimeError("Stop-loss failed — position closed")
+
+9. Grid Trading Bypasses RiskManager
+
+Grid execution is routed here:
+
+if signal.strategy == StrategyType.GRID_TRADING:
+    self._execute_grid_signal(signal)
+
+
+trading_bot
+
+But _execute_grid_signal() does not enforce RiskManager per-leg risk.
+
+❌ Grid is where bots die.
+
+Fix:
+
+RiskManager must cap:
+
+total grid exposure
+
+per-level size
+
+GridTradingStrategy should request size from RiskManager per level
+
+10. Regime Cache Exists but Is Not Used
+
+You added:
+
+self._regime_cache
+self._pending_regime_changes
+
+
+market_regime
+
+…but detect_regime() never consults or updates it.
+
+❌ Dead code = false confidence.
+
+Fix:
+
+Implement:
+
+symbol-based caching
+
+confirmation delay (N bars)
+
+TTL enforcement
+
+✅ OVERALL GRADE
+
+Architecture: A-
+Risk Safety: B (after fixes → A)
+Execution Safety: C+ (brackets + grid issues)
+Live-Readiness: ❌ Not yet
+
+You are very close. This is no longer a toy bot — it’s a real system that just needs its last safety rails welded shut.

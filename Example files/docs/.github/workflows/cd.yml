@@ -1,0 +1,67 @@
+name: CD & Scheduled Tasks
+
+on:
+  push:
+    branches: [main, develop]
+  schedule:
+    - cron: "0 2 * * 1" # Same weekly schedule
+  workflow_dispatch:
+
+jobs:
+  build-and-package:
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    needs: [ci]  # This requires the ci workflow to exist and pass
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python & Node
+        uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install & build
+        run: |
+          python tasks.py install
+          npm run build || echo "No frontend build"
+
+      - name: Create Python package
+        run: |
+          pip install build
+          python -m build
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-packages
+          path: dist/
+
+  deploy-staging:
+    needs: build-and-package
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - run: echo "Deploying to staging..."
+
+  deploy-production:
+    needs: build-and-package
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: echo "Deploying to production..."
+
+  weekly-maintenance:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Upgrade dependencies
+        run: |
+          python -m pip install --upgrade pip-tools
+          pip-compile --upgrade requirements.in || true
+          pip-compile --upgrade requirements-dev.in || true

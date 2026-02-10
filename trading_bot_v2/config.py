@@ -1,0 +1,164 @@
+import os
+import logging
+from typing import Optional
+from enum import Enum
+from dotenv import load_dotenv
+
+# Load environment variables from .env file (override=True ensures fresh values)
+load_dotenv(override=True)
+
+# Define all enums locally to avoid import issues with "Example files/core_logic"
+# These are duplicated from core_logic/config.py for proper module resolution
+
+
+class MarketState(str, Enum):
+    """Market state classification."""
+
+    TREND = "trend"
+    RANGE = "range"
+    TRANSITION = "transition"
+    UNKNOWN = "unknown"
+
+
+class StrategyType(str, Enum):
+    """Trading strategy types."""
+
+    TREND_FOLLOWING = "trend_following"
+    BREAKOUT = "breakout"
+    LIQUIDATION_CAPTURE = "liquidation_capture"
+    MEAN_REVERSION = "mean_reversion"
+    MA_CROSSOVER = "ma_crossover"
+    GRID_TRADING = "grid_trading"
+    VWAP_SCALPING = "vwap_scalping"
+    FUNDING_ARB = "funding_arb"
+    MOMENTUM_SCALPING = "momentum_scalping"
+    ORDERBOOK_IMBALANCE = "orderbook_imbalance"
+
+
+class AssetClass(str, Enum):
+    """Asset class types for position sizing and risk management."""
+
+    BTC_ETH = "btc_eth"
+    LARGE_CAP = "large_cap"
+    SMALL_CAP = "small_cap"
+    CRYPTO = "crypto"
+    PERPETUAL = "perpetual"
+    STOCK = "stock"
+    FOREX = "forex"
+    COMMODITY = "commodity"
+
+
+class TradeQuality(str, Enum):
+    """Trade quality classification for position sizing."""
+
+    STANDARD = "standard"
+    HIGH_CONVICTION = "high_conviction"
+    EXCEPTIONAL = "exceptional"
+
+
+class Config:
+    """Configuration class for the trading bot v2."""
+
+    def __init__(self) -> None:
+        """Initialize configuration from environment variables."""
+        self.database_path: str = os.getenv("DATABASE_PATH", "trading_bot.db")
+        self.pacifica_private_key: Optional[str] = os.getenv("AGENT_WALLET_PRIVATE_KEY")
+        self.pacifica_public_key: Optional[str] = os.getenv("ACCOUNT_PUBLIC_KEY")
+
+        # Parse testnet with more flexible boolean conversion
+        testnet_env = os.getenv("TESTNET", "true").lower()
+        self.testnet: bool = testnet_env in ("true", "1", "yes")
+
+        # Parse auto-trading flag
+        auto_trading_env = os.getenv("ENABLE_AUTO_TRADING", "false").lower()
+        self.enable_auto_trading: bool = auto_trading_env in ("true", "1", "yes")
+
+        # Parse websocket flag
+        websocket_env = os.getenv("ENABLE_WEBSOCKET", "true").lower()
+        self.enable_websocket: bool = websocket_env in ("true", "1", "yes")
+
+        # Parse integer values with error handling
+        try:
+            self.max_positions: int = int(os.getenv("MAX_POSITIONS", "15"))
+        except ValueError:
+            raise ValueError("MAX_POSITIONS must be a valid integer")
+
+        try:
+            self.max_positions_per_strategy: int = int(
+                os.getenv("MAX_POSITIONS_PER_STRATEGY", "3")
+            )
+        except ValueError:
+            raise ValueError("MAX_POSITIONS_PER_STRATEGY must be a valid integer")
+
+        try:
+            self.max_grid_positions: int = int(os.getenv("MAX_GRID_POSITIONS", "10"))
+        except ValueError:
+            raise ValueError("MAX_GRID_POSITIONS must be a valid integer")
+
+        # Grid partial unwind on regime change (keep trend-aligned positions)
+        self.grid_partial_unwind_enabled: bool = (
+            os.getenv("GRID_PARTIAL_UNWIND_ENABLED", "true").lower() == "true"
+        )
+
+        try:
+            self.default_leverage: int = int(os.getenv("DEFAULT_LEVERAGE", "10"))
+        except ValueError:
+            raise ValueError("DEFAULT_LEVERAGE must be a valid integer")
+
+        # Parse float values with error handling
+        try:
+            self.max_risk_per_trade: float = float(
+                os.getenv("MAX_RISK_PER_TRADE", "0.02")
+            )
+        except ValueError:
+            raise ValueError("MAX_RISK_PER_TRADE must be a valid float")
+
+        try:
+            self.circuit_breaker_loss_pct: float = float(
+                os.getenv("CIRCUIT_BREAKER_LOSS_PCT", "0.10")
+            )
+        except ValueError:
+            raise ValueError("CIRCUIT_BREAKER_LOSS_PCT must be a valid float")
+
+        self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
+
+    @property
+    def pacifica_base_url(self) -> str:
+        """Return the base URL for Pacifica API based on testnet/mainnet setting."""
+        if self.testnet:
+            return "https://testnet.api.pacifica.network"
+        else:
+            return "https://api.pacifica.network"
+
+    def validate(self) -> None:
+        """Validate that required configuration values are present and valid."""
+        if not self.pacifica_private_key:
+            raise ValueError(
+                "AGENT_WALLET_PRIVATE_KEY environment variable is required"
+            )
+        if not self.pacifica_public_key:
+            raise ValueError("ACCOUNT_PUBLIC_KEY environment variable is required")
+
+        # Validate log level
+        if self.log_level not in logging.getLevelNamesMapping():
+            raise ValueError(
+                f"Invalid LOG_LEVEL: {self.log_level}. Must be one of: {list(logging.getLevelNamesMapping().keys())}"
+            )
+
+        # Validate bounds
+        if self.max_positions <= 0:
+            raise ValueError("MAX_POSITIONS must be positive")
+        if self.max_positions_per_strategy <= 0:
+            raise ValueError("MAX_POSITIONS_PER_STRATEGY must be positive")
+        if self.max_grid_positions <= 0:
+            raise ValueError("MAX_GRID_POSITIONS must be positive")
+        if self.default_leverage <= 0:
+            raise ValueError("DEFAULT_LEVERAGE must be positive")
+        if not (0 < self.max_risk_per_trade <= 1):
+            raise ValueError("MAX_RISK_PER_TRADE must be between 0 and 1")
+        if not (0 < self.circuit_breaker_loss_pct <= 1):
+            raise ValueError("CIRCUIT_BREAKER_LOSS_PCT must be between 0 and 1")
+
+
+# Global config instance
+config = Config()

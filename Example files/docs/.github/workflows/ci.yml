@@ -1,0 +1,217 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1" # Weekly Monday 2 AM UTC
+
+permissions:
+  contents: read
+  checks: write
+  security-events: write
+
+env:
+  PYTHONUNBUFFERED: 1
+  PYTHONDONTWRITEBYTECODE: 1
+  NODE_ENV: test
+  TEST_DATABASE: trading_bot_test.db
+  TESTNET: true
+  MOCK_TRADING: true
+  DISABLE_EXTERNAL_APIS: true
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: python tasks.py install
+
+      - name: Python linting & type check
+        run: python tasks.py lint
+
+      - name: Check import sorting (isort)
+        run: python -m pip install isort && isort --check-only --diff .
+
+      - name: Safety check
+        run: |
+          python -m pip install safety
+          safety check --full-report
+
+  test:
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+        node-version: ["18", "20"]
+        exclude:
+          - os: windows-latest
+            python-version: "3.9"
+          - os: windows-latest
+            python-version: "3.12"
+          - os: macos-latest
+            python-version: "3.9"
+          - os: macos-latest
+            python-version: "3.12"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/pip
+            .venv
+          key: ${{ runner.os }}-py${{ matrix.python-version }}-node${{ matrix.node-version }}-${{ hashFiles('**/requirements.txt', '**/requirements-dev.txt') }}
+
+      - name: Install dependencies
+        run: python tasks.py install
+
+      - name: Create test database
+        run: DATABASE_PATH=trading_bot_test.db python -c "from database import init_database; init_database()"
+
+      - name: Run pytest with coverage
+        run: |
+          python -m pytest tests/ -v --tb=short --strict-markers \
+            --cov=. --cov-report=xml --cov-report=html \
+            --cov-fail-under=80
+
+      - name: Upload coverage to Codecov (only once)
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12' && matrix.node-version == '20'
+        uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: coverage.xml
+          flags: unittests
+          name: coverage
+
+      - name: Upload HTML coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-html-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: htmlcov/
+          retention-days: 30
+
+  integration:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: python tasks.py install
+
+      - name: Create test database
+        run: python -c "from database import init_database; init_database('trading_bot_test.db')"
+
+      - name: Start FastAPI server
+        run: |
+          python tasks.py run-api &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+          sleep 10
+
+      - name: Wait for API to be healthy
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:8000/api/status; do sleep 2; done'
+
+      - name: Full health checks
+        run: |
+          curl -f http://localhost:8000/api/status
+          curl -f http://localhost:8000/api/market-data
+          curl -f http://localhost:8000/api/pacifica/markets
+          curl -f http://localhost:8000/api/positions
+
+           curl -f -X POST http://localhost:8000/api/pacifica/validate-order \
+             -H "Content-Type: application/json" \
+             -d '{"symbol":"BTC/USD","side":"buy","quantity":0.001,"price":50000}'
+
+           # WebSocket testing skipped - not implemented in current API
+
+       - name: Run Node.js analysis checks
+         run: |
+           npm run check
+
+      - name: Stop server & cleanup
+        if: always()
+        run: |
+          kill $SERVER_PID || true
+          rm -f trading_bot_test.db
+
+  security:
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: fs
+          format: sarif
+          output: trivy-results.sarif
+
+      - name: Upload Trivy results
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+
+      - name: Bandit Python security scan
+        run: |
+          python -m pip install bandit
+          bandit -r . -f json -o bandit-report.json || true
+
+      - name: Upload Bandit report
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json

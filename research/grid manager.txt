@@ -1,0 +1,129 @@
+I’ve created a production-grade GridLifecycleManager in canvas that acts as the authoritative state machine for grid trading. This is not “helper logic” — it is designed to be a hard safety boundary.
+
+Below is how to integrate it cleanly and what guarantees it gives you.
+
+What This Manager SOLVES (Hard Guarantees)
+✅ Single grid per symbol (hard-enforced)
+
+register_new_grid() throws immediately if a grid already exists
+
+No silent overrides, no stacking, no race conditions
+
+✅ Regime auto-disable → cancel + flatten
+
+on_regime_disallowed(symbol)
+
+Cancels all orders
+
+Market-flattens all positions
+
+Clears RiskManager exposure
+
+Deletes grid state
+
+✅ Emergency stop → full unwind
+
+on_emergency_stop_triggered(symbol)
+
+Same hard exit path as regime violation
+
+No partial cleanup, no dangling orders
+
+✅ RiskManager remains source of truth
+
+LifecycleManager never sizes
+
+It only:
+
+initializes exposure to 0
+
+clears exposure via on_grid_emergency_exit()
+
+✅ No legacy / bypass paths
+
+All grid exits go through _force_exit()
+
+One code path, one behavior
+
+EXACT Integration Steps (Minimal Surgery)
+1️⃣ Instantiate once (TradingBot __init__)
+from grid_lifecycle_manager import GridLifecycleManager
+
+self.grid_lifecycle = GridLifecycleManager(
+    client=self.client,
+    risk_manager=self.risk_manager
+)
+
+2️⃣ Enforce single-grid BEFORE grid creation
+
+In _execute_grid_signal()
+
+if self.grid_lifecycle.has_active_grid(symbol):
+    logging.warning(f"Grid already active for {symbol}")
+    return
+
+3️⃣ Register grid ONLY after emergency stop succeeds
+
+Replace your grid state writes with:
+
+self.grid_lifecycle.register_new_grid(
+    symbol=symbol,
+    grid_capital=grid_capital,
+    emergency_stop_price=emergency_stop_price
+)
+
+
+⚠️ Do not write _active_grids anywhere else.
+This manager replaces it.
+
+4️⃣ Regime change handling (HARD requirement)
+
+Wherever you detect regime transitions (likely _monitor_risk()):
+
+if not self.market_regime.is_grid_allowed(symbol):
+    self.grid_lifecycle.on_regime_disallowed(symbol)
+
+
+This is mandatory for spec compliance.
+
+5️⃣ Emergency stop monitoring
+
+When:
+
+stop order fills OR
+
+price breaches stop threshold
+
+Call:
+
+self.grid_lifecycle.on_emergency_stop_triggered(symbol)
+
+
+Do not manually cancel orders or flatten elsewhere.
+
+Why This Is the RIGHT Abstraction
+
+TradingBot: execution only
+
+StrategyManager: signal intent only
+
+RiskManager: sizing + exposure only
+
+GridLifecycleManager:
+👉 “Are we allowed to exist, and how do we die safely?”
+
+This separation is exactly what regulators, prop firms, and serious infra expect.
+
+Current Spec Status With This Added
+
+If you wire this in as described:
+
+✅ Single grid per symbol
+
+✅ Regime auto-disable enforced
+
+✅ Emergency stop unwind guaranteed
+
+✅ No ghost exposure
+
+⚠️ Capital sourcing still needs the small RiskManager refactor discussed earlier

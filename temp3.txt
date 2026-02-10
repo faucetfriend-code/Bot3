@@ -1,0 +1,1 @@
+https://docs.pacifica.fi/api-documentation/api/websocket/subscriptions/prices

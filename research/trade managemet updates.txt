@@ -1,0 +1,239 @@
+Trading Bot Architecture – Current Issues & Fix Plan
+Trading Bot – Current Issues & Upgrade Plan
+
+This document describes current architectural and execution issues in the trading bot, with specific code references and a clear, actionable fix plan for each item. It is intended for an AI or human developer to implement upgrades safely and incrementally.
+
+1. STOP-LOSS & TAKE-PROFIT ARE NEVER EXECUTED
+Problem
+
+Signals contain stop_loss and take_profit, but no protective orders are placed after entry.
+
+Current execution code:
+
+# trading_bot.py::_execute_signal()
+order = self.client.place_order(symbol, side, quantity, 'market')
+
+There is no follow-up call to place:
+
+stop-loss orders
+
+take-profit orders
+
+OCO / bracket orders
+
+Impact
+
+A single liquidation wick can wipe out the account
+
+Strategy RRR assumptions are invalid
+
+Backtest ≠ live behavior
+
+Required Fix
+A. Introduce Bracket Order Execution
+
+After the entry order is confirmed:
+
+entry_price = order['price']
+
+
+# Stop loss
+self.client.place_order(
+    symbol,
+    'sell' if side == 'buy' else 'buy',
+    quantity,
+    'stop',
+    stop_price=signal.stop_loss
+)
+
+
+# Take profit
+if signal.take_profit:
+    self.client.place_order(
+        symbol,
+        'sell' if side == 'buy' else 'buy',
+        quantity,
+        'limit',
+        price=signal.take_profit
+    )
+B. Enforce Validation Before Execution
+if not signal.stop_loss:
+    raise ValueError("Signal missing stop-loss")
+C. Persist Order IDs
+
+Store entry, stop, and TP order IDs in DB for later management.
+
+2. GRID TRADING IS NOT ACTUALLY A GRID
+Problem
+
+Grid strategies generate BUY + SELL signals, but execution treats them as independent market orders.
+
+Conflict resolution allows dual signals:
+
+# strategy_manager.py::_handle_grid_signals()
+return [buy_signal, sell_signal]
+
+Execution:
+
+for signal in signals:
+    self._execute_signal(signal)
+Impact
+
+No laddered orders
+
+No grid spacing logic at execution layer
+
+Risk stacks rapidly
+
+Required Fix
+A. Introduce Grid Execution Path
+
+In _execute_signal():
+
+if signal.strategy == StrategyType.GRID_TRADING:
+    self._execute_grid(signal)
+    return
+B. Grid Executor Should:
+
+Place limit orders, not market
+
+Use ATR-based spacing
+
+Cap total grid exposure
+
+Example:
+
+for level in grid_levels:
+    self.client.place_order(
+        symbol,
+        side,
+        grid_quantity,
+        'limit',
+        price=grid_price
+    )
+C. Enforce Grid-Level Risk Budget
+
+Grid risk should be capped per symbol, not per order.
+
+3. RISK IS DEFINED IN THREE DIFFERENT PLACES
+Problem
+
+Risk is independently enforced in:
+
+Position sizing
+
+# _calculate_position_size()
+risk_pct = risk_per_trade.get(signal.strategy)
+
+Validation
+
+# _validate_position_size()
+max_position_value = account_balance * leverage
+
+Strategy confidence (implicit)
+
+Impact
+
+Inconsistent sizing
+
+Strategy intent is overridden
+
+Grid + liquidation strategies can silently over-risk
+
+Required Fix
+A. Create Single Risk Engine
+class RiskManager:
+    def get_position_size(signal, account_balance):
+        ...
+B. Strategy Provides Risk Intent
+signal.risk_profile = "LOW" | "MEDIUM" | "HIGH"
+C. TradingBot Uses RiskManager ONLY
+
+Remove direct risk math from _execute_signal().
+
+4. MARKET REGIME IS RECOMPUTED EVERY LOOP
+Problem
+
+Regime detection runs per symbol, per minute, using overlapping data.
+
+regime = self.regime_detector.detect_regime(regime_data)
+Impact
+
+Unnecessary computation
+
+Possible regime flicker
+
+Strategies thrash on transitions
+
+Required Fix
+A. Cache Regime Per Symbol
+self._regime_cache[symbol] = {
+    'regime': regime,
+    'timestamp': candle_close_time
+}
+B. Recompute Only on HTF Candle Close
+
+4h regime → recompute every 4h candle close
+
+5. NO POST-TRADE FEEDBACK LOOP
+Problem
+
+After execution:
+
+StrategyManager is unaware
+
+No cooldown per strategy
+
+Same signal can re-fire endlessly
+
+Required Fix
+A. Add Trade Cooldown
+strategy_cooldowns[(symbol, strategy)] = now + cooldown_seconds
+B. Prevent Re-Entry
+
+Before execution:
+
+if cooldown_active:
+    skip
+C. Optional: Confidence Decay
+
+Reduce signal confidence after losses.
+
+6. TREND FOLLOWING STRATEGY IS REFERENCED BUT NOT IMPLEMENTED
+Problem
+
+Market regime enables TrendFollowing:
+
+MarketRegime.TRENDING_STRONG: ["TrendFollowing", "MACrossover"]
+
+But no implementation exists.
+
+Required Fix
+A. Disable Until Implemented
+enable_trend_following=False
+
+OR
+
+B. Stub Strategy That Returns No Signals
+
+Prevent runtime confusion.
+
+IMPLEMENTATION PRIORITY (RECOMMENDED)
+
+Bracket orders (STOP + TP)
+
+Grid execution rewrite
+
+Centralized RiskManager
+
+Regime caching
+
+Trade cooldowns
+
+TrendFollowing cleanup
+
+FINAL NOTE
+
+The signal logic is solid. The execution layer is the risk.
+
+Do NOT add new strategies until execution and risk are corrected.

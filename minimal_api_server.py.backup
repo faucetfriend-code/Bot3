@@ -1,0 +1,76 @@
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+import uvicorn
+import json
+
+app = FastAPI(title="Trading Bot API", version="1.0.0")
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
+)
+
+@app.get("/")
+def serve_interface():
+    """Serve the trading bot interface."""
+    import os
+    html_path = os.path.join(os.path.dirname(__file__), 'interface.html')
+    with open(html_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+    return HTMLResponse(content=content)
+
+@app.get("/api/health")
+def health_check():
+    return {"success": True, "data": {"status": "healthy"}}
+
+@app.get("/api/status")
+def get_status():
+    return {
+        "success": True,
+        "data": {
+            "bot_running": False,
+            "positions_count": 0,
+            "trades_count": 0,
+            "total_pnl": 0.0
+        }
+    }
+
+@app.get("/api/positions")
+def get_positions():
+    return {"success": True, "data": []}
+
+@app.get("/api/trades")
+def get_trades():
+    return {"success": True, "data": []}
+
+@app.get("/api/activity")
+def get_activity():
+    return {"success": True, "data": []}
+
+@app.get("/api/orders")
+def get_orders():
+    return {"success": True, "data": []}
+
+@app.get("/api/grids")
+def get_grids():
+    return {"success": True, "data": []}
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await websocket.accept()
+    try:
+        while True:
+            # Keep the connection alive
+            data = await websocket.receive_text()
+            # Echo back for testing
+            await websocket.send_text(json.dumps({"type": "echo", "data": data}))
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)

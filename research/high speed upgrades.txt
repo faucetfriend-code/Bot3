@@ -1,0 +1,554 @@
+I've reviewed the high-speed algorithmic trading research document you provided (dated 2026-02-08), which strongly recommends VWAP Mean Reversion as Priority #1 for addition to your bot.
+This aligns perfectly with your existing architecture:
+
+You already have regime detection (RANGING_CALM / RANGING_VOLATILE → grid + mean reversion friendly)
+MultiTimeframeFetcher + WebSocket infrastructure supports 1m/5m data
+RiskManager, ExecutionInterface, and StrategyManager are in place
+Mean reversion already exists → VWAP variant is a natural overlay/extension
+
+Diagnostic Classification
+Bot Issue → Strategy execution gap
+Integration Issue → Missing high-frequency mean-reversion signal suitable for 1m/5m scalping
+New Feature Request (from research): Add VWAP-based mean reversion scalping as an overlay strategy that can run in ALL regimes (with strongest edge in ranging conditions)
+Proposed Implementation Plan
+File to create: strategies/vwap_scalping.py
+Design Goals
+
+Timeframe: Primary execution on 1m, confirmation on 5m (as per research)
+Logic: Price significantly deviates from VWAP → expect reversion
+Long: price << VWAP + confirmation (e.g. MACD positive / RSI oversold)
+Short: price >> VWAP + confirmation
+
+Exit: at/near VWAP or trailing ATR-based
+Overlay mode: Can generate signals even when primary strategy is something else (complements existing mean reversion & grid)
+Safety: Strict risk delegation to RiskManager, regime filter optional but loose
+
+Key Decisions / Trade-offs
+
+Aspect							Choice								Rationale
+VWAP Calculation			Session-based (daily reset)				Standard for intraday scalping; crypto 24/7 → consider 4h/8h anchor later
+Typical Price					(H + L + C)/3						Most common in pandas_ta & crypto implementations
+Deviation Threshold				0.8–1.5 × ATR(14)					Adaptive to volatility; avoids fixed % in crypto
+Confirmation Indicator			MACD(12,26,9) histogram directionMatches 			research EMA+MACD scalping; lightweight
+Max Trades / Symbol				1 active + cooldown 5–15 min				Prevents over-trading on 1m noise
+Regime Preference				Strongest in RANGING_*					But allow in ALL as research overlay
+
+Next Steps (Safe Implementation Order)
+
+Add StrategyType.VWAP_SCALPING to config.py
+Create minimal vwap_scalping.py with manual VWAP calculation (avoid pandas_ta dependency initially)
+Hook into StrategyManager.__init__ → if enable_vwap_scalping: self.strategies["VWAPScalping"] = VWAPScalpingStrategy()
+Add flag in config / env: ENABLE_VWAP_SCALPING=true
+Update regime weights (in market_regime.py) to include VWAPScalping in ALL regimes (weight 0.2–0.4)
+Test in dry-run mode first (no real orders)
+Monitor: add logging for VWAP value + deviation × ATR
+Later: add anchored VWAP (4h reset), standard deviation bands, order book filter
+
+Safety Reminder
+All sizing → RiskManager.get_position_size()
+All exposure checks → RiskManager.validate_position_size()
+No direct order placement here — delegate to ExecutionInterface
+
+Adding standard deviation bands around the VWAP is a high-value enhancement for the VWAP Scalping strategy. These bands create dynamic overbought/oversold zones, improve mean-reversion filtering, and help identify statistical extremes — exactly as recommended in the 2026 research and common in professional setups (TrendSpider, thinkorswim, TradingView VWAP+SD implementations).
+Why Add VWAP Bands?
+
++1/−1 SD ≈ 68% of price action (normal range)
++2/−2 SD ≈ 95% — strong reversion candidates when price reaches outer bands
++3/−3 SD ≈ very rare extremes (exhaustion/reversal zones)
+In crypto/perps (high volatility), bands adapt better than fixed % thresholds
+Complements your existing ATR-based deviation check while adding volume-weighted statistical context
+
+Calculation Method (Chosen Approach)
+From platform implementations (thinkorswim, TrendSpider, multiple Pine Script examples):
+VWAP bands use a volume-weighted variance approach:
+
+VWAP = cumulative (price × volume) / cumulative volume
+(already using typical price = (H+L+C)/3)
+Variance = [cumulative (volume × (price - VWAP)²)] / cumulative volume  −  VWAP²
+(more precisely: second moment minus square of first moment)
+StdDev = sqrt(variance)
+Upper band N = VWAP + multiplier × StdDev
+Lower band N = VWAP − multiplier × StdDev
+
+This is the volume-weighted standard deviation — the most common and theoretically sound method for VWAP bands (matches thinkorswim, many TradingView scripts, and institutional tools).
+Alternative (simpler but less accurate): sqrt( cumulative (volume × (price - VWAP)²) / cumulative volume )
+Many platforms use this approximation; it's close when VWAP is stable.
+We'll implement the precise version.
+Updated Code: VWAPScalpingStrategy with Bands
+Add these to your strategies/vwap_scalping.py (building on previous skeleton):
+Python# strategies/vwap_scalping.py
+# ... existing imports ...
+
+class VWAPScalpingStrategy(BaseStrategy):
+    def __init__(self,
+                 atr_period: int = 14,
+                 atr_multiplier_entry: float = 1.2,
+                 atr_multiplier_sl: float = 1.5,
+                 macd_fast: int = 12, macd_slow: int = 26, macd_signal: int = 9,
+                 vwap_sd_multipliers: list = [1.0, 2.0, 3.0],   # bands to compute
+                 cooldown_minutes: int = 8,
+                 min_confidence: float = 0.62):
+        super().__init__()
+        self.strategy_type = StrategyType.VWAP_SCALPING
+        # ... existing params ...
+        self.vwap_sd_mults = vwap_sd_multipliers  # e.g. [1,2,3]
+
+    def calculate_vwap_and_bands(self, df: Any) -> Dict[str, float]:
+        """
+        Compute VWAP + multiple standard deviation bands (volume-weighted)
+        Expects pandas DataFrame with 'high','low','close','volume'
+        Returns dict: {'vwap': ..., 'sd1_upper':..., 'sd1_lower':..., 'sd2_upper':..., ...}
+        """
+        if len(df) < 20 or 'volume' not in df.columns:
+            return {}
+
+        typical = (df['high'] + df['low'] + df['close']) / 3
+        pv = typical * df['volume']                    # price × volume
+        cum_pv = pv.cumsum()
+        cum_vol = df['volume'].cumsum()
+
+        vwap = cum_pv / cum_vol
+
+        # For volume-weighted variance:
+        # squared_dev = volume * (typical - vwap)^2
+        # But vwap is cumulative → we need to compute running variance carefully
+
+        # Practical implementation (common in indicators):
+        # variance = [cum(vol * typical^2) / cum(vol)] - vwap^2
+        price_sq_vol = typical.pow(2) * df['volume']
+        cum_price_sq_vol = price_sq_vol.cumsum()
+
+        variance = (cum_price_sq_vol / cum_vol) - vwap.pow(2)
+        variance = variance.clip(lower=0)  # avoid floating-point negative
+
+        stddev = variance.pow(0.5)
+
+        result = {'vwap': vwap.iloc[-1]}
+        for mult in self.vwap_sd_mults:
+            result[f'sd{mult}_upper'] = vwap.iloc[-1] + mult * stddev.iloc[-1]
+            result[f'sd{mult}_lower'] = vwap.iloc[-1] - mult * stddev.iloc[-1]
+
+        return result
+
+    def generate_signal(self,
+                        symbol: str,
+                        timeframe_data: Dict[str, Any],
+                        current_position: float = 0,
+                        **kwargs) -> Optional[Signal]:
+        if '1m' not in timeframe_data or '5m' not in timeframe_data:
+            return None
+
+        df1 = timeframe_data['1m'].copy()  # ensure we don't modify original
+        df5 = timeframe_data['5m']
+
+        if len(df1) < 30 or len(df5) < 40:
+            return None
+
+        # === VWAP + Bands (1m timeframe - most responsive) ===
+        bands = self.calculate_vwap_and_bands(df1)
+        if not bands:
+            return None
+
+        vwap = bands['vwap']
+        current_price = df1['close'].iloc[-1]
+
+        # Distance to VWAP (in ATR units for normalization)
+        atr_1m = calculate_atr(df1['high'], df1['low'], df1['close'], period=self.atr_period)[-1]
+        deviation_atr = abs(current_price - vwap) / atr_1m if atr_1m > 0 else 0
+
+        # === Band position checks ===
+        in_sd1 = bands['sd1_lower'] <= current_price <= bands['sd1_upper']
+        outside_sd2 = (
+            current_price > bands.get('sd2_upper', float('inf')) or
+            current_price < bands.get('sd2_lower', float('-inf'))
+        )
+        near_sd3 = (
+            abs(current_price - bands.get('sd3_upper', 0)) < atr_1m * 0.3 or
+            abs(current_price - bands.get('sd3_lower', 0)) < atr_1m * 0.3
+        )
+
+        # === MACD confirmation (5m) ===
+        macd_line, signal_line, hist = calculate_macd(df5['close'], *self.macd_params)
+        macd_hist_now = hist[-1]
+        macd_hist_prev = hist[-2] if len(hist) > 1 else 0
+
+        side = None
+        notes = []
+
+        if current_price < vwap and deviation_atr > self.atr_mult_entry:
+            # Below VWAP → Long bias (reversion up)
+            if macd_hist_now > 0 and macd_hist_now > macd_hist_prev:  # bullish confirmation
+                if outside_sd2 or near_sd3:
+                    # Extreme → higher conviction
+                    side = OrderSide.BUY
+                    notes.append("Extreme lower deviation (SD2+)")
+                elif not in_sd1:
+                    side = OrderSide.BUY
+                    notes.append("Outside SD1 lower")
+
+        elif current_price > vwap and deviation_atr > self.atr_mult_entry:
+            # Above VWAP → Short bias
+            if macd_hist_now < 0 and macd_hist_now < macd_hist_prev:
+                if outside_sd2 or near_sd3:
+                    side = OrderSide.SELL
+                    notes.append("Extreme upper deviation (SD2+)")
+                elif not in_sd1:
+                    side = OrderSide.SELL
+                    notes.append("Outside SD1 upper")
+
+        if not side:
+            return None
+
+        # === Build signal ===
+        entry_price = current_price
+        stop_loss = vwap if side == OrderSide.BUY else vwap
+        if side == OrderSide.BUY:
+            stop_loss = min(stop_loss, current_price - atr_1m * self.atr_mult_sl)
+        else:
+            stop_loss = max(stop_loss, current_price + atr_1m * self.atr_mult_sl)
+
+        take_profit = vwap  # primary target = mean reversion to VWAP
+        # Optional: partial TP at SD1 opposite band
+
+        confidence = 0.65 + min(0.25, deviation_atr * 0.12)
+        if outside_sd2:
+            confidence += 0.12
+        if near_sd3:
+            confidence += 0.15
+        confidence = min(0.94, max(self.min_confidence, confidence))
+
+        signal = Signal(
+            strategy=self.strategy_type,
+            asset=symbol,
+            side=side,
+            entry_price=entry_price,
+            stop_loss=stop_loss,
+            take_profit=take_profit,
+            confidence=confidence,
+            quality=TradeQuality.HIGH if confidence > 0.80 else TradeQuality.STANDARD,
+            timeframe="1m",
+            market_state="vwap_reversion",
+            notes=" | ".join([f"VWAP ${vwap:.4f}", f"dev {deviation_atr:.2f}×ATR"] + notes)
+        )
+
+        return signal
+Integration & Safety Notes
+
+Add to __init__ params in StrategyManager if needed (or hardcode defaults)
+In calculate_vwap_and_bands: uses cumsum() — efficient in pandas; safe for 1m data (hundreds of rows)
+Edge cases handled: low volume → bands collapse near VWAP
+No new risk logic — still delegates sizing/validation to RiskManager
+Logging: add debug log of bands values once per symbol per hour to monitor
+Testing recommendation: dry-run + log when price crosses SD2/SD3
+
+Tuning Suggestions (Start Conservative)
+
+Entry trigger → require price outside SD1 or touching SD2
+High-conviction → SD2+ deviation + MACD divergence/zero-line cross
+Avoid entries near SD3 unless very strong reversal pattern (rare in crypto)
+
+This upgrade significantly strengthens the strategy's statistical edge while staying aligned with your existing architecture.
+
+VWAP bands backtesting resultsBot Issue → Strategy performance evaluation gap
+New Feature Request → Quantitative validation of VWAP + SD bands mean reversion logic (especially for 1m/5m scalping on Pacifica perpetuals/crypto)
+Diagnostic Summary
+The VWAP Scalping strategy with added standard deviation bands is a classic mean-reversion overlay. Public backtests and trader reports (mostly from 2023–2025 sources, as 2026 data is emerging) show mixed but promising results when properly filtered:
+
+Strongest setups: Extreme deviations (price reaching/touching ±2 SD or ±3 SD bands) + confirmation (e.g., MACD histogram reversal, volume spike, or RSI divergence) often yield high-probability short-term reversals.
+Crypto/perps reality: High volatility + funding + fees make pure low-timeframe mean reversion fee-sensitive. Many traders report the edge survives best in ranging/low-ADX sessions (your RANGING_CALM / RANGING_VOLATILE regimes).
+No universal "84% win rate" holds across all conditions — that claim (from a popular 2025 BTCUSDT video) was session/filter-specific (e.g., only certain hours + strict rules).
+
+Aggregated Backtest Insights from Available Sources
+Here's a realistic synthesis from trader-shared backtests, YouTube quant videos, TradingView/QuantConnect-style reports, and strategy papers (focused on crypto/BTC/USDT perpetuals where possible):
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Source / VariantTimeframeWin RateProfit FactorAvg R:RMax DDNotes / ConditionsApprox Period / AssetVWAP reclaim + SD bands (mean rev)1m–5m55–68%1.4–2.11:1.5–28–18%Extreme ±2/3 SD + MACD/RSI filter; fees kill unfiltered versions3–4 years BTCUSDT perpVWAP mean rev (SD2+ touch → VWAP target)5m60–72%~1.8–2.31:1.810–15%Strongest in ranging markets; add volume confirmationVarious crypto pairsPure VWAP + SD bands breakout (not rev)1m–15m45–58%1.3–1.91:2+12–25%Continuation after band expansion; worse in chopBTC/ETH perpetualsVWAP + BB hybrid (similar logic)1h–4h52–65%1.6–2.41:2–3<12%Lower frequency → better fee survival; 2024–2025 backtest periodsShort-term cryptoExtreme case (filtered 84% claim)Session-specific~84%High (3+)1:1+LowVery strict filters (time of day, trend alignment); not robust live4y BTCUSDT (selective)
+Key Takeaways from Real-World Reports
+
+Win rates 55–70% are realistic for mean-reversion VWAP+SD setups on 1m/5m crypto when:
+Entry only on ±1.5 to ±2.5 SD deviation
+Confirmation required (MACD hist flip + ATR filter)
+Target = VWAP or opposite SD1 band
+Avoid high-vol trending periods (ADX > 25–28)
+
+Profit factor >1.5–2.0 achievable in backtests, but live drops 20–40% due to:
+Slippage (0.02–0.1% on Solana perps)
+Fees (Pacifica taker/maker structure)
+Funding rate drag on perpetuals
+
+Max drawdown stays manageable (<20%) with proper position sizing (your RiskManager already enforces this)
+Many quants conclude: Pure 1m scalping VWAP reclaim barely survives fees unless morphed into higher-timeframe context or combined with regime filter (your MarketRegimeDetector is perfect for this).
+
+Recommendations for Your Bot (Before Live Deployment)
+
+Regime Gate (already strong in your setup)
+Allow VWAP signals primarily in RANGING_CALM / RANGING_VOLATILE (ADX ≤ 22)
+Reduce weight or disable in TRENDING_STRONG (ADX > 28)
+
+Entry Filters to Target Realistic 58–68% Win Rate
+Require deviation ≥ 1.8–2.2 × SD (not just ATR)
+MACD histogram must flip direction
+Optional: price must touch/breach SD2 or near SD3 for high-conviction (boosts confidence to 0.80+)
+
+Risk / Exit Rules
+SL beyond nearest SD band or 1.5–2× ATR
+TP at VWAP (conservative) or partial at SD1 opposite + trail to VWAP
+Max 1–2 trades per symbol per hour (cooldown)
+
+Backtesting Plan in Your Environment
+Use MultiTimeframeFetcher historical data (1m + 5m)
+Simulate Pacifica fees (maker 0.02%, taker 0.05%?) + realistic slippage
+Run on BTC/SOL/USDC perps over 2024–2026 data
+Metrics to watch: Profit Factor >1.6, Sharpe >1.0, DD <18%, trades/day 15–40
+
+Quick Code Tweak Suggestion
+In generate_signal() add stricter band check:Python# Replace simple deviation_atr check with band-specific
+deviation_sd = abs(current_price - vwap) / stddev.iloc[-1] if 'stddev' in bands else 0
+
+if deviation_sd < 1.8:  # require at least ~SD1.8
+    return None
+
+if deviation_sd >= 2.2:
+    confidence += 0.15  # extreme = higher conv
+
+Would you like me to:
+
+Draft a full backtest harness skeleton (using your existing data fetcher + pandas)?
+Suggest exact parameter grid for optimization (multipliers, SD thresholds, cooldowns)?
+Help integrate band values into database/journal for live monitoring?
+Diagnose how to visualize bands on frontend charts (trading_bot_interface.html)?
+
+Prioritize safety — run extensive dry-run/paper trading first on Pacifica testnet. Let me know your next step.3.8s75 sourcesthis would just cover the scalping. are the other 3 additions easy to upgrade as well?
+ 
+Recommended Additions to Your Bot
+  1. VWAP Scalping (Priority 1) - Complements mean reversion
+  2. Funding Rate Arbitrage (Priority 2) - Pacifica has hourly funding = 24x per day collection
+  3. Momentum Scalping (Priority 3) - Higher frequency trend capture
+  4. Order Book Imbalance (Priority 4) - Requires Level 2 data
+ 
+I also need to know what level 2 data is.Bot Issue → Strategy expansion gap (missing high-frequency / passive additions beyond scalping)
+Integration Issue → Need to assess feasibility of adding Funding Rate Arbitrage, Momentum Scalping, and Order Book Imbalance given current architecture (WebSocket, Pacifica API, RiskManager, StrategyManager, etc.)
+Yes — the other three recommended additions are realistically implementable with moderate-to-low effort, especially since your bot already has strong foundations:
+
+MultiTimeframeFetcher + WebSocket for real-time data
+StrategyManager with regime filtering & conflict resolution
+RiskManager for sizing/validation/exposure tracking
+ExecutionInterface for order placement
+Database for state persistence
+
+They fit the "overlay/passive" or "higher-frequency" pattern like VWAP scalping — no need for massive rewrites.
+Quick Feasibility & Effort Estimate (2026 Pacifica Solana Perps Context)
+
+
+PriorityStrategyDifficultyEffort LevelDependencies / Changes NeededRegime FitExpected Edge / FrequencyNotes / Risks2Funding Rate ArbitrageLow2–4 daysPacifica API for funding rate + perp/spot prices; new passive strategy class; delta-neutral position trackingALL (passive)Low-risk, steady (hourly payments ×24/day on Pacifica)Very low directional risk; main risk = basis risk + funding flips; needs subaccount isolation or hedging logic3Momentum ScalpingMedium5–8 days5m/15m EMA cross + MACD/RSI confirmation; reuse existing indicators; similar to MA Crossover but fasterTRENDING_STRONG/MODERATEMedium frequency, 10–30 trades/dayBuilds on your existing MA Crossover; add strict regime gate + cooldown to avoid chop4Order Book ImbalanceMedium-High8–14 daysLevel 2 / order book depth via Pacifica WebSocket (bid/ask levels + sizes); imbalance calc (e.g., cumulative bid vs ask volume in top 5–10 levels)ALL (real-time overlay)High-frequency (tick/1m)Highest complexity due to L2 data handling; needs fast processing + reconnection logic
+Bottom line: All three are easier than starting from scratch because your bot is already multi-strategy, regime-aware, and WebSocket-connected. Funding Rate Arbitrage is the easiest next step after VWAP (low code, passive income). Order Book Imbalance is the hardest due to data requirements — but feasible if Pacifica provides it.
+What is Level 2 Data? (Order Book Depth)
+Level 2 market data (also called market depth, depth of book, or L2 quotes) shows the full visible order book beyond just the best bid and best ask (which is Level 1).
+
+Level 1: Only top bid price + size, top ask price + size (your current get_ticker_ws approximates this).
+Level 2: Multiple price levels on both sides (e.g., top 10–50 bids and asks), including:
+Price levels
+Quantity (size) at each level
+Sometimes aggregated or individual orders (market-by-price vs market-by-order)
+
+
+In crypto perpetuals/DEXes (like Pacifica on Solana):
+
+Many order-book DEXs (Drift, Phoenix, Openbook derivatives) expose on-chain or WebSocket Level 2 depth.
+It shows real-time supply/demand walls, potential support/resistance, and absorption (e.g., large buy wall getting eaten → bullish pressure).
+For Order Book Imbalance strategy: You calculate something like
+imbalance = (sum bid sizes top N levels) / (sum bid + sum ask sizes)
+→ >0.6 → buy pressure → long bias
+→ <0.4 → sell pressure → short bias
+Often combined with delta (aggressive buys vs sells hitting the book).
+
+Pacifica-specific note: As a Solana perp DEX (similar to Drift/Phoenix patterns), it likely provides WebSocket order book snapshots/updates (depth levels configurable, e.g., 10–20). Your pacifica_ws_client.py probably already subscribes to ticker — extending it to depth channels is the main lift.
+If Pacifica lacks deep L2 (some Solana perps are hybrid AMM/order-book), fallback options include shallower imbalance proxies (e.g., bid/ask spread changes + volume delta).
+Recommended Next Steps (Safe, Incremental Path)
+
+Finish & dry-run VWAP Scalping first (Priority 1) — prove the overlay pattern works in your StrategyManager.
+Add Funding Rate Arbitrage next (Priority 2) — lowest risk, passive yield boost:
+New file: strategies/funding_arb.py
+Poll hourly funding rate via Pacifica API
+If positive & high → long spot/perp hedge (or equivalent delta-neutral)
+Use RiskManager for exposure cap (e.g., 10–20% alloc)
+Store positions in DB for monitoring
+
+Momentum Scalping — reuse EMA/MACD logic from existing strategies; just tighten timeframe + add regime weighting.
+Order Book Imbalance — only after confirming Pacifica WS gives depth:
+Extend pacifica_ws_client to subscribe to orderbook/depth channel
+Compute imbalance every 5–30s
+Trigger directional scalps when imbalance > threshold + confirmation
+
+
+All can follow your existing patterns:
+
+Inherit from BaseStrategy
+Generate Signal objects
+Delegate sizing/validation/execution
+Respect regime (or ALL for passive/arbitrage)
+
+Want me to:
+
+Sketch the Funding Rate Arbitrage strategy skeleton (easiest next one)?
+Draft WebSocket depth subscription extension for L2?
+Help define exact regime weights for these new strategies in market_regime.py?
+
+Prioritize safety — add one at a time, extensive dry-run/paper mode on testnet first. Let me know your preferred order.2s70 sourceswould this have the information for the order book imbalance? https://docs.pacifica.fi/api-documentation/api/websocket/subscriptions/orderbookIntegration Issue → Pacifica WebSocket orderbook subscription compatibility with Order Book Imbalance strategy
+Yes — the page https://docs.pacifica.fi/api-documentation/api/websocket/subscriptions/orderbook provides exactly the information needed to implement an Order Book Imbalance strategy in your bot. It gives a fully usable aggregated Level 2 (market depth) feed with everything required for imbalance calculations.
+Why This Feed is Sufficient for Order Book Imbalance
+Key Capabilities from the Documentation:
+
+Real-time aggregated depth (not raw L3 individual orders, but aggregated L2 — common and efficient for most imbalance strategies)
+Aggregation levels (agg_level): 1, 10, 100, 1000, 10000 — this controls the "granularity" of price buckets
+Lower values (e.g. agg_level: 1 or 10) → finer price resolution (more levels, closer to true depth)
+Higher values → coarser aggregation (fewer effective levels, but still usable)
+
+Update frequency: Every 100 ms — excellent for real-time scalping/imbalance overlays (tick-level reactivity)
+Message format includes:
+Bids and asks arrays separately
+Per level:
+"p": price (highest in bid bucket, lowest in ask bucket)
+"a": total quantity/amount (volume at that aggregated level)
+"n": number of orders in the bucket (bonus signal for order density/walls)
+
+Timestamp ("t") and nonce ("li") for ordering/reliability
+
+Symbol-specific (e.g. "SOL", "BTC", etc. — matches your perp symbols)
+
+This is classic aggregated Level 2 data — precisely what most retail/quant bots use for imbalance, spoofing detection, absorption, or aggressive flow signals.
+How to Use It for Order Book Imbalance Strategy
+Typical imbalance formula (top N levels):
+Pythondef calculate_imbalance(bids: list, asks: list, levels: int = 5) -> float:
+    """
+    imbalance = (sum bid quantities top N) / (sum bid qty + sum ask qty top N)
+    > 0.6 → strong buy pressure
+    < 0.4 → strong sell pressure
+    """
+    bid_vol = sum(float(level["a"]) for level in bids[:levels])
+    ask_vol = sum(float(level["a"]) for level in asks[:levels])
+    total_vol = bid_vol + ask_vol
+    if total_vol == 0:
+        return 0.5  # neutral
+    return bid_vol / total_vol
+
+Subscribe with agg_level: 10 or 1 for usable depth
+Maintain local book state (merge incremental updates — doc implies delta-style at 100ms)
+Trigger signals when imbalance crosses thresholds (e.g. >0.65 long, <0.35 short) + confirmation (price momentum, volume spike)
+Use "n" (order count) as secondary filter — high n + low a → potential spoofing/wall
+
+Comparison to "True" Level 2:
+
+Not raw individual orders (L3) → no order-by-order tracking
+But aggregated by price → still very effective for imbalance (most strategies use top 5–20 levels anyway)
+Depth not fixed # of levels (depends on market + agg_level), but practical for Solana perps (liquid pairs have good coverage)
+
+Recommended Implementation Steps in Your Bot
+
+Extend pacifica_ws_client.py
+Add subscription support for "book" channel:Pythondef subscribe_orderbook(self, symbol: str, agg_level: int = 10):
+    payload = {
+        "method": "subscribe",
+        "params": {
+            "source": "book",
+            "symbol": symbol.upper().replace("-PERP", ""),
+            "agg_level": agg_level
+        }
+    }
+    self.ws.send(json.dumps(payload))
+Handle incoming messages in WS handler:
+Parse "channel": "book"
+Store/update local orderbook dict: {symbol: {"bids": [...], "asks": [...], "timestamp": ...}}
+Use nonce ("li") to detect/reorder if needed
+
+New strategy file → strategies/orderbook_imbalance.py
+Inherit from BaseStrategy
+In generate_signal(): compute imbalance every 200–500ms
+Thresholds: e.g. imbalance > 0.62 → BUY signal, < 0.38 → SELL
+Confidence boost if "n" high on one side (dense orders)
+Regime: ALL (real-time overlay)
+
+Risk & Safety:
+Use RiskManager for sizing/validation
+Add cooldown (e.g. 30–60s per symbol) to avoid over-trading
+Monitor WS reconnection (your existing WS client should handle)
+
+Testing:
+Dry-run on testnet (wss://test-ws.pacifica.fi/ws)
+Log imbalance values + top levels for debugging
+Start with agg_level: 10 (good balance of depth vs noise)
+
+
+Verdict: This endpoint fully enables an Order Book Imbalance strategy (Priority #4). It's aggregated L2 — not ultra-deep L3 — but more than adequate (and performant) for high-frequency imbalance signals on Pacifica Solana perps.
+Would you like:
+
+A skeleton for orderbook_imbalance.py (with imbalance calc + signal generation)?
+Code snippet for maintaining/merging the book in pacifica_ws_client?
+Parameter recommendations (agg_level, imbalance thresholds, lookback levels)?
+Next priority (Funding Arb skeleton instead, since it's easier)?
+
+Prioritize testnet validation — subscribe and log raw messages first to confirm format/live data quality.
+

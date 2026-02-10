@@ -1,0 +1,113 @@
+Diagnosis: Feasibility of Partial Grid Unwind on Regime Change
+This falls under Bot Issues: Trading logic modifications, specifically in position management during market regime changes. No immediate errors in the current codebase—it's designed conservatively for safety—but your proposal introduces a more directional unwind strategy, which is feasible with targeted repairs. I'll break it down step-by-step, including current behavior, feasibility assessment, repair plan, and safety considerations.
+1. Current Behavior Analysis
+
+Regime Detection: Handled by MarketRegimeDetector in market_regime.py. Grids are allowed only in RANGING_CALM, RANGING_VOLATILE, or INDECISIVE (ADX ≤ 22 or transitional). When ADX rises above 22 (entering TRENDING_MODERATE or TRENDING_STRONG), StrategyManager.enable_grid_trading is set to False.
+Unwind Trigger: In TradingBot._handle_regime_transition (via trading_bot.py), it checks if grid trading is disabled and calls GridLifecycleManager.on_regime_disallowed(symbol) for each active grid symbol.
+Full Unwind Logic: GridLifecycleManager._force_exit (in grid_lifecycle_manager.py) is authoritative—it cancels all orders and flattens all positions via market closes, regardless of direction. This ensures complete isolation (grids are neutral and exclusive per symbol), resets exposure in RiskManager, and clears state. Reason: Prioritizes risk minimization in trending markets where grids can bleed from one-sided moves.
+Why Full Flatten?: Per the Grid Trading Brief (implied in docs), grids assume no directional bias. Trending regimes invalidate this, so everything unwinds to avoid drawdowns. No partial logic exists currently—positions aren't classified as "with/against trend."
+
+Trace: No bugs here; it's intentional for safety. Logs would show "Grid disabled by regime change" followed by "All orders cancelled" and "Position flattened."
+2. Feasibility Assessment
+
+Yes, it's possible: The system is modular, so we can repair GridLifecycleManager to add directional logic without breaking core architecture. Key enablers:
+Access to trend direction: Integrate from MarketRegimeDetector or strategies like MACrossoverStrategy (e.g., using MA indicators to detect up/down trend).
+Position querying: Already available via PacificaClient.get_positions()—positions have side ("bid" for long/buy, "ask" for short/sell? Wait, docs show "side" as string; confirm in client).
+Partial close: place_order supports closing specific quantities/sides.
+
+Complexity: Medium. Requires new logic to infer "trend direction" (not currently exposed) and classify positions (e.g., keep longs in uptrend, close shorts).
+Timeline: 1-2 hours for implementation + testing; low risk of regressions if isolated to unwind methods.
+Pros: Could capture trend profits from surviving positions.
+Cons/Risks: Introduces directional bias to a neutral strategy; potential for amplified losses if trend detection is wrong (e.g., false trends). Violates current "exclusive trader" assertion in _assert_grid_pre_trade.
+
+No data corruption or DB issues anticipated—unwind would still save to grid_positions table.
+3. Repair Plan
+To implement: Modify unwind to be partial. We'll add trend detection and selective closing in GridLifecycleManager.
+Step 1: Gather Context
+
+Run diagnostics: Check recent regime changes in logs (search for "Regime: TRENDING_"). Query DB for grid positions: SELECT * FROM grid_positions WHERE symbol = 'YOUR_SYMBOL' AND status = 'pending';.
+Isolate: Test on_regime_disallowed in a mock env (use python -m unittest if tests exist; add if not).
+
+Step 2: Code Changes
+
+Add Trend Detection: In market_regime.py, expose trend direction (e.g., via DI+/- from ADX calc). For simplicity, use MA crossover (from ma_crossover.py) since it's trend-enabled.
+New method in MarketRegimeDetector:Pythondef get_trend_direction(self, market_data: Dict[str, List[float]]) -> str:
+    """Return 'up', 'down', or 'none' based on MA crossover."""
+    from .strategies.ma_crossover import MACrossoverStrategy
+    ma_strategy = MACrossoverStrategy()
+    signal = ma_strategy.generate_signal(market_data)  # Assuming it returns Signal with side
+    if signal and signal.side == OrderSide.BUY:
+        return 'up'
+    elif signal and signal.side == OrderSide.SELL:
+        return 'down'
+    return 'none'
+Call this in StrategyManager when disabling grids.
+
+Modify Unwind in grid_lifecycle_manager.py:
+Update on_regime_disallowed to pass trend direction (from above).
+Change _force_exit to _partial_exit for selective close:Pythondef _partial_exit(self, symbol: str, reason: str, trend_direction: str):
+    """Selective unwind: Close against-trend positions, keep with-trend."""
+    if trend_direction == 'none':
+        return self._force_exit(symbol, reason)  # Fallback to full if unclear
+    
+    try:
+        # Cancel all open orders (keep, as pending orders are neutral)
+        self.client.cancel_all_orders(symbol)
+        logger.info(f"All orders cancelled for {symbol} ({reason})")
+        
+        # Get positions
+        positions = self.client.get_positions()
+        for pos in [p for p in positions if p.get('symbol') == symbol]:
+            side = pos.get('side').lower()  # Assume 'bid'/'long' for buy, 'ask'/'short' for sell
+            qty = abs(float(pos.get('amount', 0)))
+            if qty <= 0:
+                continue
+            
+            # Determine if against trend
+            if (trend_direction == 'up' and 'short' in side) or \
+               (trend_direction == 'down' and 'long' in side):
+                close_side = 'buy' if 'short' in side else 'sell'  # Opposite to close
+                self.client.place_order(symbol, close_side, qty, 'market')
+                logger.warning(f"Against-trend position closed: {symbol} {close_side} {qty}")
+            else:
+                logger.info(f"With-trend position kept: {symbol} {side} {qty}")
+                # Optional: Add trailing stop via RiskManager
+
+    except Exception as e:
+        logger.critical(f"Partial exit failed for {symbol}: {e} - Falling back to full exit")
+        self._force_exit(symbol, reason)  # Safety fallback
+    
+    # Partial reset: Update RiskManager exposure only for closed portions
+    # (Add logic to recalculate remaining exposure)
+    remaining_exposure = self._calculate_remaining_exposure(symbol)  # New helper
+    self.risk_manager.grid_exposure[symbol] = remaining_exposure
+    
+    # State: Set to DISABLED_BY_REGIME, but note remaining positions
+    if symbol in self._grids:
+        self._grids[symbol]['state'] = GridState.DISABLED_BY_REGIME
+        logger.critical(f"Partial grid exit complete for {symbol} ({reason})")
+Integrate: In on_regime_disallowed, fetch trend_direction and call _partial_exit.
+
+RiskManager Updates: Add _calculate_remaining_exposure to sum notional of kept positions. Ensure validate_grid_exposure accounts for partials.
+DB/Logging: In _save_grid_position, add 'trend_aligned' flag. Log partial closes.
+
+Step 3: Testing
+
+Unit: Mock positions/trends, assert only against-trend closes.
+Integration: Simulate regime change via MultiTimeframeFetcher mock data.
+Run python tasks.py validate (assume exists; add if not).
+Manual: Start bot in testnet, force regime change, verify positions.
+
+Step 4: Deployment
+
+Update config/env for new params (e.g., GRID_PARTIAL_UNWIND_ENABLED=True).
+Minimal downtime: Restart bot after changes.
+
+4. Safety and Emergency Notes
+
+Prioritize Safety: This adds risk—if trend detection fails (e.g., choppy market), kept positions could lose big. Add circuit breaker check in _partial_exit.
+Live Trading Caution: Test in testnet first. If issues, emergency stop via TradingBot.stop() and manual flatten.
+Regressions: Ensure doesn't violate "one grid per symbol" or exposure caps—re-run assertions.
+Documentation: Update Grid Trading Brief in docs; add to README.
+
+This repair resolves your request while maintaining integrity. If you share code snippets/logs or want me to simulate via code_execution tool, I can refine further! ✅

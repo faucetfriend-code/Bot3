@@ -1,0 +1,1515 @@
+"""
+GridLifecycleManager
+====================
+
+Authoritative state machine for Grid Trading lifecycle.
+
+Responsibilities (HARD GUARANTEES):
+- Enforces exactly ONE grid per symbol
+- Owns grid state (ACTIVE / DISABLED / EMERGENCY_EXIT)
+- Cancels all grid orders on regime change
+- Flattens positions on emergency stop
+- Single integration point for TradingBot
+- ACTIVE MONITORING: Track fills, calculate P&L, detect round-trips
+
+This module intentionally contains NO strategy logic and NO sizing logic.
+Sizing MUST come from RiskManager.
+"""
+
+from enum import Enum
+from typing import Dict, Any, List, Optional, Set
+from datetime import datetime, timedelta
+from loguru import logger
+from dataclasses import dataclass, field
+
+from .config import config
+
+
+class GridState(Enum):
+    IDLE = "idle"
+    ACTIVE = "active"
+    EMERGENCY_EXIT = "emergency_exit"
+    DISABLED_BY_REGIME = "disabled_by_regime"
+    CLOSED = "closed"
+
+
+@dataclass
+class GridFill:
+    """Represents a single fill on a grid order."""
+
+    trade_id: str
+    order_id: str
+    side: str  # "BUY" or "SELL"
+    price: float
+    quantity: float
+    fee: float
+    timestamp: datetime
+    matched: bool = False  # True when FULLY matched with opposite side for P&L
+    matched_quantity: float = 0.0  # Track how much of this fill has been matched
+
+    @property
+    def remaining_quantity(self) -> float:
+        """Return unmatched quantity."""
+        return self.quantity - self.matched_quantity
+
+
+@dataclass
+class GridMetrics:
+    """Tracks grid performance metrics."""
+
+    total_buy_fills: int = 0
+    total_sell_fills: int = 0
+    total_buy_quantity: float = 0.0
+    total_sell_quantity: float = 0.0
+    total_buy_value: float = 0.0  # quantity * price
+    total_sell_value: float = 0.0
+    total_fees: float = 0.0
+    realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    completed_round_trips: int = 0
+    avg_buy_price: float = 0.0
+    avg_sell_price: float = 0.0
+    net_position: float = 0.0  # positive = long, negative = short
+
+
+class GridLifecycleManager:
+    def __init__(self, client, risk_manager, db=None, regime_detector=None):
+        """
+        Args:
+            client: Exchange client (PacificaClient)
+            risk_manager: Central RiskManager instance
+            db: Optional DatabaseManager for grid state persistence
+            regime_detector: Optional MarketRegimeDetector for trend direction on unwind
+        """
+        self.client = client
+        self.risk_manager = risk_manager
+        self.db = db
+        self.regime_detector = regime_detector
+
+        # symbol -> grid metadata
+        self._grids: Dict[str, Dict[str, Any]] = {}
+
+        # symbol -> list of fills
+        self._fills: Dict[str, List[GridFill]] = {}
+
+        # symbol -> set of processed trade IDs (prevent duplicate processing)
+        self._processed_trades: Dict[str, Set[str]] = {}
+
+        # symbol -> GridMetrics
+        self._metrics: Dict[str, GridMetrics] = {}
+
+        # Last time we checked for fills
+        self._last_fill_check: datetime = datetime.now() - timedelta(hours=1)
+
+    # =========================
+    # STATE CHECKS
+    # =========================
+
+    def has_active_grid(self, symbol: str) -> bool:
+        return (
+            symbol in self._grids and self._grids[symbol]["state"] == GridState.ACTIVE
+        )
+
+    def needs_order_placement(self, symbol: str) -> bool:
+        """Check if an active grid needs orders placed (registered but no orders on exchange)."""
+        if symbol not in self._grids:
+            return False
+        grid = self._grids[symbol]
+        if grid.get("state") != GridState.ACTIVE:
+            return False
+        return grid.get("orders_placed", 0) == 0
+
+    def get_orders_placed(self, symbol: str) -> int:
+        """Get the number of orders placed for a grid."""
+        if symbol not in self._grids:
+            return 0
+        return self._grids[symbol].get("orders_placed", 0)
+
+    def set_orders_placed(self, symbol: str, count: int):
+        """Update the orders placed count for a grid."""
+        if symbol not in self._grids:
+            logger.warning(f"Cannot set orders_placed - no grid for {symbol}")
+            return
+        self._grids[symbol]["orders_placed"] = count
+        logger.info(f"📊 Grid {symbol} orders_placed set to {count}")
+
+    def get_grid_state(self, symbol: str) -> GridState:
+        return self._grids.get(symbol, {}).get("state", GridState.IDLE)
+
+    def get_grid_center(self, symbol: str) -> Optional[float]:
+        """Return the current reference center price of the active grid."""
+        if not self.has_active_grid(symbol):
+            return None
+        grid = self._grids[symbol]
+        # Use stored center price if available
+        if "center_price" in grid:
+            return grid["center_price"]
+        # Fallback to initial entry price from grid creation
+        return grid.get("initial_center", None)
+
+    def get_last_refresh_time(self, symbol: str) -> Optional[datetime]:
+        """Get when grid was last recentered/refreshed."""
+        if symbol not in self._grids:
+            return None
+        return self._grids[symbol].get("last_refresh", None)
+
+    def get_grid_spacing(self, symbol: str) -> float:
+        """Get the current grid spacing for a symbol."""
+        if symbol not in self._grids:
+            return 0.0
+        return self._grids[symbol].get("grid_spacing", 0.0)
+
+    def update_grid_spacing(self, symbol: str, new_spacing: float, reason: str = "dynamic"):
+        """Update the grid spacing (for dynamic spacing adjustments)."""
+        if symbol not in self._grids:
+            logger.warning(f"Cannot update spacing - no grid for {symbol}")
+            return
+        old_spacing = self._grids[symbol].get("grid_spacing", 0)
+        self._grids[symbol]["grid_spacing"] = new_spacing
+        self._grids[symbol]["spacing_updated_at"] = datetime.now()
+        logger.info(
+            f"📊 Grid {symbol} spacing updated: ${old_spacing:.4f} → ${new_spacing:.4f} ({reason})"
+        )
+
+    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh") -> bool:
+        """
+        Soft recenter: shift UNFILLED limit orders toward new center price.
+        Does NOT touch filled positions.
+
+        Args:
+            symbol: Trading symbol
+            new_center: New center price to shift orders toward
+            reason: Reason for recentering (for logging)
+
+        Returns:
+            True if recenter successful, False otherwise
+        """
+        if not self.has_active_grid(symbol):
+            logger.warning(f"Cannot recenter - no active grid for {symbol}")
+            return False
+
+        grid = self._grids[symbol]
+        current_center = self.get_grid_center(symbol)
+        if current_center is None:
+            logger.error(f"Cannot recenter {symbol} - no current center price")
+            return False
+
+        # Safety: enforce minimum time between refreshes (45 minutes)
+        last_refresh = self.get_last_refresh_time(symbol)
+        if last_refresh and (datetime.now() - last_refresh).total_seconds() < 2700:
+            remaining = 2700 - (datetime.now() - last_refresh).total_seconds()
+            logger.info(
+                f"Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
+            )
+            return False
+
+        drift_abs = abs(new_center - current_center)
+        drift_pct = drift_abs / current_center if current_center > 0 else 0
+        logger.info(
+            f"📊 Recentering {symbol} | old center ${current_center:.4f} → new ${new_center:.4f} "
+            f"(drift ${drift_abs:.4f} / {drift_pct:.2%}) - reason: {reason}"
+        )
+
+        try:
+            # Calculate shift delta
+            delta = new_center - current_center
+            spacing = grid.get("grid_spacing", 0)
+
+            # Get current open orders from exchange
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+
+            if not symbol_orders:
+                logger.info(f"No open orders to recenter for {symbol}")
+                # Still update metadata
+                grid["center_price"] = new_center
+                grid["last_refresh"] = datetime.now()
+                grid["last_refresh_reason"] = reason
+                return True
+
+            orders_adjusted = 0
+
+            for order in symbol_orders:
+                order_id = order.get("id") or order.get("order_id")
+                old_price = float(order.get("price", 0))
+                side = order.get("side", "").lower()
+                quantity = float(order.get("quantity") or order.get("size") or order.get("amount", 0))
+
+                if not order_id or not old_price or not quantity:
+                    continue
+
+                new_price = old_price + delta
+
+                # Safety: cap single-order price shift at 8%
+                if abs(new_price - old_price) / old_price > 0.08:
+                    logger.warning(
+                        f"Price shift too large for {symbol} order {order_id} "
+                        f"(${old_price:.2f} → ${new_price:.2f}) - skipping this leg"
+                    )
+                    continue
+
+                # Round price to appropriate tick size
+                tick_size = 1.0 if "BTC" in symbol else 0.01
+                new_price = round(new_price / tick_size) * tick_size
+
+                try:
+                    # Cancel old order
+                    self.client.cancel_order(symbol, order_id)
+                    logger.debug(f"Cancelled old order {order_id} @ ${old_price:.4f}")
+
+                    # Place new order at adjusted price
+                    new_order = self.client.place_order(
+                        symbol, side, quantity, "limit", new_price
+                    )
+                    new_order_id = new_order.get("id") or new_order.get("order_id")
+                    logger.info(
+                        f"📊 Replaced order {order_id} → {new_order_id} @ ${new_price:.4f} ({side})"
+                    )
+                    orders_adjusted += 1
+
+                except Exception as e:
+                    logger.error(f"Failed to replace order {order_id}: {e}")
+                    continue
+
+            # Update grid metadata
+            grid["center_price"] = new_center
+            grid["last_refresh"] = datetime.now()
+            grid["last_refresh_reason"] = reason
+            grid["refresh_count"] = grid.get("refresh_count", 0) + 1
+
+            logger.info(
+                f"✅ Grid recenter completed for {symbol} - {orders_adjusted} orders adjusted"
+            )
+            return True
+
+        except Exception as e:
+            logger.critical(f"Recentering FAILED for {symbol}: {e}")
+            return False
+
+    def close_grid(self, symbol: str, reason: str = "manual") -> bool:
+        """
+        Close/deactivate a grid for a symbol.
+
+        Args:
+            symbol: Trading symbol
+            reason: Reason for closing (for logging)
+
+        Returns:
+            True if grid was closed, False if no active grid
+        """
+        if symbol not in self._grids:
+            logger.warning(f"No grid found for {symbol}")
+            return False
+
+        grid_data = self._grids[symbol]
+        old_state = grid_data.get("state", GridState.IDLE)
+
+        # Set state to CLOSED
+        grid_data["state"] = GridState.CLOSED
+        grid_data["closed_at"] = datetime.now()
+        grid_data["close_reason"] = reason
+
+        logger.info(
+            f"📊 Grid closed for {symbol}: {old_state.value} -> CLOSED (reason: {reason})"
+        )
+
+        # Optionally persist to database
+        if self.db:
+            try:
+                self.db.update_grid_state(symbol, "closed", reason)
+            except Exception as e:
+                logger.warning(f"Could not persist grid close to DB: {e}")
+
+        return True
+
+    def clear_grid(self, symbol: str) -> bool:
+        """
+        Completely remove a grid from memory AND database (allows new grid creation).
+
+        Args:
+            symbol: Trading symbol
+
+        Returns:
+            True if grid was removed, False if no grid existed
+        """
+        if symbol in self._grids:
+            del self._grids[symbol]
+            logger.info(f"📊 Grid cleared from memory for {symbol}")
+
+            # Also clear related data
+            if symbol in self._fills:
+                del self._fills[symbol]
+            if symbol in self._processed_trades:
+                del self._processed_trades[symbol]
+            if symbol in self._metrics:
+                del self._metrics[symbol]
+
+            # Delete from database to prevent reload
+            self.delete_grid_state(symbol)
+            logger.info(f"📊 Grid cleared from database for {symbol}")
+
+            return True
+
+        # Even if not in memory, try to delete from DB (in case of stale state)
+        self.delete_grid_state(symbol)
+        return False
+
+    # =========================
+    # GRID CREATION
+    # =========================
+
+    def register_new_grid(
+        self,
+        symbol: str,
+        grid_capital: float,
+        emergency_stop_price: float,
+        regime: str = None,
+        atr: float = 0,
+        spacing: float = 0,
+        num_levels: int = 10,
+        center_price: float = 0,
+    ):
+        """
+        Register a grid AFTER emergency stop has been successfully placed.
+        HARD FAIL if grid already exists.
+
+        Args:
+            symbol: Trading symbol
+            grid_capital: Capital allocated to the grid
+            emergency_stop_price: Price at which to emergency exit
+            regime: Current market regime (for persistence)
+            atr: ATR at creation time
+            spacing: Grid spacing used
+            num_levels: Number of grid levels
+            center_price: Initial center price for the grid
+        """
+        if symbol in self._grids:
+            raise RuntimeError(f"Grid already active for {symbol}")
+
+        self._grids[symbol] = {
+            "state": GridState.ACTIVE,
+            "grid_capital": grid_capital,
+            "emergency_stop": emergency_stop_price,
+            "regime_on_creation": regime,
+            "atr_at_creation": atr,
+            "grid_spacing": spacing,
+            "num_levels": num_levels,
+            "orders_placed": 0,  # Track actual orders placed on exchange
+            "center_price": center_price,  # For recentering logic
+            "initial_center": center_price,  # Preserve original center
+            "created_at": datetime.now(),
+            "refresh_count": 0,
+        }
+
+        # Initialize exposure tracking at zero
+        self.risk_manager.grid_exposure[symbol] = 0.0
+
+        # Persist to database for restart resilience
+        self.save_grid_state(symbol, regime=regime, atr=atr, spacing=spacing)
+
+        logger.info(
+            f"Grid registered for {symbol}: capital=${grid_capital:.2f}, center=${center_price:.4f}, regime={regime}"
+        )
+
+    # =========================
+    # REGIME HANDLING
+    # =========================
+
+    def on_regime_disallowed(self, symbol: str, market_data: Dict[str, List] = None):
+        """
+        Called when market regime transitions OUT of allowed grid regimes.
+
+        If partial unwind is enabled and trend direction is clear:
+        - Close positions AGAINST the trend
+        - KEEP positions aligned WITH the trend (migrate to trend-following)
+
+        Falls back to full exit if:
+        - Partial unwind disabled in config
+        - Trend direction is 'none' (unclear)
+        - Any error during partial exit
+        - No regime detector available
+
+        Args:
+            symbol: Trading symbol
+            market_data: Optional OHLCV data for trend detection (4h timeframe preferred)
+        """
+        if symbol not in self._grids:
+            return
+
+        logger.warning(f"Grid disabled by regime change for {symbol}")
+        self._grids[symbol]["state"] = GridState.DISABLED_BY_REGIME
+
+        # Check if partial unwind is enabled
+        if not config.grid_partial_unwind_enabled:
+            logger.info(
+                f"Partial unwind disabled in config - using full exit for {symbol}"
+            )
+            self._force_exit(symbol, reason="REGIME_CHANGE")
+            return
+
+        # Check if regime detector available
+        if not self.regime_detector or not market_data:
+            logger.info(
+                f"No regime detector or market data - using full exit for {symbol}"
+            )
+            self._force_exit(symbol, reason="REGIME_CHANGE")
+            return
+
+        # Get trend direction
+        trend_direction = self.regime_detector.get_trend_direction(market_data)
+        logger.info(f"Detected trend direction for {symbol}: {trend_direction}")
+
+        # Fall back to full exit if trend unclear
+        if trend_direction == "none":
+            logger.warning(f"Trend direction unclear - using full exit for {symbol}")
+            self._force_exit(symbol, reason="REGIME_CHANGE_UNCLEAR_TREND")
+            return
+
+        # Attempt partial exit
+        try:
+            result = self._partial_exit(
+                symbol, reason="REGIME_CHANGE", trend_direction=trend_direction
+            )
+
+            if not result.get("success"):
+                logger.error(
+                    f"Partial exit failed for {symbol} - falling back to full exit"
+                )
+                self._force_exit(symbol, reason="PARTIAL_EXIT_FAILED")
+        except Exception as e:
+            logger.error(
+                f"Error during partial exit for {symbol}: {e} - falling back to full exit"
+            )
+            self._force_exit(symbol, reason=f"PARTIAL_EXIT_ERROR:{e}")
+
+    # =========================
+    # EMERGENCY EXIT
+    # =========================
+
+    def on_emergency_stop_triggered(self, symbol: str):
+        """
+        Called when emergency stop price is breached or stop order fills.
+        """
+        if symbol not in self._grids:
+            return
+
+        logger.critical(f"EMERGENCY GRID EXIT triggered for {symbol}")
+        self._grids[symbol]["state"] = GridState.EMERGENCY_EXIT
+
+        self._force_exit(symbol, reason="EMERGENCY_STOP")
+
+    # =========================
+    # CORE EXIT LOGIC
+    # =========================
+
+    def _force_exit(self, symbol: str, reason: str):
+        """
+        HARD EXIT:
+        - Cancel all orders
+        - Close all positions
+        - Clear RiskManager exposure
+        - Remove grid state
+        """
+        try:
+            # Cancel all open orders
+            self.client.cancel_all_orders(symbol)
+            logger.info(f"All orders cancelled for {symbol} ({reason})")
+        except Exception as e:
+            logger.error(f"Order cancel failed for {symbol}: {e}")
+
+        try:
+            # Close all open positions (market)
+            positions = self.client.get_positions()
+            for pos in positions:
+                if pos.get("symbol") != symbol:
+                    continue
+
+                qty = abs(float(pos.get("amount", 0)))
+                if qty <= 0:
+                    continue
+
+                side = pos.get("side")
+                close_side = "sell" if side == "bid" else "buy"
+
+                self.client.place_order(symbol, close_side, qty, "market")
+                logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
+
+        except Exception as e:
+            logger.critical(f"POSITION FLATTEN FAILED for {symbol}: {e}")
+
+        # Reset risk manager exposure
+        self.risk_manager.on_grid_emergency_exit(symbol)
+
+        # Remove grid from memory
+        if symbol in self._grids:
+            del self._grids[symbol]
+
+        # Remove from database persistence
+        self.delete_grid_state(symbol)
+
+        logger.critical(f"Grid fully exited and cleared for {symbol} ({reason})")
+
+    def _partial_exit(
+        self, symbol: str, reason: str, trend_direction: str
+    ) -> Dict[str, Any]:
+        """
+        Selective unwind: Close against-trend positions, keep with-trend.
+
+        This is called when regime changes from ranging to trending.
+        Instead of closing ALL positions, we:
+        - Close positions that are AGAINST the trend (would lose in trending market)
+        - KEEP positions that are WITH the trend (could profit from trend continuation)
+        - Migrate kept positions to trend-following management
+
+        Args:
+            symbol: Trading symbol
+            reason: Why the unwind is happening
+            trend_direction: 'up' or 'down' (from MarketRegimeDetector)
+
+        Returns:
+            Dict with 'closed_positions', 'kept_positions', 'success' keys
+        """
+        result = {
+            "success": False,
+            "closed_positions": [],
+            "kept_positions": [],
+            "errors": [],
+        }
+
+        # ALWAYS cancel all open orders first (pending orders are neutral, don't keep them)
+        try:
+            self.client.cancel_all_orders(symbol)
+            logger.info(f"All grid orders cancelled for {symbol} ({reason})")
+        except Exception as e:
+            logger.error(f"Order cancel failed for {symbol}: {e}")
+            result["errors"].append(f"Order cancel failed: {e}")
+            return result  # Fail early - orders must be cancelled
+
+        # Get all positions for this symbol
+        try:
+            positions = self.client.get_positions()
+        except Exception as e:
+            logger.error(f"Failed to get positions for {symbol}: {e}")
+            result["errors"].append(f"Get positions failed: {e}")
+            return result
+
+        # Process each position
+        for pos in positions:
+            if pos.get("symbol") != symbol:
+                continue
+
+            qty = abs(float(pos.get("amount", 0)))
+            if qty <= 0:
+                continue
+
+            # Determine position side
+            raw_side = str(pos.get("side", "")).lower()
+            if "long" in raw_side or "bid" in raw_side or "buy" in raw_side:
+                position_side = "long"
+            elif "short" in raw_side or "ask" in raw_side or "sell" in raw_side:
+                position_side = "short"
+            else:
+                logger.warning(
+                    f"Unknown position side '{raw_side}' for {symbol} - closing for safety"
+                )
+                position_side = "unknown"
+
+            # Determine if position is against trend
+            # trend='up' and LONG → WITH trend (KEEP)
+            # trend='up' and SHORT → AGAINST trend (CLOSE)
+            # trend='down' and LONG → AGAINST trend (CLOSE)
+            # trend='down' and SHORT → WITH trend (KEEP)
+            against_trend = False
+            if position_side == "unknown":
+                against_trend = True  # Close unknown positions for safety
+            elif trend_direction == "up" and position_side == "short":
+                against_trend = True
+            elif trend_direction == "down" and position_side == "long":
+                against_trend = True
+
+            if against_trend:
+                # CLOSE against-trend position
+                try:
+                    close_side = "buy" if position_side == "short" else "sell"
+                    self.client.place_order(symbol, close_side, qty, "market")
+
+                    result["closed_positions"].append(
+                        {"side": position_side, "qty": qty, "reason": "against_trend"}
+                    )
+
+                    logger.warning(
+                        f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
+                        f"(trend={trend_direction})"
+                    )
+
+                    # Update database record
+                    self._update_position_status(
+                        symbol, position_side, qty, "closed", "against_trend"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to close position for {symbol}: {e}")
+                    result["errors"].append(f"Close position failed: {e}")
+                    return result  # Fail if any close fails
+            else:
+                # KEEP with-trend position (migrate to trend-following)
+                # Get entry price from position data (or use current price as fallback)
+                entry_price = float(
+                    pos.get("entry_price")
+                    or pos.get("avg_price")
+                    or pos.get("price", 0)
+                )
+
+                result["kept_positions"].append(
+                    {
+                        "side": position_side,
+                        "qty": qty,
+                        "entry_price": entry_price,
+                        "reason": "trend_aligned",
+                    }
+                )
+
+                logger.info(
+                    f"📊 With-trend position KEPT: {symbol} {position_side} {qty} "
+                    f"(trend={trend_direction}) - migrating to trend-following"
+                )
+
+                # Register migrated position with RiskManager
+                self.risk_manager.register_migrated_position(
+                    symbol,
+                    {
+                        "side": position_side,
+                        "qty": qty,
+                        "entry_price": entry_price,
+                        "trend_direction": trend_direction,
+                        "has_stop": False,  # Stop will be added by MigratedPositionManager
+                    },
+                )
+
+                # Update database record for migration
+                self._update_position_status(
+                    symbol, position_side, qty, "migrated", "trend_aligned"
+                )
+
+        # Update grid state
+        if symbol in self._grids:
+            if result["kept_positions"]:
+                # Mark grid as disabled but with migrated positions
+                self._grids[symbol]["state"] = GridState.DISABLED_BY_REGIME
+                self._grids[symbol]["has_migrated_positions"] = True
+                self._grids[symbol]["migrated_positions"] = result["kept_positions"]
+                self._grids[symbol]["trend_direction"] = trend_direction
+
+                logger.info(
+                    f"📊 Partial grid exit complete for {symbol}: "
+                    f"closed={len(result['closed_positions'])}, kept={len(result['kept_positions'])}"
+                )
+            else:
+                # No positions kept - clear grid entirely
+                del self._grids[symbol]
+                self.delete_grid_state(symbol)
+
+        # Reset grid exposure in RiskManager (grid orders are gone)
+        # Migrated positions will be tracked separately
+        self.risk_manager.on_grid_emergency_exit(symbol)
+
+        result["success"] = True
+        logger.critical(
+            f"📊 Partial grid unwind complete for {symbol} ({reason}): "
+            f"trend={trend_direction}, closed={len(result['closed_positions'])}, "
+            f"migrated={len(result['kept_positions'])}"
+        )
+
+        return result
+
+    def _update_position_status(
+        self, symbol: str, side: str, qty: float, status: str, exit_reason: str
+    ):
+        """
+        Update position status in database.
+
+        Args:
+            symbol: Trading symbol
+            side: Position side ('long' or 'short')
+            qty: Position quantity
+            status: New status ('closed' or 'migrated')
+            exit_reason: Reason for the status change
+        """
+        if not self.db:
+            return
+
+        try:
+            from .database import get_db_connection
+
+            with get_db_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE grid_positions
+                    SET status = ?, exit_reason = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE symbol = ? AND side = ? AND status = 'open'
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """,
+                    (status, exit_reason, symbol, side),
+                )
+                conn.commit()
+                logger.debug(
+                    f"Updated position status: {symbol} {side} -> {status} ({exit_reason})"
+                )
+        except Exception as e:
+            logger.warning(f"Could not update position status in DB: {e}")
+
+    # =========================
+    # HOUSEKEEPING
+    # =========================
+
+    def clear_all(self):
+        """Force-clear ALL grids (shutdown safety)."""
+        for symbol in list(self._grids.keys()):
+            self._force_exit(symbol, reason="SYSTEM_SHUTDOWN")
+
+    # =========================
+    # ACTIVE MONITORING
+    # =========================
+
+    def monitor_grids(self, current_prices: Dict[str, float] = None) -> Dict[str, Any]:
+        """
+        Main monitoring method - call this periodically from the trading loop.
+
+        1. Fetch recent trades from exchange
+        2. Match trades to active grids
+        3. Update fill tracking and metrics
+        4. Check emergency stop conditions
+        5. Calculate P&L
+
+        Args:
+            current_prices: Optional dict of symbol -> current price for unrealized P&L
+
+        Returns:
+            Dict with monitoring results
+        """
+        results = {
+            "grids_monitored": 0,
+            "new_fills": 0,
+            "completed_round_trips": 0,
+            "alerts": [],
+        }
+
+        if not self._grids:
+            return results
+
+        try:
+            # Fetch recent trades from exchange
+            trades = self.client.get_trade_history(limit=100)
+
+            for symbol in list(self._grids.keys()):
+                if self._grids[symbol]["state"] != GridState.ACTIVE:
+                    continue
+
+                results["grids_monitored"] += 1
+
+                # Process fills for this symbol
+                symbol_trades = [
+                    t
+                    for t in trades
+                    if (t.get("symbol") or t.get("market", "").replace("-PERP", ""))
+                    == symbol
+                ]
+
+                new_fills = self._process_trades(symbol, symbol_trades)
+                results["new_fills"] += new_fills
+
+                # Calculate round-trips and P&L
+                round_trips = self._calculate_round_trips(symbol)
+                results["completed_round_trips"] += round_trips
+
+                # Check emergency stop
+                current_price = (current_prices or {}).get(symbol)
+                if current_price:
+                    self._check_emergency_stop(symbol, current_price)
+                    self._update_unrealized_pnl(symbol, current_price)
+
+                # Periodically update DB with latest metrics (on new fills)
+                if new_fills > 0:
+                    self.update_grid_metrics_in_db(symbol)
+
+            self._last_fill_check = datetime.now()
+
+        except Exception as e:
+            logger.error(f"Grid monitoring error: {e}")
+            results["alerts"].append(f"Monitoring error: {e}")
+
+        return results
+
+    def _process_trades(self, symbol: str, trades: List[Dict]) -> int:
+        """
+        Process trades from exchange and record new fills.
+
+        Returns:
+            Number of new fills processed
+        """
+        if symbol not in self._processed_trades:
+            self._processed_trades[symbol] = set()
+
+        if symbol not in self._fills:
+            self._fills[symbol] = []
+
+        if symbol not in self._metrics:
+            self._metrics[symbol] = GridMetrics()
+
+        new_fills = 0
+
+        for trade in trades:
+            trade_id = str(
+                trade.get("trade_id") or trade.get("history_id") or trade.get("id", "")
+            )
+
+            # Skip if already processed
+            if trade_id in self._processed_trades[symbol]:
+                continue
+
+            # Determine side
+            raw_side = str(trade.get("side", "")).lower()
+            if "long" in raw_side or "bid" in raw_side or "buy" in raw_side:
+                side = "BUY"
+            elif "short" in raw_side or "ask" in raw_side or "sell" in raw_side:
+                side = "SELL"
+            else:
+                continue  # Unknown side, skip
+
+            # Extract fill data
+            try:
+                price = float(trade.get("price", 0))
+                quantity = float(
+                    trade.get("amount") or trade.get("size") or trade.get("quantity", 0)
+                )
+                fee = float(trade.get("fee", 0))
+                order_id = str(trade.get("order_id", ""))
+
+                # Parse timestamp
+                ts = trade.get("timestamp") or trade.get("created_at")
+                if isinstance(ts, (int, float)):
+                    timestamp = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                elif isinstance(ts, str):
+                    timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                else:
+                    timestamp = datetime.now()
+
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid trade data for {symbol}: {e}")
+                continue
+
+            # Create fill record
+            fill = GridFill(
+                trade_id=trade_id,
+                order_id=order_id,
+                side=side,
+                price=price,
+                quantity=quantity,
+                fee=fee,
+                timestamp=timestamp,
+            )
+
+            self._fills[symbol].append(fill)
+            self._processed_trades[symbol].add(trade_id)
+            new_fills += 1
+
+            # Update metrics
+            metrics = self._metrics[symbol]
+            metrics.total_fees += fee
+
+            if side == "BUY":
+                metrics.total_buy_fills += 1
+                metrics.total_buy_quantity += quantity
+                metrics.total_buy_value += quantity * price
+                metrics.net_position += quantity
+                if metrics.total_buy_quantity > 0:
+                    metrics.avg_buy_price = (
+                        metrics.total_buy_value / metrics.total_buy_quantity
+                    )
+            else:  # SELL
+                metrics.total_sell_fills += 1
+                metrics.total_sell_quantity += quantity
+                metrics.total_sell_value += quantity * price
+                metrics.net_position -= quantity
+                if metrics.total_sell_quantity > 0:
+                    metrics.avg_sell_price = (
+                        metrics.total_sell_value / metrics.total_sell_quantity
+                    )
+
+            logger.info(
+                f"📊 Grid fill: {symbol} {side} {quantity:.6f} @ ${price:.2f} "
+                f"(fee: ${fee:.6f}, net pos: {metrics.net_position:.6f})"
+            )
+
+            # REPLENISH: Place counter order on opposite side
+            self._replenish_order(symbol, side, price, quantity)
+
+        return new_fills
+
+    def _replenish_order(self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float):
+        """
+        Place a counter order when a grid order is filled.
+
+        Grid trading logic:
+        - BUY filled -> Place SELL order at fill_price + spacing (take profit)
+        - SELL filled -> Place BUY order at fill_price - spacing (take profit)
+
+        This maintains the grid and captures oscillations.
+        """
+        if symbol not in self._grids:
+            return
+
+        grid = self._grids[symbol]
+        if grid["state"] != GridState.ACTIVE:
+            logger.debug(f"Grid not active for {symbol}, skipping replenishment")
+            return
+
+        spacing = grid.get("grid_spacing", 0)
+        if not spacing or spacing <= 0:
+            logger.warning(f"No valid grid spacing for {symbol}, cannot replenish")
+            return
+
+        try:
+            # Determine counter order parameters
+            if filled_side == "BUY":
+                # Buy was filled -> place sell at higher price
+                counter_side = "sell"
+                counter_price = fill_price + spacing
+            else:  # SELL was filled
+                # Sell was filled -> place buy at lower price
+                counter_side = "buy"
+                counter_price = fill_price - spacing
+
+            # Round price to appropriate tick size
+            tick_size = 1.0 if "BTC" in symbol else 0.01
+            counter_price = round(counter_price / tick_size) * tick_size
+
+            # Use same quantity as filled order
+            lot_size = 0.00001 if "BTC" in symbol else 0.0001
+            counter_quantity = round(int(fill_quantity / lot_size) * lot_size, 5)
+
+            if counter_quantity < lot_size:
+                logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity}")
+                return
+
+            # Place the counter order
+            order_result = self.client.place_order(
+                symbol, counter_side, counter_quantity, "limit", counter_price
+            )
+
+            logger.info(
+                f"📊 Grid REPLENISH: {symbol} {counter_side.upper()} {counter_quantity:.6f} @ ${counter_price:.2f} "
+                f"(triggered by {filled_side} fill @ ${fill_price:.2f})"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to replenish grid order for {symbol}: {e}")
+
+    def _calculate_round_trips(self, symbol: str) -> int:
+        """
+        Calculate completed round-trips (buy + sell pairs) and realized P&L.
+
+        A round-trip is when we have both buy and sell fills that can be matched.
+        P&L = (sell_price - buy_price) * quantity - fees
+
+        Uses FIFO matching with proper partial fill tracking.
+
+        Returns:
+            Number of new round-trips completed
+        """
+        if symbol not in self._fills or symbol not in self._metrics:
+            return 0
+
+        fills = self._fills[symbol]
+        metrics = self._metrics[symbol]
+
+        # Get fills with remaining unmatched quantity
+        unmatched_buys = [
+            f for f in fills if f.side == "BUY" and f.remaining_quantity > 0.0000001
+        ]
+        unmatched_sells = [
+            f for f in fills if f.side == "SELL" and f.remaining_quantity > 0.0000001
+        ]
+
+        # Sort by timestamp (oldest first for FIFO matching)
+        unmatched_buys.sort(key=lambda f: f.timestamp)
+        unmatched_sells.sort(key=lambda f: f.timestamp)
+
+        round_trips = 0
+        buy_idx = 0
+        sell_idx = 0
+
+        while buy_idx < len(unmatched_buys) and sell_idx < len(unmatched_sells):
+            buy_fill = unmatched_buys[buy_idx]
+            sell_fill = unmatched_sells[sell_idx]
+
+            # Match using REMAINING quantities (not original)
+            match_qty = min(buy_fill.remaining_quantity, sell_fill.remaining_quantity)
+
+            if match_qty < 0.0000001:  # Skip negligible matches
+                buy_idx += 1
+                continue
+
+            # Calculate P&L for this match
+            gross_pnl = (sell_fill.price - buy_fill.price) * match_qty
+
+            # Allocate fees proportionally based on matched portion
+            buy_fee_portion = (
+                buy_fill.fee * (match_qty / buy_fill.quantity)
+                if buy_fill.quantity > 0
+                else 0
+            )
+            sell_fee_portion = (
+                sell_fill.fee * (match_qty / sell_fill.quantity)
+                if sell_fill.quantity > 0
+                else 0
+            )
+            net_pnl = gross_pnl - buy_fee_portion - sell_fee_portion
+
+            metrics.realized_pnl += net_pnl
+            metrics.completed_round_trips += 1
+            round_trips += 1
+
+            logger.info(
+                f"📊 Grid round-trip: {symbol} "
+                f"BUY @ ${buy_fill.price:.2f} → SELL @ ${sell_fill.price:.2f} "
+                f"qty={match_qty:.6f}, P&L=${net_pnl:.4f}"
+            )
+
+            # Track matched quantities
+            buy_fill.matched_quantity += match_qty
+            sell_fill.matched_quantity += match_qty
+
+            # Mark as fully matched if no remaining quantity
+            if buy_fill.remaining_quantity < 0.0000001:
+                buy_fill.matched = True
+                buy_idx += 1
+            if sell_fill.remaining_quantity < 0.0000001:
+                sell_fill.matched = True
+                sell_idx += 1
+
+        return round_trips
+
+    def _check_emergency_stop(self, symbol: str, current_price: float):
+        """Check if emergency stop price has been breached."""
+        if symbol not in self._grids:
+            return
+
+        grid = self._grids[symbol]
+        emergency_stop = grid.get("emergency_stop", 0)
+
+        if emergency_stop <= 0:
+            return
+
+        # Check if price has breached emergency stop
+        # For grids, emergency stop is typically below entry (protecting against crash)
+        if current_price <= emergency_stop:
+            logger.critical(
+                f"🚨 EMERGENCY STOP BREACHED for {symbol}: "
+                f"price ${current_price:.2f} <= stop ${emergency_stop:.2f}"
+            )
+            self.on_emergency_stop_triggered(symbol)
+
+    def _update_unrealized_pnl(self, symbol: str, current_price: float):
+        """Update unrealized P&L based on current price."""
+        if symbol not in self._metrics:
+            return
+
+        metrics = self._metrics[symbol]
+
+        # Unrealized P&L = net_position * (current_price - avg_entry_price)
+        if metrics.net_position > 0:  # Long position
+            avg_entry = (
+                metrics.avg_buy_price if metrics.avg_buy_price > 0 else current_price
+            )
+            metrics.unrealized_pnl = metrics.net_position * (current_price - avg_entry)
+        elif metrics.net_position < 0:  # Short position
+            avg_entry = (
+                metrics.avg_sell_price if metrics.avg_sell_price > 0 else current_price
+            )
+            metrics.unrealized_pnl = abs(metrics.net_position) * (
+                avg_entry - current_price
+            )
+        else:
+            metrics.unrealized_pnl = 0.0
+
+    # =========================
+    # SYNC FROM EXCHANGE
+    # =========================
+
+    def sync_from_exchange(self, symbol: str) -> bool:
+        """
+        Synchronize grid state from exchange orders.
+        Call this on startup to detect existing grids.
+
+        Returns:
+            True if grid was detected and registered
+        """
+        try:
+            # Get open orders for symbol
+            orders = self.client.get_open_orders(market=symbol)
+            limit_orders = [
+                o for o in orders if o.get("order_type", o.get("type", "")) == "limit"
+            ]
+
+            if len(limit_orders) < 5:
+                return False  # Not enough orders to be a grid
+
+            # Detect grid parameters from orders
+            buy_orders = [
+                o
+                for o in limit_orders
+                if "bid" in str(o.get("side", "")).lower()
+                or "buy" in str(o.get("side", "")).lower()
+            ]
+            sell_orders = [
+                o
+                for o in limit_orders
+                if "ask" in str(o.get("side", "")).lower()
+                or "sell" in str(o.get("side", "")).lower()
+            ]
+
+            if not buy_orders and not sell_orders:
+                return False
+
+            # Calculate grid capital from order sizes
+            total_value = 0
+            for order in limit_orders:
+                price = float(order.get("price", 0))
+                qty = float(
+                    order.get("amount") or order.get("size") or order.get("quantity", 0)
+                )
+                total_value += price * qty
+
+            # Estimate emergency stop (5% below lowest buy order)
+            if buy_orders:
+                lowest_buy = min(float(o.get("price", 0)) for o in buy_orders)
+                emergency_stop = lowest_buy * 0.95
+            else:
+                emergency_stop = 0
+
+            # Register the grid
+            if symbol not in self._grids:
+                self._grids[symbol] = {
+                    "state": GridState.ACTIVE,
+                    "grid_capital": total_value,
+                    "emergency_stop": emergency_stop,
+                    "synced_from_exchange": True,
+                    "order_count": len(limit_orders),
+                    "buy_orders": len(buy_orders),
+                    "sell_orders": len(sell_orders),
+                }
+
+                # Initialize metrics
+                self._metrics[symbol] = GridMetrics()
+                self._fills[symbol] = []
+                self._processed_trades[symbol] = set()
+
+                logger.info(
+                    f"📊 Grid synced from exchange: {symbol} - "
+                    f"{len(limit_orders)} orders, capital≈${total_value:.2f}"
+                )
+
+                # Sync recent fills
+                self._sync_recent_fills(symbol)
+
+                return True
+
+        except Exception as e:
+            logger.error(f"Failed to sync grid from exchange for {symbol}: {e}")
+
+        return False
+
+    def _sync_recent_fills(self, symbol: str):
+        """Sync recent trade history for a newly detected grid."""
+        try:
+            trades = self.client.get_trade_history(limit=100)
+            symbol_trades = [
+                t
+                for t in trades
+                if (t.get("symbol") or t.get("market", "").replace("-PERP", ""))
+                == symbol
+            ]
+
+            if symbol_trades:
+                new_fills = self._process_trades(symbol, symbol_trades)
+                self._calculate_round_trips(symbol)
+                logger.info(f"📊 Synced {new_fills} historical fills for {symbol}")
+
+        except Exception as e:
+            logger.warning(f"Could not sync fills for {symbol}: {e}")
+
+    # =========================
+    # STATUS & REPORTING
+    # =========================
+
+    def get_grid_status(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Get comprehensive grid status including metrics."""
+        if symbol not in self._grids:
+            return None
+
+        grid = self._grids[symbol]
+        metrics = self._metrics.get(symbol, GridMetrics())
+
+        return {
+            "symbol": symbol,
+            "state": grid["state"].value,
+            "grid_capital": grid.get("grid_capital", 0),
+            "emergency_stop": grid.get("emergency_stop", 0),
+            "metrics": {
+                "total_buy_fills": metrics.total_buy_fills,
+                "total_sell_fills": metrics.total_sell_fills,
+                "total_buy_quantity": metrics.total_buy_quantity,
+                "total_sell_quantity": metrics.total_sell_quantity,
+                "avg_buy_price": metrics.avg_buy_price,
+                "avg_sell_price": metrics.avg_sell_price,
+                "net_position": metrics.net_position,
+                "total_fees": metrics.total_fees,
+                "realized_pnl": metrics.realized_pnl,
+                "unrealized_pnl": metrics.unrealized_pnl,
+                "total_pnl": metrics.realized_pnl + metrics.unrealized_pnl,
+                "completed_round_trips": metrics.completed_round_trips,
+            },
+            "synced_from_exchange": grid.get("synced_from_exchange", False),
+        }
+
+    def get_all_active_grids(self) -> List[Dict[str, Any]]:
+        """Get status for all active grids."""
+        active_grids = []
+        for symbol in self._grids:
+            if self._grids[symbol]["state"] == GridState.ACTIVE:
+                status = self.get_grid_status(symbol)
+                if status:
+                    active_grids.append(status)
+        return active_grids
+
+    def get_grid_statistics(self) -> Dict[str, Any]:
+        """Get aggregate statistics across all grids."""
+        total_realized_pnl = 0.0
+        total_unrealized_pnl = 0.0
+        total_fees = 0.0
+        total_round_trips = 0
+
+        for symbol, metrics in self._metrics.items():
+            total_realized_pnl += metrics.realized_pnl
+            total_unrealized_pnl += metrics.unrealized_pnl
+            total_fees += metrics.total_fees
+            total_round_trips += metrics.completed_round_trips
+
+        return {
+            "total_active_grids": sum(
+                1 for g in self._grids.values() if g["state"] == GridState.ACTIVE
+            ),
+            "total_realized_pnl": total_realized_pnl,
+            "total_unrealized_pnl": total_unrealized_pnl,
+            "total_pnl": total_realized_pnl + total_unrealized_pnl,
+            "total_fees": total_fees,
+            "total_round_trips": total_round_trips,
+            "last_check": self._last_fill_check.isoformat()
+            if self._last_fill_check
+            else None,
+        }
+
+    def validate_grid_creation(self, symbol: str, capital: float) -> bool:
+        """Validate if a new grid can be created for this symbol."""
+        if symbol in self._grids:
+            return False
+        return True
+
+    def is_healthy(self) -> bool:
+        """Check if the grid manager is healthy."""
+        return True
+
+    def update_grid_levels(self, symbol: str, buy_levels: int, sell_levels: int):
+        """Update grid level counts (for tracking)."""
+        if symbol in self._grids:
+            self._grids[symbol]["buy_levels"] = buy_levels
+            self._grids[symbol]["sell_levels"] = sell_levels
+
+    # =========================
+    # DATABASE PERSISTENCE
+    # =========================
+
+    def save_grid_state(
+        self, symbol: str, regime: str = None, atr: float = 0, spacing: float = 0
+    ):
+        """
+        Save grid state to database for persistence across restarts.
+
+        Args:
+            symbol: Trading symbol
+            regime: Market regime when grid was created (e.g., 'ranging_volatile')
+            atr: ATR value at creation time
+            spacing: Grid spacing used
+        """
+        if not self.db or symbol not in self._grids:
+            return
+
+        grid = self._grids[symbol]
+        metrics = self._metrics.get(symbol, GridMetrics())
+
+        try:
+            from .database import get_db_connection
+
+            with get_db_connection() as conn:
+                conn.execute(
+                    """
+                    INSERT OR REPLACE INTO grid_states
+                    (symbol, state, regime_on_creation, grid_capital, emergency_stop,
+                     atr_at_creation, grid_spacing, num_levels, total_buy_fills,
+                     total_sell_fills, realized_pnl, total_fees, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                    (
+                        symbol,
+                        grid["state"].value
+                        if isinstance(grid["state"], GridState)
+                        else grid["state"],
+                        regime,
+                        grid.get("grid_capital", 0),
+                        grid.get("emergency_stop", 0),
+                        atr,
+                        spacing,
+                        grid.get("num_levels", 10),
+                        metrics.total_buy_fills,
+                        metrics.total_sell_fills,
+                        metrics.realized_pnl,
+                        metrics.total_fees,
+                    ),
+                )
+                conn.commit()
+            logger.debug(f"Grid state saved to DB: {symbol}")
+        except Exception as e:
+            logger.error(f"Failed to save grid state for {symbol}: {e}")
+
+    def load_grid_states(self, regime_detector=None) -> Dict[str, Dict]:
+        """
+        Load grid states from database on startup.
+        Validates regime if detector provided - closes grids in wrong regime.
+
+        Args:
+            regime_detector: Optional MarketRegimeDetector for regime validation
+
+        Returns:
+            Dict of loaded grids that passed validation
+        """
+        if not self.db:
+            return {}
+
+        loaded_grids = {}
+
+        try:
+            from .database import get_db_connection
+
+            with get_db_connection() as conn:
+                cursor = conn.execute("""
+                    SELECT symbol, state, regime_on_creation, grid_capital, emergency_stop,
+                           atr_at_creation, grid_spacing, num_levels, total_buy_fills,
+                           total_sell_fills, realized_pnl, total_fees
+                    FROM grid_states
+                    WHERE state = 'active'
+                """)
+
+                rows = cursor.fetchall()
+                for row in rows:
+                    symbol = row[0]
+                    regime_on_creation = row[2]
+
+                    # Validate regime if detector provided
+                    if regime_detector:
+                        current_regime = regime_detector.get_cached_regime(symbol)
+                        if current_regime:
+                            current_regime_str = current_regime.value
+
+                            # Grid trading only valid in RANGING regimes
+                            allowed_regimes = ["ranging_volatile", "ranging_calm"]
+                            if current_regime_str not in allowed_regimes:
+                                logger.warning(
+                                    f"⚠️ Grid {symbol} created in {regime_on_creation}, "
+                                    f"but current regime is {current_regime_str} - CLOSING"
+                                )
+                                self.delete_grid_state(symbol)
+                                # Trigger close on exchange
+                                self._force_exit(
+                                    symbol,
+                                    reason=f"REGIME_MISMATCH:{current_regime_str}",
+                                )
+                                continue
+
+                    # Load into memory
+                    self._grids[symbol] = {
+                        "state": GridState.ACTIVE,
+                        "grid_capital": row[3],
+                        "emergency_stop": row[4],
+                        "atr_at_creation": row[5],
+                        "grid_spacing": row[6],
+                        "num_levels": row[7],
+                        "loaded_from_db": True,
+                        "regime_on_creation": regime_on_creation,
+                    }
+
+                    # Initialize metrics from DB
+                    self._metrics[symbol] = GridMetrics(
+                        total_buy_fills=row[8],
+                        total_sell_fills=row[9],
+                        realized_pnl=row[10],
+                        total_fees=row[11],
+                    )
+                    self._fills[symbol] = []
+                    self._processed_trades[symbol] = set()
+
+                    loaded_grids[symbol] = self._grids[symbol]
+                    logger.info(
+                        f"📊 Loaded grid from DB: {symbol} (regime: {regime_on_creation})"
+                    )
+
+        except Exception as e:
+            logger.error(f"Failed to load grid states from DB: {e}")
+
+        return loaded_grids
+
+    def delete_grid_state(self, symbol: str):
+        """Remove grid state from database when grid is closed."""
+        if not self.db:
+            return
+
+        try:
+            from .database import get_db_connection
+
+            with get_db_connection() as conn:
+                conn.execute("DELETE FROM grid_states WHERE symbol = ?", (symbol,))
+                conn.commit()
+            logger.debug(f"Grid state deleted from DB: {symbol}")
+        except Exception as e:
+            logger.error(f"Failed to delete grid state for {symbol}: {e}")
+
+    def update_grid_metrics_in_db(self, symbol: str):
+        """Update grid metrics in database (call periodically)."""
+        if not self.db or symbol not in self._grids:
+            return
+
+        metrics = self._metrics.get(symbol, GridMetrics())
+
+        try:
+            from .database import get_db_connection
+
+            with get_db_connection() as conn:
+                conn.execute(
+                    """
+                    UPDATE grid_states
+                    SET total_buy_fills = ?, total_sell_fills = ?,
+                        realized_pnl = ?, total_fees = ?, updated_at = CURRENT_TIMESTAMP
+                    WHERE symbol = ?
+                """,
+                    (
+                        metrics.total_buy_fills,
+                        metrics.total_sell_fills,
+                        metrics.realized_pnl,
+                        metrics.total_fees,
+                        symbol,
+                    ),
+                )
+                conn.commit()
+        except Exception as e:
+            logger.error(f"Failed to update grid metrics for {symbol}: {e}")

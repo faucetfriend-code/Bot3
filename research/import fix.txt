@@ -1,0 +1,178 @@
+Python Import & LSP Compatibility Rules
+
+(Mandatory – Non-Negotiable)
+
+Core Principle
+
+If the LSP cannot resolve it statically, it is considered broken — even if runtime works.
+
+Dynamic import hacks are forbidden in production code.
+
+✅ DO THIS (Approved Patterns)
+1. Use absolute package imports only
+
+All shared logic must be imported via its package name.
+
+from core_logic.models import Signal, OrderSide
+from core_logic.indicators import calculate_atr
+from core_logic.pacifica_client import PacificaClient
+
+
+✔ LSP-safe
+✔ Runtime-safe
+✔ Refactor-safe
+
+2. Treat core_logic as a real package
+
+Must contain __init__.py
+
+Must be importable without path hacks
+
+Must be resolvable from project root
+
+trading_bot_project/
+├── core_logic/
+│   ├── __init__.py
+│   ├── models.py
+│   ├── indicators.py
+│   └── pacifica_client.py
+
+3. Configure the LSP explicitly
+
+Editor must be told where packages live.
+
+VS Code / Pylance
+
+{
+  "python.analysis.extraPaths": ["./"],
+  "python.analysis.typeCheckingMode": "basic"
+}
+
+
+✔ Static analysis must succeed with zero runtime execution
+
+4. Keep runtime and editor environments aligned
+
+LSP must use the same interpreter as runtime
+
+Virtualenv must be consistent
+
+No hidden paths in execution scripts
+
+5. Use TYPE_CHECKING only for optional / heavy deps
+
+Allowed only for circular or optional imports.
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from core_logic.models import Signal
+
+
+✔ Does NOT replace real imports
+✔ Does NOT hide broken structure
+
+6. Treat LSP errors as build failures
+
+If the editor reports unresolved imports:
+
+Stop
+
+Fix structure or configuration
+
+Do not suppress or ignore
+
+❌ DON’T DO THIS (Banned Patterns)
+1. ❌ No sys.path.insert() in application code
+
+This is strictly forbidden outside of one-off experiments.
+
+# ❌ NEVER ALLOWED
+sys.path.insert(0, "../core_logic")
+from models import Signal
+
+
+Reason:
+
+Invisible to LSP
+
+Breaks tooling
+
+Causes cascading false errors
+
+Unmaintainable at scale
+
+2. ❌ No bare module imports from path hacks
+# ❌ INVALID
+from models import Signal
+from indicators import calculate_adx
+
+
+If it’s not namespaced, it’s wrong.
+
+3. ❌ No “it works at runtime” justification
+
+Runtime success does not override static failure.
+
+If LSP fails:
+
+The code is considered structurally incorrect
+
+Even if trades execute correctly
+
+4. ❌ No duplicate or legacy module locations
+
+Only one canonical source per package.
+
+❌ Example files/core_logic/
+❌ legacy/core_logic/
+✅ core_logic/
+
+
+Multiple copies = undefined import resolution.
+
+5. ❌ No editor-specific hacks in code
+
+Code must not depend on:
+
+IDE settings
+
+Local file layout
+
+Developer machine quirks
+
+Configuration belongs in:
+
+pyrightconfig.json
+
+settings.json
+
+pyproject.toml
+
+Not in .py files.
+
+6. ❌ No stubs to “silence” real problems
+
+.pyi files must:
+
+Match real modules
+
+Never be used to hide broken imports
+
+Stubs are documentation, not duct tape.
+
+🚨 Enforcement Rules
+
+Any PR introducing sys.path mutation is rejected
+
+Any unresolved import in LSP is a blocker
+
+Absolute imports are mandatory
+
+Single source of truth per module
+
+Static analysis must match runtime behavior
+
+Final Rule (Put This at the Top of the Repo)
+
+If the editor can’t understand the code without running it, the architecture is wrong.

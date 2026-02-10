@@ -1,0 +1,2307 @@
+import time
+import logging
+import threading
+import sys
+import os
+import warnings
+from typing import Dict, List, Any, Optional
+from datetime import datetime
+import urllib3
+from loguru import logger
+
+# Suppress expected SSL warnings for test environment
+try:
+    import urllib3
+
+    warnings.filterwarnings(
+        "ignore",
+        message=".*Unverified HTTPS request.*",
+        category=urllib3.exceptions.InsecureRequestWarning,
+    )
+except ImportError:
+    # Fallback if urllib3 not available
+    warnings.filterwarnings("ignore", message=".*Unverified HTTPS request.*")
+
+# Import local config
+from .config import config
+
+# Import core modules
+from .models import Signal, OrderSide
+from .indicators import calculate_adx, calculate_atr, calculate_bollinger_bands
+
+# Import other modules
+from .database import DatabaseManager
+from .pacifica_client import PacificaClient, PacificaEnvironment
+from .strategy_manager import StrategyManager
+from .multi_timeframe_fetcher import MultiTimeframeFetcher
+from .market_regime import MarketRegimeDetector
+from .risk_manager import RiskManager, RiskProfile
+
+# Import StrategyType from local config (re-exported from core_logic)
+from .config import StrategyType
+
+# Import WebSocket client for real-time price data
+from .pacifica_ws_client import get_ws_client
+
+# Import GridLifecycleManager for authoritative grid state management
+from .grid_lifecycle_manager import GridLifecycleManager
+
+# Import MigratedPositionManager for trend-following management of migrated positions
+from .migrated_position_manager import MigratedPositionManager
+
+# Import ExecutionLayer for precise 1m/5m entry timing
+from .execution_layer import ExecutionLayer
+
+# Import SignalLogger for comprehensive signal tracking
+from .signal_logger import SignalLogger
+
+# Import Phase 2 component system
+from .component_interfaces import (
+    ExecutionInterface,
+    RiskInterface,
+    GridInterface,
+    RegimeInterface,
+    StrategyInterface,
+    DatabaseInterface,
+)
+from .event_system import get_event_bus, EventType
+from .component_registry import get_component_registry
+
+
+class TradingBot:
+    """
+    Trading bot class for automated trading on Pacifica exchange.
+
+    INTEGRATION WITH API SERVER HUB
+    ===============================
+    This bot now communicates through the centralized API server hub
+    for all data distribution and real-time updates.
+    ===============================
+
+    RISK MANAGEMENT WARNING
+    ===============================
+    This bot now communicates through the centralized API server hub
+    for all data distribution and real-time updates.
+    ===============================
+
+    RISK MANAGEMENT WARNING
+    ===============================
+    DO NOT ADD RISK LOGIC HERE
+    All risk calculations must go through RiskManager
+    Use: self.risk_manager.get_position_size()
+    Use: self.risk_manager.validate_position_size()
+    ===============================
+    """
+
+    def __init__(self, db=None, client=None, risk_manager=None, hub_publish_func=None):
+        """
+        Initialize the trading bot.
+
+        Args:
+            db: Database instance (DatabaseManager). If None, creates new instance.
+            client: PacificaClient instance.
+            risk_manager: RiskManager instance. If None, creates new instance.
+            hub_publish_func: Function to publish status updates to API server hub.
+        """
+        # Store config reference
+        self.config = config
+
+        # Initialize database
+        if db is None:
+            self.db = DatabaseManager()
+        else:
+            self.db = db
+
+        # Initialize signal logger (CSV auto-save + database + memory)
+        self.signal_logger = SignalLogger(db_manager=self.db)
+        logger.info("Signal logger initialized - logging to signals_log.csv")
+
+        # Initialize client
+        if client is None:
+            self.client = PacificaClient(
+                agent_wallet_private_key=config.agent_wallet_private_key,
+                account_public_key=config.account_public_key,
+                testnet=config.testnet,
+            )
+        else:
+            self.client = client
+
+        # Initialize risk manager
+        if risk_manager is None:
+            self.risk_manager = RiskManager(
+                db=self.db,
+                client=self.client,
+                risk_profile=RiskProfile[config.risk_profile.upper()],
+            )
+        else:
+            self.risk_manager = risk_manager
+
+        # Initialize hub publish function
+        self.hub_publish_func = hub_publish_func
+
+        # Initialize circuit breaker
+        self._circuit_breaker_triggered = False
+        self._circuit_breaker_loss_pct = (
+            config.circuit_breaker_loss_pct
+        )  # From config (default 10%)
+
+        # Initialize WebSocket client if enabled
+        if self.config.enable_websocket:
+            try:
+                self.ws_client = get_ws_client()
+                # Don't start WebSocket client automatically - will be started by API server
+                logging.info("WebSocket client initialized (not started)")
+            except Exception as e:
+                logging.warning(f"WebSocket client failed to initialize: {e}")
+                self.ws_client = None
+        else:
+            self.ws_client = None
+
+        # Initialize multi-timeframe data fetcher with WebSocket support and longer cache
+        self.multi_tf_fetcher = MultiTimeframeFetcher(
+            self.client,
+            ws_client=self.ws_client,
+            cache_ttl_seconds=300,  # 5 minutes cache (tiered TTL handles 1m/5m)
+        )
+
+        # Initialize market regime detector (uses default thresholds)
+        self.market_regime = MarketRegimeDetector()
+
+        # Initialize strategy manager with regime detector
+        self.strategy_manager = StrategyManager(
+            regime_detector=self.market_regime,
+            risk_manager=self.risk_manager,
+            client=self.client,  # Pass client for FundingArb API calls
+            ws_client=self.ws_client,  # Pass WS client for OrderBookImbalance
+        )
+
+        # Initialize grid lifecycle manager
+        self.grid_lifecycle = GridLifecycleManager(
+            client=self.client,
+            risk_manager=self.risk_manager,
+            db=self.db,
+        )
+
+        # Load persisted grid states from database (survives restarts)
+        loaded_grids = self.grid_lifecycle.load_grid_states(
+            regime_detector=self.market_regime
+        )
+        if loaded_grids:
+            logger.info(f"Restored {len(loaded_grids)} grid(s) from database: {list(loaded_grids.keys())}")
+
+        # Initialize migrated position manager
+        self.migrated_position_manager = MigratedPositionManager(
+            client=self.client,
+            risk_manager=self.risk_manager,
+            regime_detector=self.market_regime,
+            multi_tf_fetcher=self.multi_tf_fetcher,
+        )
+
+        # Initialize execution layer for precise 1m/5m entry timing
+        self.execution_layer = ExecutionLayer(
+            fetcher=self.multi_tf_fetcher,
+        )
+
+        # Thread control
+        self._running_event = threading.Event()
+        self.thread = None
+
+        # PHASE 2: Component system
+        self.event_bus = get_event_bus()
+        self.component_registry = get_component_registry()
+        self._register_components()
+        self._setup_event_subscriptions()
+
+        logging.info("Trading bot initialized")
+
+    @property
+    def is_running(self) -> bool:
+        """Check if bot is running."""
+        return self._running_event.is_set()
+
+    @is_running.setter
+    def is_running(self, value: bool) -> None:
+        """Set running state."""
+        if value:
+            self._running_event.set()
+        else:
+            self._running_event.clear()
+
+    def _register_components(self):
+        """Register bot components with component registry."""
+        # Register self as coordinator (component, name, interfaces)
+        self.component_registry.register(
+            component=self,
+            name="coordinator",
+        )
+
+        # Register strategy manager
+        self.component_registry.register(
+            component=self.strategy_manager,
+            name="strategy_manager",
+        )
+
+        # Register regime detector
+        self.component_registry.register(
+            component=self.market_regime,
+            name="market_regime",
+        )
+
+        # Register database
+        self.component_registry.register(
+            component=self.db,
+            name="database",
+        )
+
+        # Register grid lifecycle manager
+        self.component_registry.register(
+            component=self.grid_lifecycle,
+            name="grid_lifecycle",
+        )
+
+        logger.info("Components registered with component registry")
+
+    def start(self) -> None:
+        """Start the trading bot."""
+        if self.is_running:
+            logging.warning("Trading bot is already running")
+            return
+
+        # Start WebSocket client if available (for real-time price data)
+        if self.ws_client and hasattr(self.ws_client, "start"):
+            try:
+                self.ws_client.start()
+                logger.info("WebSocket client started for real-time price data")
+
+                # Bootstrap kline cache with historical data for immediate RSI calculation
+                if hasattr(self.ws_client, "bootstrap_kline_cache") and self.client:
+                    try:
+                        # Bootstrap core trading symbols with historical candles
+                        # This eliminates the 4h delay before RSI/indicators become available
+                        core_symbols = [
+                            "BTC",
+                            "ETH",
+                            "SOL",
+                            "SUI",
+                            "AVAX",
+                            "DOGE",
+                        ]
+                        self.ws_client.bootstrap_kline_cache(
+                            rest_client=self.client,
+                            symbols=core_symbols,
+                            intervals=["1m", "5m", "1h"],
+                            limit=100,
+                        )
+                        logger.info(
+                            f"✅ Kline cache bootstrapped for {len(core_symbols)} symbols (1m, 5m, 1h)"
+                        )
+                    except Exception as e:
+                        logger.warning(f"Kline cache bootstrap failed: {e}")
+
+            except Exception as e:
+                logger.error(f"WebSocket client start failed: {e}")
+                self.ws_client = None
+
+        self.is_running = True
+        self.thread = threading.Thread(target=self._trading_loop, daemon=True)
+        self.thread.start()
+        logging.info("Trading bot started")
+
+        # Publish status update to API server hub
+        if self.hub_publish_func:
+            self.hub_publish_func(
+                {"type": "bot_status", "status": "running", "timestamp": time.time()}
+            )
+
+    def stop(self) -> None:
+        """Stop the trading bot."""
+        if not self.is_running:
+            logging.warning("Trading bot is not running")
+            return
+
+        self.is_running = False
+
+        # Stop WebSocket client if running
+        if self.ws_client and hasattr(self.ws_client, "stop"):
+            try:
+                self.ws_client.stop()
+                logger.info("WebSocket client stopped")
+            except Exception as e:
+                logger.error(f"WebSocket client stop failed: {e}")
+
+        logging.info("Trading bot stopped")
+        if self.thread:
+            self.thread.join(timeout=5)
+
+    def _get_ticker_rest(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get ticker data using REST API (fallback method).
+
+        Args:
+            symbol: Market symbol (e.g., "SUI" or "SUI-PERP")
+
+        Returns:
+            Ticker dict with 'last', 'bid', 'ask', 'symbol', 'timestamp'
+
+        Raises:
+            RuntimeError: If REST API price unavailable
+        """
+        try:
+            # Clean symbol (remove -PERP suffix if present)
+            clean_symbol = symbol.replace("-PERP", "").upper()
+
+            # Get market data from REST API
+            market_data = self.client.get_market_data(clean_symbol)
+
+            if not market_data:
+                raise RuntimeError(f"No REST API data available for {clean_symbol}")
+
+            # Extract price from market data
+            # API returns dict with various fields - try common price fields
+            price = None
+            for field in ["last", "price", "last_price", "mark_price"]:
+                if field in market_data:
+                    price = float(market_data[field])
+                    if price > 0:
+                        break
+
+            if not price or price <= 0:
+                raise RuntimeError(
+                    f"Invalid price in REST API data for {clean_symbol}: {market_data}"
+                )
+
+            logging.debug(f"REST API price for {clean_symbol}: ${price}")
+
+            # Return in same format as WebSocket for compatibility
+            return {
+                "symbol": symbol,
+                "last": float(price),
+                "bid": float(price * 0.9995),  # Approximate bid (0.05% below)
+                "ask": float(price * 1.0005),  # Approximate ask (0.05% above)
+                "high": float(market_data.get("high", price * 1.02)),
+                "low": float(market_data.get("low", price * 0.98)),
+                "volume": float(market_data.get("volume", 0)),
+                "timestamp": int(time.time() * 1000),
+            }
+
+        except Exception as e:
+            error_msg = f"REST API price retrieval failed for {symbol}: {e}"
+            logging.error(error_msg)
+            raise RuntimeError(error_msg) from e
+
+    def _get_ticker_ws(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get ticker data using WebSocket with REST API fallback.
+
+        IMPROVED RESILIENCE: WebSocket is preferred for real-time data,
+        but REST API fallback ensures trading continuity if WebSocket is unavailable.
+
+        Args:
+            symbol: Market symbol (e.g., "SUI")
+
+        Returns:
+            Ticker dict with 'last', 'bid', 'ask', 'symbol', 'timestamp'
+
+        Raises:
+            RuntimeError: If both WebSocket and REST API price unavailable
+        """
+        # Check if WebSocket client is available and connected
+        if not self.ws_client or not hasattr(self.ws_client, "_running") or not self.ws_client._running:
+            logger.warning(
+                f"WebSocket unavailable for {symbol}, falling back to REST API"
+            )
+            return self._get_ticker_rest(symbol)
+
+        try:
+            # Get price from WebSocket cache
+            clean_symbol = symbol.replace("-PERP", "").upper()
+            price = self.ws_client.get_price(clean_symbol)
+
+            if price and price > 0:
+                logging.debug(f"WebSocket price for {clean_symbol}: ${price}")
+                # Return in same format as REST API for compatibility
+                return {
+                    "symbol": symbol,
+                    "last": float(price),
+                    "bid": float(price * 0.9995),  # Approximate bid (0.05% below)
+                    "ask": float(price * 1.0005),  # Approximate ask (0.05% above)
+                    "high": float(price * 1.02),
+                    "low": float(price * 0.98),
+                    "volume": 0,  # Not available via ticker WS
+                    "timestamp": int(time.time() * 1000),
+                }
+            else:
+                # No WebSocket price - fall back to REST
+                logger.warning(
+                    f"No WebSocket price available for {clean_symbol}, falling back to REST API"
+                )
+                return self._get_ticker_rest(symbol)
+
+        except Exception as e:
+            # WebSocket error - fall back to REST
+            logger.warning(
+                f"WebSocket price failed for {symbol}, trying REST fallback: {e}"
+            )
+            try:
+                return self._get_ticker_rest(symbol)
+            except Exception as rest_error:
+                # Both methods failed - raise final error
+                error_msg = f"Both WebSocket and REST API failed for {symbol}. WS error: {e}, REST error: {rest_error}"
+                logging.error(error_msg)
+                raise RuntimeError(error_msg) from rest_error
+
+    def _trading_loop(self) -> None:
+        """Main trading loop - PHASE 2: Coordinator pattern."""
+        logger.info(
+            "🔄 Trading Bot coordinator loop STARTED - running every 30 seconds (was 120s)"
+        )
+
+        # Wait for WebSocket prices to cache before first iteration
+        logger.info("⏳ Waiting 5 seconds for WebSocket price cache to populate...")
+        time.sleep(5)
+
+        # GRID MONITORING: Sync existing grids from exchange on startup
+        self._sync_existing_grids()
+
+        self._loop_iteration = 0
+        self._last_loop_time = None
+        self._loop_step = None  # Track which step we're on for debugging
+        self._loop_events_generated = 0  # Track events generated in loop
+        while self._running_event.is_set():
+            self._loop_iteration += 1
+            self._last_loop_time = datetime.now()
+            self._loop_step = "starting"
+            try:
+                logger.info(f"🔄 Trading loop iteration {self._loop_iteration} starting...")
+
+                # Update positions from client
+                self._loop_step = "update_positions"
+                self._update_positions()
+
+                # GRID MONITORING: Monitor active grids for fills, P&L, emergency stops
+                self._loop_step = "monitor_grids"
+                self._monitor_grids()
+
+                # MIGRATED POSITION MANAGEMENT: Manage positions migrated from grid
+                self._loop_step = "manage_migrated_positions"
+                self._manage_migrated_positions()
+
+                # PHASE 2: Generate and publish signals as events (coordinator role)
+                self._loop_step = "generate_signals"
+                events_before = len(self.event_bus._event_history)
+                logger.info(f"📊 Calling _generate_and_publish_signals (events_before={events_before})...")
+                self._generate_and_publish_signals()
+                events_after = len(self.event_bus._event_history)
+                self._loop_events_generated = events_after - events_before
+                logger.info(f"📊 Signal generation complete (events_after={events_after}, new={self._loop_events_generated})")
+
+                # Monitor risk (delegated to RiskManager)
+                self._loop_step = "monitor_risk"
+                self._monitor_risk_coordinated()
+
+                # Publish status update to API server hub
+                if self.hub_publish_func:
+                    self.hub_publish_func(
+                        {
+                            "type": "loop_complete",
+                            "iteration": self._loop_iteration,
+                            "timestamp": time.time(),
+                        }
+                    )
+
+            except Exception as e:
+                logger.error(
+                    f"Error in trading loop (step={self._loop_step}): {e}", exc_info=True
+                )
+
+            # Sleep for configured interval
+            self._loop_step = "sleeping"
+            time.sleep(config.trading_loop_interval)
+
+    def _monitor_risk(self) -> None:
+        """Monitor risk and trigger circuit breaker if needed."""
+        pass  # Placeholder for legacy method signature
+
+    def _update_positions(self) -> None:
+        """
+        Update positions from Pacifica API.
+
+        Syncs positions with database for accurate P&L tracking.
+        """
+        try:
+            # Get positions from API
+            positions = self.client.get_positions()
+
+            if not positions:
+                logging.debug("No open positions")
+                return
+
+            # Get current prices for P&L calculation
+            current_prices = {}
+            for pos in positions:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+
+                # Get price via WebSocket (Phase 2 requirement)
+                # PHASE 2: WebSocket is authoritative, but be tolerant during startup
+                entry_price = float(pos.get("entry_price", 0))
+                try:
+                    ticker = self._get_ticker_ws(symbol)
+                    current_price = float(ticker.get("last", entry_price))
+                except Exception as e:
+                    logging.debug(
+                        f"Price unavailable for {symbol} during position update: {e}"
+                    )
+                    current_price = entry_price  # Fall back to entry price
+
+                current_prices[symbol] = current_price
+
+            # Update database with positions
+            for pos in positions:
+                symbol = pos.get("symbol")
+                if not symbol:
+                    continue
+
+                # Calculate unrealized P&L
+                side = pos.get("side", "LONG")
+                quantity = float(pos.get("quantity", 0))
+                entry_price = float(pos.get("entry_price", 0))
+                current_price = current_prices.get(symbol, entry_price)
+
+                if side == "LONG":
+                    unrealized_pnl = (current_price - entry_price) * quantity
+                else:
+                    unrealized_pnl = (entry_price - current_price) * quantity
+
+                # Update position in database
+                self.db.update_position(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    current_price=current_price,
+                    unrealized_pnl=unrealized_pnl,
+                    leverage=float(pos.get("leverage", 1)),
+                )
+
+                logging.debug(
+                    f"Updated position: {symbol} {side} {quantity} @ ${entry_price:.2f} "
+                    f"(current: ${current_price:.2f}, PnL: ${unrealized_pnl:.2f})"
+                )
+
+        except Exception as e:
+            logging.error(f"Error updating positions: {e}")
+
+    def _sync_existing_grids(self) -> None:
+        """
+        GRID MONITORING: Sync existing grids from exchange on startup.
+
+        This detects grids that were created in a previous session or by another bot instance.
+        Critical for maintaining state consistency after restarts.
+        """
+        try:
+            logger.info("🔍 Syncing existing grids from exchange...")
+
+            # Get all open orders from exchange
+            open_orders = self.client.get_orders()
+            if not open_orders:
+                logger.info("No open orders found on exchange")
+                return
+
+            # Group orders by symbol
+            orders_by_symbol: Dict[str, List[Dict]] = {}
+            for order in open_orders:
+                symbol = order.get("symbol", "")
+                if not symbol:
+                    continue
+
+                if symbol not in orders_by_symbol:
+                    orders_by_symbol[symbol] = []
+                orders_by_symbol[symbol].append(order)
+
+            # Analyze each symbol's orders to detect grid patterns
+            for symbol, orders in orders_by_symbol.items():
+                # Grid detection heuristics:
+                # 1. Multiple orders (>= 5)
+                # 2. Mix of BUY and SELL orders
+                # 3. Evenly spaced price levels
+
+                if len(orders) < 5:
+                    logger.debug(
+                        f"Skipping {symbol}: only {len(orders)} orders (need >= 5 for grid)"
+                    )
+                    continue
+
+                buy_orders = [o for o in orders if o.get("side") == "BUY"]
+                sell_orders = [o for o in orders if o.get("side") == "SELL"]
+
+                if not buy_orders or not sell_orders:
+                    logger.debug(
+                        f"Skipping {symbol}: missing BUY or SELL orders (not a grid)"
+                    )
+                    continue
+
+                # Check if this symbol already has an active grid in memory
+                if symbol in self.grid_lifecycle._grids:
+                    logger.info(
+                        f"✅ {symbol} grid already tracked in memory ({len(orders)} exchange orders)"
+                    )
+                    continue
+
+                # ORPHANED GRID DETECTED: Orders exist on exchange but not in memory
+                # This means the bot restarted or crashed while the grid was active
+                logger.warning(
+                    f"⚠️ ORPHANED GRID DETECTED: {symbol} has {len(orders)} exchange orders "
+                    f"({len(buy_orders)} BUY, {len(sell_orders)} SELL) but no in-memory state"
+                )
+
+                # Decision: Close orphaned grid for safety
+                # Rationale: We don't know the original grid parameters (spacing, stop loss, etc.)
+                # Better to close and start fresh than risk losses from incomplete state
+                self._close_orphaned_grid(
+                    symbol, reason="ORPHANED_ON_STARTUP"
+                )
+
+        except Exception as e:
+            logger.error(f"Error syncing existing grids: {e}", exc_info=True)
+
+    def _close_orphaned_grid(self, symbol: str, reason: str = "UNKNOWN") -> None:
+        """
+        Close an orphaned grid (orders exist on exchange but no in-memory state).
+
+        Args:
+            symbol: Symbol with orphaned grid
+            reason: Reason for closure (for logging/metrics)
+        """
+        try:
+            logger.warning(f"🛑 Closing orphaned grid for {symbol} (reason: {reason})")
+
+            # Get all open orders for symbol
+            all_orders = self.client.get_orders()
+            symbol_orders = [
+                o for o in all_orders if o.get("symbol") == symbol
+            ]
+
+            # Cancel all orders
+            for order in symbol_orders:
+                order_id = order.get("order_id") or order.get("id")
+                if order_id:
+                    try:
+                        self.client.cancel_order(order_id)
+                        logger.info(
+                            f"  ✅ Cancelled order {order_id} "
+                            f"({order.get('side')} @ ${order.get('price')})"
+                        )
+                    except Exception as e:
+                        logger.error(f"  ❌ Failed to cancel order {order_id}: {e}")
+
+            # Check if there's an open position for this symbol
+            positions = self.client.get_positions()
+            symbol_positions = [
+                p for p in positions if p.get("symbol") == symbol
+            ]
+
+            if symbol_positions:
+                logger.warning(
+                    f"  ⚠️ Open position exists for {symbol} after grid closure - "
+                    f"consider manual review"
+                )
+
+            logger.info(f"✅ Orphaned grid closed for {symbol}")
+
+        except Exception as e:
+            logger.error(
+                f"Error closing orphaned grid for {symbol}: {e}", exc_info=True
+            )
+
+    def _monitor_grids(self) -> None:
+        """
+        GRID MONITORING: Monitor active grids for fills, P&L, and emergency stops.
+
+        Delegates to GridLifecycleManager for authoritative state management.
+        """
+        try:
+            # Get current prices for all active grids
+            current_prices = {}
+            for symbol in list(self.grid_lifecycle._grids.keys()):
+                try:
+                    ticker = self._get_ticker_ws(symbol)
+                    current_prices[symbol] = float(ticker.get("last", 0))
+                except Exception:
+                    pass  # Skip price update if unavailable
+
+            if not current_prices:
+                return  # No active grids or no prices available
+
+            # Monitor each grid using GridLifecycleManager
+            for symbol, current_price in current_prices.items():
+                try:
+                    # Monitor grid (checks fills, P&L, emergency stops)
+                    result = self.grid_lifecycle.monitor_grid(
+                        symbol=symbol, current_price=current_price
+                    )
+
+                    # Log monitoring results
+                    if result.get("fills_detected", 0) > 0:
+                        logger.info(
+                            f"📊 Grid {symbol}: {result['fills_detected']} fills detected, "
+                            f"realized P&L: ${result.get('realized_pnl', 0):.2f}"
+                        )
+
+                    if result.get("emergency_stop_triggered"):
+                        logger.critical(
+                            f"🚨 EMERGENCY STOP triggered for {symbol} grid: {result.get('stop_reason')}"
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"Error monitoring grid {symbol}: {e}", exc_info=True
+                    )
+
+        except Exception as e:
+            logger.error(f"Error in grid monitoring: {e}", exc_info=True)
+
+    def _manage_migrated_positions(self) -> None:
+        """
+        MIGRATED POSITION MANAGEMENT: Manage positions that were migrated from grid trading.
+
+        When a grid exits (due to trend change or stop loss), its position is "migrated" to
+        trend-following management with trailing stop loss.
+
+        Delegates to MigratedPositionManager for authoritative state management.
+        """
+        try:
+            # Get current prices for all migrated positions
+            current_prices = {}
+            positions = self.client.get_positions()
+            for pos in positions:
+                symbol = pos.get("symbol")
+                if symbol and symbol not in current_prices:
+                    try:
+                        ticker = self._get_ticker_ws(symbol)
+                        current_prices[symbol] = float(ticker.get("last", 0))
+                    except Exception:
+                        pass
+
+            if not current_prices:
+                return  # No positions or no prices available
+
+            # Manage migrated positions using MigratedPositionManager
+            result = self.migrated_position_manager.manage_positions(
+                current_prices=current_prices
+            )
+
+            # Log management results
+            if result.get("positions_closed", 0) > 0:
+                logger.info(
+                    f"📊 Migrated Position Manager: {result['positions_closed']} positions closed, "
+                    f"reasons: {result.get('close_reasons', {})}"
+                )
+
+            if result.get("stops_updated", 0) > 0:
+                logger.debug(
+                    f"📊 Migrated Position Manager: {result['stops_updated']} trailing stops updated"
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error managing migrated positions: {e}", exc_info=True
+            )
+
+    def start_trading(self) -> None:
+        """
+        Start trading (unpause).
+
+        PHASE 2: This is a stub - actual trading is controlled by start/stop methods.
+        Kept for backward compatibility with existing code.
+        """
+        if not self.is_running:
+            logger.warning("Trading bot not running - call start() first")
+            return
+
+        logger.info("Trading active (PHASE 2: coordinator pattern)")
+
+    def stop_trading(self) -> None:
+        """
+        Stop trading (pause).
+
+        PHASE 2: This is a stub - actual trading is controlled by start/stop methods.
+        Kept for backward compatibility with existing code.
+        """
+        logger.info("Trading paused (PHASE 2: coordinator pattern)")
+
+    def _generate_and_publish_signals(self) -> None:
+        """
+        PHASE 2: Generate signals and publish as events.
+
+        Coordinator role: Ask strategies for signals, validate them, and publish events.
+        Execution is handled by event subscribers (decoupled).
+        """
+        try:
+            # Get all markets
+            markets = self.client.get_markets()
+            if not markets:
+                logger.warning("No markets available")
+                return
+
+            logger.info(f"📊 Checking {len(markets)} markets for signals...")
+
+            signals_generated = 0
+            for market in markets[:10]:  # Limit to first 10 markets to avoid rate limits
+                try:
+                    symbol = market.get("symbol")
+                    if not symbol:
+                        continue
+
+                    # Get current price
+                    try:
+                        ticker = self._get_ticker_ws(symbol)
+                        current_price = float(ticker.get("last", 0))
+                    except Exception as e:
+                        logger.debug(f"Skipping {symbol}: price unavailable ({e})")
+                        continue
+
+                    if current_price <= 0:
+                        logger.debug(f"Skipping {symbol}: invalid price {current_price}")
+                        continue
+
+                    # Get multi-timeframe data (5m for MomentumScalping, others for main strategies)
+                    multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
+                        symbol=symbol, timeframes=["5m", "15m", "1h", "4h"], lookback_candles=250
+                    )
+
+                    if not multi_tf_data:
+                        logger.debug(f"Skipping {symbol}: no multi-timeframe data")
+                        continue
+
+                    # Detect regime for this symbol (for logging) - uses 4h data
+                    regime_data = multi_tf_data.get("4h", {})
+                    if regime_data:
+                        regime = self.market_regime.detect_regime(regime_data)
+                    else:
+                        regime = None  # Will be handled gracefully in logging
+
+                    # Generate signals using strategy manager
+                    signals = self.strategy_manager.generate_signals_for_market(
+                        symbol=symbol,
+                        multi_tf_data=multi_tf_data,
+                        current_price=current_price,
+                    )
+
+                    # Publish signals as events
+                    for signal in signals:
+                        # Validate signal before publishing
+                        if not signal.is_valid():
+                            logger.debug(
+                                f"Skipping invalid signal for {symbol}: {signal.validation_flags}"
+                            )
+                            continue
+
+                        # Publish signal event (use publish_event for convenience)
+                        self.event_bus.publish_event(
+                            event_type=EventType.SIGNAL_GENERATED,
+                            data={
+                                "signal": signal,
+                                "timestamp": time.time(),
+                            },
+                            source="strategy_manager",
+                        )
+
+                        signals_generated += 1
+                        logger.info(
+                            f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
+                            f"{symbol} @ ${signal.entry_price:.4f} "
+                            f"(confidence: {signal.confidence:.1f}%, quality: {signal.quality.name})"
+                        )
+
+                        # Log signal to CSV/database
+                        regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
+                        self.signal_logger.log_signal_generated(
+                            signal=signal,
+                            regime=regime_str,
+                            notes=f"Generated from {signal.strategy.name}",
+                        )
+
+                except Exception as e:
+                    logger.error(
+                        f"Error generating signals for {symbol}: {e}", exc_info=True
+                    )
+
+            if signals_generated > 0:
+                logger.info(f"📊 Total signals generated: {signals_generated}")
+            else:
+                logger.debug("📊 No signals generated this iteration")
+
+        except Exception as e:
+            logger.error(f"Error in signal generation: {e}", exc_info=True)
+
+    def _monitor_risk_coordinated(self) -> None:
+        """
+        PHASE 2: Monitor risk using RiskManager.
+
+        Coordinator role: Check risk limits and publish events if exceeded.
+        """
+        try:
+            # Get account balance
+            balance = self._get_account_balance()
+            if balance <= 0:
+                logger.warning("Invalid account balance - skipping risk monitoring")
+                return
+
+            # Get current exposure
+            exposure = self._get_current_exposure()
+
+            # Calculate risk percentage
+            risk_pct = (exposure / balance) * 100
+
+            # Check circuit breaker threshold
+            if risk_pct >= 80:  # Warning at 80% of limit
+                logger.warning(
+                    f"⚠️ High risk exposure: {risk_pct:.1f}% of account "
+                    f"(${exposure:.2f} / ${balance:.2f})"
+                )
+
+            # Publish risk event for monitoring
+            self.event_bus.publish_event(
+                event_type=EventType.CAPITAL_REQUESTED,
+                data={
+                    "balance": balance,
+                    "exposure": exposure,
+                    "risk_pct": risk_pct,
+                    "timestamp": time.time(),
+                },
+                source="trading_bot",
+            )
+
+        except Exception as e:
+            logger.error(f"Error monitoring risk: {e}", exc_info=True)
+
+    def _setup_event_subscriptions(self):
+        """
+        PHASE 2: Subscribe to events from other components.
+
+        Coordinator subscribes to:
+        - SIGNAL_GENERATED: Execute signals
+        - ORDER_PLACED: Track order placement
+        - ORDER_FILLED: Update positions
+        - CAPITAL_REQUESTED: Validate capital allocation
+        - RISK_LIMIT_EXCEEDED: Trigger circuit breaker
+        - GRID_EMERGENCY: Handle grid emergency stops
+        """
+        self.event_bus.subscribe(EventType.SIGNAL_GENERATED, self._handle_signal_generated)
+        self.event_bus.subscribe(EventType.ORDER_PLACED, self._handle_order_placed)
+        self.event_bus.subscribe(EventType.ORDER_FILLED, self._handle_order_filled)
+        self.event_bus.subscribe(
+            EventType.CAPITAL_REQUESTED, self._handle_capital_requested
+        )
+        self.event_bus.subscribe(
+            EventType.RISK_LIMIT_EXCEEDED, self._handle_risk_limit_exceeded
+        )
+        # Note: GRID_EMERGENCY doesn't exist in EventType yet, so commenting out
+        # self.event_bus.subscribe(EventType.GRID_EMERGENCY, self._handle_grid_emergency)
+
+        logger.info("Event subscriptions configured")
+
+    def _handle_signal_generated(self, event):
+        """
+        Handle SIGNAL_GENERATED event.
+
+        PHASE 2: Coordinator receives signals as events and coordinates execution.
+        """
+        try:
+            # Event object has .data attribute (not a dict with .get())
+            signal_data = event.data if hasattr(event, 'data') else event.get("data", {})
+            signal = signal_data.get("signal") if isinstance(signal_data, dict) else None
+
+            if not signal:
+                logger.warning("Received signal event with no signal data")
+                return
+
+            # Validate signal should be executed
+            if not self._should_execute_signal(signal):
+                logger.debug(
+                    f"Signal validation failed for {signal.asset} - skipping execution"
+                )
+                return
+
+            # Log signal details for debugging
+            log_entry = {
+                "timestamp": datetime.now().isoformat(),
+                "symbol": signal.asset,
+                "strategy": signal.strategy.name,
+                "side": signal.side.name,
+                "entry_price": signal.entry_price,
+                "confidence": signal.confidence,
+                "quality": signal.quality.name,
+            }
+
+            # Coordinate signal execution
+            self._coordinate_signal_execution(signal, log_entry)
+
+        except Exception as e:
+            logger.error(f"Error handling signal event: {e}", exc_info=True)
+
+    def _convert_signal_data(self, signal_data):
+        """Convert signal data dict to Signal object if needed."""
+        if isinstance(signal_data, Signal):
+            return signal_data
+        # If it's a dict, construct Signal object
+        # Implementation depends on Signal class structure
+        return signal_data
+
+    def _should_execute_signal(self, signal):
+        """
+        Validate if signal should be executed.
+
+        Checks:
+        1. Signal is valid (8 validation flags)
+        2. Account has sufficient capital
+        3. Risk limits not exceeded
+        4. No conflicting positions
+        """
+        try:
+            # Check signal validity
+            if not signal.is_valid():
+                reason = f"Signal invalid: {signal.validation_flags}"
+                logger.debug(f"Signal invalid for {signal.asset}: {signal.validation_flags}")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
+            # Check account balance
+            balance = self._get_account_balance()
+            if balance <= 0:
+                reason = "Invalid account balance (<=0)"
+                logger.warning("Invalid account balance - cannot execute signal")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
+            # Check risk limits
+            current_exposure = self._get_current_exposure()
+            exposure_pct = (current_exposure / balance) * 100
+
+            if exposure_pct >= 80:  # 80% utilization limit
+                reason = f"Risk limit reached ({exposure_pct:.1f}% >= 80%)"
+                logger.warning(f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
+            return True
+
+        except Exception as e:
+            reason = f"Validation error: {e}"
+            logger.error(f"Error validating signal execution: {e}")
+            self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+            return False
+
+    def _coordinate_signal_execution(self, signal, log_entry=None):
+        """
+        PHASE 2: Coordinate signal execution through components.
+
+        Flow:
+        1. Request capital allocation from RiskManager
+        2. If approved, delegate to appropriate execution method:
+           - Grid signals → GridLifecycleManager
+           - Standard signals → ExecutionLayer → PacificaClient
+        """
+        try:
+            # Get current account state for capital allocation request
+            account_balance = self._get_account_balance()
+            current_exposure = self._get_current_exposure()
+
+            # Calculate requested amount based on position size
+            position_size = self.risk_manager.get_position_size(
+                signal=signal,
+                account_balance=account_balance,
+                current_exposure=current_exposure,
+            )
+            requested_amount = position_size * signal.entry_price
+
+            # Request capital allocation
+            allocation_result = self.risk_manager.request_capital_allocation(
+                symbol=signal.asset,
+                requested_amount=requested_amount,
+                strategy=signal.strategy.name if hasattr(signal.strategy, 'name') else str(signal.strategy),
+                account_balance=account_balance,
+                current_exposure=current_exposure,
+            )
+
+            if not allocation_result.get("approved", False):
+                logger.warning(
+                    f"Capital allocation denied for {signal.asset}: {allocation_result.get('reason')}"
+                )
+                return
+
+            logger.info(
+                f"✅ Capital allocated: ${allocation_result.get('allocated_amount', 0):.2f} "
+                f"for {signal.asset} {signal.strategy.name}"
+            )
+
+            # Execute signal based on type
+            if signal.strategy == StrategyType.GRID_TRADING:
+                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+            else:
+                self._execute_standard_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error coordinating signal execution for {signal.asset}: {e}",
+                exc_info=True,
+            )
+
+    def _execute_coordinated_signal(self, signal, allocation_result, log_entry=None):
+        """
+        Execute signal through appropriate execution path.
+
+        PHASE 2: Delegates to GridLifecycleManager or ExecutionLayer based on strategy type.
+        """
+        try:
+            if signal.strategy == StrategyType.GRID_TRADING:
+                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+            else:
+                self._execute_standard_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
+        except Exception as e:
+            logger.error(f"Error executing signal: {e}", exc_info=True)
+
+    def _execute_grid_signal_coordinated(
+        self, signal, allocation_result, log_entry=None
+    ):
+        """
+        Execute grid trading signal through GridLifecycleManager.
+
+        PHASE 2: Coordinator delegates grid execution to GridLifecycleManager.
+        GridLifecycleManager is responsible for:
+        - Calculating grid levels
+        - Placing grid orders
+        - Monitoring fills
+        - Managing P&L
+        - Emergency stops
+        """
+        try:
+            symbol = signal.asset
+            # RiskManager returns "allocated_amount" (not "capital_allocated")
+            capital_allocated = allocation_result.get("allocated_amount", 0)
+
+            logger.info(
+                f"🔷 Executing GRID signal for {symbol} with ${capital_allocated:.2f} capital"
+            )
+
+            # Place grid orders through GridLifecycleManager
+            # TradingBot has self.client (PacificaClient) for order execution
+            result = self._place_grid_orders(
+                signal=signal,
+                allocation_result=allocation_result,
+                log_entry=log_entry,
+            )
+
+            if result.get("success"):
+                buy_orders = result.get('buy_orders', 0)
+                sell_orders = result.get('sell_orders', 0)
+                logger.info(
+                    f"✅ Grid orders placed for {symbol}: "
+                    f"{buy_orders} BUY, {sell_orders} SELL"
+                )
+
+                # Log successful grid execution
+                self.signal_logger.log_signal_executed(
+                    signal=signal,
+                    order_id=f"grid_{symbol}_{buy_orders}buy_{sell_orders}sell",
+                    filled_price=signal.entry_price,
+                    filled_quantity=buy_orders + sell_orders,
+                    execution_result=f"Grid placed: {buy_orders} BUY, {sell_orders} SELL",
+                    notes=f"Capital allocated: ${capital_allocated:.2f}",
+                )
+
+                # Register grid with GridLifecycleManager for monitoring
+                self.grid_lifecycle.register_new_grid(
+                    symbol=symbol,
+                    grid_capital=capital_allocated,
+                    emergency_stop_price=signal.stop_loss,
+                    regime=signal.market_state.name if hasattr(signal.market_state, 'name') else str(signal.market_state),
+                    atr=0,  # ATR not stored in signal, grid manager will recalculate if needed
+                    spacing=signal.spacing or 0,
+                    num_levels=signal.grid_levels or 10,
+                    center_price=signal.entry_price,
+                )
+                logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+
+            else:
+                error_msg = result.get('error', 'Unknown error')
+                logger.error(f"❌ Grid order placement failed for {symbol}: {error_msg}")
+
+                # Log failed grid execution
+                self.signal_logger.log_signal_failed(
+                    signal=signal,
+                    error=error_msg,
+                    notes=f"Grid placement failed, capital: ${capital_allocated:.2f}",
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error executing grid signal for {signal.asset}: {e}", exc_info=True
+            )
+
+            # Log exception
+            self.signal_logger.log_signal_failed(
+                signal=signal,
+                error=str(e),
+                notes="Exception during grid execution",
+            )
+
+    def _place_grid_orders(self, signal, allocation_result, log_entry=None):
+        """
+        Place grid orders using GridLifecycleManager.
+
+        Args:
+            signal: Grid trading signal
+            allocation_result: Capital allocation result from RiskManager
+            log_entry: Optional log entry dict for debugging
+
+        Returns:
+            Dict with placement results:
+            {
+                "success": bool,
+                "buy_orders": int,
+                "sell_orders": int,
+                "buy_order_ids": List[str],
+                "sell_order_ids": List[str],
+                "error": Optional[str]
+            }
+        """
+        try:
+            symbol = signal.asset
+            # RiskManager returns "allocated_amount" (not "capital_allocated")
+            capital = allocation_result.get("allocated_amount", 0)
+
+            if capital <= 0:
+                return {"success": False, "error": "No capital allocated"}
+
+            # Calculate grid levels
+            grid_levels = self._calculate_grid_levels(
+                signal=signal,
+                total_capital=capital,
+            )
+
+            if not grid_levels.get("buy_levels") or not grid_levels.get("sell_levels"):
+                return {"success": False, "error": "Failed to calculate grid levels"}
+
+            logger.info(
+                f"📊 Grid levels calculated for {symbol}: "
+                f"{len(grid_levels['buy_levels'])} BUY, {len(grid_levels['sell_levels'])} SELL"
+            )
+
+            # Place grid orders
+            buy_order_ids = []
+            sell_order_ids = []
+
+            # Place BUY orders
+            for level in grid_levels["buy_levels"]:
+                try:
+                    response = self.client.place_order(
+                        symbol=symbol,
+                        side="buy",
+                        quantity=level["quantity"],
+                        order_type="limit",
+                        price=level["price"],
+                    )
+
+                    # Extract order data from response wrapper {"success": bool, "data": {...}}
+                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_id = order_data.get("order_id") or order_data.get("id")
+
+                    if order_id:
+                        buy_order_ids.append(str(order_id))
+                        logger.info(
+                            f"  ✅ BUY order placed: {level['quantity']} @ ${level['price']:.4f} (ID: {order_id})"
+                        )
+                    elif response.get("success") is False:
+                        error_msg = response.get("error", "Unknown API error")
+                        logger.error(f"  ❌ BUY order rejected: {error_msg}")
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}")
+
+            # Place SELL orders
+            for level in grid_levels["sell_levels"]:
+                try:
+                    response = self.client.place_order(
+                        symbol=symbol,
+                        side="sell",
+                        quantity=level["quantity"],
+                        order_type="limit",
+                        price=level["price"],
+                    )
+
+                    # Extract order data from response wrapper {"success": bool, "data": {...}}
+                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_id = order_data.get("order_id") or order_data.get("id")
+
+                    if order_id:
+                        sell_order_ids.append(str(order_id))
+                        logger.info(
+                            f"  ✅ SELL order placed: {level['quantity']} @ ${level['price']:.4f} (ID: {order_id})"
+                        )
+                    elif response.get("success") is False:
+                        error_msg = response.get("error", "Unknown API error")
+                        logger.error(f"  ❌ SELL order rejected: {error_msg}")
+                except Exception as e:
+                    logger.error(f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}")
+
+            # Return results
+            success = len(buy_order_ids) > 0 or len(sell_order_ids) > 0
+            return {
+                "success": success,
+                "buy_orders": len(buy_order_ids),
+                "sell_orders": len(sell_order_ids),
+                "buy_order_ids": buy_order_ids,
+                "sell_order_ids": sell_order_ids,
+            }
+
+        except Exception as e:
+            logger.error(f"Error placing grid orders: {e}", exc_info=True)
+            return {"success": False, "error": str(e)}
+
+    def _execute_standard_signal_coordinated(
+        self, signal, allocation_result, log_entry=None
+    ):
+        """
+        Execute standard (non-grid) signal through ExecutionLayer.
+
+        PHASE 2: Coordinator delegates execution to ExecutionLayer for precise entry timing.
+        ExecutionLayer monitors 1m/5m candles for optimal entry conditions.
+        """
+        try:
+            symbol = signal.asset
+            # RiskManager returns "allocated_amount" (not "capital_allocated")
+            capital_allocated = allocation_result.get("allocated_amount", 0)
+
+            # Calculate quantity from allocated capital and entry price
+            if signal.entry_price > 0 and capital_allocated > 0:
+                quantity = capital_allocated / signal.entry_price
+            else:
+                quantity = 0
+
+            logger.info(
+                f"🔹 Executing {signal.strategy.name} signal for {symbol}: "
+                f"{signal.side.name} {quantity:.6f} @ ${signal.entry_price:.4f} "
+                f"(capital: ${capital_allocated:.2f})"
+            )
+
+            if quantity <= 0:
+                logger.error(f"❌ Invalid quantity for {symbol}: {quantity}")
+                self.signal_logger.log_signal_failed(
+                    signal=signal,
+                    error="Invalid quantity (<=0)",
+                    notes=f"Capital: ${capital_allocated:.2f}, Price: ${signal.entry_price:.4f}",
+                )
+                return
+
+            # Execute order directly through PacificaClient
+            # ExecutionLayer.refine_entry() is for timing refinement only, not execution
+            side_str = "buy" if signal.side.name == "BUY" else "sell"
+
+            # Use market order for immediate execution
+            order_response = self.client.place_order(
+                symbol=symbol,
+                side=side_str,
+                quantity=quantity,
+                order_type="market",
+            )
+
+            # Extract order data from response wrapper {"success": bool, "data": {...}}
+            order_data = order_response.get("data", {}) if isinstance(order_response, dict) else {}
+            order_id = order_data.get("order_id") or order_data.get("id")
+
+            # Convert to execution result format
+            execution_result = {
+                "success": order_response.get("success", False) and order_id is not None,
+                "order_id": order_id,
+                "executed_price": order_data.get("price", signal.entry_price),  # Use actual fill price if available
+                "error": order_response.get("error") if not order_response.get("success") else None,
+            }
+
+            if execution_result.get("success"):
+                logger.info(
+                    f"✅ Order executed for {symbol}: "
+                    f"ID={execution_result.get('order_id')}, "
+                    f"Price=${execution_result.get('executed_price'):.4f}"
+                )
+
+                # Log successful execution to CSV/database
+                self.signal_logger.log_signal_executed(
+                    signal=signal,
+                    order_id=str(execution_result.get("order_id", "")),
+                    filled_price=execution_result.get("executed_price", 0),
+                    filled_quantity=quantity,
+                    execution_result="success",
+                    notes=f"Capital allocated: ${capital_allocated:.2f}",
+                )
+
+                # Publish ORDER_PLACED event
+                self.event_bus.publish_event(
+                    event_type=EventType.ORDER_PLACED,
+                    data={
+                        "symbol": symbol,
+                        "order_id": execution_result.get("order_id"),
+                        "side": signal.side.name,
+                        "quantity": quantity,
+                        "price": execution_result.get("executed_price"),
+                        "timestamp": time.time(),
+                    },
+                    source="trading_bot",
+                )
+
+            else:
+                error_msg = execution_result.get('error', 'Unknown error')
+                logger.error(f"❌ Order execution failed for {symbol}: {error_msg}")
+
+                # Log failed execution
+                self.signal_logger.log_signal_failed(
+                    signal=signal,
+                    error=error_msg,
+                    notes=f"Attempted quantity: {quantity}",
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error executing standard signal for {signal.asset}: {e}",
+                exc_info=True,
+            )
+
+            # Log exception
+            self.signal_logger.log_signal_failed(
+                signal=signal,
+                error=str(e),
+                notes="Exception during execution",
+            )
+
+    def _handle_order_placed(self, event):
+        """Handle ORDER_PLACED event."""
+        logger.debug(f"Order placed event: {event}")
+
+    def _handle_order_filled(self, event):
+        """Handle ORDER_FILLED event."""
+        logger.debug(f"Order filled event: {event}")
+
+    def _handle_capital_requested(self, event):
+        """Handle CAPITAL_REQUESTED event."""
+        logger.debug(f"Capital requested event: {event}")
+
+    def _handle_risk_limit_exceeded(self, event):
+        """Handle RISK_LIMIT_EXCEEDED event."""
+        logger.warning(f"Risk limit exceeded event: {event}")
+
+    def _handle_grid_emergency(self, event):
+        """Handle GRID_EMERGENCY event."""
+        logger.critical(f"Grid emergency event: {event}")
+
+    def get_coordinator_status(self) -> Dict[str, Any]:
+        """
+        Get coordinator status for monitoring.
+
+        Returns:
+            Dict with coordinator state, active components, event metrics
+        """
+        return {
+            "is_running": self.is_running,
+            "loop_iteration": getattr(self, "_loop_iteration", 0),
+            "last_loop_time": getattr(self, "_last_loop_time", None),
+            "loop_step": getattr(self, "_loop_step", None),
+            "loop_events_generated": getattr(self, "_loop_events_generated", 0),
+            "active_components": self.component_registry.list_components(),
+            "event_history_size": len(self.event_bus._event_history),
+        }
+
+    def _check_signals(self) -> None:
+        """
+        Check for trading signals and execute them.
+
+        LEGACY METHOD - PHASE 2: Now handled by _generate_and_publish_signals()
+        Kept for backward compatibility.
+        """
+        try:
+            # Get all markets
+            markets = self.client.get_markets()
+            if not markets:
+                logging.warning("No markets available")
+                return
+
+            logging.info(f"Checking {len(markets)} markets for signals...")
+
+            for market in markets[:10]:  # Limit to first 10 markets
+                try:
+                    symbol = market.get("symbol")
+                    if not symbol:
+                        continue
+
+                    # Get current price via WebSocket (eliminates REST API rate limiting)
+                    ticker = self._get_ticker_ws(symbol)
+                    current_price = float(ticker.get("last", 0))
+
+                    if current_price <= 0:
+                        logging.debug(
+                            f"Skipping {symbol}: invalid price {current_price}"
+                        )
+                        continue
+
+                    # Get multi-timeframe data (5m, 15m, 1h, 4h)
+                    multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
+                        symbol=symbol, timeframes=["5m", "15m", "1h", "4h"], lookback_candles=250
+                    )
+
+                    if not multi_tf_data:
+                        logging.debug(f"Skipping {symbol}: no multi-timeframe data")
+                        continue
+
+                    # Generate signals using strategy manager
+                    signals = self.strategy_manager.generate_signals_for_market(
+                        symbol=symbol,
+                        multi_tf_data=multi_tf_data,
+                        current_price=current_price,
+                    )
+
+                    # Execute valid signals
+                    for signal in signals:
+                        if signal.is_valid():
+                            logging.info(
+                                f"Valid signal: {signal.strategy.name} {signal.side.name} "
+                                f"{symbol} @ ${signal.entry_price:.4f} "
+                                f"(confidence: {signal.confidence:.1f}%)"
+                            )
+
+                            # Execute signal
+                            self._execute_signal(signal)
+                        else:
+                            logging.debug(
+                                f"Invalid signal for {symbol}: {signal.validation_flags}"
+                            )
+
+                except Exception as e:
+                    logging.error(f"Error checking signals for {symbol}: {e}")
+
+        except Exception as e:
+            logging.error(f"Error checking signals: {e}")
+
+    def _calculate_position_size(self, signal: Signal) -> float:
+        """
+        Calculate position size based on signal and risk parameters.
+
+        RISK MANAGEMENT WARNING:
+        This is a LEGACY method kept for backward compatibility.
+        New code should use: self.risk_manager.get_position_size(signal)
+
+        Args:
+            signal: Trading signal.
+
+        Returns:
+            Position size in base currency units.
+        """
+        # Delegate to RiskManager
+        return self.risk_manager.get_position_size(
+            strategy=signal.strategy,
+            entry_price=signal.entry_price,
+            stop_loss=signal.stop_loss,
+            confidence=signal.confidence,
+        )
+
+    def _get_account_balance(self) -> float:
+        """
+        Get current account balance.
+
+        Returns:
+            Account balance in USD.
+        """
+        try:
+            balance = self.client.get_balance()
+            # Pacifica returns "balance" or "account_equity" (as strings), not "equity"
+            balance_str = balance.get("balance", balance.get("account_equity", "0"))
+            equity = float(balance_str) if balance_str else 0.0
+            logging.debug(f"Account balance: ${equity:.2f}")
+            return equity
+        except Exception as e:
+            logging.error(f"Error getting account balance: {e}")
+            return 0.0
+
+    def _get_current_exposure(self) -> float:
+        """
+        Get current total exposure across all positions.
+
+        Returns:
+            Total exposure in USD.
+        """
+        try:
+            positions = self.client.get_positions()
+            if not positions:
+                return 0.0
+
+            total_exposure = 0.0
+            for pos in positions:
+                quantity = float(pos.get("quantity", 0))
+                # Get current price (fallback to entry price if unavailable)
+                symbol = pos.get("symbol")
+                entry_price = float(pos.get("entry_price", 0))
+
+                current_price = entry_price  # Default to entry price
+                if symbol:
+                    try:
+                        ticker = self._get_ticker_ws(symbol)
+                        current_price = float(ticker.get("last", entry_price))
+                    except (RuntimeError, ValueError, KeyError):
+                        pass  # Keep default current_price
+
+                exposure = quantity * current_price
+                total_exposure += exposure
+
+            logging.debug(f"Total exposure: ${total_exposure:.2f}")
+            return total_exposure
+
+        except Exception as e:
+            logging.error(f"Error calculating current exposure: {e}")
+            return 0.0
+
+    def _validate_position_size(self, quantity: float, entry_price: float = 0) -> bool:
+        """
+        Validate that position size is within limits.
+
+        RISK MANAGEMENT WARNING:
+        This is a LEGACY method kept for backward compatibility.
+        New code should use: self.risk_manager.validate_position_size(...)
+
+        Args:
+            quantity: Position size in base currency units.
+            entry_price: Entry price (for notional value calculation).
+
+        Returns:
+            True if position size is valid, False otherwise.
+        """
+        # Delegate to RiskManager
+        return self.risk_manager.validate_position_size(
+            quantity=quantity, entry_price=entry_price
+        )
+
+    def _execute_signal(self, signal: Signal) -> Optional[Dict]:
+        """
+        Execute a trading signal.
+
+        LEGACY METHOD - PHASE 2: Now handled by _coordinate_signal_execution()
+        Kept for backward compatibility.
+
+        Args:
+            signal: Signal to execute.
+
+        Returns:
+            Order details if successful, None otherwise.
+        """
+        try:
+            # Route to appropriate execution method based on strategy type
+            if signal.strategy == StrategyType.GRID_TRADING:
+                return self._execute_grid_signal(signal)
+            else:
+                return self._execute_standard_signal(signal)
+
+        except Exception as e:
+            logging.error(f"Error executing signal: {e}")
+            return None
+
+    def _execute_standard_signal(self, signal: Signal):
+        """
+        Execute a standard (non-grid) trading signal.
+
+        LEGACY METHOD - PHASE 2: Now handled by ExecutionLayer
+        Kept for backward compatibility.
+
+        Args:
+            signal: Signal to execute.
+
+        Returns:
+            Order details if successful, None otherwise.
+        """
+        try:
+            # Calculate position size
+            quantity = self._calculate_position_size(signal)
+
+            if quantity <= 0:
+                logging.warning(
+                    f"Invalid position size {quantity} for {signal.asset}"
+                )
+                return None
+
+            # Validate position size
+            if not self._validate_position_size(quantity, signal.entry_price):
+                logging.warning(
+                    f"Position size validation failed for {signal.asset}"
+                )
+                return None
+
+            # Place order
+            order_side = "BUY" if signal.side == OrderSide.BUY else "SELL"
+            order = self.client.place_order(
+                symbol=signal.asset,
+                side=order_side,
+                quantity=quantity,
+                order_type="MARKET",
+            )
+
+            logging.info(
+                f"Order placed: {order_side} {quantity} {signal.asset} @ ${signal.entry_price:.4f}"
+            )
+
+            # Save trade to database
+            self.db.save_trade(
+                symbol=signal.asset,
+                strategy=signal.strategy.name,
+                side=order_side,
+                quantity=quantity,
+                entry_price=signal.entry_price,
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                confidence=signal.confidence,
+                quality=signal.quality.name,
+                metadata={"notes": signal.notes, "indicators": signal.indicators},
+            )
+
+            return order
+
+        except Exception as e:
+            logging.error(f"Error executing standard signal: {e}")
+            return None
+
+    def _calculate_emergency_stop(self, signal: Signal) -> float:
+        """
+        Calculate emergency stop loss price for grid trading.
+
+        Emergency stop is a hard stop below which ALL grid orders are cancelled
+        and positions are closed immediately.
+
+        Args:
+            signal: Grid trading signal
+
+        Returns:
+            Emergency stop price
+        """
+        # Emergency stop is 5-10% below entry depending on volatility
+        # For now using fixed 7.5%
+        return signal.entry_price * 0.925  # 7.5% below entry
+
+    def _emergency_close_position(self, symbol: str, side: str, quantity: float):
+        """
+        Emergency close a position immediately at market price.
+
+        Used when emergency stop is triggered for grid trading.
+
+        Args:
+            symbol: Symbol to close
+            side: Position side (LONG/SHORT)
+            quantity: Position size
+        """
+        try:
+            # Determine order side (opposite of position side)
+            order_side = "SELL" if side == "LONG" else "BUY"
+
+            logging.critical(
+                f"🚨 EMERGENCY CLOSE: {order_side} {quantity} {symbol} @ MARKET"
+            )
+
+            # Place market order
+            order = self.client.place_order(
+                symbol=symbol,
+                side=order_side,
+                quantity=quantity,
+                order_type="MARKET",
+            )
+
+            logging.info(f"Emergency close order placed: {order}")
+
+        except Exception as e:
+            logging.error(f"Error placing emergency close order: {e}")
+
+    def _execute_grid_signal(self, signal: Signal):
+        """
+        Execute a grid trading signal.
+
+        LEGACY METHOD - PHASE 2: Now handled by GridLifecycleManager
+        Kept for backward compatibility.
+
+        Grid trading executes as follows:
+        1. Calculate grid levels (buy and sell prices)
+        2. Place limit orders at each grid level
+        3. Monitor fills and P&L
+        4. Emergency stop if price breaks support
+
+        Args:
+            signal: Grid trading signal
+
+        Returns:
+            Dict with grid details if successful, None otherwise
+        """
+        try:
+            symbol = signal.asset
+            logging.info(f"Executing GRID signal for {symbol}")
+
+            # Calculate position size for grid (total capital allocation)
+            total_capital = self._calculate_position_size(signal)
+
+            if total_capital <= 0:
+                logging.warning(
+                    f"Invalid capital allocation {total_capital} for grid {symbol}"
+                )
+                return None
+
+            # Calculate grid levels
+            grid_levels = self._calculate_grid_levels(signal, total_capital)
+
+            if not grid_levels:
+                logging.error(f"Failed to calculate grid levels for {symbol}")
+                return None
+
+            # Place grid orders
+            buy_orders = []
+            sell_orders = []
+
+            for level in grid_levels["buy_levels"]:
+                order = self.client.place_order(
+                    symbol=symbol,
+                    side="BUY",
+                    quantity=level["quantity"],
+                    order_type="LIMIT",
+                    price=level["price"],
+                )
+                buy_orders.append(order)
+                logging.info(
+                    f"Grid BUY order: {level['quantity']} @ ${level['price']:.4f}"
+                )
+
+            for level in grid_levels["sell_levels"]:
+                order = self.client.place_order(
+                    symbol=symbol,
+                    side="SELL",
+                    quantity=level["quantity"],
+                    order_type="LIMIT",
+                    price=level["price"],
+                )
+                sell_orders.append(order)
+                logging.info(
+                    f"Grid SELL order: {level['quantity']} @ ${level['price']:.4f}"
+                )
+
+            # Save grid position to database
+            self._save_grid_position(
+                symbol=symbol,
+                signal=signal,
+                buy_orders=buy_orders,
+                sell_orders=sell_orders,
+                grid_levels=grid_levels,
+            )
+
+            logging.info(
+                f"Grid executed: {len(buy_orders)} BUY orders, {len(sell_orders)} SELL orders"
+            )
+
+            return {
+                "symbol": symbol,
+                "buy_orders": buy_orders,
+                "sell_orders": sell_orders,
+                "grid_levels": grid_levels,
+            }
+
+        except Exception as e:
+            logging.error(f"Error executing grid signal: {e}")
+            return None
+
+    def _calculate_grid_levels(
+        self, signal: Signal, total_capital: float
+    ) -> Dict[str, List[Dict]]:
+        """Calculate grid price levels per Grid Trading Brief specifications."""
+        try:
+            # Get current price
+            ticker = self._get_ticker_ws(signal.asset)
+            current_price = float(ticker.get("last", signal.entry_price))
+            if current_price <= 0:
+                logging.error(
+                    f"Invalid current price {current_price} for {signal.asset}"
+                )
+                return {}
+
+            # Grid parameters from signal attributes
+            num_levels = signal.grid_levels or 10
+
+            # signal.spacing is the actual dollar spacing (already calculated by GridTradingStrategy)
+            # If not set, default to 0.5% of current price
+            if signal.spacing and signal.spacing > 0:
+                grid_spacing = signal.spacing  # Already in price units
+            else:
+                grid_spacing = current_price * 0.005  # Default 0.5% of price
+
+            # Calculate quantity per grid level
+            # Total capital divided by number of levels
+            quantity_per_level = total_capital / (num_levels * current_price)
+
+            # Determine lot size and tick size based on price magnitude
+            # Using conservative tick sizes to match Pacifica API requirements
+            if current_price >= 100:
+                tick_decimals = 2  # BTC: 0.01
+                lot_decimals = 4   # 0.0001
+            elif current_price >= 1:
+                tick_decimals = 3  # AVAX, XRP: 0.001
+                lot_decimals = 2   # 0.01
+            else:
+                tick_decimals = 5  # SUI: 0.00001
+                lot_decimals = 1   # 0.1 for small coins
+
+            # Round quantity to lot size
+            quantity_per_level = round(quantity_per_level, lot_decimals)
+            min_lot = 10 ** (-lot_decimals)
+            if quantity_per_level < min_lot:
+                quantity_per_level = min_lot
+
+            # Generate buy levels (below current price)
+            buy_levels = []
+            for i in range(1, num_levels // 2 + 1):
+                price = current_price - (i * grid_spacing)
+                if price > 0:  # Only add positive prices
+                    price = round(price, tick_decimals)
+                    buy_levels.append({"price": price, "quantity": quantity_per_level})
+
+            # Generate sell levels (above current price)
+            sell_levels = []
+            for i in range(1, num_levels // 2 + 1):
+                price = current_price + (i * grid_spacing)
+                price = round(price, tick_decimals)
+                sell_levels.append({"price": price, "quantity": quantity_per_level})
+
+            spacing_pct = (grid_spacing / current_price * 100) if current_price > 0 else 0
+            logging.info(
+                f"Grid levels calculated: {len(buy_levels)} BUY, {len(sell_levels)} SELL, "
+                f"spacing: ${grid_spacing:.4f} ({spacing_pct:.2f}%), qty/level: {quantity_per_level:.4f}"
+            )
+
+            return {
+                "buy_levels": buy_levels,
+                "sell_levels": sell_levels,
+                "current_price": current_price,
+                "grid_spacing": grid_spacing,
+                "quantity_per_level": quantity_per_level,
+            }
+
+        except Exception as e:
+            logging.error(f"Error calculating grid levels: {e}")
+            return {}
+
+    def _save_grid_position(
+        self,
+        symbol: str,
+        signal: Signal,
+        buy_orders: List[Dict],
+        sell_orders: List[Dict],
+        grid_levels: Dict,
+    ):
+        """
+        Save grid position to database.
+
+        Grid positions are saved differently than standard positions:
+        - Multiple orders (buy + sell grid levels)
+        - Total capital allocation
+        - Grid spacing parameters
+        - Emergency stop level
+
+        Args:
+            symbol: Trading symbol
+            signal: Original grid signal
+            buy_orders: List of buy order details
+            sell_orders: List of sell order details
+            grid_levels: Calculated grid levels
+        """
+        try:
+            # Calculate total capital allocated
+            total_capital = sum(
+                level["quantity"] * level["price"]
+                for level in grid_levels["buy_levels"]
+            )
+
+            # Grid metadata
+            metadata = {
+                "grid_type": "ranging_volatile",
+                "num_levels": len(buy_orders) + len(sell_orders),
+                "grid_spacing": grid_levels["grid_spacing"],
+                "quantity_per_level": grid_levels["quantity_per_level"],
+                "buy_order_ids": [
+                    o.get("order_id") or o.get("id") for o in buy_orders
+                ],
+                "sell_order_ids": [
+                    o.get("order_id") or o.get("id") for o in sell_orders
+                ],
+                "emergency_stop": self._calculate_emergency_stop(signal),
+                "notes": signal.notes,
+            }
+
+            # Save as special "GRID" position
+            self.db.save_trade(
+                symbol=symbol,
+                strategy="GRID_TRADING",
+                side="GRID",
+                quantity=grid_levels["quantity_per_level"],
+                entry_price=grid_levels["current_price"],
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
+                confidence=signal.confidence,
+                quality=signal.quality.name,
+                metadata=metadata,
+            )
+
+            logging.info(f"Grid position saved to database: {symbol}")
+
+        except Exception as e:
+            logging.error(f"Error saving grid position: {e}")
+
+    def _monitor_risk(self) -> None:
+        """
+        Monitor risk and check circuit breaker.
+
+        Checks:
+        1. Total unrealized P&L against circuit breaker threshold
+        2. Position exposure vs account balance
+        3. Leverage usage
+        """
+        try:
+            # Get account balance
+            balance = self._get_account_balance()
+            if balance <= 0:
+                logging.warning("Invalid account balance - skipping risk monitoring")
+                return
+
+            # Get all positions
+            positions = self.client.get_positions()
+            if not positions:
+                return
+
+            # Calculate total unrealized P&L
+            total_pnl = 0.0
+            for pos in positions:
+                unrealized_pnl = float(pos.get("unrealized_pnl", 0))
+                total_pnl += unrealized_pnl
+
+            # Calculate P&L percentage
+            pnl_percentage = (total_pnl / balance) * 100
+
+            # Check circuit breaker threshold
+            if pnl_percentage <= -self._circuit_breaker_loss_pct:
+                self._circuit_breaker_triggered = True
+                logging.critical(
+                    f"🚨 CIRCUIT BREAKER TRIGGERED: {pnl_percentage:.1f}% loss "
+                    f"(${total_pnl:.2f} / ${balance:.2f})"
+                )
+
+                # Stop trading
+                self.stop()
+
+                # Publish circuit breaker event
+                if self.hub_publish_func:
+                    self.hub_publish_func(
+                        {
+                            "type": "circuit_breaker",
+                            "pnl_percentage": pnl_percentage,
+                            "total_pnl": total_pnl,
+                            "balance": balance,
+                            "timestamp": time.time(),
+                        }
+                    )
+
+            # Warning at 80% of threshold
+            elif pnl_percentage <= -self._circuit_breaker_loss_pct * 0.8:
+                logging.warning(
+                    f"⚠️ Approaching circuit breaker threshold: {pnl_percentage:.1f}% loss "
+                    f"(threshold: {-self._circuit_breaker_loss_pct:.1f}%)"
+                )
+
+        except Exception as e:
+            logging.error(f"Error monitoring risk: {e}")
+
+    def _handle_regime_transition(self) -> None:
+        """
+        Handle market regime transitions.
+
+        When regime changes:
+        1. Close positions from strategies no longer active
+        2. Cancel pending orders from inactive strategies
+        3. Update strategy weights
+        """
+        try:
+            # Detect current regime
+            current_regime = self.market_regime.detect_regime("BTC")  # Use BTC as proxy
+
+            if not hasattr(self, "_previous_regime"):
+                self._previous_regime = current_regime
+                return
+
+            # Check if regime has changed
+            if current_regime != self._previous_regime:
+                logging.info(
+                    f"🔄 Regime transition: {self._previous_regime.name} → {current_regime.name}"
+                )
+
+                # Get strategies that are no longer active
+                old_strategies = self.strategy_manager.get_active_strategies(
+                    self._previous_regime
+                )
+                new_strategies = self.strategy_manager.get_active_strategies(
+                    current_regime
+                )
+
+                inactive_strategies = set(old_strategies.keys()) - set(
+                    new_strategies.keys()
+                )
+
+                # Close positions from inactive strategies
+                for strategy_name in inactive_strategies:
+                    logging.info(
+                        f"Closing positions from inactive strategy: {strategy_name}"
+                    )
+                    # TODO: Implement position closure by strategy
+
+                # Update previous regime
+                self._previous_regime = current_regime
+
+        except Exception as e:
+            logging.error(f"Error handling regime transition: {e}")
+
+    def _monitor_emergency_stops(self) -> None:
+        """
+        Monitor emergency stops for grid trading positions.
+
+        Emergency stop is triggered when:
+        1. Price breaks below emergency stop level
+        2. Grid P&L exceeds max drawdown threshold
+        3. ADX rises above 20 (trend forming - not suitable for grid)
+        """
+        try:
+            # Get all grid positions
+            # TODO: Query database for active grid positions
+
+            # For each grid position:
+            # 1. Check current price vs emergency stop
+            # 2. Check unrealized P&L vs max drawdown
+            # 3. Check ADX (via market_regime)
+
+            # If emergency stop triggered:
+            # 1. Cancel all grid orders
+            # 2. Close position at market
+            # 3. Log emergency stop details
+
+            pass  # Implementation deferred to Phase 3
+
+        except Exception as e:
+            logging.error(f"Error monitoring emergency stops: {e}")
+
+    def _assert_grid_pre_trade(
+        self,
+        symbol: str,
+        grid_spacing: float,
+        num_levels: int,
+        quantity_per_level: float,
+    ) -> None:
+        """
+        Assert pre-trade conditions for grid trading (per Grid Trading Brief).
+
+        Validates:
+        1. Grid spacing > 0
+        2. Number of levels between 5-20
+        3. Quantity per level > minimum order size
+        4. Emergency stop price > 0 and < current price
+        5. Total capital allocation within risk limits
+
+        Args:
+            symbol: Trading symbol
+            grid_spacing: Grid spacing in price units
+            num_levels: Number of grid levels
+            quantity_per_level: Quantity at each grid level
+
+        Raises:
+            AssertionError: If any pre-trade condition fails
+        """
+        # Validate grid spacing
+        assert (
+            grid_spacing > 0
+        ), f"Grid spacing must be positive, got {grid_spacing}"
+
+        # Validate number of levels
+        assert (
+            5 <= num_levels <= 20
+        ), f"Number of levels must be 5-20, got {num_levels}"
+
+        # Validate quantity per level
+        min_order_size = 1.0  # TODO: Get from exchange info
+        assert (
+            quantity_per_level >= min_order_size
+        ), f"Quantity per level {quantity_per_level} below minimum {min_order_size}"
+
+        # Validate emergency stop price
+        signal = None  # TODO: Pass signal to this method
+        if signal:
+            emergency_stop_price = self._calculate_emergency_stop(signal)
+            assert emergency_stop_price > 0, "Emergency stop price must be positive"
+
+            current_price = self._get_ticker_ws(symbol)
+            if isinstance(current_price, dict):
+                current_price = current_price.get("price", current_price.get("last", 0))
+            assert emergency_stop_price < current_price, (
+                f"Emergency stop {emergency_stop_price} must be below "
+                f"current price {current_price}"
+            )
+
+        logging.info(f"✅ Grid pre-trade assertions passed for {symbol}")
+
+    def get_status(self) -> Dict[str, Any]:
+        """
+        Get bot status for monitoring.
+
+        Returns:
+            Dict with bot state, positions, P&L, risk metrics.
+        """
+        try:
+            # Get account balance
+            balance = self._get_account_balance()
+
+            # Get positions
+            positions = self.client.get_positions()
+
+            # Calculate total unrealized P&L
+            total_pnl = sum(
+                float(pos.get("unrealized_pnl", 0)) for pos in positions
+            )
+
+            # Get current exposure
+            exposure = self._get_current_exposure()
+
+            # Calculate risk percentage
+            risk_pct = (exposure / balance * 100) if balance > 0 else 0
+
+            return {
+                "is_running": self.is_running,
+                "circuit_breaker_triggered": self._circuit_breaker_triggered,
+                "account_balance": balance,
+                "total_positions": len(positions),
+                "total_unrealized_pnl": total_pnl,
+                "total_exposure": exposure,
+                "risk_percentage": risk_pct,
+                "circuit_breaker_threshold": self._circuit_breaker_loss_pct,
+                "positions": [
+                    {
+                        "symbol": pos.get("symbol"),
+                        "side": pos.get("side"),
+                        "quantity": float(pos.get("quantity", 0)),
+                        "entry_price": float(pos.get("entry_price", 0)),
+                        "unrealized_pnl": float(pos.get("unrealized_pnl", 0)),
+                    }
+                    for pos in positions
+                ],
+            }
+
+        except Exception as e:
+            logging.error(f"Error getting bot status: {e}")
+            return {
+                "is_running": self.is_running,
+                "error": str(e),
+            }

@@ -1,0 +1,262 @@
+Starting trading bot with PYTHONPATH=C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\
+2026-01-23 02:31:17,492 - trading_bot_v2.database - INFO - Database initialized successfully with performance indexes
+2026-01-23 02:31:17,493 - __main__ - INFO - ✅ Initialized Pacifica client (TESTNET)
+2026-01-23 02:31:17,493 - __main__ - INFO -    Account: 6Jj5ahJw...uumgfLDt
+INFO:     Started server process [434088]
+INFO:     Waiting for application startup.
+2026-01-23 02:31:17,546 - __main__ - INFO - ✅ Hub system initialized
+[INFO] Found 1 existing account profile(s)
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:63191 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63191 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63191 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63201 - "WebSocket /ws" [accepted]
+2026-01-23 02:31:23,891 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:31:23,892 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:31:23,892 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:31:23,895 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:63205 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63204 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63202 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:31:24,326 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:63203 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:31:24,570 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:31:24,570 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:63192 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63191 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63543 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63557 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63557 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+2026-01-23 02:36:23,910 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:63680 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63682 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63683 - "GET /api/grids HTTP/1.1" 200 OK
+2026-01-23 02:36:24,605 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:63681 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:36:24,854 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:36:24,855 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:63679 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63678 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63718 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:36:43,690 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+INFO:     127.0.0.1:63718 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63718 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:63733 - "WebSocket /ws" [accepted]
+2026-01-23 02:36:44,776 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:36:44,776 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:36:44,777 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+INFO:     127.0.0.1:63734 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:36:44,784 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:63734 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63736 - "GET /api/grids HTTP/1.1" 200 OK
+2026-01-23 02:36:45,189 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:63735 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:36:45,388 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:36:45,389 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:63722 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:63718 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64026 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:39:53,789 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+INFO:     127.0.0.1:64026 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64026 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64047 - "WebSocket /ws" [accepted]
+2026-01-23 02:39:54,874 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:39:54,875 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:39:54,875 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:39:54,878 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64050 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64048 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64051 - "GET /api/grids HTTP/1.1" 200 OK
+2026-01-23 02:39:55,297 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64049 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:39:55,548 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:39:55,548 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64027 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64026 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64178 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:41:13,260 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+INFO:     127.0.0.1:64178 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64190 - "WebSocket /ws" [accepted]
+2026-01-23 02:41:14,179 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:41:14,180 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:41:14,180 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:41:14,183 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64194 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64193 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64191 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:41:14,537 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:41:14,537 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64179 - "GET /api/positions HTTP/1.1" 200 OK
+2026-01-23 02:41:14,599 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64192 - "GET /api/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64178 - "GET /api/status HTTP/1.1" 200 OK
+2026-01-23 02:41:29,997 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64225 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:41:31,318 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64236 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64237 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64234 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:41:31,720 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:41:31,721 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64226 - "GET /api/positions HTTP/1.1" 200 OK
+2026-01-23 02:41:31,997 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64235 - "GET /api/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64225 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64247 - "POST /api/bot/stop HTTP/1.1" 200 OK
+2026-01-23 02:41:39,005 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64257 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64258 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64255 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:41:39,009 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64257 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64258 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64255 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:41:39,317 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:41:39,317 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64248 - "GET /api/positions HTTP/1.1" 200 OK
+2026-01-23 02:41:39,409 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64256 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:41:39,859 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64248 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:41:39,918 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:41:39,918 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64255 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64247 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64255 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64255 - "GET /api/positions/sync HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64469 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:43:54,400 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+INFO:     127.0.0.1:64469 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64486 - "WebSocket /ws" [accepted]
+2026-01-23 02:43:54,945 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:43:54,946 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:43:54,946 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:43:54,948 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64490 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64489 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64487 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:43:55,361 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64488 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:43:55,615 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:43:55,615 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64475 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64469 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64469 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+2026-01-23 02:44:13,781 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64519 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:44:15,113 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64530 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64531 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64528 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:44:15,504 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64529 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:44:15,685 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:44:15,685 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64520 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64519 - "GET /api/status HTTP/1.1" 200 OK
+2026-01-23 02:45:40,879 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64645 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:45:42,209 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64659 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64658 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:45:42,540 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+2026-01-23 02:45:42,649 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:42,844 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:42,844 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64656 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:64659 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64673 - "WebSocket /ws" [accepted]
+2026-01-23 02:45:43,457 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:45:43,457 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:45:43,458 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:45:43,459 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64674 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64675 - "GET /api/grids HTTP/1.1" 200 OK
+2026-01-23 02:45:43,698 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64659 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:45:43,863 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:43,863 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64658 - "GET /api/positions HTTP/1.1" 200 OK
+2026-01-23 02:45:44,587 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64658 - "POST /api/bot/start HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /api/status HTTP/1.1" 200 OK
+2026-01-23 02:45:45,611 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64674 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64676 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64659 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:45:46,132 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64675 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:45:46,296 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:46,296 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64658 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /api/status HTTP/1.1" 200 OK
+2026-01-23 02:45:48,486 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64656 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:45:49,496 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64676 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64674 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64675 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:45:50,049 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64659 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:45:50,212 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:50,213 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64658 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /.well-known/appspecific/com.chrome.devtools.json HTTP/1.1" 404 Not Found
+2026-01-23 02:45:56,008 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:64656 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:45:57,337 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:64718 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64719 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64716 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:45:57,798 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:64717 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:45:57,965 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:45:57,965 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:64715 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:64656 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65091 - "GET / HTTP/1.1" 200 OK
+2026-01-23 02:49:45,199 - root - INFO - WebSocket client disconnected. Total connections: 0
+INFO:     connection closed
+INFO:     127.0.0.1:65091 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:65100 - "WebSocket /ws" [accepted]
+2026-01-23 02:49:46,081 - root - WARNING - WebSocket connection without authentication token
+2026-01-23 02:49:46,081 - root - INFO - WebSocket client connected. Total connections: 1
+2026-01-23 02:49:46,081 - __main__ - INFO - WebSocket client connected
+INFO:     connection open
+2026-01-23 02:49:46,084 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:65103 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65101 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65104 - "GET /api/grids HTTP/1.1" 200 OK
+2026-01-23 02:49:46,738 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:49:46,738 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:65091 - "GET /api/positions HTTP/1.1" 200 OK
+2026-01-23 02:49:46,950 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:65102 - "GET /api/activity HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65092 - "GET /api/status HTTP/1.1" 200 OK
+2026-01-23 02:49:48,937 - __main__ - ERROR - Failed to start trading: TradingBot.__init__() got an unexpected keyword argument 'testnet'
+INFO:     127.0.0.1:65092 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-23 02:49:49,946 - __main__ - WARNING - Failed to get orders from Pacifica API: 'PacificaClient' object has no attribute 'get_orders'
+INFO:     127.0.0.1:65103 - "GET /api/grids HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65101 - "GET /api/orders HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65091 - "GET /api/trades?limit=20 HTTP/1.1" 200 OK
+2026-01-23 02:49:50,445 - __main__ - WARNING - Failed to get prices from /info/prices endpoint: 'PacificaClient' object has no attribute '_make_request'
+INFO:     127.0.0.1:65104 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-23 02:49:50,642 - __main__ - WARNING - Failed to get live positions from Pacifica API: 'PacificaClient' object has no attribute '_make_request'
+2026-01-23 02:49:50,642 - __main__ - INFO - Falling back to database for positions
+INFO:     127.0.0.1:65102 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:65092 - "GET /api/status HTTP/1.1" 200 OK

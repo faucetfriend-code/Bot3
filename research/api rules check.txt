@@ -1,0 +1,220 @@
+# Websocket
+
+Mainnet websocket URL: <wss://ws.pacifica.fi/ws>\
+Testnet websocket URL: <wss://test-ws.pacifica.fi/ws>
+
+The API service provides a universal endpoint for websocket streams. The subscribed data will be streamed in the corresponding channel after the connection is established.
+
+### Subscription Message
+
+```
+{
+    "method": "subscribe",
+    "params": { ... }
+}
+```
+
+### Unsubscription Message
+
+```
+{
+    "method": "unsubscribe",
+    "params": { ... }
+}
+```
+
+### Heartbeat and Timeout
+
+A webscoket connection will be closed if no message is sent for the past 60 seconds, or the connection has been alive for 24 hours.&#x20;
+
+To keep the connection alive without messages in 60 seconds, we can send a heartbeat message&#x20;
+
+```
+{
+    "method": "ping"
+}
+```
+
+and alive connection will respond with
+
+```
+{
+    "channel": "pong"
+}
+```
+# Prices
+
+Refer to [Websocket](https://docs.pacifica.fi/api-documentation/api/websocket) for establishing the websocket connection.
+
+### Params
+
+```json
+{
+    "method": "subscribe",
+    "params": {
+        "source": "prices"
+    }
+}
+```
+
+### Stream
+
+```json
+{
+    "channel": "prices",
+    "data": [
+        {
+            "funding": "0.0000125",
+            "mark": "105473",
+            "mid": "105476",
+            "next_funding": "0.0000125",
+            "open_interest": "0.00524",
+            "oracle": "105473",
+            "symbol": "BTC",
+            "timestamp": 1749051612681,
+            "volume_24h": "63265.87522",
+            "yesterday_price": "955476"
+        }
+        // ... other symbol prices
+    ],
+}
+```
+
+| Field               | Type           | Description               |
+| ------------------- | -------------- | ------------------------- |
+| `'funding'`         | decimal string | Funding rate              |
+| `'mark'`            | decimal string | Mark price                |
+| `'timestamp'`       | number         | Timestamp in milliseconds |
+| `'mid'`             | decimal string | Mid price                 |
+| `'next_funding'`    | decimal string | Next funding rate         |
+| `'open_interest'`   | decimal string | Open interest amount      |
+| `'oracle'`          | decimal string | Oracle price              |
+| `'symbol'`          | string         | Symbol                    |
+| `'volume_24h'`      | decimal string | 24 hour volume in USD     |
+| `'yesterday_price'` | decimal string | Previous day price        |
+
+
+# Best bid offer (BBO)
+
+Refer to [Websocket](https://docs.pacifica.fi/api-documentation/api/websocket) for establishing the websocket connection.
+
+### Params
+
+```json
+{
+  "method": "subscribe",
+  "params": {
+    "source": "bbo",
+    "symbol": "BTC"
+  }
+}
+```
+
+### Stream
+
+```json
+{
+  "channel": "bbo",
+  "data": {
+    "s": "BTC",
+    "i": 1234567890,
+    "li": 1325476098,
+    "t": 1764133203991,
+    "b": "87185",
+    "B": "1.234",
+    "a": "87186",
+    "A": "0.567"
+  }
+}
+```
+
+| Field  | Type           | Description                       |
+| ------ | -------------- | --------------------------------- |
+| `'s'`  | string         | Symbol                            |
+| `'i'`  | integer        | Order id                          |
+| `'li'` | integer        | Last order id                     |
+| `'t'`  | integer        | Timestamp in milliseconds         |
+| `'b'`  | decimal string | Best bid price                    |
+| `'B'`  | decimal string | Best bid amount (in token amount) |
+| `'a'`  | decimal string | Best ask price                    |
+| `'A'`  | decimal string | Best ask amount (in token amount) |
+
+WebSocket Limits
+Max 300 concurrent connections per IP
+
+Max 20 subscriptions per channel per connection
+
+# Tick and lot size
+
+Both `'price'` and `'amount'` fields in order related API operations are subject to rounding, needing to be multiples tick and lot size.\
+\
+Generally `tick_size` is determined by the rightmost decimal place of a symbol's current price, and prices generally have five significant figures, with the exception of assets with more than six integer places, where sig.figs = #of integer places. \
+\
+For example:\
+\
+If `'price' = 123.45`, expect `'tick_size' = 0.01`\
+If `'price' = 123456`, expect `'tick_size' = 1`\
+\
+Generally, `lot_size*tick_size = 0.0001 or 0.00001`, based on the market.\
+\
+For the exact implemented `tick_size` and `lot_size` of each market, call the [market info](https://docs.pacifica.fi/api-documentation/api/rest-api/markets/get-market-info) endpoint to verify.
+
+## Rounding
+
+Pacifica accepts requests containing `'price'` and `'amount'` fields only when they are multiples of `tick_size` and `lot_size` respectively. Any requests with incorrectly rounded  `'price'` and `'amount'` fields will return `'"Internal server error","code":500'`&#x20;
+
+For example:\
+\
+BTC has `"tick_size": "1"`, `"lot_size": "0.00001"`\
+\
+A request where `"amount": "0.000005"` will return `Status 500: Internal server error` \
+A request where `"price": "100_000.5"` will return `Status 500: Internal server error`&#x20;
+
+A request where `"amount": "0.00002"` will be accepted \
+A request where `"price": "100_001"` will be accepted&#x20;
+
+# Subscriptions
+
+- [Prices](/api-documentation/api/websocket/subscriptions/prices.md): Streams all symbols' price information on Pacifica as they update
+- [Orderbook](/api-documentation/api/websocket/subscriptions/orderbook.md): Streams book data for given symbol at a set aggregation level as they update
+- [Best bid offer (BBO)](/api-documentation/api/websocket/subscriptions/best-bid-offer-bbo.md): Real-time updates of the best bid and ask prices and amounts for a specific symbol. Updates are sent whenever the top of book changes.
+- [Trades](/api-documentation/api/websocket/subscriptions/trades.md): Streams all trades on the taker side as they occur in a chosen market.
+- [Candle](/api-documentation/api/websocket/subscriptions/candle.md): Streams candle information for given symbol and candle time interval
+- [Mark price candle](/api-documentation/api/websocket/subscriptions/mark-price-candle.md): Streams real-time mark price candlestick data for a specific market.
+- [Account margin](/api-documentation/api/websocket/subscriptions/account-margin.md): Streams all changes made to an account's margin mode in any market.
+- [Account leverage](/api-documentation/api/websocket/subscriptions/account-leverage.md): Streams all changes made to an account's max leverage any market.
+- [Account info](/api-documentation/api/websocket/subscriptions/account-info.md): Streams all changes made to an account's overall info such as equity, balance, order count, etc.
+- [Account positions](/api-documentation/api/websocket/subscriptions/account-positions.md): Streams all changes made to an account's positions in any market. A position that has been fully closed will be streamed and return empty.
+- [Account orders](/api-documentation/api/websocket/subscriptions/account-orders.md): Streams all changes made to an account's open orders in any market. An order that has been cancelled/filled will be streamed and return empty.
+- [Account order updates](/api-documentation/api/websocket/subscriptions/account-order-updates.md): Streams the amount and nature of changes made to any of an account's open orders in any market.
+- [Account trades](/api-documentation/api/websocket/subscriptions/account-trades.md): Streams all trades that take place for an account
+
+
+Optimization Opportunities: Grouping & Parallelism
+You can dramatically reduce latency and API load by:
+
+One connection for public data
+Subscribe to:
+prices (once → covers everything)
+Multiple bbo for your watched symbols (up to ~20 per connection)
+Multiple book for depth on key pairs
+Example subscription batch (send as separate messages or in quick succession):JSON{"method": "subscribe", "params": {"source": "prices"}}
+{"method": "subscribe", "params": {"source": "bbo", "symbol": "BTC"}}
+{"method": "subscribe", "params": {"source": "bbo", "symbol": "SOL"}}
+{"method": "subscribe", "params": {"source": "book", "symbol": "BTC", "agg_level": 10}}
+Separate connection(s) for private/account streams
+Authenticated WS often needs special headers (e.g. PF-API-KEY or signature).
+Group all account-related subs on 1–2 connections:
+account info + margin + leverage
+positions + orders + order updates + trades
+
+This keeps public (high-volume) traffic separate from private (lower volume but sensitive).
+Parallel connection strategy (if watching many symbols or need >20 subs)
+Connection A: prices + bbo for 10–15 symbols
+Connection B: book for 5–10 symbols + any candles/trades
+Connection C: all private/account subs (authenticated)
+Most WS libraries let you open multiple in parallel easily.
+Other wins
+Cache initial state from REST once on startup (markets/tick-lot sizes, active symbols), then rely 100% on WS for live updates.
+Use reconnection logic with exponential backoff + heartbeat enforcement.
+For tick/lot rounding: fetch via REST /markets once (or infrequently) → store in memory → validate orders before sending.

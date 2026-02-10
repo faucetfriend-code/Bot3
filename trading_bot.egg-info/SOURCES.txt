@@ -1,0 +1,11 @@
+pyproject.toml
+setup.py
+./core_logic/__init__.py
+./core_logic/indicators.py
+./core_logic/models.py
+./core_logic/models.pyi
+./core_logic/pacifica_client.py
+trading_bot.egg-info/PKG-INFO
+trading_bot.egg-info/SOURCES.txt
+trading_bot.egg-info/dependency_links.txt
+trading_bot.egg-info/top_level.txt

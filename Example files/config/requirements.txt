@@ -1,0 +1,59 @@
+# Core dependencies
+fastapi
+uvicorn[standard]
+pydantic
+python-dotenv
+
+# Database
+aiosqlite
+
+# WebSocket and HTTP clients
+websockets
+aiohttp
+
+# Authentication and encryption
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+cryptography>=41.0.0  # For encrypting private keys in database
+
+# Logging and monitoring
+loguru
+structlog
+
+# Data processing
+numpy
+pandas
+
+# Exchange integration
+ccxt
+
+# Development and testing
+pytest
+pytest-asyncio
+pytest-cov
+black
+flake8
+mypy
+
+# Additional utilities
+python-dateutil
+requests
+psutil
+base58
+slowapi
+
+# Solana dependencies for private key authentication
+solders
+
+# Agent system dependencies
+langchain==0.1.20
+langchain-anthropic==0.1.15
+langchain-community==0.0.38
+anthropic==0.25.0
+pyyaml==6.0.1
+
+# Agent Lightning - Reinforcement learning for agents
+agentlightning>=0.2.0
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0

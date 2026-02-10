@@ -1,0 +1,33 @@
+<!DOCTYPE html>    
+<html lang="en-US">
+
+<head>
+    <!-- Meta Information -->
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=...
+</head>
+<body>
+...
+<a href="/register">
+    <img title="beep bop - Hi, I'm Flynn, the Alertatron bot." class="logo-light"
+alt="Alertatron.com Logo" src="/img/email/alertatron-wide-dark.png">
+    <img title="beep bop - Hi, I'm Flynn, the Alertatron bot." class="logo-dark"
+alt="Alertatron.com Logo" src="/img/email/alertatron-wide.png">
+</a>
+<a class="menu-dropdown-trigger" href="/blog">
+    Blog
+</a>
+<a class="menu-dropdown-trigger" href="#" @click="toggle()">
+    <i title="If only you knew the power of the Dark Side..." class="fas fa-moon dark-mode-icon"></i>   
+</a>
+<a href="#" @click.prevent="toggle('welcome')">
+    <span><i class="fa-solid fa-fw fa-circle-info"></i> Welcome</span>
+    <span class="menu-arrow">
+        <i class="fas fa-chevron-right" x-show="isClosed('welcome')"></i>
+        <i class="fas fa-chevron-down" x-show="isOpen('welcome')"></i>
+    </span>
+</a>
+...
+</body>
+</html>

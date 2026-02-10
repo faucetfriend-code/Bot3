@@ -1,0 +1,298 @@
+2026-01-14 15:53:27.368 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for DOGE 1h (range: 1767524400000 - 1768420800000)
+2026-01-14 15:53:27.369 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: DOGE 4h - fetching from API
+2026-01-14 15:53:27.560 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:27.560 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:27.561 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 0.12 - 0.15
+2026-01-14 15:53:27.561 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for DOGE 4h (range: 1764835200000 - 1768420800000)
+2026-01-14 15:53:27.562 | INFO     | trading_bot_v2.market_regime:detect_regime:138 - Regime: TRENDING_MODERATE (ADX=24.32 between 22.0-28.0)
+2026-01-14 15:53:27.563 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:209 - Regime recalculated for DOGE: trending_moderate
+2026-01-14 15:53:27.563 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_moderate -> Active strategies: ['MACrossover']
+2026-01-14 15:53:27.622 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:27.740 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:53:27.740 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:27.759 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:53:27.760 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:27.760 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - ETH ticker: last=$3372.3000, bid=$3353.9000, ask=$3390.7000
+2026-01-14 15:53:27.760 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 15m - fetching from API
+2026-01-14 15:53:27.945 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:27.945 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:27.946 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 3072.00 - 3387.40
+2026-01-14 15:53:27.947 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 15m (range: 1768199400000 - 1768423500000)
+2026-01-14 15:53:27.947 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 1h - fetching from API
+2026-01-14 15:53:28.135 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:28.135 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:28.136 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 3068.30 - 3377.20
+2026-01-14 15:53:28.136 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 1h (range: 1767524400000 - 1768420800000)
+2026-01-14 15:53:28.136 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ETH 4h - fetching from API
+2026-01-14 15:53:28.313 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:28.313 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 429
+2026-01-14 15:53:28.313 | WARNING  | core_logic.pacifica_client:_make_request:372 - Rate limit hit (attempt 1/5), retrying in 1.0s
+2026-01-14 15:53:29.476 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:29.477 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 429
+2026-01-14 15:53:29.477 | WARNING  | core_logic.pacifica_client:_make_request:372 - Rate limit hit (attempt 2/5), retrying in 2.0s
+2026-01-14 15:53:30.549 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:31.640 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:31.640 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 429
+2026-01-14 15:53:31.641 | WARNING  | core_logic.pacifica_client:_make_request:372 - Rate limit hit (attempt 3/5), retrying in 4.0s
+2026-01-14 15:53:33.544 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:35.818 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:35.818 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:35.820 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:229 - Parsed 250 candles: close range 2770.90 - 3384.40
+2026-01-14 15:53:35.820 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 250 candles for ETH 4h (range: 1764835200000 - 1768420800000)
+2026-01-14 15:53:35.820 | INFO     | trading_bot_v2.market_regime:detect_regime:133 - Regime: TRENDING_STRONG (ADX=30.20 > 28.0)
+2026-01-14 15:53:35.821 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:209 - Regime recalculated for ETH: trending_strong
+2026-01-14 15:53:35.821 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 15:53:35.995 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:53:35.995 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:36.012 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:53:36.012 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:36.013 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - TRUMP ticker: last=$5.5823, bid=$5.5734, ask=$5.5912
+2026-01-14 15:53:36.013 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 15m - fetching from API
+2026-01-14 15:53:36.477 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:36.478 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:36.479 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for TRUMP 15m
+2026-01-14 15:53:36.479 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 1h - fetching from API
+2026-01-14 15:53:36.519 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:36.664 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:36.664 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:36.665 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for TRUMP 1h
+2026-01-14 15:53:36.666 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 4h - fetching from API
+2026-01-14 15:53:36.849 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:53:36.849 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:53:36.851 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:229 - Parsed 1 candles: close range 5.04 - 5.04
+2026-01-14 15:53:36.851 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:109 - Fetched 1 candles for TRUMP 4h (range: 1766419200000 - 1766419200000)
+2026-01-14 15:53:36.852 | WARNING  | trading_bot_v2.market_regime:detect_regime:119 - Insufficient data for regime detection. Need at least 29 candles, got 1
+2026-01-14 15:53:36.852 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:209 - Regime recalculated for TRUMP: indecisive
+2026-01-14 15:53:36.852 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+INFO:     127.0.0.1:52860 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-14 15:53:39.565 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:42.512 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:45.515 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:48.529 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:51.514 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:54.586 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:53:57.611 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:00.607 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+WARNING:root:⚠️  AUTO-TRADING ENABLED - Bot will place real orders on signals
+INFO:     127.0.0.1:52865 - "POST /api/bot/start HTTP/1.1" 200 OK
+2026-01-14 15:54:00.858 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/positions
+2026-01-14 15:54:00.859 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 429
+2026-01-14 15:54:00.859 | WARNING  | core_logic.pacifica_client:_make_request:372 - Rate limit hit (attempt 1/5), retrying in 1.0s
+2026-01-14 15:54:02.054 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/positions
+2026-01-14 15:54:02.054 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+[TICKER_WS] _get_ticker_ws called for BTC
+[TICKER_WS] NO PRICE for BTC, falling back to REST
+[TICKER_WS] FALLBACK to REST API for BTC
+2026-01-14 15:54:02.238 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:02.239 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.258 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:02.258 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.259 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - BTC ticker: last=$97480.5000, bid=$97430.0000, ask=$97531.0000
+WARNING:trading_bot_v2.database:🔍 save_position RECEIVED: funding_pnl=7.277275
+WARNING:trading_bot_v2.database:🔍 save_position EXTRACTED: funding_value=7.277275, type=<class 'float'>
+WARNING:trading_bot_v2.database:🔍 save_position UPDATE: symbol=BTC, rowcount=0, funding sent to SQL=7.277275
+DEBUG save_position: Inserting new position with funding_pnl=7.277275
+DEBUG save_position: COMMITTED to database
+[TICKER_WS] _get_ticker_ws called for LTC
+[TICKER_WS] NO PRICE for LTC, falling back to REST
+[TICKER_WS] FALLBACK to REST API for LTC
+2026-01-14 15:54:02.438 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:02.438 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.454 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:02.454 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.455 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - LTC ticker: last=$77.4450, bid=$77.3200, ask=$77.5700
+WARNING:trading_bot_v2.database:🔍 save_position RECEIVED: funding_pnl=-0.16269
+WARNING:trading_bot_v2.database:🔍 save_position EXTRACTED: funding_value=-0.16269, type=<class 'float'>
+WARNING:trading_bot_v2.database:🔍 save_position UPDATE: symbol=LTC, rowcount=0, funding sent to SQL=-0.16269
+DEBUG save_position: Inserting new position with funding_pnl=-0.16269
+DEBUG save_position: COMMITTED to database
+2026-01-14 15:54:02.475 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:02.475 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+[TICKER_WS] _get_ticker_ws called for SUI
+[TICKER_WS] NO PRICE for SUI, falling back to REST
+[TICKER_WS] FALLBACK to REST API for SUI
+2026-01-14 15:54:02.650 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:02.650 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.667 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:02.667 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.667 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - SUI ticker: last=$1.8447, bid=$1.8424, ask=$1.8469
+2026-01-14 15:54:02.668 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SUI 15m (age: 41s)
+2026-01-14 15:54:02.668 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SUI 1h (age: 40s)
+2026-01-14 15:54:02.668 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SUI 4h (age: 40s)
+2026-01-14 15:54:02.669 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for SUI: ranging_calm (0.0h old)
+2026-01-14 15:54:02.669 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime ranging_calm -> Active strategies: ['MeanReversion', 'GridTrading']
+2026-01-14 15:54:02.670 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - SUI: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:02.670 | DEBUG    | trading_bot_v2.strategies.mean_reversion:generate_signals:121 - SUI indicators: RSI_15m=48.57, RSI_1h=50.22, BB=(1.80, 1.85, 1.90), Price=1.84, SMA=1.85
+2026-01-14 15:54:02.671 | DEBUG    | trading_bot_v2.risk_manager:get_grid_capital:172 - Grid capital for SUI: $350.00 (4.0% of account)
+2026-01-14 15:54:02.671 | ERROR    | trading_bot_v2.strategies.grid_trading:generate_signals:233 - Error generating grid signals for SUI: RiskManager.validate_grid_exposure() missing 1 required positional argument: 'current_exposure'
+2026-01-14 15:54:02.671 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - SUI: No signals from any strategy in ranging_calm regime
+[TICKER_WS] _get_ticker_ws called for ADA
+[TICKER_WS] NO PRICE for ADA, falling back to REST
+[TICKER_WS] FALLBACK to REST API for ADA
+2026-01-14 15:54:02.844 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:02.845 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.863 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:02.863 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:02.864 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - ADA ticker: last=$0.4128, bid=$0.4121, ask=$0.4135
+2026-01-14 15:54:02.864 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ADA 15m - fetching from API
+2026-01-14 15:54:03.096 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:03.097 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.098 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for ADA 15m
+2026-01-14 15:54:03.098 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: ADA 1h - fetching from API
+2026-01-14 15:54:03.292 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:03.293 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.294 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for ADA 1h
+2026-01-14 15:54:03.294 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: ADA 4h (age: 40s)
+2026-01-14 15:54:03.294 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for ADA: indecisive (0.0h old)
+2026-01-14 15:54:03.295 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 15:54:03.295 | WARNING  | trading_bot_v2.strategies.liquidation_capture:generate_signals:122 - Missing 15m timeframe for ADA
+2026-01-14 15:54:03.295 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - ADA: No signals from any strategy in indecisive regime
+[TICKER_WS] _get_ticker_ws called for LTC
+[TICKER_WS] NO PRICE for LTC, falling back to REST
+[TICKER_WS] FALLBACK to REST API for LTC
+2026-01-14 15:54:03.472 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:03.472 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.487 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:03.488 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.488 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - LTC ticker: last=$77.4450, bid=$77.3200, ask=$77.5700
+2026-01-14 15:54:03.488 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: LTC 15m (age: 40s)
+2026-01-14 15:54:03.489 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: LTC 1h (age: 39s)
+2026-01-14 15:54:03.489 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: LTC 4h (age: 39s)
+2026-01-14 15:54:03.490 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for LTC: trending_moderate (0.0h old)
+2026-01-14 15:54:03.490 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_moderate -> Active strategies: ['MACrossover']
+2026-01-14 15:54:03.490 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - LTC: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:03.496 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:139 - LTC 4h indicators: Fast MA=80.11, Slow MA=79.04, MACD=-0.58, Signal=-0.76, Volume ratio=0.21x
+2026-01-14 15:54:03.497 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - LTC: No signals from any strategy in trending_moderate regime
+[TICKER_WS] _get_ticker_ws called for XRP
+[TICKER_WS] NO PRICE for XRP, falling back to REST
+[TICKER_WS] FALLBACK to REST API for XRP
+2026-01-14 15:54:03.603 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:03.679 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:03.679 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.698 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:03.698 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.698 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - XRP ticker: last=$2.1444, bid=$2.1406, ask=$2.1482
+2026-01-14 15:54:03.698 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: XRP 15m (age: 39s)
+2026-01-14 15:54:03.699 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: XRP 1h (age: 39s)
+2026-01-14 15:54:03.699 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: XRP 4h (age: 39s)
+2026-01-14 15:54:03.700 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for XRP: ranging_calm (0.0h old)
+2026-01-14 15:54:03.700 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime ranging_calm -> Active strategies: ['MeanReversion', 'GridTrading']
+2026-01-14 15:54:03.700 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - XRP: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:03.701 | DEBUG    | trading_bot_v2.strategies.mean_reversion:generate_signals:121 - XRP indicators: RSI_15m=46.15, RSI_1h=51.12, BB=(2.13, 2.15, 2.17), Price=2.14, SMA=2.15
+2026-01-14 15:54:03.701 | DEBUG    | trading_bot_v2.strategies.grid_trading:generate_signals:102 - XRP: Grid trading restricted to ['SUI', 'DOGE'] only
+2026-01-14 15:54:03.702 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - XRP: No signals from any strategy in ranging_calm regime
+[TICKER_WS] _get_ticker_ws called for SOL
+[TICKER_WS] NO PRICE for SOL, falling back to REST
+[TICKER_WS] FALLBACK to REST API for SOL
+2026-01-14 15:54:03.876 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:03.876 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.893 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:03.893 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:03.895 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - SOL ticker: last=$147.3250, bid=$147.1500, ask=$147.5000
+2026-01-14 15:54:03.896 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SOL 15m (age: 38s)
+2026-01-14 15:54:03.897 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SOL 1h (age: 38s)
+2026-01-14 15:54:03.898 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: SOL 4h (age: 38s)
+2026-01-14 15:54:03.898 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for SOL: trending_strong (0.0h old)
+2026-01-14 15:54:03.899 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 15:54:03.899 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - SOL: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:03.903 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:139 - SOL 4h indicators: Fast MA=139.37, Slow MA=130.24, MACD=2.32, Signal=1.88, Volume ratio=0.29x
+2026-01-14 15:54:03.904 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - SOL: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for WLD
+[TICKER_WS] NO PRICE for WLD, falling back to REST
+[TICKER_WS] FALLBACK to REST API for WLD
+2026-01-14 15:54:04.078 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:04.078 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.097 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:04.097 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.097 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - WLD ticker: last=$0.6033, bid=$0.6020, ask=$0.6046
+2026-01-14 15:54:04.097 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: WLD 15m - fetching from API
+2026-01-14 15:54:04.281 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:04.281 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.281 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for WLD 15m
+2026-01-14 15:54:04.282 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: WLD 1h - fetching from API
+2026-01-14 15:54:04.465 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:04.465 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.466 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for WLD 1h
+2026-01-14 15:54:04.466 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: WLD 4h (age: 38s)
+2026-01-14 15:54:04.466 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for WLD: indecisive (0.0h old)
+2026-01-14 15:54:04.466 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 15:54:04.466 | WARNING  | trading_bot_v2.strategies.liquidation_capture:generate_signals:122 - Missing 15m timeframe for WLD
+2026-01-14 15:54:04.466 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - WLD: No signals from any strategy in indecisive regime
+[TICKER_WS] _get_ticker_ws called for BTC
+[TICKER_WS] NO PRICE for BTC, falling back to REST
+[TICKER_WS] FALLBACK to REST API for BTC
+2026-01-14 15:54:04.646 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:04.647 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.666 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:04.666 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.667 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - BTC ticker: last=$97480.5000, bid=$97430.0000, ask=$97531.0000
+2026-01-14 15:54:04.667 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: BTC 15m (age: 38s)
+2026-01-14 15:54:04.667 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: BTC 1h (age: 38s)
+2026-01-14 15:54:04.667 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: BTC 4h (age: 37s)
+2026-01-14 15:54:04.668 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for BTC: trending_strong (0.0h old)
+2026-01-14 15:54:04.668 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 15:54:04.668 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - BTC: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:04.672 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:139 - BTC 4h indicators: Fast MA=91971.42, Slow MA=89476.97, MACD=1537.67, Signal=1018.97, Volume ratio=0.12x
+2026-01-14 15:54:04.673 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - BTC: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for DOGE
+[TICKER_WS] NO PRICE for DOGE, falling back to REST
+[TICKER_WS] FALLBACK to REST API for DOGE
+2026-01-14 15:54:04.851 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:04.852 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.866 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:04.867 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:04.867 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - DOGE ticker: last=$0.1470, bid=$0.1467, ask=$0.1473
+2026-01-14 15:54:04.867 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: DOGE 15m (age: 37s)
+2026-01-14 15:54:04.867 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: DOGE 1h (age: 37s)
+2026-01-14 15:54:04.867 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: DOGE 4h (age: 37s)
+2026-01-14 15:54:04.868 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for DOGE: trending_moderate (0.0h old)
+2026-01-14 15:54:04.868 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_moderate -> Active strategies: ['MACrossover']
+2026-01-14 15:54:04.868 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - DOGE: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:04.872 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:139 - DOGE 4h indicators: Fast MA=0.14, Slow MA=0.13, MACD=0.00, Signal=0.00, Volume ratio=0.24x
+2026-01-14 15:54:04.872 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - DOGE: No signals from any strategy in trending_moderate regime
+[TICKER_WS] _get_ticker_ws called for ETH
+[TICKER_WS] NO PRICE for ETH, falling back to REST
+[TICKER_WS] FALLBACK to REST API for ETH
+2026-01-14 15:54:05.065 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:05.065 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.083 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:05.083 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.083 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - ETH ticker: last=$3374.0000, bid=$3370.8000, ask=$3377.2000
+2026-01-14 15:54:05.084 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: ETH 15m (age: 37s)
+2026-01-14 15:54:05.084 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: ETH 1h (age: 36s)
+2026-01-14 15:54:05.084 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: ETH 4h (age: 29s)
+2026-01-14 15:54:05.084 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for ETH: trending_strong (0.0h old)
+2026-01-14 15:54:05.084 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime trending_strong -> Active strategies: ['MACrossover']
+2026-01-14 15:54:05.085 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:293 - ETH: Added LiquidationCapture (runs in all regimes)
+2026-01-14 15:54:05.089 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:139 - ETH 4h indicators: Fast MA=3160.57, Slow MA=3044.37, MACD=63.25, Signal=41.35, Volume ratio=0.02x
+2026-01-14 15:54:05.089 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - ETH: No signals from any strategy in trending_strong regime
+[TICKER_WS] _get_ticker_ws called for TRUMP
+[TICKER_WS] NO PRICE for TRUMP, falling back to REST
+[TICKER_WS] FALLBACK to REST API for TRUMP
+2026-01-14 15:54:05.268 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 15:54:05.268 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.284 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 15:54:05.284 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.284 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - TRUMP ticker: last=$5.5823, bid=$5.5734, ask=$5.5912
+2026-01-14 15:54:05.285 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 15m - fetching from API
+2026-01-14 15:54:05.467 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:05.467 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.467 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for TRUMP 15m
+2026-01-14 15:54:05.468 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:86 - Cache MISS: TRUMP 1h - fetching from API
+2026-01-14 15:54:05.688 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/kline
+2026-01-14 15:54:05.689 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 15:54:05.689 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:101 - No candles returned for TRUMP 1h
+2026-01-14 15:54:05.689 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:79 - Cache HIT: TRUMP 4h (age: 28s)
+2026-01-14 15:54:05.690 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:196 - Using cached regime for TRUMP: indecisive (0.0h old)
+2026-01-14 15:54:05.690 | DEBUG    | trading_bot_v2.market_regime:get_active_strategies:352 - Regime indecisive -> Active strategies: ['LiquidationCapture']
+2026-01-14 15:54:05.690 | WARNING  | trading_bot_v2.strategies.liquidation_capture:generate_signals:122 - Missing 15m timeframe for TRUMP
+2026-01-14 15:54:05.690 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:326 - TRUMP: No signals from any strategy in indecisive regime
+ERROR:root:Error monitoring risk: no such column: status
+2026-01-14 15:54:06.568 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:09.567 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:12.513 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:15.516 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:18.609 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:21.516 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:24.524 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 15:54:27.518 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:223 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']

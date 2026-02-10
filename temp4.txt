@@ -1,0 +1,185 @@
+Starting trading bot with PYTHONPATH=C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\
+2026-01-14 19:28:44.074 | INFO     | trading_bot_v2.risk_manager:__init__:55 - RiskManager initialized: max_risk=2.0%, max_exposure=10.0%
+CRITICAL:root:🚀 TRADING BOT __INIT__: WebSocket Integration v2.1 (2026-01-11 22:27)
+2026-01-14 19:28:44.116 | INFO     | core_logic.pacifica_client:__init__:182 - Initialized Pacifica client (TESTNET)
+2026-01-14 19:28:44.117 | INFO     | core_logic.pacifica_client:__init__:183 - Account: 6Jj5ahJwLVceRw5kZgyw9VMszjEcS2ZfaWFHuumgfLDt
+2026-01-14 19:28:44.117 | INFO     | core_logic.pacifica_client:__init__:184 - Agent Wallet: 6Jj5ahJwLVceRw5kZgyw9VMszjEcS2ZfaWFHuumgfLDt
+2026-01-14 19:28:44.117 | INFO     | core_logic.pacifica_client:__init__:185 - Rate limit: 10 req/s
+2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.multi_timeframe_fetcher:__init__:43 - MultiTimeframeFetcher initialized with 300s cache TTL, WS client: True2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.market_regime:__init__:71 - MarketRegimeDetector initialized: ADX trending=28.0, moderate=22.0, ranging=22.0, volatility percentile=75.0%, cache_ttl=4h
+2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.strategies.mean_reversion:__init__:66 - MeanReversionStrategy initialized: RSI 30.0/70.0, BB period=20, ATR stop=2.0x
+2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.strategy_manager:__init__:80 - Mean Reversion strategy enabled
+2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.strategies.ma_crossover:__init__:72 - MACrossoverStrategy initialized: MA 50/200, pullback 2.0%-4.0%, ATR stop=2.5x
+2026-01-14 19:28:44.121 | INFO     | trading_bot_v2.strategy_manager:__init__:84 - MA Crossover strategy enabled
+2026-01-14 19:28:44.120 | INFO     | trading_bot_v2.pacifica_ws_client:_run:226 - Starting Pacifica WebSocket client...
+2026-01-14 19:28:44.121 | INFO     | trading_bot_v2.strategies.grid_trading:__init__:75 - GridTradingStrategy initialized: 10 levels, spacing=0.5x ATR, max positions=10, emergency stop=5.0%
+2026-01-14 19:28:44.122 | INFO     | trading_bot_v2.strategy_manager:__init__:108 - Grid Trading strategy enabled: 10 levels, spacing=0.5x ATR, max positions=102026-01-14 19:28:44.122 | INFO     | trading_bot_v2.strategies.liquidation_capture:__init__:92 - LiquidationCaptureStrategy initialized: price threshold=3.0%, volume spike=3.0x, RSI oversold=15.0/overbought=85.0, BIDIRECTIONAL (detects both long liquidations and short squeezes)
+2026-01-14 19:28:44.123 | INFO     | trading_bot_v2.strategy_manager:__init__:136 - Liquidation Capture strategy enabled: price threshold=3.0%, volume spike=3.0x, RRR target=3.0x
+2026-01-14 19:28:44.123 | INFO     | trading_bot_v2.strategy_manager:__init__:141 - StrategyManager initialized with 4 strategies: ['MeanReversion', 'MACrossover', 'GridTrading', 'LiquidationCapture']
+INFO:     Started server process [77156]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2026-01-14 19:28:44.665 | SUCCESS  | trading_bot_v2.pacifica_ws_client:_run:239 - Connected to Pacifica WebSocket
+2026-01-14 19:28:44.666 | INFO     | trading_bot_v2.pacifica_ws_client:_authenticate:282 - Sent auth message
+2026-01-14 19:28:44.667 | INFO     | trading_bot_v2.pacifica_ws_client:_subscribe_public:287 - Subscribed to prices stream (all markets)
+2026-01-14 19:28:44.667 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: SUI 15m
+2026-01-14 19:28:44.779 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: SUI 1h
+2026-01-14 19:28:44.886 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: SUI 4h
+2026-01-14 19:28:44.999 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: DOGE 15m
+2026-01-14 19:28:45.107 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: DOGE 1h
+2026-01-14 19:28:45.215 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:310 - 📊 Subscribed to candle: DOGE 4h
+2026-01-14 19:28:45.324 | INFO     | trading_bot_v2.pacifica_ws_client:_subscribe_public:315 - ✅ Completed 6 candle subscriptions for 2 symbols
+2026-01-14 19:28:46.331 | INFO     | trading_bot_v2.pacifica_ws_client:_subscribe_private:325 - Subscribed to private: ['position', 'order', 'executionReport', 'balance']
+2026-01-14 19:28:46.332 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=, symbol=, data_keys=['code', 'err', 't']
+2026-01-14 19:28:46.333 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.333 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.333 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.334 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.334 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:402 - 📊 Raw candle data: {'channel': 'candle', 'data': {'t': 1768436100000, 'T': 1768437000000, 's': 'SUI', 'i': '15m', 'o': '1.8452', 'c': '1.8469', 'h': '1.8524', 'l': '1.8369', 'v': '26.6', 'n': 107}}
+2026-01-14 19:28:46.334 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 15m - O:1.85 C:1.85
+2026-01-14 19:28:46.335 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.335 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.336 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:402 - 📊 Raw candle data: {'channel': 'candle', 'data': {'t': 1768435200000, 'T': 1768438800000, 's': 'SUI', 'i': '1h', 'o': '1.8479', 'c': '1.8469', 'h': '1.8524', 'l': '1.8369', 'v': '54', 'n': 221}}
+2026-01-14 19:28:46.336 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 1h - O:1.85 C:1.85
+2026-01-14 19:28:46.336 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.337 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.337 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:402 - 📊 Raw candle data: {'channel': 'candle', 'data': {'t': 1768435200000, 'T': 1768449600000, 's': 'SUI', 'i': '4h', 'o': '1.8479', 'c': '1.8469', 'h': '1.8524', 'l': '1.8369', 'v': '54', 'n': 221}}
+2026-01-14 19:28:46.337 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 4h - O:1.85 C:1.85
+2026-01-14 19:28:46.338 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.338 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.338 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 15m - O:0.15 C:0.15
+2026-01-14 19:28:46.339 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.339 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.339 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 1h - O:0.15 C:0.15
+2026-01-14 19:28:46.340 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=subscribe, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.340 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.340 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 4h - O:0.15 C:0.15
+2026-01-14 19:28:46.341 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:46.492 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=, symbol=, data_keys=['code', 'err', 't']
+2026-01-14 19:28:48.559 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:48.929 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:48.930 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 1h - O:0.15 C:0.15
+2026-01-14 19:28:48.931 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:48.931 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 4h - O:0.15 C:0.15
+2026-01-14 19:28:48.931 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:48.932 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 15m - O:0.15 C:0.15
+2026-01-14 19:28:51.498 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:56.917 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:56.917 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 15m - O:1.85 C:1.85
+2026-01-14 19:28:56.918 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:56.918 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 4h - O:1.85 C:1.85
+2026-01-14 19:28:56.918 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:56.918 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 1h - O:1.85 C:1.85
+2026-01-14 19:28:56.918 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:28:57.492 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:00.578 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:03.496 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:04.904 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:04.905 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 4h - O:0.15 C:0.15
+2026-01-14 19:29:04.905 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:04.905 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 1h - O:0.15 C:0.15
+2026-01-14 19:29:04.906 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:04.906 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 15m - O:0.15 C:0.15
+2026-01-14 19:29:06.488 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:07.874 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:07.874 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 15m - O:1.85 C:1.85
+2026-01-14 19:29:07.876 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:07.877 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 1h - O:1.85 C:1.85
+2026-01-14 19:29:07.879 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:07.880 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 4h - O:1.85 C:1.85
+2026-01-14 19:29:09.524 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:12.498 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+INFO:     127.0.0.1:59199 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59199 - "GET /api/status HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59199 - "GET /api/positions HTTP/1.1" 200 OK
+INFO:     127.0.0.1:59199 - "GET /api/trades?limit=10 HTTP/1.1" 200 OK
+2026-01-14 19:29:15.314 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:15.314 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.511 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:15.511 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.523 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:15.530 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:15.530 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.531 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - SUI ticker: last=$1.8432, bid=$1.8396, ask=$1.8469
+ERROR:root:Error analyzing SUI: asyncio.run() cannot be called from a running event loop
+C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\api_server.py:396: RuntimeWarning: coroutine 'MultiTimeframeFetcher._fetch_all_timeframes_parallel' was never awaited
+  continue
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+2026-01-14 19:29:15.723 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:15.724 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.743 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:15.743 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.744 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - ADA ticker: last=$0.4125, bid=$0.4115, ask=$0.4135
+ERROR:root:Error analyzing ADA: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:15.914 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:15.914 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.930 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:15.931 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:15.932 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - LTC ticker: last=$76.4050, bid=$76.2800, ask=$76.5300
+ERROR:root:Error analyzing LTC: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:16.106 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:16.106 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.123 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:16.123 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.124 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - XRP ticker: last=$2.1316, bid=$2.1278, ask=$2.1354
+ERROR:root:Error analyzing XRP: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:16.298 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:16.299 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.312 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:16.312 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.313 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - SOL ticker: last=$145.8600, bid=$145.6900, ask=$146.0300
+ERROR:root:Error analyzing SOL: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:16.525 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:16.526 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.544 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:16.544 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.545 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - WLD ticker: last=$0.5966, bid=$0.5957, ask=$0.5974
+ERROR:root:Error analyzing WLD: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:16.717 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:16.717 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.734 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:16.734 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.735 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - BTC ticker: last=$96671.0000, bid=$96588.0000, ask=$96754.0000
+ERROR:root:Error analyzing BTC: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:16.906 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:16.906 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.924 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:16.924 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:16.925 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - DOGE ticker: last=$0.1466, bid=$0.1463, ask=$0.1469
+ERROR:root:Error analyzing DOGE: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:17.095 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:17.095 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:17.115 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:17.116 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:17.116 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - ETH ticker: last=$3340.3500, bid=$3337.2000, ask=$3343.5000
+ERROR:root:Error analyzing ETH: asyncio.run() cannot be called from a running event loop
+2026-01-14 19:29:17.286 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book
+2026-01-14 19:29:17.286 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:17.302 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/info
+2026-01-14 19:29:17.302 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
+2026-01-14 19:29:17.303 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - TRUMP ticker: last=$5.5489, bid=$5.5401, ask=$5.5577
+ERROR:root:Error analyzing TRUMP: asyncio.run() cannot be called from a running event loop
+INFO:     127.0.0.1:59199 - "GET /api/activity HTTP/1.1" 200 OK
+2026-01-14 19:29:18.503 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:20.880 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:20.880 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 1h - O:0.15 C:0.15
+2026-01-14 19:29:20.881 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:20.882 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 4h - O:0.15 C:0.15
+2026-01-14 19:29:20.882 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:20.883 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 15m - O:0.15 C:0.15
+2026-01-14 19:29:21.505 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:23.849 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:23.850 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 15m - O:1.85 C:1.85
+2026-01-14 19:29:23.851 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:23.852 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 4h - O:1.85 C:1.85
+2026-01-14 19:29:23.852 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=candle, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:23.853 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 1h - O:1.85 C:1.85
+2026-01-14 19:29:24.491 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:27.494 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:30.581 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:349 - WS message: channel=prices, symbol=, data_keys=['channel', 'data']
+2026-01-14 19:29:36.765 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 1h - O:0.15 C:0.15
+2026-01-14 19:29:36.765 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 15m - O:0.15 C:0.15
+2026-01-14 19:29:36.771 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: DOGE 4h - O:0.15 C:0.15
+2026-01-14 19:29:38.834 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 4h - O:1.85 C:1.84
+2026-01-14 19:29:38.834 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 1h - O:1.85 C:1.84
+2026-01-14 19:29:38.836 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:452 - 📊 Candle update: SUI 15m - O:1.85 C:1.84

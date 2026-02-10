@@ -1,0 +1,106 @@
+**Issue Classification**  
+Bot Issue: Trading logic errors / Strategy execution failures  
+(Enhancement request: Regime-strategy mapping optimization + potential regime expansion)
+
+**Diagnostic Summary**  
+This is a concise reference sheet summarizing the recommended upgrades to the market regime detection and strategy orchestration system (as discussed January 11, 2026).  
+Purpose: Provide your AI developer with clear, prioritized, low-risk changes to improve strategy activation rate while preserving safety.
+
+### Reference Sheet – Market Regime & Strategy Mapping Upgrades (Jan 2026)
+
+#### Goal
+- Allow **Grid Trading** in more appropriate regimes without exposing it to trending markets  
+- Reduce over-conservatism in the current INDECISIVE zone by splitting it  
+- Keep system simple (max +1 new regime) and backward compatible
+
+#### Recommended Changes – Priority Order (Safest First)
+
+| Priority | Change                                                                 | Risk Level | Expected Benefit                              | Estimated Effort |
+|----------|------------------------------------------------------------------------|------------|-----------------------------------------------|------------------|
+| 1        | Add strong internal ADX filter inside `GridTradingStrategy`           | Very Low   | Prevents grid opening during emerging trends  | ★☆☆☆☆            |
+| 2        | Allow GridTrading in **RANGING_CALM**                                  | Low        | ~30-50% more grid opportunities in low-vol    | ★★☆☆☆            |
+| 3        | Split current indecisive range → Add **TRENDING_MODERATE** regime     | Low–Medium | Much better MA Crossover usage in 22–28 ADX   | ★★★☆☆            |
+| 4        | (Optional) Allow cautious GridTrading in INDECISIVE                    | Medium     | Marginal increase in activity                 | ★★☆☆☆            |
+
+#### 1. Internal Grid Safety Filter (Highest Priority – Do First)
+
+In `strategies/grid_trading.py` → `generate_signals()` method, add at the very beginning:
+
+```python
+def generate_signals(self, symbol: str, multi_tf_data: Dict, current_price: float) -> List[Signal]:
+    # Safety guard: never open new grids when trend is developing
+    regime_data = multi_tf_data.get("4h", multi_tf_data.get("1h", {}))
+    if len(regime_data.get("close", [])) >= 50:
+        adx = calculate_adx(
+            regime_data["high"],
+            regime_data["low"],
+            regime_data["close"],
+            period=14
+        )
+        if adx > self.adx_regime_threshold:  # already have this param (default ~20-25)
+            logger.info(f"Grid blocked - ADX {adx:.1f} > threshold {self.adx_regime_threshold}")
+            return []
+    # ... rest of grid logic
+```
+
+#### 2. Updated Regime → Strategy Mapping (Recommended Final State)
+
+File: `market_regime.py`
+
+```python
+class MarketRegime(Enum):
+    TRENDING_STRONG     = "trending_strong"       # ADX > 28
+    TRENDING_MODERATE   = "trending_moderate"     # 22 < ADX ≤ 28     ← NEW
+    RANGING_VOLATILE    = "ranging_volatile"      # ADX ≤ 22, high vol
+    RANGING_CALM        = "ranging_calm"          # ADX ≤ 22, low vol
+    INDECISIVE          = "indecisive"            # transitional / choppy
+```
+
+File: `market_regime.py` → `get_active_strategies()` method (updated map):
+
+```python
+def get_active_strategies(self, regime: MarketRegime) -> List[str]:
+    regime_strategy_map = {
+        MarketRegime.TRENDING_STRONG:     ["TrendFollowing", "MACrossover"],
+        MarketRegime.TRENDING_MODERATE:   ["MACrossover", "TrendFollowing"],     # lighter trend exposure
+        MarketRegime.RANGING_VOLATILE:    ["GridTrading"],
+        MarketRegime.RANGING_CALM:        ["MeanReversion", "GridTrading"],      # ← Grid added here
+        MarketRegime.INDECISIVE:          ["GridTrading"]                        # optional – can stay [] if conservative
+    }
+    return regime_strategy_map.get(regime, [])
+```
+
+#### 3. Regime Threshold Adjustments (in `MarketRegimeDetector.__init__`)
+
+```python
+def __init__(self, ...):
+    self.adx_trending_threshold = 28.0          # was 25.0 – make strong trend stricter
+    self.adx_ranging_threshold = 22.0           # was 20.0 – create space for moderate trend
+    self.volatility_high_percentile = 75.0
+    ...
+```
+
+#### 4. Quick Validation Checklist After Implementation
+
+- [ ] GridTrading never activates when ADX > ~25 (internal filter + regime gating)
+- [ ] RANGING_CALM now shows both MeanReversion and GridTrading in logs
+- [ ] ADX values 22–28 show MACrossover (and possibly TrendFollowing) instead of nothing
+- [ ] No regression in TRENDING_STRONG — still only trend strategies
+- [ ] Run simulation on last 3 months BTC/SOL 4h data → compare signal count before/after
+
+#### Success Criteria for This Upgrade
+- Grid trading frequency increases 30–70% in ranging markets without increasing max drawdown significantly
+- MA Crossover activates meaningfully more often (moderate trends no longer blocked)
+- Zero cases of grid positions being opened during strong trends (ADX > 28)
+- All changes fully logged for audit (use logger.info on regime transitions)
+
+**Developer Notes / Warnings**  
+- Always keep the internal ADX filter in GridTrading even if regime allows it — this is the last line of defense  
+- Consider adding a config flag `allow_grid_in_calm` and `allow_grid_in_indecisive` for quick toggling during testing  
+- After deployment, monitor first 1–2 weeks very closely (start with tiny position sizes)
+
+Let me know if you want the full unified diff, test cases outline, or logging examples to go with this reference sheet.
+
+**Status**: Enhancement proposal – ready for implementation  
+**Risk**: Low after step 1 completed  
+**Priority**: Medium-High (improves capital efficiency significantly)

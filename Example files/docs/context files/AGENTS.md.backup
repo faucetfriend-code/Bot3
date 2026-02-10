@@ -1,0 +1,150 @@
+# Agent Guidelines for Trade Bot
+
+## Build Commands
+- **Dev server**: `cd ../../../ && python -m trading_bot_v2.api_server` (FastAPI on 0.0.0.0:8000)
+- **Alternative**: `cd ../../../ && python trading_bot_v2/api_server.py`
+- **Build**: Not applicable - Python project with FastAPI backend
+- **Type check**: `mypy ../../../trading_bot_v2/` (Python type validation)
+- **Lint**: `ruff check ../../../trading_bot_v2/` - run after code changes
+- **Test**: `pytest ../../../trading_bot_v2/` (Python tests) | `npm test` (E2E from root)
+- **E2E**: `npm test` from project root (Playwright web interface tests)
+
+## Code Style Guidelines
+
+### Python & FastAPI
+- **Strict Type Hints**: Define interfaces for all API models and function signatures
+- **Absolute Imports**: Use `from core_logic.models import Signal` - NO sys.path.insert()
+- **Async Patterns**: Use async/await for I/O operations (FastAPI routes, DB calls)
+- **Documentation**: Google/NumPy style docstrings for public functions/classes
+- **Line Length**: 88 characters (Black default)
+- **String Quotes**: Single quotes for code, double quotes for docstrings
+- **Path Handling**: Use `pathlib.Path` instead of `os.path`
+
+### Naming & Structure
+- **Classes/Interfaces**: PascalCase (Signal, Trade, StrategyType)
+- **Variables/Functions**: snake_case (generate_signals, calculate_rsi)
+- **Constants**: UPPER_CASE (MAX_POSITIONS, DEFAULT_TIMEOUT)
+- **File Names**: snake_case (trading_bot.py, strategy_manager.py)
+- **API Routes**: Descriptive endpoint names with proper HTTP methods
+
+### Error Handling & Styling
+- **Try-catch**: Specific exception types for async operations
+- **Validation**: Use Pydantic models for input validation with TypeScript interfaces
+- **Error Responses**: Structured error messages with proper HTTP status codes
+- **Logging**: Structured logging with loguru (logger.info/warning/error)
+- **FastAPI Patterns**: Dependency injection, proper exception handlers
+
+### Quality Assurance
+- **Unit Tests**: pytest fixtures and mocks for component testing
+- **Integration Tests**: API endpoint testing with comprehensive scenarios
+- **E2E Tests**: Consider Playwright for full application testing
+- **Type Safety**: Strict mypy configuration enabled
+- **Performance**: Monitor API response times and database query performance
+- **Security**: Follow FastAPI security best practices
+
+## Current Trading Bot Implementation (Jan 2026)
+
+### Multi-Strategy Trading System ✅
+
+**Production-Ready Strategies**:
+- **Mean Reversion**: RSI 35/65 with Bollinger Bands (RANGING_CALM)
+- **MA Crossover**: 50/200 MA with pullback entries (TRENDING regimes)
+- **Grid Trading**: ATR-spaced 8-level grid with partial unwind (RANGING regimes)
+- **Liquidation Capture**: Bidirectional cascade detection (ALL regimes)
+
+**Enhanced Market Regime Classification**:
+- **5 Regimes**: TRENDING_STRONG (>30 ADX), TRENDING_MODERATE (25-30 ADX), RANGING_VOLATILE/CALM (≤25 ADX), INDECISIVE
+- **Volatility Integration**: 65% volatility threshold for ranging classification
+- **Multi-Timeframe**: 15m, 1h, 4h timeframe analysis for regime detection
+
+### Advanced Risk Management ✅
+
+**Kelly Criterion Integration**:
+- 50-trade history requirement per strategy
+- Fractional Kelly (0.5x) with 10% position cap
+- Dynamic position sizing based on historical performance
+
+**Circuit Breaker System**:
+- 10% portfolio loss trigger (percentage-based)
+- 80% warning threshold with automatic trading halt
+- Grid-specific emergency stops and regime change protection
+
+### Hub-Based Architecture ✅
+
+**Centralized Communication**:
+- **DataHub**: Thread-safe data management with circuit breaker
+- **ConnectionManager**: WebSocket pooling and authentication
+- **Component Registry**: Interface-based discovery and health monitoring
+- **Event System**: Decoupled communication between components
+- **Circuit Breaker**: Database failure protection with exponential backoff
+
+### Professional Web Interface ✅
+
+**Fully Functional API & Frontend**:
+- Real-time bot controls with state management
+- WebSocket live updates (30s intervals)
+- Professional Bootstrap UI with responsive design
+- Comprehensive error handling and user feedback
+- Position and trade history with filtering
+- Cross-browser compatibility verified
+
+### Comprehensive Testing ✅
+
+**Multi-Layer Testing Infrastructure**:
+- **Unit Tests**: pytest suite with fixtures and mocks
+- **Integration Tests**: API endpoint testing with error scenarios
+- **Performance Tests**: Critical path benchmarking
+- **E2E Tests**: Playwright web interface testing
+- **Hub System Tests**: Component orchestration testing
+
+## Recent Enhancements (Jan 2026)
+
+### Signal Parameter Optimization
+- **Loosened Thresholds**: Mean reversion confidence 0.45, RSI 35/65
+- **Grid Improvements**: 0.4x ATR spacing, 8 levels, partial unwind
+- **Liquidation Enhancements**: 2.5% price move, 2.5x volume spike
+- **MA Crossover**: Maintains 0.65 confidence for trend confirmation
+
+### Architecture Improvements
+- **Hub System**: Centralized communication with circuit breaker protection
+- **Import Refactoring**: Absolute imports from core_logic package
+- **Error Handling**: Enhanced user feedback and recovery mechanisms
+- **Performance**: Optimized database operations and WebSocket management
+
+### Development Toolchain
+- **Modern Linting**: Ruff with auto-fix capabilities
+- **Enhanced Testing**: Coverage reporting with missing line indicators
+- **Type Safety**: Strict mypy configuration
+- **Documentation**: Comprehensive docstring coverage
+
+## Development Best Practices
+
+### API Development
+- **Route Design**: RESTful principles with proper HTTP methods
+- **Input Validation**: Pydantic models for all request/response bodies
+- **Error Handling**: Structured error responses with appropriate status codes
+- **Authentication**: Secure token-based authentication
+- **Rate Limiting**: Implement appropriate rate limiting for API endpoints
+
+### Database Operations
+- **Async Patterns**: Use async database operations throughout
+- **Connection Management**: Proper connection pooling and cleanup
+- **Transaction Handling**: Use transactions for multi-table operations
+- **Query Optimization**: Monitor and optimize slow queries
+- **Data Integrity**: Proper foreign key relationships and constraints
+
+### WebSocket Integration
+- **Connection Management**: Proper connection lifecycle management
+- **Message Handling**: Structured message format with type safety
+- **Error Recovery**: Automatic reconnection with exponential backoff
+- **Broadcasting**: Efficient message broadcasting to multiple clients
+- **Security**: WebSocket authentication and message validation
+
+### Security Considerations
+- **Input Validation**: Never trust user input, validate everything
+- **SQL Injection**: Use parameterized queries or ORM
+- **Authentication**: Secure password storage and token management
+- **CORS**: Proper CORS configuration for API access
+- **Secrets Management**: Use environment variables for all secrets
+
+The trading bot is a production-ready system with comprehensive multi-strategy implementation, advanced risk management, professional web interface, and robust testing infrastructure. All development should follow established patterns for security, performance, and maintainability.
