@@ -594,15 +594,11 @@ class BotIntegration:
 
                 # Regime to active strategies mapping
                 regime_strategies = {
-                    "ranging_calm": [
-                        "MeanReversion",
-                        "GridTrading",
-                        "LiquidationCapture",
-                    ],
-                    "ranging_volatile": ["GridTrading", "LiquidationCapture"],
-                    "trending_strong": ["MACrossover", "LiquidationCapture"],
-                    "trending_moderate": ["MACrossover", "LiquidationCapture"],
-                    "indecisive": ["LiquidationCapture"],
+                    "ranging_calm": ["MeanReversion", "GridTrading", "VWAPScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
+                    "ranging_volatile": ["GridTrading", "VWAPScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
+                    "trending_strong": ["MACrossover", "MomentumScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
+                    "trending_moderate": ["MACrossover", "MomentumScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
+                    "indecisive": ["LiquidationCapture", "FundingArb", "OrderBookImbalance"],
                 }
 
                 # Use server's regime detector (or bot's if available for cached data)
@@ -912,19 +908,37 @@ async def get_orders():
 
 @app.post("/api/orders/cancel-all")
 async def cancel_all_orders_endpoint(symbol: str = None):
-    """Cancel all open orders, optionally filtered by symbol."""
+    """Cancel all open orders and clear orphaned grid state."""
     try:
         if not bot_integration.pacifica_client:
             raise HTTPException(status_code=503, detail="Exchange client not available")
 
-        # Use cancel_all_orders API endpoint (simpler than cancelling one-by-one)
+        # 1. Cancel all orders on exchange
         result = bot_integration.pacifica_client.cancel_all_orders(symbol)
         logger.info(f"Cancel all orders result: {result}")
+
+        # 2. Clear grid state in GridLifecycleManager so grids don't remain orphaned
+        grids_cleared = 0
+        bot = bot_integration.trading_bot
+        if bot and hasattr(bot, "grid_lifecycle") and bot.grid_lifecycle:
+            glm = bot.grid_lifecycle
+            if symbol:
+                # Clear specific symbol
+                if symbol in glm._grids:
+                    del glm._grids[symbol]
+                    grids_cleared = 1
+            else:
+                # Clear all grids
+                grids_cleared = len(glm._grids)
+                glm._grids.clear()
+            if grids_cleared:
+                logger.info(f"Cleared {grids_cleared} grid(s) from GridLifecycleManager")
 
         return {
             "success": True,
             "result": result,
-            "message": f"Cancelled orders for {'all symbols' if not symbol else symbol}"
+            "message": f"Cancelled orders for {'all symbols' if not symbol else symbol}",
+            "grids_cleared": grids_cleared,
         }
     except Exception as e:
         logger.error(f"Error cancelling orders: {e}")
@@ -1634,6 +1648,77 @@ async def trigger_signal_generation():
 
     except Exception as e:
         import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.get("/api/debug/test-signal-handler")
+async def test_signal_handler():
+    """Debug: manually invoke _handle_signal_generated and trace every step."""
+    import traceback
+    try:
+        bot = bot_integration.trading_bot
+        if not bot:
+            return {"success": False, "error": "Bot not available"}
+
+        result = {"steps": []}
+
+        # Get a real signal
+        markets = bot.client.get_markets()
+        core = [m for m in markets if m.get("symbol") in ["AVAX", "SUI", "XRP"]]
+        if not core:
+            return {"success": False, "error": "No markets"}
+
+        symbol = core[0].get("symbol")
+        ticker = bot._get_ticker_ws(symbol)
+        price = float(ticker.get("last", 0))
+        result["steps"].append({"step": "price", "symbol": symbol, "price": price})
+
+        multi_tf = bot.multi_tf_fetcher.get_candles_multi_tf(symbol=symbol, timeframes=["15m", "1h", "4h"], lookback_candles=250)
+        signals = bot.strategy_manager.generate_signals_for_market(symbol, multi_tf, price)
+        result["steps"].append({"step": "signals", "count": len(signals), "valid": [s.is_valid() for s in signals]})
+
+        if not signals:
+            return {"success": True, "result": result, "note": "No signals generated"}
+
+        signal = signals[0]
+        result["steps"].append({
+            "step": "signal_detail",
+            "strategy": signal.strategy.name,
+            "side": signal.side.name,
+            "entry": signal.entry_price,
+            "is_valid": signal.is_valid(),
+        })
+
+        # Step 1: should_execute_signal
+        stats_before = bot.signal_logger.get_statistics()
+        try:
+            should_exec = bot._should_execute_signal(signal)
+            result["steps"].append({"step": "should_execute", "result": should_exec})
+        except Exception as e:
+            result["steps"].append({"step": "should_execute", "error": str(e), "tb": traceback.format_exc()})
+            stats_after = bot.signal_logger.get_statistics()
+            result["stats_before"] = stats_before
+            result["stats_after"] = stats_after
+            return {"success": True, "result": result}
+
+        stats_after_validate = bot.signal_logger.get_statistics()
+        result["steps"].append({"step": "stats_after_validate", "stats": stats_after_validate})
+
+        # Step 2: coordinate execution
+        if should_exec:
+            try:
+                log_entry = {"timestamp": "test", "symbol": signal.asset}
+                bot._coordinate_signal_execution(signal, log_entry)
+                result["steps"].append({"step": "coordinate", "result": "completed"})
+            except Exception as e:
+                result["steps"].append({"step": "coordinate", "error": str(e), "tb": traceback.format_exc()})
+
+        stats_final = bot.signal_logger.get_statistics()
+        result["stats_before"] = stats_before
+        result["stats_final"] = stats_final
+        return {"success": True, "result": result}
+
+    except Exception as e:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 

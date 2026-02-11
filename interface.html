@@ -343,6 +343,68 @@
             margin: 1px;
         }
 
+        .strategy-badge-MeanReversion { background-color: #17a2b8; }
+        .strategy-badge-MACrossover { background-color: #007bff; }
+        .strategy-badge-GridTrading { background-color: #fd7e14; }
+        .strategy-badge-LiquidationCapture { background-color: #dc3545; }
+        .strategy-badge-VWAPScalping { background-color: #6f42c1; }
+        .strategy-badge-FundingArb { background-color: #28a745; }
+        .strategy-badge-MomentumScalping { background-color: #e83e8c; }
+        .strategy-badge-OrderBookImbalance { background-color: #6610f2; }
+
+        .stats-cards {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .stats-card {
+            background: var(--light-bg);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            padding: 0.75rem 1rem;
+            min-width: 120px;
+            text-align: center;
+        }
+
+        [data-theme="dark"] .stats-card {
+            background: rgba(255,255,255,0.05);
+        }
+
+        .stats-card .card-value {
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+
+        .stats-card .card-label {
+            font-size: 0.75rem;
+            color: var(--text-light);
+            text-transform: uppercase;
+        }
+
+        .circuit-breaker-warning {
+            background-color: var(--danger-color);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-weight: bold;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.6; }
+        }
+
+        .adx-trending { color: var(--success-color); font-weight: bold; }
+        .adx-ranging { color: var(--primary-color); font-weight: bold; }
+        .adx-indecisive { color: var(--secondary-color); }
+
+        .btn-cancel {
+            background-color: var(--warning-color);
+            color: black;
+        }
+
         .status-active {
             color: var(--success-color);
             font-weight: bold;
@@ -575,16 +637,21 @@
                     <span id="bot-status">Unknown</span>
                 </div>
                 <div class="stats">
+                    <div class="stat-item"><strong>Balance:</strong> $<span id="account-balance">0.00</span></div>
                     <div class="stat-item"><strong>Positions:</strong> <span id="positions-count">0</span></div>
                     <div class="stat-item"><strong>Trades:</strong> <span id="trades-count">0</span></div>
                     <div class="stat-item"><strong>P&L:</strong> $<span id="pnl">0</span></div>
+                    <div class="stat-item"><strong>Regime:</strong> <span id="current-regime" class="regime">Unknown</span></div>
+                    <div class="stat-item"><strong>Grids:</strong> <span id="active-grids">0</span></div>
                     <div class="stat-item"><strong>Hub:</strong> <span id="ws-status" class="ws-status">Connecting...</span></div>
+                    <span id="circuit-breaker" class="circuit-breaker-warning" style="display:none">CIRCUIT BREAKER</span>
                 </div>
                 <div class="controls">
                     <button class="btn-start" onclick="startBot()">Start Bot</button>
                     <button class="btn-stop" onclick="stopBot()">Stop Bot</button>
                     <button class="btn-refresh" onclick="refreshData()">Refresh</button>
                     <button class="btn-sync" onclick="syncPositions()">Sync Positions</button>
+                    <button class="btn-cancel" onclick="cancelAllOrders()">Cancel Orders</button>
                 </div>
             </section>
 
@@ -596,6 +663,7 @@
                             <th>Market</th>
                             <th>Price</th>
                             <th>Regime</th>
+                            <th>ADX</th>
                             <th>RSI 15m</th>
                             <th>RSI 1h</th>
                             <th>Active Strategies</th>
@@ -604,7 +672,7 @@
                     </thead>
                     <tbody id="activity-tbody">
                         <tr class="skeleton-row">
-                            <td colspan="7">
+                            <td colspan="8">
                                 <div class="skeleton skeleton-text"></div>
                                 <div class="skeleton skeleton-text"></div>
                                 <div class="skeleton skeleton-text"></div>
@@ -695,19 +763,31 @@
                             <th>Strategy</th>
                             <th>Side</th>
                             <th>Entry</th>
-                            <th>Stop Loss</th>
-                            <th>Take Profit</th>
+                            <th>SL</th>
+                            <th>TP</th>
                             <th>Confidence</th>
-                            <th>Valid</th>
+                            <th>Status</th>
+                            <th>Quality</th>
                         </tr>
                     </thead>
                     <tbody id="signals-tbody">
                         <tr>
-                            <td colspan="9" style="text-align: center;">No signals yet</td>
+                            <td colspan="10" style="text-align: center;">No signals yet</td>
                         </tr>
                     </tbody>
                 </table>
                 <div class="last-update" id="signals-last-update">Last updated: Never</div>
+            </section>
+
+            <section>
+                <h2>Signal Statistics</h2>
+                <div id="signal-stats" class="stats-cards">
+                    <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
+                    <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
+                </div>
             </section>
 
             <section>
@@ -923,9 +1003,29 @@
                 document.getElementById('positions-count').textContent = data.positions_count || 0;
                 document.getElementById('trades-count').textContent = data.trades_count || 0;
                 document.getElementById('pnl').textContent = data.total_pnl ? data.total_pnl.toFixed(2) : '0.00';
+
+                // Balance
+                const balance = data.account_balance || 0;
+                document.getElementById('account-balance').textContent = balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+
+                // Regime
+                const regimeEl = document.getElementById('current-regime');
+                const regime = data.current_regime || 'unknown';
+                regimeEl.textContent = regime.replace(/_/g, ' ');
+                regimeEl.className = 'regime regime-' + regime.replace(/_/g, '-');
+
+                // Active grids
+                document.getElementById('active-grids').textContent = data.active_grids || 0;
+
+                // Circuit breaker
+                const cbEl = document.getElementById('circuit-breaker');
+                if (data.circuit_breaker_triggered) {
+                    cbEl.style.display = 'inline-block';
+                } else {
+                    cbEl.style.display = 'none';
+                }
             } catch (error) {
                 console.error('Failed to update status:', error);
-                // Show error state in UI
                 const statusDiv = document.getElementById('status');
                 const statusSpan = document.getElementById('bot-status');
                 statusSpan.textContent = 'Error';
@@ -933,6 +1033,7 @@
                 document.getElementById('positions-count').textContent = 'N/A';
                 document.getElementById('trades-count').textContent = 'N/A';
                 document.getElementById('pnl').textContent = 'N/A';
+                document.getElementById('account-balance').textContent = 'N/A';
                 showToast(`Failed to update status: ${error.message}`, 'error');
             }
         }
@@ -1117,7 +1218,7 @@
                 if (data.length === 0) {
                     const row = document.createElement('tr');
                     const cell = document.createElement('td');
-                    cell.colSpan = 7;
+                    cell.colSpan = 8;
                     cell.style.textAlign = 'center';
                     cell.className = 'warning';
                     let errorMsg = 'No market data available';
@@ -1147,6 +1248,15 @@
                         regimeCell.innerHTML = `<span class="regime ${regimeClass}">${activity.regime}</span>`;
                         row.appendChild(regimeCell);
 
+                        // ADX (with color coding)
+                        const adxCell = document.createElement('td');
+                        const adxVal = parseFloat(activity.adx || 0);
+                        let adxClass = 'adx-indecisive';
+                        if (adxVal > 25) adxClass = 'adx-trending';
+                        else if (adxVal < 20) adxClass = 'adx-ranging';
+                        adxCell.innerHTML = `<span class="${adxClass}">${adxVal.toFixed(1)}</span>`;
+                        row.appendChild(adxCell);
+
                         // RSI 15m (with color based on value)
                         const rsi15m = parseFloat(activity.rsi_15m);
                         const rsi15mCell = document.createElement('td');
@@ -1165,11 +1275,11 @@
                         rsi1hCell.innerHTML = `<span class="${rsi1hClass}">${activity.rsi_1h}</span>`;
                         row.appendChild(rsi1hCell);
 
-                        // Active Strategies
+                        // Active Strategies (with per-strategy badge colors)
                         const strategiesCell = document.createElement('td');
                         const strategies = activity.active_strategies || [];
                         strategiesCell.innerHTML = strategies.length > 0
-                            ? strategies.map(s => `<span class="strategy-badge">${s}</span>`).join(' ')
+                            ? strategies.map(s => `<span class="strategy-badge strategy-badge-${s}">${s}</span>`).join(' ')
                             : '<span class="text-muted">-</span>';
                         row.appendChild(strategiesCell);
 
@@ -1391,10 +1501,20 @@
 
         async function updateSignals() {
             try {
-                const response = await apiCall('/signals');
-                const data = Array.isArray(response.data) ? response.data : [];
-                const tbody = document.getElementById('signals-tbody');
+                // Try signal logger first (richer data), fall back to basic /signals
+                let data = [];
+                try {
+                    const response = await apiCall('/signals/recent?count=50');
+                    if (response.success && Array.isArray(response.data)) {
+                        data = response.data;
+                    }
+                } catch (e) {
+                    // Fallback to basic endpoint
+                    const response = await apiCall('/signals');
+                    data = Array.isArray(response.data) ? response.data : [];
+                }
 
+                const tbody = document.getElementById('signals-tbody');
                 const fragment = document.createDocumentFragment();
 
                 document.getElementById('signals-count').textContent = `(${data.length})`;
@@ -1402,13 +1522,15 @@
                 if (data.length === 0) {
                     const row = document.createElement('tr');
                     const cell = document.createElement('td');
-                    cell.colSpan = 9;
+                    cell.colSpan = 10;
                     cell.style.textAlign = 'center';
                     cell.textContent = 'No signals yet';
                     row.appendChild(cell);
                     fragment.appendChild(row);
                 } else {
-                    data.forEach(signal => {
+                    // Show newest first
+                    const sorted = [...data].reverse();
+                    sorted.forEach(signal => {
                         const row = document.createElement('tr');
 
                         // Time
@@ -1424,51 +1546,69 @@
                         symbolCell.style.fontWeight = 'bold';
                         row.appendChild(symbolCell);
 
-                        // Strategy
+                        // Strategy (with badge color)
                         const strategyCell = document.createElement('td');
-                        strategyCell.textContent = signal.strategy;
+                        const stratName = signal.strategy || '';
+                        strategyCell.innerHTML = `<span class="strategy-badge strategy-badge-${stratName}">${stratName}</span>`;
                         row.appendChild(strategyCell);
 
                         // Side
                         const sideCell = document.createElement('td');
-                        sideCell.textContent = signal.side.toUpperCase();
-                        sideCell.className = signal.side === 'buy' ? 'positive' : 'negative';
+                        const side = (signal.side || '').toUpperCase();
+                        sideCell.textContent = side;
+                        sideCell.className = side === 'BUY' ? 'positive' : 'negative';
                         row.appendChild(sideCell);
 
                         // Entry Price
                         const entryCell = document.createElement('td');
-                        entryCell.textContent = '$' + (signal.entry_price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                        entryCell.textContent = '$' + parseFloat(signal.entry_price || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                         row.appendChild(entryCell);
 
                         // Stop Loss
                         const stopCell = document.createElement('td');
-                        stopCell.textContent = '$' + (signal.stop_loss || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+                        stopCell.textContent = '$' + parseFloat(signal.stop_loss || 0).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
                         stopCell.className = 'negative';
                         row.appendChild(stopCell);
 
                         // Take Profit
                         const tpCell = document.createElement('td');
-                        tpCell.textContent = signal.take_profit ? '$' + signal.take_profit.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-';
-                        if (signal.take_profit) tpCell.className = 'positive';
+                        const tp = parseFloat(signal.take_profit || 0);
+                        tpCell.textContent = tp ? '$' + tp.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2}) : '-';
+                        if (tp) tpCell.className = 'positive';
                         row.appendChild(tpCell);
 
                         // Confidence
                         const confCell = document.createElement('td');
-                        confCell.textContent = signal.confidence + '%';
-                        if (signal.confidence >= 70) {
+                        const conf = parseFloat(signal.confidence || 0);
+                        confCell.textContent = conf.toFixed(0) + '%';
+                        if (conf >= 70) {
                             confCell.className = 'positive';
-                        } else if (signal.confidence >= 50) {
+                        } else if (conf >= 50) {
                             confCell.style.color = 'var(--warning-color)';
                         } else {
                             confCell.className = 'negative';
                         }
                         row.appendChild(confCell);
 
-                        // Valid
-                        const validCell = document.createElement('td');
-                        validCell.textContent = signal.is_valid ? '✓' : '✗';
-                        validCell.className = signal.is_valid ? 'positive' : 'negative';
-                        row.appendChild(validCell);
+                        // Status (generated/executed/rejected/failed)
+                        const statusCell = document.createElement('td');
+                        const status = signal.status || 'unknown';
+                        const statusColors = {
+                            'executed': 'positive',
+                            'generated': 'neutral',
+                            'rejected': 'negative',
+                            'failed': 'negative'
+                        };
+                        statusCell.textContent = status;
+                        statusCell.className = statusColors[status] || '';
+                        row.appendChild(statusCell);
+
+                        // Quality
+                        const qualityCell = document.createElement('td');
+                        const quality = signal.quality || '-';
+                        qualityCell.textContent = quality;
+                        if (quality === 'HIGH_CONVICTION') qualityCell.className = 'positive';
+                        row.appendChild(qualityCell);
 
                         fragment.appendChild(row);
                     });
@@ -1483,6 +1623,46 @@
             }
         }
 
+        async function updateSignalStats() {
+            try {
+                const response = await apiCall('/signals/stats');
+                if (response.success && response.data) {
+                    const stats = response.data;
+                    document.getElementById('stat-total').textContent = stats.total || 0;
+                    document.getElementById('stat-executed').textContent = stats.executed || 0;
+                    document.getElementById('stat-rejected').textContent = stats.rejected || 0;
+                    document.getElementById('stat-failed').textContent = stats.failed || 0;
+                    document.getElementById('stat-exec-rate').textContent = (stats.execution_rate || 0).toFixed(1) + '%';
+                }
+            } catch (error) {
+                console.error('Failed to update signal stats:', error);
+            }
+        }
+
+        async function cancelAllOrders() {
+            if (!confirm('Cancel ALL open orders and clear grid state? This cannot be undone.')) return;
+
+            const button = document.querySelector('button[onclick="cancelAllOrders()"]');
+            const originalText = button.textContent;
+            try {
+                button.textContent = 'Cancelling...';
+                button.disabled = true;
+                const response = await apiCall('/orders/cancel-all', 'POST');
+                const grids = response.grids_cleared || 0;
+                const msg = grids > 0
+                    ? `All orders cancelled, ${grids} grid(s) cleared`
+                    : 'All orders cancelled';
+                showToast(msg, 'success');
+                setTimeout(refreshData, 1000);
+            } catch (error) {
+                showToast('Failed to cancel orders: ' + error.message, 'error');
+                console.error('Cancel orders error:', error);
+            } finally {
+                button.textContent = originalText;
+                button.disabled = false;
+            }
+        }
+
         async function refreshData() {
             const startTime = performance.now();
             setLoadingState('activity-table', true);
@@ -1493,7 +1673,7 @@
             setLoadingState('signals-table', true);
 
             try {
-                await Promise.all([updateStatus(), updatePositions(), updateTrades(), updateActivity(), updateOrders(), updateGrids(), updateSignals()]);
+                await Promise.all([updateStatus(), updatePositions(), updateTrades(), updateActivity(), updateOrders(), updateGrids(), updateSignals(), updateSignalStats()]);
                 const duration = Math.round(performance.now() - startTime);
                 updatePerformanceIndicator(duration);
             } catch (error) {

@@ -800,7 +800,7 @@ class GridLifecycleManager:
 
         try:
             # Fetch recent trades from exchange
-            trades = self.client.get_trade_history(limit=100)
+            trades = self.client.get_trades(limit=100)
 
             for symbol in list(self._grids.keys()):
                 if self._grids[symbol]["state"] != GridState.ACTIVE:
@@ -1224,7 +1224,7 @@ class GridLifecycleManager:
     def _sync_recent_fills(self, symbol: str):
         """Sync recent trade history for a newly detected grid."""
         try:
-            trades = self.client.get_trade_history(limit=100)
+            trades = self.client.get_trades(limit=100)
             symbol_trades = [
                 t
                 for t in trades

@@ -298,23 +298,25 @@ class SignalLogger:
             return
 
         try:
+            import json
+            from datetime import datetime
             signal_data = {
                 "symbol": entry.get("symbol", ""),
-                "strategy": entry.get("strategy", ""),
-                "side": entry.get("side", ""),
-                "entry_price": entry.get("entry_price", 0),
-                "stop_loss": entry.get("stop_loss", 0),
-                "take_profit": entry.get("take_profit", 0),
-                "confidence": entry.get("confidence", 0),
-                "quality": entry.get("quality", ""),
-                "regime": entry.get("regime", ""),
-                "status": entry.get("status", ""),
-                "rejection_reason": entry.get("rejection_reason", ""),
-                "execution_result": entry.get("execution_result", ""),
-                "order_id": entry.get("order_id", ""),
-                "filled_price": entry.get("filled_price", ""),
-                "filled_quantity": entry.get("filled_quantity", ""),
-                "notes": entry.get("notes", ""),
+                "asset_class": entry.get("asset_class", "perpetual"),
+                "signal_type": entry.get("strategy", entry.get("signal_type", "unknown")),
+                "strength": entry.get("confidence", 0),
+                "indicators": {
+                    "side": entry.get("side", ""),
+                    "entry_price": entry.get("entry_price", 0),
+                    "stop_loss": entry.get("stop_loss", 0),
+                    "take_profit": entry.get("take_profit", 0),
+                    "quality": entry.get("quality", ""),
+                    "regime": entry.get("regime", ""),
+                    "status": entry.get("status", ""),
+                    "rejection_reason": entry.get("rejection_reason", ""),
+                    "notes": entry.get("notes", ""),
+                },
+                "timestamp": entry.get("timestamp", datetime.now().isoformat()),
             }
             self.db_manager.save_signal(signal_data)
         except Exception as e:

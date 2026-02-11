@@ -44,7 +44,7 @@ from .config import StrategyType
 from .pacifica_ws_client import get_ws_client
 
 # Import GridLifecycleManager for authoritative grid state management
-from .grid_lifecycle_manager import GridLifecycleManager
+from .grid_lifecycle_manager import GridLifecycleManager, GridState
 
 # Import MigratedPositionManager for trend-following management of migrated positions
 from .migrated_position_manager import MigratedPositionManager
@@ -290,7 +290,7 @@ class TradingBot:
                             rest_client=self.client,
                             symbols=core_symbols,
                             intervals=["1m", "5m", "1h"],
-                            limit=100,
+                            lookback=100,
                         )
                         logger.info(
                             f"✅ Kline cache bootstrapped for {len(core_symbols)} symbols (1m, 5m, 1h)"
@@ -514,9 +514,9 @@ class TradingBot:
                     f"Error in trading loop (step={self._loop_step}): {e}", exc_info=True
                 )
 
-            # Sleep for configured interval
+            # Sleep for configured interval (30 seconds)
             self._loop_step = "sleeping"
-            time.sleep(config.trading_loop_interval)
+            time.sleep(getattr(config, 'trading_loop_interval', 30))
 
     def _monitor_risk(self) -> None:
         """Monitor risk and trigger circuit breaker if needed."""
@@ -533,8 +533,14 @@ class TradingBot:
             positions = self.client.get_positions()
 
             if not positions:
-                logging.debug("No open positions")
+                logging.debug("No open positions from Pacifica API")
                 return
+
+            # Filter to real positions (non-zero quantity)
+            real_positions = [p for p in positions if float(p.get("quantity", 0)) > 0]
+            logging.info(
+                f"Positions from Pacifica: {len(positions)} total, {len(real_positions)} with quantity > 0"
+            )
 
             # Get current prices for P&L calculation
             current_prices = {}
@@ -564,26 +570,37 @@ class TradingBot:
                     continue
 
                 # Calculate unrealized P&L
-                side = pos.get("side", "LONG")
+                # Pacifica API returns "long"/"short" or "bid"/"ask" (lowercase)
+                raw_side = pos.get("side", "long")
+                side = raw_side.upper() if raw_side else "LONG"
                 quantity = float(pos.get("quantity", 0))
                 entry_price = float(pos.get("entry_price", 0))
                 current_price = current_prices.get(symbol, entry_price)
 
-                if side == "LONG":
+                # Skip zero-quantity positions (filled order remnants)
+                if quantity == 0:
+                    continue
+
+                # "long" or "bid" = long position; "short" or "ask" = short
+                is_long = side in ("LONG", "BID")
+                if is_long:
                     unrealized_pnl = (current_price - entry_price) * quantity
                 else:
                     unrealized_pnl = (entry_price - current_price) * quantity
 
-                # Update position in database
-                self.db.update_position(
-                    symbol=symbol,
-                    side=side,
-                    quantity=quantity,
-                    entry_price=entry_price,
-                    current_price=current_price,
-                    unrealized_pnl=unrealized_pnl,
-                    leverage=float(pos.get("leverage", 1)),
-                )
+                # Update position in database (save_position does upsert)
+                self.db.save_position({
+                    "symbol": symbol,
+                    "side": side,
+                    "quantity": quantity,
+                    "entry_price": entry_price,
+                    "current_price": current_price,
+                    "unrealized_pnl": unrealized_pnl,
+                    "leverage": float(pos.get("leverage", 1)),
+                    "asset_class": "perpetual",
+                    "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
+                    "funding_pnl": float(pos.get("funding_pnl", 0)),
+                })
 
                 logging.debug(
                     f"Updated position: {symbol} {side} {quantity} @ ${entry_price:.2f} "
@@ -597,8 +614,9 @@ class TradingBot:
         """
         GRID MONITORING: Sync existing grids from exchange on startup.
 
-        This detects grids that were created in a previous session or by another bot instance.
-        Critical for maintaining state consistency after restarts.
+        Detects grids from previous sessions and RE-ADOPTS them into the
+        GridLifecycleManager so they continue to be managed properly.
+        This prevents orphaned grids that block new signals.
         """
         try:
             logger.info("🔍 Syncing existing grids from exchange...")
@@ -606,8 +624,10 @@ class TradingBot:
             # Get all open orders from exchange
             open_orders = self.client.get_orders()
             if not open_orders:
-                logger.info("No open orders found on exchange")
+                logger.info("No open orders found on exchange - no grids to sync")
                 return
+
+            logger.info(f"📋 Found {len(open_orders)} open orders on exchange")
 
             # Group orders by symbol
             orders_by_symbol: Dict[str, List[Dict]] = {}
@@ -615,60 +635,107 @@ class TradingBot:
                 symbol = order.get("symbol", "")
                 if not symbol:
                     continue
-
                 if symbol not in orders_by_symbol:
                     orders_by_symbol[symbol] = []
                 orders_by_symbol[symbol].append(order)
 
             # Analyze each symbol's orders to detect grid patterns
             for symbol, orders in orders_by_symbol.items():
-                # Grid detection heuristics:
-                # 1. Multiple orders (>= 5)
-                # 2. Mix of BUY and SELL orders
-                # 3. Evenly spaced price levels
-
+                # Grid detection: multiple orders with mix of buy and sell sides
                 if len(orders) < 5:
                     logger.debug(
                         f"Skipping {symbol}: only {len(orders)} orders (need >= 5 for grid)"
                     )
                     continue
 
-                buy_orders = [o for o in orders if o.get("side") == "BUY"]
-                sell_orders = [o for o in orders if o.get("side") == "SELL"]
+                # Pacifica API uses "bid"/"ask" for sides (not "BUY"/"SELL")
+                buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
+                sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
 
                 if not buy_orders or not sell_orders:
                     logger.debug(
-                        f"Skipping {symbol}: missing BUY or SELL orders (not a grid)"
+                        f"Skipping {symbol}: need both bid and ask orders for grid "
+                        f"(found {len(buy_orders)} bid, {len(sell_orders)} ask)"
                     )
                     continue
 
-                # Check if this symbol already has an active grid in memory
-                if symbol in self.grid_lifecycle._grids:
+                # Check if already tracked in memory
+                if self.grid_lifecycle and symbol in self.grid_lifecycle._grids:
                     logger.info(
-                        f"✅ {symbol} grid already tracked in memory ({len(orders)} exchange orders)"
+                        f"✅ {symbol} grid already tracked in memory ({len(orders)} orders)"
                     )
                     continue
 
-                # ORPHANED GRID DETECTED: Orders exist on exchange but not in memory
-                # This means the bot restarted or crashed while the grid was active
+                # ORPHANED GRID DETECTED - re-adopt it
                 logger.warning(
-                    f"⚠️ ORPHANED GRID DETECTED: {symbol} has {len(orders)} exchange orders "
-                    f"({len(buy_orders)} BUY, {len(sell_orders)} SELL) but no in-memory state"
+                    f"⚠️ ORPHANED GRID DETECTED: {symbol} has {len(orders)} orders "
+                    f"({len(buy_orders)} bid, {len(sell_orders)} ask) - RE-ADOPTING"
                 )
-
-                # Decision: Close orphaned grid for safety
-                # Rationale: We don't know the original grid parameters (spacing, stop loss, etc.)
-                # Better to close and start fresh than risk losses from incomplete state
-                self._close_orphaned_grid(
-                    symbol, reason="ORPHANED_ON_STARTUP"
-                )
+                self._readopt_orphaned_grid(symbol, buy_orders, sell_orders)
 
         except Exception as e:
             logger.error(f"Error syncing existing grids: {e}", exc_info=True)
 
+    def _readopt_orphaned_grid(
+        self, symbol: str, buy_orders: List[Dict], sell_orders: List[Dict]
+    ) -> None:
+        """
+        Re-adopt an orphaned grid into the GridLifecycleManager.
+
+        Reconstructs minimal grid state from existing exchange orders so the
+        grid continues to be managed (fills tracked, emergency stops work, etc.)
+        """
+        try:
+            all_orders = buy_orders + sell_orders
+            # Calculate center price from order spread
+            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+
+            if not buy_prices or not sell_prices:
+                logger.error(f"Cannot re-adopt {symbol}: no valid prices in orders")
+                return
+
+            center_price = (max(buy_prices) + min(sell_prices)) / 2
+            grid_spacing = (min(sell_prices) - max(buy_prices)) / center_price if center_price > 0 else 0
+
+            # Estimate capital from order sizes
+            total_capital = sum(
+                float(o.get("initial_amount", 0)) * float(o.get("price", 0))
+                for o in all_orders
+            )
+
+            # Register directly in GridLifecycleManager
+            if self.grid_lifecycle and symbol not in self.grid_lifecycle._grids:
+                self.grid_lifecycle._grids[symbol] = {
+                    "state": GridState.ACTIVE,
+                    "grid_capital": total_capital,
+                    "emergency_stop": 0,  # No emergency stop for re-adopted grids
+                    "regime_on_creation": "unknown_readopted",
+                    "atr_at_creation": 0,
+                    "grid_spacing": grid_spacing,
+                    "num_levels": len(all_orders),
+                    "orders_placed": len(all_orders),
+                    "center_price": center_price,
+                    "initial_center": center_price,
+                    "created_at": datetime.now(),
+                    "refresh_count": 0,
+                    "readopted": True,  # Flag that this was re-adopted
+                }
+
+                logger.info(
+                    f"✅ Re-adopted grid for {symbol}: center=${center_price:.4f}, "
+                    f"{len(buy_orders)} bids + {len(sell_orders)} asks, "
+                    f"capital≈${total_capital:.2f}"
+                )
+            else:
+                logger.warning(f"Cannot re-adopt {symbol}: GridLifecycleManager unavailable or grid already exists")
+
+        except Exception as e:
+            logger.error(f"Error re-adopting grid for {symbol}: {e}", exc_info=True)
+
     def _close_orphaned_grid(self, symbol: str, reason: str = "UNKNOWN") -> None:
         """
-        Close an orphaned grid (orders exist on exchange but no in-memory state).
+        Close an orphaned grid by cancelling all orders for a symbol.
 
         Args:
             symbol: Symbol with orphaned grid
@@ -677,29 +744,18 @@ class TradingBot:
         try:
             logger.warning(f"🛑 Closing orphaned grid for {symbol} (reason: {reason})")
 
-            # Get all open orders for symbol
-            all_orders = self.client.get_orders()
-            symbol_orders = [
-                o for o in all_orders if o.get("symbol") == symbol
-            ]
-
-            # Cancel all orders
-            for order in symbol_orders:
-                order_id = order.get("order_id") or order.get("id")
-                if order_id:
-                    try:
-                        self.client.cancel_order(order_id)
-                        logger.info(
-                            f"  ✅ Cancelled order {order_id} "
-                            f"({order.get('side')} @ ${order.get('price')})"
-                        )
-                    except Exception as e:
-                        logger.error(f"  ❌ Failed to cancel order {order_id}: {e}")
+            # Cancel all orders for this symbol
+            try:
+                result = self.client.cancel_all_orders(symbol=symbol)
+                logger.info(f"  ✅ Cancelled all orders for {symbol}: {result}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to cancel orders for {symbol}: {e}")
 
             # Check if there's an open position for this symbol
             positions = self.client.get_positions()
             symbol_positions = [
-                p for p in positions if p.get("symbol") == symbol
+                p for p in positions
+                if p.get("symbol") == symbol and float(p.get("quantity", 0)) > 0
             ]
 
             if symbol_positions:
@@ -734,30 +790,26 @@ class TradingBot:
             if not current_prices:
                 return  # No active grids or no prices available
 
-            # Monitor each grid using GridLifecycleManager
-            for symbol, current_price in current_prices.items():
-                try:
-                    # Monitor grid (checks fills, P&L, emergency stops)
-                    result = self.grid_lifecycle.monitor_grid(
-                        symbol=symbol, current_price=current_price
+            # Monitor all grids at once using GridLifecycleManager
+            try:
+                result = self.grid_lifecycle.monitor_grids(
+                    current_prices=current_prices
+                )
+
+                # Log monitoring results
+                if result.get("new_fills", 0) > 0:
+                    logger.info(
+                        f"📊 Grid monitoring: {result['new_fills']} fills detected, "
+                        f"{result.get('completed_round_trips', 0)} round-trips completed"
                     )
 
-                    # Log monitoring results
-                    if result.get("fills_detected", 0) > 0:
-                        logger.info(
-                            f"📊 Grid {symbol}: {result['fills_detected']} fills detected, "
-                            f"realized P&L: ${result.get('realized_pnl', 0):.2f}"
-                        )
+                for alert in result.get("alerts", []):
+                    logger.warning(f"Grid alert: {alert}")
 
-                    if result.get("emergency_stop_triggered"):
-                        logger.critical(
-                            f"🚨 EMERGENCY STOP triggered for {symbol} grid: {result.get('stop_reason')}"
-                        )
-
-                except Exception as e:
-                    logger.error(
-                        f"Error monitoring grid {symbol}: {e}", exc_info=True
-                    )
+            except Exception as e:
+                logger.error(
+                    f"Error monitoring grids: {e}", exc_info=True
+                )
 
         except Exception as e:
             logger.error(f"Error in grid monitoring: {e}", exc_info=True)
@@ -893,12 +945,39 @@ class TradingBot:
                     for signal in signals:
                         # Validate signal before publishing
                         if not signal.is_valid():
-                            logger.debug(
-                                f"Skipping invalid signal for {symbol}: {signal.validation_flags}"
-                            )
+                            flags = {
+                                'volume_confirmation': signal.volume_confirmation,
+                                'multi_timeframe_alignment': signal.multi_timeframe_alignment,
+                                'support_resistance_valid': signal.support_resistance_valid,
+                                'rrr_meets_minimum': signal.rrr_meets_minimum,
+                                'liquidation_buffer_safe': signal.liquidation_buffer_safe,
+                                'account_risk_ok': signal.account_risk_ok,
+                                'margin_drawdown_ok': signal.margin_drawdown_ok,
+                                'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                            }
+                            failed = [k for k, v in flags.items() if not v]
+                            reason = f"Pre-publish validation failed: {failed}"
+                            logger.debug(f"Skipping invalid signal for {symbol}: {failed}")
+                            regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
+                            self.signal_logger.log_signal_rejected(signal=signal, reason=reason, regime=regime_str)
                             continue
 
-                        # Publish signal event (use publish_event for convenience)
+                        # Log signal BEFORE publishing event (event bus is synchronous)
+                        signals_generated += 1
+                        regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
+                        self.signal_logger.log_signal_generated(
+                            signal=signal,
+                            regime=regime_str,
+                            notes=f"Generated from {signal.strategy.name}",
+                        )
+
+                        logger.info(
+                            f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
+                            f"{symbol} @ ${signal.entry_price:.4f} "
+                            f"(confidence: {signal.confidence:.1f}%, quality: {signal.quality.name})"
+                        )
+
+                        # Publish signal event (synchronous - will execute immediately)
                         self.event_bus.publish_event(
                             event_type=EventType.SIGNAL_GENERATED,
                             data={
@@ -906,21 +985,6 @@ class TradingBot:
                                 "timestamp": time.time(),
                             },
                             source="strategy_manager",
-                        )
-
-                        signals_generated += 1
-                        logger.info(
-                            f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
-                            f"{symbol} @ ${signal.entry_price:.4f} "
-                            f"(confidence: {signal.confidence:.1f}%, quality: {signal.quality.name})"
-                        )
-
-                        # Log signal to CSV/database
-                        regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
-                        self.signal_logger.log_signal_generated(
-                            signal=signal,
-                            regime=regime_str,
-                            notes=f"Generated from {signal.strategy.name}",
                         )
 
                 except Exception as e:
@@ -1015,13 +1079,18 @@ class TradingBot:
             signal = signal_data.get("signal") if isinstance(signal_data, dict) else None
 
             if not signal:
-                logger.warning("Received signal event with no signal data")
+                logger.warning("Received signal event with no signal data - event.data type=%s, signal_data type=%s", type(event.data).__name__, type(signal_data).__name__)
                 return
+
+            logger.info(
+                f"📨 Signal handler received: {signal.strategy.name} {signal.side.name} "
+                f"{signal.asset} (valid={signal.is_valid()}, confidence={signal.confidence})"
+            )
 
             # Validate signal should be executed
             if not self._should_execute_signal(signal):
-                logger.debug(
-                    f"Signal validation failed for {signal.asset} - skipping execution"
+                logger.info(
+                    f"🚫 Signal validation failed for {signal.asset} {signal.strategy.name} - skipping execution"
                 )
                 return
 
@@ -1041,6 +1110,13 @@ class TradingBot:
 
         except Exception as e:
             logger.error(f"Error handling signal event: {e}", exc_info=True)
+            # Log the failure so it's visible in signal stats
+            if signal:
+                self.signal_logger.log_signal_failed(
+                    signal=signal,
+                    error=str(e),
+                    notes="Exception in _handle_signal_generated",
+                )
 
     def _convert_signal_data(self, signal_data):
         """Convert signal data dict to Signal object if needed."""
@@ -1063,8 +1139,19 @@ class TradingBot:
         try:
             # Check signal validity
             if not signal.is_valid():
-                reason = f"Signal invalid: {signal.validation_flags}"
-                logger.debug(f"Signal invalid for {signal.asset}: {signal.validation_flags}")
+                flags = {
+                    'volume_confirmation': signal.volume_confirmation,
+                    'multi_timeframe_alignment': signal.multi_timeframe_alignment,
+                    'support_resistance_valid': signal.support_resistance_valid,
+                    'rrr_meets_minimum': signal.rrr_meets_minimum,
+                    'liquidation_buffer_safe': signal.liquidation_buffer_safe,
+                    'account_risk_ok': signal.account_risk_ok,
+                    'margin_drawdown_ok': signal.margin_drawdown_ok,
+                    'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                }
+                failed = [k for k, v in flags.items() if not v]
+                reason = f"Signal invalid - failed flags: {failed}"
+                logger.info(f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
@@ -1086,6 +1173,10 @@ class TradingBot:
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
+            logger.info(
+                f"✅ Signal passed validation: {signal.asset} {signal.strategy.name} "
+                f"(balance=${balance:.2f}, exposure={exposure_pct:.1f}%)"
+            )
             return True
 
         except Exception as e:
@@ -1127,9 +1218,11 @@ class TradingBot:
             )
 
             if not allocation_result.get("approved", False):
+                reason = f"Capital allocation denied: {allocation_result.get('reason', 'unknown')}"
                 logger.warning(
                     f"Capital allocation denied for {signal.asset}: {allocation_result.get('reason')}"
                 )
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return
 
             logger.info(
@@ -1149,6 +1242,11 @@ class TradingBot:
             logger.error(
                 f"Error coordinating signal execution for {signal.asset}: {e}",
                 exc_info=True,
+            )
+            self.signal_logger.log_signal_failed(
+                signal=signal,
+                error=str(e),
+                notes="Exception during signal coordination",
             )
 
     def _execute_coordinated_signal(self, signal, allocation_result, log_entry=None):
@@ -1183,6 +1281,14 @@ class TradingBot:
         """
         try:
             symbol = signal.asset
+
+            # Pre-check: skip if grid already active for this symbol
+            if self.grid_lifecycle and self.grid_lifecycle.has_active_grid(symbol):
+                reason = f"Grid already active for {symbol}"
+                logger.info(f"🔷 {reason}, skipping duplicate grid signal")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return
+
             # RiskManager returns "allocated_amount" (not "capital_allocated")
             capital_allocated = allocation_result.get("allocated_amount", 0)
 
@@ -1411,17 +1517,34 @@ class TradingBot:
                 order_type="market",
             )
 
-            # Extract order data from response wrapper {"success": bool, "data": {...}}
-            order_data = order_response.get("data", {}) if isinstance(order_response, dict) else {}
-            order_id = order_data.get("order_id") or order_data.get("id")
+            # Debug: log raw API response to diagnose parsing issues
+            logger.info(
+                f"📡 Raw order response for {symbol}: type={type(order_response).__name__}, "
+                f"value={str(order_response)[:200]}"
+            )
 
-            # Convert to execution result format
-            execution_result = {
-                "success": order_response.get("success", False) and order_id is not None,
-                "order_id": order_id,
-                "executed_price": order_data.get("price", signal.entry_price),  # Use actual fill price if available
-                "error": order_response.get("error") if not order_response.get("success") else None,
-            }
+            # Extract order data from response wrapper {"success": bool, "data": {...}}
+            if not isinstance(order_response, dict):
+                logger.error(f"Unexpected order response type: {type(order_response).__name__} = {order_response}")
+                execution_result = {
+                    "success": False,
+                    "order_id": None,
+                    "executed_price": signal.entry_price,
+                    "error": f"Unexpected response type: {type(order_response).__name__}",
+                }
+            else:
+                order_data = order_response.get("data", {})
+                if not isinstance(order_data, dict):
+                    order_data = {}
+                order_id = order_data.get("order_id") or order_data.get("id")
+
+                # Convert to execution result format
+                execution_result = {
+                    "success": order_response.get("success", False) and order_id is not None,
+                    "order_id": order_id,
+                    "executed_price": order_data.get("price", signal.entry_price),
+                    "error": order_response.get("error") if not order_response.get("success") else None,
+                }
 
             if execution_result.get("success"):
                 logger.info(
