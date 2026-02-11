@@ -1,3 +1,4 @@
 .env
 *.log
 nul
+signals_log.csv

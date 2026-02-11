@@ -1505,8 +1505,19 @@ class TradingBot:
                 )
                 return
 
-            # Execute order directly through PacificaClient
-            # ExecutionLayer.refine_entry() is for timing refinement only, not execution
+            # Refine signal through ExecutionLayer before execution
+            refined_signal = self.execution_layer.refine_entry(signal, symbol)
+            if refined_signal is None:
+                logger.info(f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable")
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason="ExecutionLayer timing skip",
+                    notes="1m/5m timing conditions not met",
+                )
+                return
+            
+            # Use refined signal for execution
+            signal = refined_signal
             side_str = "buy" if signal.side.name == "BUY" else "sell"
 
             # Use market order for immediate execution
@@ -1739,13 +1750,21 @@ class TradingBot:
         """
         try:
             balance = self.client.get_balance()
+            logging.info(f"🔍 Raw balance response: {balance}")
+            
             # Pacifica returns "balance" or "account_equity" (as strings), not "equity"
             balance_str = balance.get("balance", balance.get("account_equity", "0"))
+            logging.info(f"🔍 Extracted balance string: '{balance_str}'")
+            
             equity = float(balance_str) if balance_str else 0.0
-            logging.debug(f"Account balance: ${equity:.2f}")
+            logging.info(f"🔍 Final account balance: ${equity:.2f}")
+            
+            if equity <= 0:
+                logging.warning(f"⚠️ Account balance is ${equity:.2f} - this will block all executions!")
+            
             return equity
         except Exception as e:
-            logging.error(f"Error getting account balance: {e}")
+            logging.error(f"❌ Error getting account balance: {e}")
             return 0.0
 
     def _get_current_exposure(self) -> float:
