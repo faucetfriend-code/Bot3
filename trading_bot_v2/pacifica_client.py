@@ -1,8 +1,12 @@
+import asyncio
 import json
 import time
 import uuid
 import base58
-from typing import Dict, List, Any, Optional
+import json
+from collections import defaultdict, deque
+from datetime import datetime, timedelta
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 from enum import Enum
 
 import requests
@@ -27,6 +31,309 @@ class RateLimitError(Exception):
     """Custom exception for HTTP 429 rate limit errors - allows retry with backoff."""
 
     pass
+
+
+class RequestPriority(Enum):
+    """Priority levels for API requests."""
+    CRITICAL = 3  # Trading operations (place/cancel orders)
+    HIGH = 2     # Market data needed for trading decisions
+    NORMAL = 1   # Background refreshes and non-critical data
+    LOW = 0      # Statistics and monitoring
+
+
+class RateLimitManager:
+    """Manages API rate limiting with circuit breaker patterns."""
+    
+    def __init__(self, max_requests_per_minute: int = 30):
+        """
+        Initialize rate limit manager.
+        
+        Args:
+            max_requests_per_minute: Maximum requests per minute (conservative limit)
+        """
+        self.max_rpm = max_requests_per_minute
+        self.requests = deque(maxlen=max_requests_per_minute)
+        self.last_reset = time.time()
+        self.circuit_breaker_active = False
+        self.circuit_breaker_until = 0
+        self.rate_limit_hits = 0
+        self.total_requests = 0
+        
+        # Statistics tracking
+        self.priority_stats = defaultdict(lambda: {'count': 0, 'success': 0})
+        
+    def can_make_request(self, priority: Union[str, RequestPriority] = RequestPriority.NORMAL) -> bool:
+        """
+        Check if request can be made based on rate limits and circuit breaker.
+        
+        Args:
+            priority: Request priority level
+            
+        Returns:
+            True if request can proceed, False otherwise
+        """
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+            
+        now = time.time()
+        
+        # Reset counter every minute
+        if now - self.last_reset > 60:
+            self.requests.clear()
+            self.last_reset = now
+            self.circuit_breaker_active = False
+            self.rate_limit_hits = 0
+            
+        # Check circuit breaker
+        if self.circuit_breaker_active:
+            if now < self.circuit_breaker_until:
+                return False
+            else:
+                self.circuit_breaker_active = False
+                
+        # Allow critical requests even during rate limit (within reason)
+        if priority == RequestPriority.CRITICAL:
+            if len(self.requests) < self.max_rpm * 0.9:  # 90% threshold for critical
+                return True
+            elif len(self.requests) < self.max_rpm:
+                logger.warning(f"Critical request near rate limit threshold: {len(self.requests)}/{self.max_rpm}")
+                return True
+            else:
+                logger.error(f"Critical request blocked by rate limit: {len(self.requests)}/{self.max_rpm}")
+                return False
+            
+        # Check rate limit for other priorities
+        return len(self.requests) < self.max_rpm
+    
+    def record_request(self, priority: Union[str, RequestPriority] = RequestPriority.NORMAL, success: bool = True):
+        """
+        Record a request was made.
+        
+        Args:
+            priority: Request priority level
+            success: Whether the request was successful
+        """
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+            
+        self.requests.append(time.time())
+        self.total_requests += 1
+        self.priority_stats[priority]['count'] += 1
+        if success:
+            self.priority_stats[priority]['success'] += 1
+    
+    def record_rate_limit_hit(self):
+        """Record a rate limit hit and activate circuit breaker if needed."""
+        self.rate_limit_hits += 1
+        
+        # Activate circuit breaker if multiple hits in short time
+        recent_hits = sum(1 for req_time in self.requests if time.time() - req_time < 60)
+        if recent_hits >= 3:  # 3+ rate limit hits in a minute
+            self.activate_circuit_breaker(duration=30)
+            
+    def activate_circuit_breaker(self, duration: int = 30):
+        """
+        Temporarily pause requests due to rate limit.
+        
+        Args:
+            duration: Duration in seconds to pause requests
+        """
+        self.circuit_breaker_active = True
+        self.circuit_breaker_until = time.time() + duration
+        logger.warning(f"Circuit breaker activated for {duration} seconds due to rate limiting")
+        
+    def get_stats(self) -> Dict[str, Any]:
+        """Get rate limiting statistics."""
+        return {
+            'total_requests': self.total_requests,
+            'rate_limit_hits': self.rate_limit_hits,
+            'circuit_breaker_active': self.circuit_breaker_active,
+            'current_usage': len(self.requests),
+            'max_rpm': self.max_rpm,
+            'reset_in': max(0, 60 - (time.time() - self.last_reset)),
+            'priority_stats': dict(self.priority_stats)
+        }
+
+
+class SmartCache:
+    """Intelligent caching system with TTL and invalidation."""
+    
+    def __init__(self, rate_manager: RateLimitManager):
+        """
+        Initialize smart cache.
+        
+        Args:
+            rate_manager: RateLimitManager instance for rate limiting
+        """
+        self.cache: Dict[str, Tuple[Any, float, RequestPriority]] = {}  # key -> (data, timestamp, priority)
+        self.cache_stats = defaultdict(lambda: {'hits': 0, 'misses': 0})
+        self.rate_manager = rate_manager
+        
+        # TTL by data type (in seconds)
+        self.ttl_config = {
+            'market_data': 10,      # Market prices - very short TTL
+            'candles_1m': 60,      # 1-minute candles
+            'candles_5m': 120,     # 5-minute candles
+            'candles_15m': 300,    # 15+ minute candles
+            'account_data': 30,     # Account info - short TTL for trading
+            'positions': 30,       # Positions - short TTL
+            'orders': 60,          # Orders - medium TTL
+            'markets': 3600,       # Market info - long TTL
+            'funding': 300,        # Funding rates - medium TTL
+        }
+        
+    def get(self, key: str, fetch_func: Callable[[], Any], ttl: Optional[int] = None, 
+            priority: Union[str, RequestPriority] = RequestPriority.NORMAL) -> Any:
+        """
+        Get cached data or fetch if not available.
+        
+        Args:
+            key: Cache key
+            fetch_func: Function to call if cache miss
+            ttl: Time-to-live in seconds (overrides default)
+            priority: Request priority for rate limiting
+            
+        Returns:
+            Cached or fetched data
+        """
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+            
+        # Check cache
+        if key in self.cache:
+            data, timestamp, cached_priority = self.cache[key]
+            cache_ttl = ttl or self._get_ttl_for_key(key)
+            
+            if time.time() - timestamp < cache_ttl:
+                self.cache_stats[key]['hits'] += 1
+                logger.debug(f"Cache HIT: {key} (age: {time.time() - timestamp:.1f}s)")
+                return data
+            else:
+                # Stale cache entry
+                del self.cache[key]
+                logger.debug(f"Cache STALE: {key} (age: {time.time() - timestamp:.1f}s > TTL: {cache_ttl}s)")
+        
+        # Cache miss - check rate limit before fetching
+        if not self.rate_manager.can_make_request(priority):
+            logger.warning(f"Rate limit reached for {key}, waiting...")
+            self._wait_for_rate_limit(priority)
+            
+        self.cache_stats[key]['misses'] += 1
+        try:
+            data = fetch_func()
+            self.cache[key] = (data, time.time(), priority)
+            self.rate_manager.record_request(priority, success=True)
+            logger.debug(f"Cache SET: {key}")
+            return data
+        except Exception as e:
+            self.rate_manager.record_request(priority, success=False)
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                self.rate_manager.record_rate_limit_hit()
+            raise
+            
+    async def get_async(self, key: str, fetch_func: Callable[[], Any], ttl: Optional[int] = None,
+                       priority: Union[str, RequestPriority] = RequestPriority.NORMAL) -> Any:
+        """
+        Async version of get method.
+        
+        Args:
+            key: Cache key
+            fetch_func: Async function to call if cache miss
+            ttl: Time-to-live in seconds (overrides default)
+            priority: Request priority for rate limiting
+            
+        Returns:
+            Cached or fetched data
+        """
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+            
+        # Check cache (same as sync version)
+        if key in self.cache:
+            data, timestamp, cached_priority = self.cache[key]
+            cache_ttl = ttl or self._get_ttl_for_key(key)
+            
+            if time.time() - timestamp < cache_ttl:
+                self.cache_stats[key]['hits'] += 1
+                logger.debug(f"Cache HIT: {key} (age: {time.time() - timestamp:.1f}s)")
+                return data
+            else:
+                del self.cache[key]
+                
+        # Cache miss - check rate limit before fetching
+        if not self.rate_manager.can_make_request(priority):
+            logger.warning(f"Rate limit reached for {key}, waiting...")
+            await self._wait_for_rate_limit_async(priority)
+            
+        self.cache_stats[key]['misses'] += 1
+        try:
+            data = await fetch_func()
+            self.cache[key] = (data, time.time(), priority)
+            self.rate_manager.record_request(priority, success=True)
+            logger.debug(f"Cache SET: {key}")
+            return data
+        except Exception as e:
+            self.rate_manager.record_request(priority, success=False)
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                self.rate_manager.record_rate_limit_hit()
+            raise
+    
+    def _get_ttl_for_key(self, key: str) -> int:
+        """Get TTL for a cache key based on its type."""
+        for pattern, ttl in self.ttl_config.items():
+            if pattern in key:
+                return ttl
+        return 300  # Default 5 minutes
+        
+    def _wait_for_rate_limit(self, priority: RequestPriority):
+        """Wait until rate limit allows requests."""
+        wait_count = 0
+        while not self.rate_manager.can_make_request(priority):
+            wait_count += 1
+            if wait_count > 60:  # Maximum wait of 1 minute
+                raise RateLimitError("Extended rate limit exceeded")
+            time.sleep(1)
+            
+    async def _wait_for_rate_limit_async(self, priority: RequestPriority):
+        """Async version of wait for rate limit."""
+        wait_count = 0
+        while not self.rate_manager.can_make_request(priority):
+            wait_count += 1
+            if wait_count > 60:  # Maximum wait of 1 minute
+                raise RateLimitError("Extended rate limit exceeded")
+            await asyncio.sleep(1)
+    
+    def invalidate(self, pattern: Optional[str] = None):
+        """
+        Invalidate cache entries.
+        
+        Args:
+            pattern: Optional pattern to match keys for selective invalidation
+        """
+        if pattern:
+            keys_to_remove = [key for key in self.cache.keys() if pattern in key]
+            for key in keys_to_remove:
+                del self.cache[key]
+            logger.debug(f"Invalidated {len(keys_to_remove)} cache entries matching '{pattern}'")
+        else:
+            cache_size = len(self.cache)
+            self.cache.clear()
+            logger.debug(f"Invalidated all {cache_size} cache entries")
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        return {
+            'cache_size': len(self.cache),
+            'cache_stats': dict(self.cache_stats),
+            'hit_rate': self._calculate_hit_rate(),
+            'memory_usage': sum(len(str(data[0])) for data in self.cache.values())
+        }
+    
+    def _calculate_hit_rate(self) -> float:
+        """Calculate overall cache hit rate."""
+        total_hits = sum(stats['hits'] for stats in self.cache_stats.values())
+        total_requests = total_hits + sum(stats['misses'] for stats in self.cache_stats.values())
+        return (total_hits / total_requests * 100) if total_requests > 0 else 0.0
 
 
 class PacificaEnvironment(Enum):
@@ -85,21 +392,23 @@ def sort_json_keys(value):
 
 
 class PacificaClient:
-    """Client for interacting with the Pacifica exchange API."""
+    """Enhanced client for interacting with the Pacifica exchange API with rate limiting and caching."""
 
     def __init__(
         self,
         agent_wallet_private_key: str,
         account_public_key: str,
         testnet: bool = True,
+        max_requests_per_minute: int = 30,
     ):
         """
-        Initialize the Pacifica client.
+        Initialize the enhanced Pacifica client.
 
         Args:
             agent_wallet_private_key: Private key for the agent wallet.
             account_public_key: Public key for the account.
             testnet: Whether to use testnet (default True).
+            max_requests_per_minute: Maximum requests per minute for rate limiting.
         """
         self.agent_keypair = Keypair.from_base58_string(agent_wallet_private_key)
         self.agent_wallet_public_key = str(self.agent_keypair.pubkey())
@@ -113,7 +422,187 @@ class PacificaClient:
         # Connection pooling - reuse TCP connections for better performance
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
-        logger.info("PacificaClient initialized with connection pooling")
+        
+        # Initialize rate limiting and caching components
+        self.rate_manager = RateLimitManager(max_requests_per_minute=max_requests_per_minute)
+        self.cache = SmartCache(self.rate_manager)
+        
+        # Request queues for different priorities
+        self.request_queue = asyncio.Queue()
+        self.priority_queue = asyncio.PriorityQueue()
+        
+        # WebSocket availability flag (set by external WebSocket client)
+        self.ws_client = None
+        
+        logger.info(f"PacificaClient initialized with rate limiting ({max_requests_per_minute} RPM) and smart caching")
+    
+    def set_websocket_client(self, ws_client):
+        """Set WebSocket client for data source optimization."""
+        self.ws_client = ws_client
+        logger.info("WebSocket client set for data source optimization")
+    
+    def should_use_websocket(self, data_type: str, symbol: str, timeframe: Optional[str] = None) -> bool:
+        """
+        Determine if data should come from WebSocket vs REST.
+        
+        Args:
+            data_type: Type of data (market_data, candles, account_data, etc.)
+            symbol: Trading symbol
+            timeframe: Optional timeframe for candle data
+            
+        Returns:
+            True if WebSocket should be used, False otherwise
+        """
+        if not self.ws_client:
+            return False
+            
+        # Define WebSocket preference rules
+        websocket_preferences = {
+            'market_data': True,  # Real-time prices always from WebSocket
+            'candles': lambda tf: tf in ['1m', '5m'] if tf else False,  # Recent timeframes from WebSocket
+            'account_data': False,  # Always use REST for account info (security)
+            'positions': False,    # Always use REST for positions (security)
+            'orders': False,       # Always use REST for orders (security)
+            'funding': False,      # Use REST for funding rates
+        }  # type: Dict[str, Union[bool, Callable[[str], bool]]]
+        
+        preference = websocket_preferences.get(data_type, False)
+        if callable(preference) and timeframe:
+            return bool(preference(timeframe))
+        return bool(preference)
+    
+    def make_priority_request(self, endpoint: str, params: Dict[str, Any], 
+                             priority: Union[str, RequestPriority] = RequestPriority.NORMAL,
+                             method: str = 'POST') -> Dict[str, Any]:
+        """
+        Make request with priority consideration.
+        
+        Args:
+            endpoint: API endpoint
+            params: Request parameters
+            priority: Request priority level
+            method: HTTP method (GET/POST)
+            
+        Returns:
+            API response as dict
+        """
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+            
+        if priority == RequestPriority.CRITICAL:
+            # Trading operations - execute immediately
+            return self._execute_request_immediately(endpoint, params, method)
+        elif priority == RequestPriority.HIGH:
+            # Market data needed for trading decisions
+            return self._make_request_with_short_wait(endpoint, params, method)
+        else:
+            # Background refreshes and non-critical data
+            return self._queue_request_for_later(endpoint, params, method)
+    
+    def _execute_request_immediately(self, endpoint: str, params: Dict[str, Any], method: str = 'POST') -> Dict[str, Any]:
+        """Execute critical request immediately, bypassing queues."""
+        if method == 'GET':
+            return self._make_get_request(endpoint, params)
+        else:
+            # Determine request type based on endpoint
+            if '/orders/create' in endpoint:
+                request_type = 'create_order' if 'market' not in endpoint else 'create_market_order'
+            elif '/orders/cancel' in endpoint:
+                request_type = 'cancel_order'
+            else:
+                request_type = f"signed_{endpoint.replace('/', '_')}"
+            return self._make_signed_request(endpoint, params, request_type)
+    
+    def _make_request_with_short_wait(self, endpoint: str, params: Dict[str, Any], method: str = 'POST') -> Dict[str, Any]:
+        """Make request with minimal wait time for high priority."""
+        if not self.rate_manager.can_make_request(RequestPriority.HIGH):
+            time.sleep(0.1)  # Short wait for high priority
+            
+        if method == 'GET':
+            return self._make_get_request(endpoint, params)
+        else:
+            return self._make_signed_request(endpoint, params, f"signed_{endpoint.replace('/', '_')}")
+    
+    def _queue_request_for_later(self, endpoint: str, params: Dict[str, Any], method: str = 'POST') -> Dict[str, Any]:
+        """Queue non-critical request for later execution."""
+        # For now, execute with longer wait time (could be enhanced with actual queueing)
+        if not self.rate_manager.can_make_request(RequestPriority.NORMAL):
+            time.sleep(1.0)  # Longer wait for normal priority
+            
+        if method == 'GET':
+            return self._make_get_request(endpoint, params)
+        else:
+            return self._make_signed_request(endpoint, params, f"signed_{endpoint.replace('/', '_')}")
+    
+    async def batch_kline_requests(self, symbols: List[str], timeframes: List[str], limit: int = 100) -> Dict[str, Dict[str, List[Dict[str, Any]]]]:
+        """
+        Batch multiple kline requests into fewer API calls.
+        
+        Args:
+            symbols: List of symbols
+            timeframes: List of timeframes
+            limit: Number of candles per request
+            
+        Returns:
+            Dictionary with results organized by symbol and timeframe
+        """
+        results = {}
+        
+        # Group by timeframe to optimize requests
+        for tf in timeframes:
+            tf_results = {}
+            
+            # Check cache first for each symbol/timeframe combination
+            uncached_symbols = []
+            for symbol in symbols:
+                cache_key = f"candles_{symbol}_{tf}"
+                try:
+                    # Try to get from cache
+                    cached_data = await self.cache.get_async(cache_key, 
+                        lambda: None, ttl=self.cache.ttl_config.get(f'candles_{tf}', 300))
+                    
+                    if cached_data:
+                        tf_results[symbol] = cached_data
+                        logger.debug(f"Cache HIT for batch request: {symbol}_{tf}")
+                    else:
+                        uncached_symbols.append(symbol)
+                except Exception:
+                    uncached_symbols.append(symbol)
+            
+            # Fetch uncached symbols
+            if uncached_symbols:
+                logger.info(f"Batch fetching {len(uncached_symbols)} symbols for timeframe {tf}")
+                
+                # Process symbols in parallel
+                fetch_tasks = []
+                for symbol in uncached_symbols:
+                    task = asyncio.create_task(self._fetch_single_candle_async(symbol, tf, limit))
+                    fetch_tasks.append((symbol, task))
+                
+                # Wait for all fetches
+                for symbol, task in fetch_tasks:
+                    try:
+                        candles = await task
+                        if candles:
+                            tf_results[symbol] = candles
+                            # Cache the results
+                            cache_key = f"candles_{symbol}_{tf}"
+                            self.cache.cache[cache_key] = (candles, time.time(), RequestPriority.NORMAL)
+                    except Exception as e:
+                        logger.error(f"Failed to fetch candles for {symbol}_{tf}: {e}")
+            
+            results[tf] = tf_results
+            
+        logger.info(f"Batch request completed: {len(results)} timeframes processed")
+        return results
+    
+    async def _fetch_single_candle_async(self, symbol: str, timeframe: str, limit: int) -> List[Dict[str, Any]]:
+        """Async wrapper for fetching single candle data."""
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.get_candles(market=symbol, interval=timeframe, limit=limit)
+        )
 
     @retry(
         stop=stop_after_attempt(5),
@@ -179,13 +668,30 @@ class PacificaClient:
             raise ValueError("Authentication failed")
         elif response.status_code == 429:
             logger.warning(f"Rate limit hit (429) for {endpoint}, backing off...")
+            self.rate_manager.record_rate_limit_hit()
             raise RateLimitError(
                 "Rate limit exceeded - retrying with exponential backoff"
             )
         elif response.status_code >= 400:
             raise ValueError(f"API error: {response.text}")
 
-        return response.json()
+        # Handle response - could be JSON or string
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            # Handle non-JSON responses (e.g., "success" string)
+            response_text = response.text.strip()
+            logger.debug(f"API returned non-JSON response: {response_text}")
+            
+            # Return a standardized format for string responses
+            if response_text.lower() == '"success"' or response_text.lower() == "success":
+                return {"success": True, "data": {"status": "success"}, "raw_response": response_text}
+            elif response_text.lower() == '"error"' or response_text.lower() == "error":
+                return {"success": False, "data": {}, "error": "API returned error response", "raw_response": response_text}
+            else:
+                # Unknown string response - treat as success but include raw response
+                logger.warning(f"API returned unexpected string response: {response_text}")
+                return {"success": True, "data": {"raw_response": response_text}, "raw_response": response_text}
 
     @retry(
         stop=stop_after_attempt(5),
@@ -234,6 +740,7 @@ class PacificaClient:
                 logger.warning(
                     f"Rate limit hit (429) for GET {endpoint}, backing off..."
                 )
+                self.rate_manager.record_rate_limit_hit()
                 raise RateLimitError(
                     "Rate limit exceeded - retrying with exponential backoff"
                 )
@@ -242,250 +749,23 @@ class PacificaClient:
                     f"API error: {response.reason or response.text or 'Unknown error'}"
                 )
 
-        return response.json()
-
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        retry=retry_if_exception_type(
-            (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                RateLimitError,
-            )
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
-    def _make_request(
-        self,
-        endpoint: str,
-        method: str = "GET",
-        params: Optional[Dict[str, Any]] = None,
-        data: Optional[Dict[str, Any]] = None,
-        signed: bool = False,
-    ) -> Dict[str, Any]:
-        """
-        Generic request method that can handle both GET and POST requests.
-
-        Args:
-            endpoint: API endpoint.
-            method: HTTP method ('GET' or 'POST').
-            params: Query parameters for GET requests.
-            data: Request body data for POST requests.
-            signed: Whether to sign the request.
-
-        Returns:
-            JSON response as dict.
-
-        Raises:
-            ValueError: For authentication or API errors.
-            RateLimitError: For rate limit (429) - will be retried with backoff.
-        """
-        url = self.base_url + endpoint
-        headers = {"Content-Type": "application/json"}
-
-        if signed and method == "GET":
-            # For signed GET requests, add signature to params
-            timestamp = int(time.time() * 1000)
-            signature_header = {
-                "timestamp": timestamp,
-                "expiry_window": 5000,
-                "type": "get_request",  # Generic type for signed GET
-            }
-            payload = data or {}
-            message, signature = sign_message(
-                signature_header, payload, self.agent_keypair
-            )
-
-            params = params or {}
-            params.update(
-                {
-                    "account": self.account_public_key,
-                    "agent_wallet": self.agent_wallet_public_key,
-                    "signature": signature,
-                    "timestamp": signature_header["timestamp"],
-                    "expiry_window": signature_header["expiry_window"],
-                }
-            )
-
-        try:
-            if method.upper() == "GET":
-                response = self.session.get(url, params=params, timeout=API_TIMEOUT)
-            elif method.upper() == "POST":
-                if signed:
-                    # For signed POST, use the existing _make_signed_request logic
-                    if data:
-                        request_type = data.get("type", "request")
-                        return self._make_signed_request(endpoint, data, request_type)
-                    else:
-                        raise ValueError("Data required for signed POST requests")
-                else:
-                    response = self.session.post(url, json=data, timeout=API_TIMEOUT)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-
-        except requests.exceptions.Timeout:
-            logger.warning(f"{method} timeout for {endpoint}, will retry...")
-            raise
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(
-                f"{method} connection error for {endpoint}: {e}, will retry..."
-            )
-            raise
-
-        if response.status_code == 401:
-            raise ValueError("Authentication failed")
-        elif response.status_code == 429:
-            logger.warning(
-                f"Rate limit hit (429) for {method} {endpoint}, backing off..."
-            )
-            raise RateLimitError(
-                "Rate limit exceeded - retrying with exponential backoff"
-            )
-        elif response.status_code >= 400:
-            raise ValueError(
-                f"API error: {response.reason or response.text or 'Unknown error'}"
-            )
-
+        # Handle response - could be JSON or string
         try:
             return response.json()
-        except ValueError:
-            # Handle non-JSON responses
-            return {"data": response.text, "success": response.status_code < 400}
-
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        retry=retry_if_exception_type(
-            (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                RateLimitError,
-            )
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
-    def get_balance(self) -> Dict[str, Any]:
-        """
-        Get account balance.
-
-        Returns:
-            Balance data as dict.
-        """
-        # Account endpoint uses GET with query parameters, not POST
-        timestamp = int(time.time() * 1000)
-
-        signature_header = {
-            "timestamp": timestamp,
-            "expiry_window": 5000,
-            "type": "get_account",
-        }
-
-        payload = {}
-        message, signature = sign_message(signature_header, payload, self.agent_keypair)
-
-        params = {
-            "account": self.account_public_key,
-            "agent_wallet": self.agent_wallet_public_key,
-            "signature": signature,
-            "timestamp": signature_header["timestamp"],
-            "expiry_window": signature_header["expiry_window"],
-        }
-
-        url = self.base_url + "/account"
-
-        try:
-            response = self.session.get(url, params=params, timeout=API_TIMEOUT)
-        except requests.exceptions.Timeout:
-            logger.warning("GET /account timeout, will retry...")
-            raise
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"GET /account connection error: {e}, will retry...")
-            raise
-
-        if response.status_code == 401:
-            raise ValueError("Authentication failed")
-        elif response.status_code == 429:
-            logger.warning("Rate limit hit (429) for GET /account, backing off...")
-            raise RateLimitError(
-                "Rate limit exceeded - retrying with exponential backoff"
-            )
-        elif response.status_code >= 400:
-            raise ValueError(f"API error: {response.text}")
-
-        return response.json().get("data", {})
-
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        retry=retry_if_exception_type(
-            (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                RateLimitError,
-            )
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
-    def get_trades(self, limit: int = 100) -> List[Dict[str, Any]]:
-        """
-        Get trade history (orders).
-
-        Args:
-            limit: Maximum number of trades to return.
-
-        Returns:
-            List of trade data as dicts.
-        """
-        # Account orders endpoint uses GET with query parameters
-        timestamp = int(time.time() * 1000)
-
-        signature_header = {
-            "timestamp": timestamp,
-            "expiry_window": 5000,
-            "type": "get_orders",
-        }
-
-        payload = {"limit": limit}
-        message, signature = sign_message(signature_header, payload, self.agent_keypair)
-
-        params = {
-            "account": self.account_public_key,
-            "agent_wallet": self.agent_wallet_public_key,
-            "signature": signature,
-            "timestamp": signature_header["timestamp"],
-            "expiry_window": signature_header["expiry_window"],
-            "limit": limit,
-        }
-
-        url = self.base_url + "/orders"
-
-        try:
-            response = self.session.get(url, params=params, timeout=API_TIMEOUT)
-        except requests.exceptions.Timeout:
-            logger.warning("GET /orders (trades) timeout, will retry...")
-            raise
-        except requests.exceptions.ConnectionError as e:
-            logger.warning(f"GET /orders (trades) connection error: {e}, will retry...")
-            raise
-
-        if response.status_code == 401:
-            raise ValueError("Authentication failed")
-        elif response.status_code == 429:
-            logger.warning(
-                "Rate limit hit (429) for GET /orders (trades), backing off..."
-            )
-            raise RateLimitError(
-                "Rate limit exceeded - retrying with exponential backoff"
-            )
-        elif response.status_code >= 400:
-            raise ValueError(f"API error: {response.text}")
-
-        response_data = response.json().get("data", [])
-        # API may return list directly or dict with orders key
-        if isinstance(response_data, list):
-            return response_data
-        return response_data.get("orders", [])
+        except json.JSONDecodeError:
+            # Handle non-JSON responses (e.g., "success" string)
+            response_text = response.text.strip()
+            logger.debug(f"API returned non-JSON GET response: {response_text}")
+            
+            # Return a standardized format for string responses
+            if response_text.lower() == '"success"' or response_text.lower() == "success":
+                return {"success": True, "data": {"status": "success"}, "raw_response": response_text}
+            elif response_text.lower() == '"error"' or response_text.lower() == "error":
+                return {"success": False, "data": {}, "error": "API returned error response", "raw_response": response_text}
+            else:
+                # Unknown string response - treat as success but include raw response
+                logger.warning(f"API returned unexpected string GET response: {response_text}")
+                return {"success": True, "data": {"raw_response": response_text}, "raw_response": response_text}
 
     @retry(
         stop=stop_after_attempt(5),
@@ -515,10 +795,10 @@ class PacificaClient:
             "type": "get_orders",
         }
 
-        payload = {}
+        payload: Dict[str, Any] = {}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -553,25 +833,25 @@ class PacificaClient:
             return response_data
         return response_data.get("orders", [])
 
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=2, min=2, max=30),
-        retry=retry_if_exception_type(
-            (
-                requests.exceptions.Timeout,
-                requests.exceptions.ConnectionError,
-                RateLimitError,
-            )
-        ),
-        before_sleep=before_sleep_log(logger, logging.WARNING),
-    )
     def get_positions(self) -> List[Dict[str, Any]]:
         """
-        Get open positions.
+        Get open positions with smart caching.
 
         Returns:
             List of position data.
         """
+        # Positions should not use WebSocket for security reasons
+        cache_key = f"positions_data"
+        positions_data = self.cache.get(
+            cache_key,
+            lambda: self._fetch_positions_fallback(),
+            ttl=self.cache.ttl_config['positions'],
+            priority=RequestPriority.HIGH
+        )
+        return positions_data if isinstance(positions_data, list) else positions_data.get("positions", [])
+    
+    def _fetch_positions_fallback(self) -> List[Dict[str, Any]]:
+        """Fallback method for fetching positions via REST API."""
         # Account positions endpoint uses GET with query parameters
         timestamp = int(time.time() * 1000)
 
@@ -581,10 +861,10 @@ class PacificaClient:
             "type": "get_positions",
         }
 
-        payload = {}
+        payload: Dict[str, Any] = {}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -607,6 +887,7 @@ class PacificaClient:
             raise ValueError("Authentication failed")
         elif response.status_code == 429:
             logger.warning("Rate limit hit (429) for GET /positions, backing off...")
+            self.rate_manager.record_rate_limit_hit()
             raise RateLimitError(
                 "Rate limit exceeded - retrying with exponential backoff"
             )
@@ -626,9 +907,11 @@ class PacificaClient:
         quantity: float,
         order_type: str,
         price: Optional[float] = None,
+        stop_loss: Optional[float] = None,
+        take_profit: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
-        Place a new order.
+        Place a new order with critical priority.
 
         Args:
             symbol: Trading symbol.
@@ -636,6 +919,8 @@ class PacificaClient:
             quantity: Order quantity.
             order_type: Order type (e.g., 'limit', 'market').
             price: Order price (required for limit orders).
+            stop_loss: Stop loss price (optional but recommended for safety).
+            take_profit: Take profit price (optional).
 
         Returns:
             Order data as dict.
@@ -662,7 +947,14 @@ class PacificaClient:
         else:
             raise ValueError(f"Unsupported order type: {order_type}")
 
-        return self._make_signed_request(endpoint, payload, request_type)
+        # Include stop loss and take profit if provided
+        if stop_loss is not None and stop_loss > 0:
+            payload["stop_loss"] = str(stop_loss)
+        if take_profit is not None and take_profit > 0:
+            payload["take_profit"] = str(take_profit)
+
+        # Use critical priority for order placement
+        return self._execute_request_immediately(endpoint, payload, 'POST')
 
     def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """
@@ -683,7 +975,7 @@ class PacificaClient:
         }
         return self._make_signed_request("/orders/cancel", payload, "cancel_order")
 
-    def cancel_all_orders(self, symbol: str = None) -> Dict[str, Any]:
+    def cancel_all_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """
         Cancel all open orders, optionally for a specific symbol.
 
@@ -693,7 +985,7 @@ class PacificaClient:
         Returns:
             Cancellation summary as dict.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "all_symbols": symbol is None,
             "exclude_reduce_only": False,
         }
@@ -704,7 +996,7 @@ class PacificaClient:
 
     def get_market_data(self, symbol: str) -> Dict[str, Any]:
         """
-        Get market data (prices) for a symbol.
+        Get market data (prices) for a symbol with caching and WebSocket optimization.
 
         Args:
             symbol: Trading symbol (without -PERP suffix).
@@ -712,7 +1004,29 @@ class PacificaClient:
         Returns:
             Market data as dict.
         """
-        response = self._make_get_request("/prices", {"symbol": symbol})
+        # Check WebSocket first for real-time data
+        if self.should_use_websocket('market_data', symbol):
+            if self.ws_client and hasattr(self.ws_client, 'get_ticker_data'):
+                try:
+                    ws_data = self.ws_client.get_ticker_data(symbol)
+                    if ws_data:
+                        logger.debug(f"WebSocket HIT for market data: {symbol}")
+                        return ws_data
+                except Exception as e:
+                    logger.debug(f"WebSocket failed for market data {symbol}: {e}")
+        
+        # Use cached data if available
+        cache_key = f"market_data_{symbol}"
+        return self.cache.get(
+            cache_key,
+            lambda: self._fetch_market_data_fallback(symbol),
+            ttl=self.cache.ttl_config['market_data'],
+            priority=RequestPriority.HIGH
+        )
+    
+    def _fetch_market_data_fallback(self, symbol: str) -> Dict[str, Any]:
+        """Fallback method for fetching market data via REST API."""
+        response = self._make_request_with_short_wait("/prices", {"symbol": symbol}, 'GET')
         prices = response.get("data", {}).get("prices", [])
         return prices[0] if prices else {}
 
@@ -773,7 +1087,7 @@ class PacificaClient:
         limit: int = 200,
     ) -> List[Dict[str, Any]]:
         """
-        Get historical candle/OHLCV data for a market with robust validation.
+        Get historical candle/OHLCV data for a market with WebSocket optimization and smart caching.
 
         Args:
             market: Market symbol (e.g., "BTC" or "BTC-PERP" - -PERP suffix will be stripped)
@@ -791,10 +1105,37 @@ class PacificaClient:
         """
         # Strip -PERP suffix if present - Pacifica API expects plain symbol
         import re
-
         clean_symbol = re.sub(r"-perp$", "", market, flags=re.IGNORECASE).upper()
 
-        params = {
+        # Check WebSocket first for recent timeframes
+        if self.should_use_websocket('candles', clean_symbol, interval):
+            if self.ws_client and hasattr(self.ws_client, 'get_kline_data'):
+                try:
+                    ws_data = self.ws_client.get_kline_data(clean_symbol, interval)
+                    if ws_data and len(ws_data) >= min(50, limit):  # Minimum data requirement
+                        logger.debug(f"WebSocket HIT for candles: {clean_symbol} {interval}")
+                        # Take the most recent candles
+                        return ws_data[-limit:] if len(ws_data) > limit else ws_data
+                except Exception as e:
+                    logger.debug(f"WebSocket failed for candles {clean_symbol} {interval}: {e}")
+
+        # Use cache for non-real-time or fallback data
+        cache_key = f"candles_{clean_symbol}_{interval}"
+        return self.cache.get(
+            cache_key,
+            lambda: self._fetch_candles_fallback(market, interval, start_time, end_time, limit),
+            ttl=self.cache.ttl_config.get(f'candles_{interval}', 300),
+            priority=RequestPriority.HIGH if interval in ['1m', '5m'] else RequestPriority.NORMAL
+        )
+    
+    def _fetch_candles_fallback(self, market: str, interval: str, start_time: Optional[int], 
+                                end_time: Optional[int], limit: int) -> List[Dict[str, Any]]:
+        """Fallback method for fetching candles via REST API."""
+        # Strip -PERP suffix if present - Pacifica API expects plain symbol
+        import re
+        clean_symbol = re.sub(r"-perp$", "", market, flags=re.IGNORECASE).upper()
+
+        params: Dict[str, Any] = {
             "symbol": clean_symbol,
             "interval": interval,
         }
@@ -806,7 +1147,7 @@ class PacificaClient:
             params["end_time"] = end_time
 
         try:
-            response = self._make_get_request("/kline", params)
+            response = self._make_request_with_short_wait("/kline", params, 'GET')
         except ValueError as e:
             logger.error(f"Failed to fetch candles for {clean_symbol}: {e}")
             return []
@@ -974,3 +1315,265 @@ class PacificaClient:
             logger.debug(f"Failed to get funding rate for {clean_symbol}: {e}")
 
         return None
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type(
+            (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                RateLimitError,
+            )
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2, min=2, max=30),
+        retry=retry_if_exception_type(
+            (
+                requests.exceptions.Timeout,
+                requests.exceptions.ConnectionError,
+                RateLimitError,
+            )
+        ),
+        before_sleep=before_sleep_log(logger, logging.WARNING),
+    )
+    def get_trades(
+        self,
+        limit: int = 100,
+        symbol: Optional[str] = None,
+        start_time: Optional[int] = None,
+        end_time: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Get recent trades/trade history.
+
+        Args:
+            limit: Maximum number of trades to return (default: 100).
+            symbol: Optional symbol to filter trades by.
+            start_time: Optional start time in milliseconds.
+            end_time: Optional end time in milliseconds.
+
+        Returns:
+            List of trade data with standardized fields.
+        """
+        # Account trades history endpoint uses GET with query parameters
+        timestamp = int(time.time() * 1000)
+
+        signature_header = {
+            "timestamp": timestamp,
+            "expiry_window": 5000,
+            "type": "get_trades",
+        }
+
+        payload: Dict[str, Any] = {}
+        message, signature = sign_message(signature_header, payload, self.agent_keypair)
+
+        params: Dict[str, Any] = {
+            "account": self.account_public_key,
+            "agent_wallet": self.agent_wallet_public_key,
+            "signature": signature,
+            "timestamp": signature_header["timestamp"],
+            "expiry_window": signature_header["expiry_window"],
+            "limit": limit,
+        }
+
+        # Add optional parameters
+        if symbol:
+            params["symbol"] = symbol
+        if start_time:
+            params["start_time"] = start_time
+        if end_time:
+            params["end_time"] = end_time
+
+        url = self.base_url + "/trades/history"
+
+        try:
+            response = self.session.get(url, params=params, timeout=API_TIMEOUT)
+        except requests.exceptions.Timeout:
+            logger.warning("GET /trades/history timeout, will retry...")
+            raise
+        except requests.exceptions.ConnectionError as e:
+            logger.warning(f"GET /trades/history connection error: {e}, will retry...")
+            raise
+
+        if response.status_code == 401:
+            raise ValueError("Authentication failed")
+        elif response.status_code == 429:
+            logger.warning("Rate limit hit (429) for GET /trades/history, backing off...")
+            raise RateLimitError(
+                "Rate limit exceeded - retrying with exponential backoff"
+            )
+        elif response.status_code >= 400:
+            raise ValueError(f"API error: {response.text}")
+
+        response_data = response.json()
+        trades_data = response_data.get("data", [])
+
+        # Standardize trade format to match expected fields
+        standardized_trades = []
+        for trade in trades_data:
+            try:
+                standardized_trade = {
+                    "history_id": trade.get("history_id"),
+                    "order_id": trade.get("order_id"),
+                    "client_order_id": trade.get("client_order_id"),
+                    "symbol": trade.get("symbol"),
+                    "side": trade.get("side"),
+                    "amount": self._safe_float_convert(trade.get("amount")),
+                    "price": self._safe_float_convert(trade.get("price")),
+                    "entry_price": self._safe_float_convert(trade.get("entry_price")),
+                    "fee": self._safe_float_convert(trade.get("fee")),
+                    "pnl": self._safe_float_convert(trade.get("pnl")),
+                    "event_type": trade.get("event_type"),
+                    "timestamp": trade.get("created_at"),
+                    "created_at": trade.get("created_at"),
+                    "cause": trade.get("cause"),
+                    # Add additional standard fields for compatibility
+                    "quantity": self._safe_float_convert(trade.get("amount")),
+                    "executed_price": self._safe_float_convert(trade.get("price")),
+                    "executed_amount": self._safe_float_convert(trade.get("amount")),
+                    "status": "filled",  # All trades in history are filled
+                }
+                standardized_trades.append(standardized_trade)
+            except Exception as e:
+                logger.warning(f"Error parsing trade data: {e}")
+                continue
+
+        logger.debug(f"Retrieved {len(standardized_trades)} trades")
+        return standardized_trades
+
+    def get_balance(self) -> Dict[str, Any]:
+        """
+        Get account balance and equity information with smart caching.
+
+        Returns:
+            Dict with balance information including fields like 'balance', 'account_equity', etc.
+        """
+        # Account data should not use WebSocket for security reasons
+        cache_key = f"account_data_balance"
+        return self.cache.get(
+            cache_key,
+            lambda: self._fetch_balance_fallback(),
+            ttl=self.cache.ttl_config['account_data'],
+            priority=RequestPriority.HIGH
+        )
+    
+    def _fetch_balance_fallback(self) -> Dict[str, Any]:
+        """Fallback method for fetching balance via REST API."""
+        # Account info endpoint uses GET with query parameters (no signature required for basic account info)
+        params = {
+            "account": self.account_public_key,
+        }
+
+        try:
+            response = self._make_request_with_short_wait("/account", params, 'GET')
+            
+            # Extract balance data from response
+            data = response.get("data", {})
+            
+            # Standardize the balance response to match expected format
+            balance_data = {
+                "balance": data.get("balance", "0"),
+                "account_equity": data.get("account_equity", "0"),
+                "equity": data.get("account_equity", "0"),  # Alias for compatibility
+                "available_balance": data.get("balance", "0"),
+                "total_equity": data.get("account_equity", "0"),
+                "usd_balance": data.get("balance", "0"),
+                "portfolio_value": data.get("account_equity", "0"),
+                "pending_balance": data.get("pending_balance", "0"),
+                "total_margin_used": data.get("total_margin_used", "0"),
+                "fee_level": data.get("fee_level", 0),
+                "maker_fee": data.get("maker_fee", "0"),
+                "taker_fee": data.get("taker_fee", "0"),
+                # Include original data for debugging
+                "raw_response": data,
+            }
+            
+            logger.debug(f"Balance data retrieved: {balance_data}")
+            return balance_data
+            
+        except ValueError as e:
+            logger.error(f"Failed to fetch account balance: {e}")
+            # Return default balance structure on error
+            return {
+                "balance": "0",
+                "account_equity": "0", 
+                "equity": "0",
+                "available_balance": "0",
+                "total_equity": "0",
+                "usd_balance": "0",
+                "portfolio_value": "0",
+                "error": str(e),
+            }
+        except Exception as e:
+            logger.error(f"Unexpected error fetching account balance: {e}")
+            return {
+                "balance": "0",
+                "account_equity": "0",
+                "equity": "0", 
+                "available_balance": "0",
+                "total_equity": "0",
+                "usd_balance": "0",
+                "portfolio_value": "0",
+                "error": str(e),
+            }
+    
+    def get_performance_stats(self) -> Dict[str, Any]:
+        """
+        Get comprehensive performance statistics for monitoring and optimization.
+        
+        Returns:
+            Dictionary with rate limiting, caching, and overall performance metrics
+        """
+        return {
+            'rate_limiting': self.rate_manager.get_stats(),
+            'caching': self.cache.get_stats(),
+            'websocket_enabled': self.ws_client is not None,
+            'api_endpoint': self.base_url,
+            'summary': {
+                'total_requests_made': self.rate_manager.total_requests,
+                'rate_limit_hits': self.rate_manager.rate_limit_hits,
+                'cache_hit_rate': self.cache._calculate_hit_rate(),
+                'circuit_breaker_active': self.rate_manager.circuit_breaker_active,
+                'current_rpm_usage': f"{len(self.rate_manager.requests)}/{self.rate_manager.max_rpm}"
+            }
+        }
+    
+    def clear_caches(self, pattern: Optional[str] = None):
+        """
+        Clear caches for maintenance or troubleshooting.
+        
+        Args:
+            pattern: Optional pattern to selectively clear cache entries
+        """
+        self.cache.invalidate(pattern)
+        logger.info(f"Cache cleared with pattern: {pattern or 'all'}")
+    
+    def reset_rate_limiting(self):
+        """Reset rate limiting state (use with caution)."""
+        self.rate_manager.requests.clear()
+        self.rate_manager.circuit_breaker_active = False
+        self.rate_manager.last_reset = time.time()
+        logger.warning("Rate limiting state reset - use with caution")
+    
+    def optimize_for_high_frequency(self):
+        """Optimize settings for high-frequency trading."""
+        self.rate_manager.max_rpm = 60  # Increase to 60 RPM for HFT
+        # Reduce cache TTLs for more frequent updates
+        self.cache.ttl_config['market_data'] = 5
+        self.cache.ttl_config['candles_1m'] = 30
+        self.cache.ttl_config['candles_5m'] = 60
+        logger.info("Optimized for high-frequency trading (60 RPM, reduced TTLs)")
+    
+    def optimize_for_low_frequency(self):
+        """Optimize settings for low-frequency trading."""
+        self.rate_manager.max_rpm = 20  # Reduce to 20 RPM for LFT
+        # Increase cache TTLs for less frequent updates
+        self.cache.ttl_config['market_data'] = 30
+        self.cache.ttl_config['candles_1m'] = 120
+        self.cache.ttl_config['candles_5m'] = 300
+        self.cache.ttl_config['candles_15m'] = 600
+        logger.info("Optimized for low-frequency trading (20 RPM, increased TTLs)")

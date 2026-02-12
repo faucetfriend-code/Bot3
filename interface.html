@@ -996,6 +996,8 @@
             try {
                 const response = await apiCall('/status');
                 const data = response.data;
+                console.log('Status API response:', data);
+                
                 const statusDiv = document.getElementById('status');
                 const statusSpan = document.getElementById('bot-status');
                 statusSpan.textContent = data.is_running ? 'Running' : 'Stopped';
@@ -1014,8 +1016,18 @@
                 regimeEl.textContent = regime.replace(/_/g, ' ');
                 regimeEl.className = 'regime regime-' + regime.replace(/_/g, '-');
 
-                // Active grids
-                document.getElementById('active-grids').textContent = data.active_grids || 0;
+                // Active grids - try multiple possible field names and log for debugging
+                const activeGridsCount = data.active_grids || data.grid_count || data.grids_count || data.active_grid_count || 
+                                        (data.grids ? data.grids.length : 0) || 0;
+                console.log('Grid count calculation:', {
+                    'active_grids': data.active_grids,
+                    'grid_count': data.grid_count,
+                    'grids_count': data.grids_count,
+                    'active_grid_count': data.active_grid_count,
+                    'grids.length': data.grids ? data.grids.length : 'N/A',
+                    'final_count': activeGridsCount
+                });
+                document.getElementById('active-grids').textContent = activeGridsCount;
 
                 // Circuit breaker
                 const cbEl = document.getElementById('circuit-breaker');
@@ -1034,6 +1046,7 @@
                 document.getElementById('trades-count').textContent = 'N/A';
                 document.getElementById('pnl').textContent = 'N/A';
                 document.getElementById('account-balance').textContent = 'N/A';
+                document.getElementById('active-grids').textContent = 'N/A';
                 showToast(`Failed to update status: ${error.message}`, 'error');
             }
         }
@@ -1391,11 +1404,23 @@
 
         async function updateGrids() {
             try {
+                console.log('Fetching grids data...');
                 const response = await apiCall('/grids');
-                const data = Array.isArray(response.data) ? response.data : [];
+                console.log('Grids API response:', response);
+                
+                let data = [];
+                if (Array.isArray(response.data)) {
+                    data = response.data;
+                } else if (Array.isArray(response)) {
+                    data = response;
+                } else if (response && typeof response === 'object') {
+                    // Handle case where data might be nested differently
+                    data = response.grids || response.active_grids || [];
+                }
+                
+                console.log('Processed grids data:', data);
+                
                 const tbody = document.getElementById('grids-tbody');
-
-                // Use document fragment to avoid layout thrashing
                 const fragment = document.createDocumentFragment();
 
                 document.getElementById('grids-count').textContent = `(${data.length})`;
@@ -1425,23 +1450,28 @@
 
                         // Symbol
                         const symbolCell = document.createElement('td');
-                        symbolCell.textContent = grid.symbol;
+                        symbolCell.textContent = grid.symbol || grid.market || 'Unknown';
                         row.appendChild(symbolCell);
 
                         // Orders (Buy/Sell)
                         const ordersCell = document.createElement('td');
-                        ordersCell.innerHTML = `${grid.total_orders} (<span class="positive">${grid.buy_orders}B</span>/<span class="negative">${grid.sell_orders}S</span>)`;
+                        const totalOrders = grid.total_orders || grid.order_count || 0;
+                        const buyOrders = grid.buy_orders || grid.buy_order_count || 0;
+                        const sellOrders = grid.sell_orders || grid.sell_order_count || 0;
+                        ordersCell.innerHTML = `${totalOrders} (<span class="positive">${buyOrders}B</span>/<span class="negative">${sellOrders}S</span>)`;
                         row.appendChild(ordersCell);
 
                         // Price Range
                         const rangeCell = document.createElement('td');
-                        rangeCell.textContent = `$${(grid.price_low || 0).toLocaleString()} - $${(grid.price_high || 0).toLocaleString()}`;
+                        const priceLow = grid.price_low || grid.lower_price || 0;
+                        const priceHigh = grid.price_high || grid.upper_price || 0;
+                        rangeCell.textContent = `$${priceLow.toLocaleString()} - $${priceHigh.toLocaleString()}`;
                         row.appendChild(rangeCell);
 
                         // Fills (Buy/Sell)
                         const fillsCell = document.createElement('td');
-                        const buyFills = grid.total_buy_fills || 0;
-                        const sellFills = grid.total_sell_fills || 0;
+                        const buyFills = grid.total_buy_fills || grid.buy_fills || 0;
+                        const sellFills = grid.total_sell_fills || grid.sell_fills || 0;
                         fillsCell.innerHTML = `<span class="positive">${buyFills}B</span>/<span class="negative">${sellFills}S</span>`;
                         if (buyFills > 0 || sellFills > 0) {
                             fillsCell.style.fontWeight = 'bold';
@@ -1450,7 +1480,7 @@
 
                         // Net Position
                         const netPosCell = document.createElement('td');
-                        const netPos = grid.net_position || 0;
+                        const netPos = grid.net_position || grid.position || 0;
                         netPosCell.textContent = netPos.toFixed(6);
                         if (netPos > 0) {
                             netPosCell.className = 'positive';
@@ -1461,14 +1491,14 @@
 
                         // Realized P&L
                         const realizedCell = document.createElement('td');
-                        const realized = grid.realized_pnl || 0;
+                        const realized = grid.realized_pnl || grid.realized || 0;
                         realizedCell.textContent = '$' + realized.toFixed(4);
                         realizedCell.className = realized >= 0 ? 'positive' : 'negative';
                         row.appendChild(realizedCell);
 
                         // Total P&L
                         const totalCell = document.createElement('td');
-                        const total = grid.total_pnl || 0;
+                        const total = grid.total_pnl || grid.pnl || 0;
                         totalCell.textContent = '$' + total.toFixed(4);
                         totalCell.className = total >= 0 ? 'positive' : 'negative';
                         totalCell.style.fontWeight = 'bold';
@@ -1476,12 +1506,13 @@
 
                         // Status
                         const statusCell = document.createElement('td');
-                        const rounds = grid.completed_round_trips || 0;
+                        const rounds = grid.completed_round_trips || grid.round_trips || 0;
+                        const status = grid.status || 'unknown';
                         if (rounds > 0) {
-                            statusCell.innerHTML = `<span class="positive">${grid.status}</span> (${rounds} RT)`;
+                            statusCell.innerHTML = `<span class="positive">${status}</span> (${rounds} RT)`;
                         } else {
-                            statusCell.textContent = grid.status;
-                            statusCell.className = grid.status === 'active' ? 'positive' : 'neutral';
+                            statusCell.textContent = status;
+                            statusCell.className = status === 'active' ? 'positive' : 'neutral';
                         }
                         row.appendChild(statusCell);
 
@@ -1493,9 +1524,15 @@
                 tbody.innerHTML = '';
                 tbody.appendChild(fragment);
 
+                console.log(`Successfully displayed ${data.length} grids`);
+
             } catch (error) {
                 console.error('Failed to update grids:', error);
                 showToast(`Failed to update grids: ${error.message}`, 'error');
+                
+                // Show error message in the grids table
+                const tbody = document.getElementById('grids-tbody');
+                tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; color: var(--danger-color);">Error loading grids</td></tr>';
             }
         }
 
@@ -1514,22 +1551,26 @@
                     data = Array.isArray(response.data) ? response.data : [];
                 }
 
+                // Filter out "generated" status signals - only show meaningful signals
+                const filteredData = data.filter(signal => signal.status !== 'generated');
+
                 const tbody = document.getElementById('signals-tbody');
                 const fragment = document.createDocumentFragment();
 
-                document.getElementById('signals-count').textContent = `(${data.length})`;
+                // Update count to reflect filtered signals only
+                document.getElementById('signals-count').textContent = `(${filteredData.length})`;
 
-                if (data.length === 0) {
+                if (filteredData.length === 0) {
                     const row = document.createElement('tr');
                     const cell = document.createElement('td');
                     cell.colSpan = 10;
                     cell.style.textAlign = 'center';
-                    cell.textContent = 'No signals yet';
+                    cell.textContent = 'No meaningful signals yet';
                     row.appendChild(cell);
                     fragment.appendChild(row);
                 } else {
                     // Show newest first
-                    const sorted = [...data].reverse();
+                    const sorted = [...filteredData].reverse();
                     sorted.forEach(signal => {
                         const row = document.createElement('tr');
 
@@ -1590,12 +1631,11 @@
                         }
                         row.appendChild(confCell);
 
-                        // Status (generated/executed/rejected/failed)
+                        // Status (executed/rejected/failed - generated is filtered out)
                         const statusCell = document.createElement('td');
                         const status = signal.status || 'unknown';
                         const statusColors = {
                             'executed': 'positive',
-                            'generated': 'neutral',
                             'rejected': 'negative',
                             'failed': 'negative'
                         };
@@ -1625,17 +1665,65 @@
 
         async function updateSignalStats() {
             try {
-                const response = await apiCall('/signals/stats');
-                if (response.success && response.data) {
-                    const stats = response.data;
-                    document.getElementById('stat-total').textContent = stats.total || 0;
-                    document.getElementById('stat-executed').textContent = stats.executed || 0;
-                    document.getElementById('stat-rejected').textContent = stats.rejected || 0;
-                    document.getElementById('stat-failed').textContent = stats.failed || 0;
-                    document.getElementById('stat-exec-rate').textContent = (stats.execution_rate || 0).toFixed(1) + '%';
+                // First try to get stats from API, if not available or doesn't exclude generated signals,
+                // calculate from raw signals data
+                let total = 0, executed = 0, rejected = 0, failed = 0;
+                
+                try {
+                    const response = await apiCall('/signals/stats');
+                    if (response.success && response.data) {
+                        // If API already provides filtered stats, use them
+                        if (response.data.excludes_generated) {
+                            const stats = response.data;
+                            total = stats.total || 0;
+                            executed = stats.executed || 0;
+                            rejected = stats.rejected || 0;
+                            failed = stats.failed || 0;
+                        } else {
+                            // API stats include generated signals, need to calculate ourselves
+                            throw new Error('Stats include generated signals, calculating manually');
+                        }
+                    } else {
+                        throw new Error('No stats available, calculating manually');
+                    }
+                } catch (e) {
+                    // Calculate manually from raw signals data
+                    let data = [];
+                    try {
+                        const signalsResponse = await apiCall('/signals/recent?count=100');
+                        if (signalsResponse.success && Array.isArray(signalsResponse.data)) {
+                            data = signalsResponse.data;
+                        }
+                    } catch (e2) {
+                        const signalsResponse = await apiCall('/signals');
+                        data = Array.isArray(signalsResponse.data) ? signalsResponse.data : [];
+                    }
+                    
+                    // Filter out generated signals and count by status
+                    const filteredData = data.filter(signal => signal.status !== 'generated');
+                    total = filteredData.length;
+                    executed = filteredData.filter(s => s.status === 'executed').length;
+                    rejected = filteredData.filter(s => s.status === 'rejected').length;
+                    failed = filteredData.filter(s => s.status === 'failed').length;
                 }
+                
+                // Update the UI
+                document.getElementById('stat-total').textContent = total;
+                document.getElementById('stat-executed').textContent = executed;
+                document.getElementById('stat-rejected').textContent = rejected;
+                document.getElementById('stat-failed').textContent = failed;
+                
+                const execRate = total > 0 ? ((executed / total) * 100) : 0;
+                document.getElementById('stat-exec-rate').textContent = execRate.toFixed(1) + '%';
+                
             } catch (error) {
                 console.error('Failed to update signal stats:', error);
+                // Set defaults on error
+                document.getElementById('stat-total').textContent = '0';
+                document.getElementById('stat-executed').textContent = '0';
+                document.getElementById('stat-rejected').textContent = '0';
+                document.getElementById('stat-failed').textContent = '0';
+                document.getElementById('stat-exec-rate').textContent = '0%';
             }
         }
 

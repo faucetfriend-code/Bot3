@@ -505,32 +505,359 @@ class BotIntegration:
 
         return grids
 
-    async def sync_positions(self) -> int:
-        """Sync positions from exchange to database."""
-        synced = 0
+    def _normalize_position_side(self, side: Optional[str]) -> str:
+        """Normalize position side from Pacifica format to database format.
+
+        Args:
+            side: Raw side value from Pacifica (e.g., 'long', 'short', 'bid', 'ask')
+
+        Returns:
+            Normalized side ('LONG' or 'SHORT')
+        """
+        if not side:
+            return "LONG"  # Default fallback
+
+        side_lower = str(side).lower()
+        if side_lower in ("long", "bid", "buy"):
+            return "LONG"
+        elif side_lower in ("short", "ask", "sell"):
+            return "SHORT"
+        return side_upper if (side_upper := str(side).upper()) in ("LONG", "SHORT") else "LONG"
+
+    def _map_pacifica_position(self, pos: Dict[str, Any]) -> Dict[str, Any]:
+        """Map Pacifica position fields to database format.
+
+        Args:
+            pos: Raw position data from Pacifica API
+
+        Returns:
+            Position data formatted for database.save_position()
+        """
+        # Extract symbol
+        symbol = pos.get("symbol", "")
+
+        # Map quantity/size/amount to quantity
+        quantity = 0.0
+        for key in ("size", "amount", "quantity", "position_size", "pos_size"):
+            if key in pos and pos[key] is not None:
+                try:
+                    quantity = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        # Map entry price fields
+        entry_price = 0.0
+        for key in ("avg_entry_price", "entry_price", "average_entry", "avg_price", "entry"):
+            if key in pos and pos[key] is not None:
+                try:
+                    entry_price = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        # Get current price from position or use entry price as fallback
+        current_price = 0.0
+        for key in ("mark_price", "current_price", "last_price", "price"):
+            if key in pos and pos[key] is not None:
+                try:
+                    current_price = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        # If no current price from position, try to get from WebSocket
+        if current_price == 0 and symbol and self.ws_client:
+            try:
+                ws_price = self.ws_client.get_price(symbol)
+                if ws_price:
+                    current_price = ws_price
+            except Exception:
+                pass
+
+        # Fallback to entry price if still no current price
+        if current_price == 0:
+            current_price = entry_price
+
+        # Normalize side
+        side = self._normalize_position_side(pos.get("side"))
+
+        # Map timestamp fields
+        opened_at = None
+        for key in ("created_at", "opened_at", "timestamp", "open_time"):
+            if key in pos and pos[key] is not None:
+                opened_at = pos[key]
+                break
+        if not opened_at:
+            opened_at = datetime.utcnow().isoformat()
+
+        # Get unrealized P&L from position or calculate it
+        unrealized_pnl = 0.0
+        for key in ("unrealized_pnl", "unrealized_pnl", "upnl", "floating_pnl"):
+            if key in pos and pos[key] is not None:
+                try:
+                    unrealized_pnl = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        # Calculate unrealized P&L if not provided and we have valid prices
+        if unrealized_pnl == 0 and entry_price > 0 and current_price > 0 and quantity > 0:
+            if side == "LONG":
+                unrealized_pnl = (current_price - entry_price) * quantity
+            else:  # SHORT
+                unrealized_pnl = (entry_price - current_price) * quantity
+
+        # Get funding P&L if available
+        funding_pnl = 0.0
+        for key in ("funding_pnl", "funding_pnl", "funding_fee", "funding"):
+            if key in pos and pos[key] is not None:
+                try:
+                    funding_pnl = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        # Determine asset class
+        asset_class = pos.get("asset_class", "perpetual")
+
+        return {
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "opened_at": opened_at,
+            "asset_class": asset_class,
+            "unrealized_pnl": round(unrealized_pnl, 2),
+            "funding_pnl": round(funding_pnl, 2),
+        }
+
+    async def sync_positions(self) -> Dict[str, Any]:
+        """Sync positions from Pacifica exchange to database.
+
+        This method syncs active positions from Pacifica and removes any positions
+        from the database that have been closed in Pacifica.
+
+        Returns:
+            Dict with success status, synced count, closed count, position details, and errors.
+        """
+        result = {
+            "success": False,
+            "synced_count": 0,
+            "inserted_count": 0,
+            "updated_count": 0,
+            "closed_count": 0,
+            "active_count": 0,
+            "positions": [],
+            "closed_positions": [],
+            "errors": [],
+            "message": "",
+        }
 
         try:
-            if self.trading_bot and hasattr(self.trading_bot, "_update_positions"):
-                # _update_positions is synchronous
-                self.trading_bot._update_positions()
+            # Get live positions from Pacifica API directly
+            if not self.pacifica_client:
+                result["message"] = "Pacifica client not available"
+                result["errors"].append({"general": "Pacifica client not initialized"})
+                return result
 
-                # Count synced positions
-                if self.database:
-                    positions = self.database.get_positions()
-                    synced = len(positions) if positions else 0
+            if not self.database:
+                result["message"] = "Database not available"
+                result["errors"].append({"general": "Database not initialized"})
+                return result
 
-            elif self.pacifica_client and self.database:
-                # Manual sync if trading bot method not available
+            # Fetch positions from Pacifica API
+            try:
                 live_positions = self.pacifica_client.get_positions()
-                if live_positions:
-                    for pos in live_positions:
-                        self.database.upsert_position(pos)
-                    synced = len(live_positions)
+            except Exception as e:
+                result["message"] = f"Failed to fetch positions from Pacifica: {e}"
+                result["errors"].append({"general": f"API error: {str(e)}"})
+                logger.error(f"Error fetching positions from Pacifica: {e}")
+                return result
+
+            # Get existing positions from database to determine insert vs update
+            existing_positions = {}
+            try:
+                db_positions = self.database.get_positions()
+                if db_positions:
+                    existing_positions = {p.get("symbol"): p for p in db_positions if p.get("symbol")}
+            except Exception as e:
+                logger.warning(f"Could not fetch existing positions from database: {e}")
+
+            # Build set of active symbols from Pacifica
+            active_symbols = set()
+            for pos in (live_positions or []):
+                symbol = pos.get("symbol")
+                if symbol:
+                    active_symbols.add(symbol)
+
+            # Step 1: Sync active positions from Pacifica to database
+            synced_count = 0
+            inserted_count = 0
+            updated_count = 0
+
+            if live_positions:
+                for pos in live_positions:
+                    symbol = pos.get("symbol")
+                    if not symbol:
+                        result["errors"].append({
+                            "symbol": "unknown",
+                            "error": "Position missing symbol field"
+                        })
+                        continue
+
+                    try:
+                        # Map Pacifica position fields to database format
+                        mapped_position = self._map_pacifica_position(pos)
+
+                        # Validate required fields
+                        if mapped_position["quantity"] == 0:
+                            logger.warning(f"Position for {symbol} has zero quantity, skipping")
+                            result["errors"].append({
+                                "symbol": symbol,
+                                "error": "Position has zero quantity"
+                            })
+                            continue
+
+                        # Determine if this is an insert or update
+                        if symbol in existing_positions:
+                            updated_count += 1
+                        else:
+                            inserted_count += 1
+
+                        # Save position to database
+                        self.database.save_position(mapped_position)
+                        synced_count += 1
+
+                        # Add position details to result
+                        position_info = {
+                            "symbol": symbol,
+                            "side": mapped_position["side"],
+                            "quantity": mapped_position["quantity"],
+                            "entry_price": mapped_position["entry_price"],
+                            "current_price": mapped_position["current_price"],
+                            "unrealized_pnl": mapped_position["unrealized_pnl"],
+                            "action": "updated" if symbol in existing_positions else "inserted"
+                        }
+                        result["positions"].append(position_info)
+
+                        logger.debug(
+                            f"Synced position {symbol}: {mapped_position['side']} "
+                            f"{mapped_position['quantity']} @ {mapped_position['entry_price']}"
+                        )
+
+                    except Exception as e:
+                        import traceback
+                        error_msg = str(e)
+                        error_details = traceback.format_exc()
+                        result["errors"].append({
+                            "symbol": symbol,
+                            "error": error_msg,
+                            "details": error_details
+                        })
+                        logger.error(f"Error syncing position for {symbol}: {e}")
+                        logger.debug(f"Position sync error traceback for {symbol}:\n{error_details}")
+
+            # Step 2: Find and remove positions that were closed in Pacifica
+            closed_count = 0
+            positions_to_close = []
+
+            for symbol, db_pos in existing_positions.items():
+                if symbol not in active_symbols:
+                    # Position was closed in Pacifica - remove from database
+                    positions_to_close.append({
+                        "symbol": symbol,
+                        "side": db_pos.get("side", "LONG"),
+                        "entry_price": db_pos.get("entry_price", 0),
+                        "unrealized_pnl": db_pos.get("unrealized_pnl", 0)
+                    })
+
+            # Close the identified positions
+            for pos_info in positions_to_close:
+                try:
+                    symbol = pos_info["symbol"]
+                    side = pos_info["side"]
+
+                    # Get current price from WebSocket or use entry price as fallback
+                    current_price = pos_info["entry_price"]
+                    if self.ws_client:
+                        ws_price = self.ws_client.get_price(symbol)
+                        if ws_price:
+                            current_price = ws_price
+
+                    # Close the position in database (hard delete)
+                    self.database.close_position(
+                        symbol=symbol,
+                        side=side,
+                        exit_price=current_price
+                    )
+
+                    closed_count += 1
+                    result["closed_positions"].append({
+                        "symbol": symbol,
+                        "side": side,
+                        "exit_price": current_price,
+                        "realized_pnl": pos_info["unrealized_pnl"]
+                    })
+
+                    logger.info(f"Closed position removed from database: {symbol} {side}")
+
+                except Exception as e:
+                    logger.error(f"Error closing position {pos_info['symbol']}: {e}")
+                    result["errors"].append({
+                        "symbol": pos_info["symbol"],
+                        "error": f"Failed to close position: {str(e)}"
+                    })
+
+            # Step 3: Build success message with details
+            result["synced_count"] = synced_count
+            result["inserted_count"] = inserted_count
+            result["updated_count"] = updated_count
+            result["closed_count"] = closed_count
+            result["active_count"] = len(active_symbols)
+
+            # Build comprehensive message
+            parts = []
+            if synced_count > 0:
+                parts.append(f"synced {synced_count} active ({inserted_count} new, {updated_count} updated)")
+            if closed_count > 0:
+                parts.append(f"closed {closed_count} position(s)")
+
+            if parts:
+                result["success"] = True
+                result["message"] = f"Successfully {'; '.join(parts)} from Pacifica"
+
+                # Add position summary if 5 or fewer positions
+                if synced_count > 0 and synced_count <= 5:
+                    position_summary = []
+                    for pos in result["positions"]:
+                        side_str = pos["side"].upper() if pos["side"] else "UNKNOWN"
+                        qty = pos["quantity"]
+                        symbol = pos["symbol"]
+                        position_summary.append(f"{symbol} ({qty} {side_str})")
+                    result["message"] += f": {', '.join(position_summary)}"
+            else:
+                if live_positions is None or len(live_positions) == 0:
+                    if closed_count == 0:
+                        result["success"] = True
+                        result["message"] = "No open positions found in Pacifica; database is clean"
+                    else:
+                        result["success"] = True
+                        result["message"] = f"All positions closed; removed {closed_count} from database"
+                elif result["errors"]:
+                    result["message"] = "No positions were synced due to errors"
+                else:
+                    result["success"] = True
+                    result["message"] = "No changes detected"
 
         except Exception as e:
-            logger.error(f"Error syncing positions: {e}")
+            error_msg = str(e)
+            result["message"] = f"Unexpected error during sync: {error_msg}"
+            result["errors"].append({"general": error_msg})
+            logger.error(f"Error syncing positions: {e}", exc_info=True)
 
-        return synced
+        return result
 
     def get_activity(self, limit: int = 50) -> List[Dict]:
         """Get market activity with regime detection and RSI for each market."""
@@ -968,16 +1295,43 @@ async def get_activity(limit: int = 50):
 
 
 @app.post("/api/positions/sync")
-async def sync_positions():
+async def sync_positions_endpoint():
     """Sync positions from exchange to database."""
     try:
-        synced_count = await bot_integration.sync_positions()
-        await broadcast_update("positions_synced", {"count": synced_count})
-        return {
-            "success": True,
-            "message": f"Synced {synced_count} positions",
-            "data": {"synced_count": synced_count},
-        }
+        result = await bot_integration.sync_positions()
+
+        # Broadcast update with synced count
+        await broadcast_update(
+            "positions_synced",
+            {"count": result.get("synced_count", 0), "success": result.get("success", False)}
+        )
+
+        # Return detailed result
+        if result.get("success"):
+            return {
+                "success": True,
+                "message": result.get("message", "Positions synced successfully"),
+                "data": {
+                    "synced_count": result.get("synced_count", 0),
+                    "inserted_count": result.get("inserted_count", 0),
+                    "updated_count": result.get("updated_count", 0),
+                    "positions": result.get("positions", []),
+                    "errors": result.get("errors", []),
+                },
+            }
+        else:
+            # Partial or complete failure
+            return {
+                "success": False,
+                "message": result.get("message", "Position sync failed"),
+                "data": {
+                    "synced_count": result.get("synced_count", 0),
+                    "inserted_count": result.get("inserted_count", 0),
+                    "updated_count": result.get("updated_count", 0),
+                    "positions": result.get("positions", []),
+                    "errors": result.get("errors", []),
+                },
+            }
     except Exception as e:
         logger.error(f"Error syncing positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1064,6 +1418,75 @@ async def get_grids():
             return {"success": True, "data": []}
     except Exception as e:
         logger.error(f"Error getting grids: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/grids/consistency")
+async def get_grid_consistency():
+    """Get grid state consistency status and statistics."""
+    try:
+        grid_mgr = None
+        if bot_integration.trading_bot and hasattr(
+            bot_integration.trading_bot, "grid_lifecycle"
+        ):
+            grid_mgr = bot_integration.trading_bot.grid_lifecycle
+        elif bot_integration.grid_manager:
+            grid_mgr = bot_integration.grid_manager
+
+        if grid_mgr and hasattr(grid_mgr, 'get_grid_consistency_status'):
+            consistency_status = grid_mgr.get_grid_consistency_status()
+            return {"success": True, "data": consistency_status}
+        else:
+            return {"success": False, "error": "Grid consistency manager not available"}
+    except Exception as e:
+        logger.error(f"Error getting grid consistency: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/grids/repair")
+async def repair_grid_states(symbols: Optional[List[str]] = None):
+    """Force repair of grid state consistency for specific symbols or all."""
+    try:
+        grid_mgr = None
+        if bot_integration.trading_bot and hasattr(
+            bot_integration.trading_bot, "grid_lifecycle"
+        ):
+            grid_mgr = bot_integration.trading_bot.grid_lifecycle
+        elif bot_integration.grid_manager:
+            grid_mgr = bot_integration.grid_manager
+
+        if grid_mgr and hasattr(grid_mgr, 'force_grid_state_repair'):
+            repair_result = grid_mgr.force_grid_state_repair(symbols)
+            return {"success": True, "data": repair_result}
+        else:
+            return {"success": False, "error": "Grid repair functionality not available"}
+    except Exception as e:
+        logger.error(f"Error repairing grid states: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/grids/emergency-cleanup")
+async def emergency_grid_cleanup():
+    """
+    Perform emergency cleanup of all grid states.
+    ⚠️ WARNING: This is a drastic measure that will reset all grid states!
+    """
+    try:
+        grid_mgr = None
+        if bot_integration.trading_bot and hasattr(
+            bot_integration.trading_bot, "grid_lifecycle"
+        ):
+            grid_mgr = bot_integration.trading_bot.grid_lifecycle
+        elif bot_integration.grid_manager:
+            grid_mgr = bot_integration.grid_manager
+
+        if grid_mgr and hasattr(grid_mgr, 'emergency_grid_cleanup'):
+            cleanup_result = grid_mgr.emergency_grid_cleanup()
+            return {"success": True, "data": cleanup_result}
+        else:
+            return {"success": False, "error": "Emergency cleanup functionality not available"}
+    except Exception as e:
+        logger.error(f"Error performing emergency grid cleanup: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

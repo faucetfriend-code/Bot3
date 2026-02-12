@@ -4,6 +4,7 @@ import threading
 import sys
 import os
 import warnings
+import json
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import urllib3
@@ -24,6 +25,146 @@ except ImportError:
 
 # Import local config
 from .config import config
+
+# Response handling utilities
+import json
+
+
+class ResponseHandler:
+    """Handles Pacifica API responses with robust validation and error handling."""
+    
+    @staticmethod
+    def validate_order_response(response: Any) -> Dict[str, Any]:
+        """
+        Validate and normalize order response from Pacifica API.
+        
+        Handles various response formats:
+        - Dict with success/data/error fields (expected format)
+        - Boolean responses (direct API responses)
+        - String responses (e.g., "success", "error", or JSON strings)
+        - None or unexpected types
+        
+        Args:
+            response: Raw response from API (could be dict, string, etc.)
+            
+        Returns:
+            Normalized response dict with expected format:
+            {"success": bool, "data": dict, "error": Optional[str]}
+        """
+        logger.debug(f"Validating order response: {response} (type: {type(response)})")
+        
+        # Defensive: Ensure response doesn't cause KeyError in string formatting
+        if isinstance(response, dict):
+            # Ensure all required keys exist to prevent KeyError
+            response.setdefault("success", False)
+            response.setdefault("data", {})
+            response.setdefault("error", None)
+        
+        # Case 1: Response is already a dict (expected format)
+        if isinstance(response, dict):
+            return ResponseHandler._normalize_dict_response(response)
+        
+        # Case 2: Response is a boolean (direct API response)
+        elif isinstance(response, bool):
+            logger.warning(f"API returned boolean directly: {response}")
+            return {
+                "success": response,
+                "data": {"status": "success" if response else "error"},
+                "error": None if response else "API returned false"
+            }
+        
+        # Case 3: Response is a string (could be JSON or just "success")
+        elif isinstance(response, str):
+            return ResponseHandler._handle_string_response(response)
+        
+        # Case 4: Response is None or unexpected type
+        else:
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected response type: {type(response).__name__}"
+            }
+    
+    @staticmethod
+    def _normalize_dict_response(response: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize dictionary response to expected format."""
+        # Ensure we have the required fields
+        normalized = {
+            "success": bool(response.get("success", False)),
+            "data": response.get("data", {}),
+            "error": response.get("error") if not response.get("success") else None
+        }
+        
+        # Validate data field
+        if not isinstance(normalized["data"], dict):
+            logger.warning(f"Response data is not a dict: {normalized['data']}")
+            normalized["data"] = {}
+        
+        return normalized
+    
+    @staticmethod
+    def _handle_string_response(response: str) -> Dict[str, Any]:
+        """Handle string response from API."""
+        # Try to parse as JSON first
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, dict):
+                return ResponseHandler._normalize_dict_response(parsed)
+            else:
+                # If parsed result is not a dict, handle based on content
+                logger.warning(f"API returned non-dict JSON: {parsed}")
+                if isinstance(parsed, bool):
+                    return {
+                        "success": parsed,
+                        "data": {"status": "success" if parsed else "error"},
+                        "error": None if parsed else "API returned false"
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "success":
+                    return {
+                        "success": True,
+                        "data": {"status": "success"},
+                        "error": None
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "error":
+                    return {
+                        "success": False,
+                        "data": {},
+                        "error": "API returned error response"
+                    }
+                else:
+                    # Default to treating as success for unknown types
+                    return {
+                        "success": True,
+                        "data": {"raw_response": parsed},
+                        "error": None
+                    }
+        except json.JSONDecodeError:
+            # Not valid JSON, treat raw string
+            pass
+        
+        # Handle specific string responses
+        if response.lower() == '"success"' or response.lower() == "success":
+            logger.warning("API returned string 'success' instead of JSON object")
+            return {
+                "success": True,
+                "data": {"status": "success"},
+                "error": None
+            }
+        elif response.lower() == '"error"' or response.lower() == "error":
+            logger.error("API returned string 'error'")
+            return {
+                "success": False,
+                "data": {},
+                "error": "API returned error response"
+            }
+        else:
+            # Unknown string response
+            logger.error(f"API returned unexpected string response: {response}")
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected API response: {response}"
+            }
 
 # Import core modules
 from .models import Signal, OrderSide
@@ -93,6 +234,16 @@ class TradingBot:
     ===============================
     """
 
+    # Grid refresh/recenter configuration constants
+    # Drift threshold in ATR multiples (1.5-2.0 range, default 1.8)
+    GRID_REFRESH_MIN_ATR_DRIFT: float = 1.8
+    # Minimum signal confidence to trigger refresh (0.72 = high conviction)
+    GRID_REFRESH_MIN_CONFIDENCE: float = 0.72
+    # Minimum confidence improvement over current (0.08 = ~10% relative improvement)
+    GRID_REFRESH_MIN_CONF_IMPROVE: float = 0.08
+    # Cooldown period between refreshes in minutes (45 minutes)
+    GRID_REFRESH_COOLDOWN_MINUTES: int = 45
+
     def __init__(self, db=None, client=None, risk_manager=None, hub_publish_func=None):
         """
         Initialize the trading bot.
@@ -144,6 +295,13 @@ class TradingBot:
         self._circuit_breaker_loss_pct = (
             config.circuit_breaker_loss_pct
         )  # From config (default 10%)
+
+        # Initialize market info cache for lot_size and tick_size compliance
+        # Fetched from Pacifica /info endpoint via get_markets()
+        self._market_info_cache: Dict[str, Dict[str, float]] = {}
+        self._market_info_cache_timestamp: Optional[float] = None
+        self._market_info_cache_ttl: int = 300  # 5 minutes TTL
+        self._refresh_market_info_cache()  # Initial population
 
         # Initialize WebSocket client if enabled
         if self.config.enable_websocket:
@@ -198,9 +356,15 @@ class TradingBot:
         )
 
         # Initialize execution layer for precise 1m/5m entry timing
-        self.execution_layer = ExecutionLayer(
-            fetcher=self.multi_tf_fetcher,
-        )
+        try:
+            self.execution_layer = ExecutionLayer(
+                fetcher=self.multi_tf_fetcher,
+            )
+            logger.info("🔧 ExecutionLayer initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize ExecutionLayer: {e}")
+            self.execution_layer = None
+            logger.warning("⚠️ Trading will continue without ExecutionLayer refinement")
 
         # Thread control
         self._running_event = threading.Event()
@@ -624,7 +788,18 @@ class TradingBot:
             # Get all open orders from exchange
             open_orders = self.client.get_orders()
             if not open_orders:
-                logger.info("No open orders found on exchange - no grids to sync")
+                # No orders on exchange - clear any stale grids loaded from DB
+                if self.grid_lifecycle and self.grid_lifecycle._grids:
+                    stale_symbols = list(self.grid_lifecycle._grids.keys())
+                    for symbol in stale_symbols:
+                        self.grid_lifecycle.delete_grid_state(symbol)
+                    self.grid_lifecycle._grids.clear()
+                    logger.warning(
+                        f"🧹 Cleared {len(stale_symbols)} stale grid(s) from DB "
+                        f"(no orders on exchange): {stale_symbols}"
+                    )
+                else:
+                    logger.info("No open orders found on exchange - no grids to sync")
                 return
 
             logger.info(f"📋 Found {len(open_orders)} open orders on exchange")
@@ -672,6 +847,29 @@ class TradingBot:
                     f"({len(buy_orders)} bid, {len(sell_orders)} ask) - RE-ADOPTING"
                 )
                 self._readopt_orphaned_grid(symbol, buy_orders, sell_orders)
+
+            # Clean up grids loaded from DB that have no matching exchange orders
+            if self.grid_lifecycle and self.grid_lifecycle._grids:
+                # Symbols that have confirmed grid orders on exchange
+                confirmed_grid_symbols = set()
+                for symbol, orders in orders_by_symbol.items():
+                    buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
+                    sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                    if len(orders) >= 5 and buy_orders and sell_orders:
+                        confirmed_grid_symbols.add(symbol)
+
+                # Remove grids that aren't confirmed on exchange
+                stale_symbols = [
+                    s for s in self.grid_lifecycle._grids
+                    if s not in confirmed_grid_symbols
+                ]
+                for symbol in stale_symbols:
+                    self.grid_lifecycle.delete_grid_state(symbol)
+                    del self.grid_lifecycle._grids[symbol]
+                    logger.warning(
+                        f"🧹 Cleared stale grid for {symbol} "
+                        f"(no matching grid orders on exchange)"
+                    )
 
         except Exception as e:
             logger.error(f"Error syncing existing grids: {e}", exc_info=True)
@@ -974,7 +1172,7 @@ class TradingBot:
                         logger.info(
                             f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
                             f"{symbol} @ ${signal.entry_price:.4f} "
-                            f"(confidence: {signal.confidence:.1f}%, quality: {signal.quality.name})"
+                            f"(confidence: {signal.confidence:.1%}, quality: {signal.quality.name})"
                         )
 
                         # Publish signal event (synchronous - will execute immediately)
@@ -1082,13 +1280,30 @@ class TradingBot:
                 logger.warning("Received signal event with no signal data - event.data type=%s, signal_data type=%s", type(event.data).__name__, type(signal_data).__name__)
                 return
 
-            logger.info(
-                f"📨 Signal handler received: {signal.strategy.name} {signal.side.name} "
-                f"{signal.asset} (valid={signal.is_valid()}, confidence={signal.confidence})"
-            )
+            # Enhanced logging for VWAP_SCALPING signals
+            if signal.strategy == StrategyType.VWAP_SCALPING:
+                logger.info(
+                    f"🚨 VWAP_SCALPING SIGNAL RECEIVED: {signal.side.name} "
+                    f"{signal.asset} (valid={signal.is_valid()}, confidence={signal.confidence})"
+                )
+                logger.info(f"🔍 VWAP_SCALPING Details: entry={signal.entry_price}, stop={signal.stop_loss}, quality={signal.quality.name}")
+            else:
+                logger.info(
+                    f"📨 Signal handler received: {signal.strategy.name} {signal.side.name} "
+                    f"{signal.asset} (valid={signal.is_valid()}, confidence={signal.confidence})"
+                )
 
             # Validate signal should be executed
-            if not self._should_execute_signal(signal):
+            should_execute = self._should_execute_signal(signal)
+            
+            # Enhanced tracking for VWAP_SCALPING
+            if signal.strategy == StrategyType.VWAP_SCALPING:
+                if should_execute:
+                    logger.info(f"✅ VWAP_SCALPING validation PASSED for {signal.asset} - proceeding to execution")
+                else:
+                    logger.warning(f"❌ VWAP_SCALPING validation FAILED for {signal.asset} - SKIPPING execution")
+            
+            if not should_execute:
                 logger.info(
                     f"🚫 Signal validation failed for {signal.asset} {signal.strategy.name} - skipping execution"
                 )
@@ -1132,9 +1347,11 @@ class TradingBot:
 
         Checks:
         1. Signal is valid (8 validation flags)
-        2. Account has sufficient capital
-        3. Risk limits not exceeded
-        4. No conflicting positions
+        2. Stop loss is present and valid (CRITICAL SAFETY CHECK)
+        3. No duplicate positions exist for this symbol
+        4. Account has sufficient capital
+        5. Risk limits not exceeded
+        6. No conflicting positions
         """
         try:
             # Check signal validity
@@ -1155,13 +1372,52 @@ class TradingBot:
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
+            # CRITICAL: Validate stop loss is present
+            if not signal.stop_loss or signal.stop_loss <= 0:
+                reason = "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                logger.error(f"🚨 {reason} for {signal.asset}")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+            else:
+                logger.debug(f"✅ Stop loss validated: ${signal.stop_loss:.4f} for {signal.asset}")
+
+            # Check if position already exists for this symbol
+            try:
+                existing_positions = self.client.get_positions()
+                for pos in existing_positions:
+                    if pos.get("symbol") == signal.asset:
+                        # Check if it's the same side
+                        pos_side = pos.get("side", "").lower()
+                        signal_side = "long" if signal.side.name == "BUY" else "short"
+                        if pos_side == signal_side:
+                            reason = f"Position already exists for {signal.asset} {signal.side.name}"
+                            logger.info(f"🔁 {reason} - skipping duplicate signal")
+                            self.signal_logger.log_signal_rejected(
+                                signal=signal,
+                                reason=reason,
+                                notes="Duplicate position prevention"
+                            )
+                            return False
+                        else:
+                            # Opposite side - could be a hedge or flip
+                            logger.info(
+                                f"⚠️ Opposite position exists for {signal.asset}: "
+                                f"existing={pos_side}, signal={signal_side}"
+                            )
+            except Exception as e:
+                logger.warning(f"Could not check existing positions: {e}")
+                # Continue anyway but log warning
+
             # Check account balance
             balance = self._get_account_balance()
             if balance <= 0:
                 reason = "Invalid account balance (<=0)"
-                logger.warning("Invalid account balance - cannot execute signal")
+                logger.warning(f"Invalid account balance (${balance:.2f}) - cannot execute signal for {signal.asset}")
+                logger.warning(f"💡 Tip: Set BYPASS_BALANCE_VALIDATION=true for testing")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
+            else:
+                logger.info(f"✅ Account balance validation passed: ${balance:.2f} available")
 
             # Check risk limits
             current_exposure = self._get_current_exposure()
@@ -1231,22 +1487,72 @@ class TradingBot:
             )
 
             # Execute signal based on type
+            logger.debug(f"🔍 Execution routing for {signal.asset}: strategy={signal.strategy.name} (enum: {signal.strategy})")
+            
             if signal.strategy == StrategyType.GRID_TRADING:
+                logger.info(f"🔍 Routing {signal.asset} to GRID execution (strategy: {signal.strategy.name})")
                 self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
             else:
+                logger.info(f"🔍 Routing {signal.asset} to STANDARD execution (strategy: {signal.strategy.name})")
+                # VWAP_SCALPING should ALWAYS go here - never grid execution
+                if signal.strategy == StrategyType.VWAP_SCALPING:
+                    logger.info(f"✅ VWAP_SCALPING correctly routed to standard execution for {signal.asset}")
                 self._execute_standard_signal_coordinated(
                     signal, allocation_result, log_entry
                 )
 
         except Exception as e:
+            # Enhanced debugging for critical error investigation
+            import traceback
+            import sys
+            
+            # Capture full exception details
+            exc_type, exc_value, exc_traceback = sys.exc_info()
+            
             logger.error(
-                f"Error coordinating signal execution for {signal.asset}: {e}",
+                f"🚨 CRITICAL ERROR in signal coordination for {signal.asset} ({signal.strategy.name}): {e}",
                 exc_info=True,
             )
+            
+            # Enhanced debugging information
+            logger.error(f"🔍 Exception Type: {exc_type.__name__}")
+            logger.error(f"🔍 Exception Value: {exc_value}")
+            logger.error(f"🔍 Signal Details: {signal}")
+            logger.error(f"🔍 Strategy Type: {signal.strategy.name} (enum: {signal.strategy})")
+            logger.error(f"🔍 Execution Path: {'GRID' if signal.strategy == StrategyType.GRID_TRADING else 'STANDARD'}")
+            
+            # Log full traceback for debugging
+            full_traceback = traceback.format_exception(exc_type, exc_value, exc_traceback)
+            logger.error(f"🔍 Full Traceback:\n{''.join(full_traceback)}")
+            
+            # Check if this is the mysterious '"success"' error
+            if '"success"' in str(e) or 'success' in str(e).lower():
+                logger.error("🚨 DETECTED THE MYSTERIOUS 'SUCCESS' ERROR - INVESTIGATING FURTHER")
+                logger.error("🔍 This error should have been handled by ResponseHandler")
+                logger.error("🔍 Possible causes:")
+                logger.error("   1. Exception occurring before ResponseHandler is called")
+                logger.error("   2. Different code path bypassing ResponseHandler")
+                logger.error("   3. ResponseHandler itself throwing an exception")
+                logger.error("   4. VWAP_SCALPING incorrectly routed to grid execution path")
+            
+            # Check VWAP_SCALPING execution routing
+            if signal.strategy == StrategyType.VWAP_SCALPING:
+                logger.error("🚨 VWAP_SCALPING SIGNAL FAILED - ROUTING ANALYSIS:")
+                logger.error(f"🔍 Strategy enum comparison: {signal.strategy == StrategyType.GRID_TRADING}")
+                logger.error(f"🔍 Strategy string: {str(signal.strategy)}")
+                logger.error(f"🔍 Strategy type: {type(signal.strategy)}")
+                logger.error(f"🔍 Should use standard execution: {signal.strategy != StrategyType.GRID_TRADING}")
+            
+            # Check stack trace for method call origins
+            stack_summary = traceback.extract_tb(exc_traceback)
+            logger.error("🔍 Call Stack Analysis:")
+            for i, frame in enumerate(stack_summary[-5:]):  # Last 5 frames
+                logger.error(f"   Frame {i}: {frame.filename}:{frame.lineno} in {frame.name} - {frame.line}")
+            
             self.signal_logger.log_signal_failed(
                 signal=signal,
                 error=str(e),
-                notes="Exception during signal coordination",
+                notes=f"Exception during signal coordination. Type: {exc_type.__name__}. Strategy: {signal.strategy.name}",
             )
 
     def _execute_coordinated_signal(self, signal, allocation_result, log_entry=None):
@@ -1278,23 +1584,54 @@ class TradingBot:
         - Monitoring fills
         - Managing P&L
         - Emergency stops
+
+        GRID REFRESH/RECENTER FEATURE:
+        When a high-conviction signal arrives with significant price drift from the
+        current grid center, the grid can be refreshed (recentered) to adapt to new
+        market conditions without closing existing filled positions.
         """
         try:
             symbol = signal.asset
 
-            # Pre-check: skip if grid already active for this symbol
+            # Pre-check: handle active grid with intelligent refresh logic
             if self.grid_lifecycle and self.grid_lifecycle.has_active_grid(symbol):
-                reason = f"Grid already active for {symbol}"
-                logger.info(f"🔷 {reason}, skipping duplicate grid signal")
-                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                self._handle_active_grid_signal(symbol, signal)
                 return
 
-            # RiskManager returns "allocated_amount" (not "capital_allocated")
-            capital_allocated = allocation_result.get("allocated_amount", 0)
-
-            logger.info(
-                f"🔷 Executing GRID signal for {symbol} with ${capital_allocated:.2f} capital"
-            )
+            # Enhanced capital extraction with fallback keys
+            capital_keys = ["allocated_amount", "capital_allocated", "capital", "amount", "allocated"]
+            capital_allocated = 0
+            
+            for key in capital_keys:
+                if key in allocation_result and allocation_result[key] is not None:
+                    try:
+                        parsed_capital = float(allocation_result[key])
+                        if parsed_capital > 0:  # Only use positive capital amounts
+                            capital_allocated = parsed_capital
+                            logger.info(f"💰 Capital allocated for {symbol} from '{key}': ${capital_allocated:.2f}")
+                            break
+                        else:
+                            logger.debug(f"⚠️ Capital from '{key}' is zero or negative: ${parsed_capital:.2f}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"⚠️ Could not parse capital from '{key}': {allocation_result[key]}")
+                        continue
+            
+            if capital_allocated <= 0:
+                logger.error(f"❌ No capital allocated for {symbol} grid. Available keys: {list(allocation_result.keys())}")
+                if log_entry is None:
+                    log_entry = {
+                        "timestamp": datetime.now().isoformat(),
+                        "symbol": symbol,
+                        "strategy": signal.strategy.name if hasattr(signal.strategy, 'name') else str(signal.strategy),
+                        "side": signal.side.name if hasattr(signal.side, 'name') else str(signal.side),
+                        "entry_price": signal.entry_price,
+                        "confidence": signal.confidence,
+                    }
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason=f"No capital allocated for grid (checked: {capital_keys})"
+                )
+                return
 
             # Place grid orders through GridLifecycleManager
             # TradingBot has self.client (PacificaClient) for order execution
@@ -1323,17 +1660,26 @@ class TradingBot:
                 )
 
                 # Register grid with GridLifecycleManager for monitoring
-                self.grid_lifecycle.register_new_grid(
-                    symbol=symbol,
-                    grid_capital=capital_allocated,
-                    emergency_stop_price=signal.stop_loss,
-                    regime=signal.market_state.name if hasattr(signal.market_state, 'name') else str(signal.market_state),
-                    atr=0,  # ATR not stored in signal, grid manager will recalculate if needed
-                    spacing=signal.spacing or 0,
-                    num_levels=signal.grid_levels or 10,
-                    center_price=signal.entry_price,
-                )
-                logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+                # Add defensive check for register_new_grid method
+                if self.grid_lifecycle and hasattr(self.grid_lifecycle, 'register_new_grid'):
+                    try:
+                        self.grid_lifecycle.register_new_grid(
+                            symbol=symbol,
+                            grid_capital=capital_allocated,
+                            emergency_stop_price=signal.stop_loss,
+                            regime=signal.market_state.name if hasattr(signal.market_state, 'name') else str(signal.market_state),
+                            atr=0,  # ATR not stored in signal, grid manager will recalculate if needed
+                            spacing=signal.spacing or 0,
+                            num_levels=signal.grid_levels or 10,
+                            center_price=signal.entry_price,
+                        )
+                        logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+                    except Exception as e:
+                        logger.error(f"❌ Failed to register grid with GridLifecycleManager: {e}")
+                        logger.warning(f"⚠️ Grid orders placed but registration failed - monitoring may be limited")
+                else:
+                    logger.warning(f"⚠️ GridLifecycleManager not available or missing register_new_grid method")
+                    logger.warning(f"⚠️ Grid orders placed but not registered for lifecycle management")
 
             else:
                 error_msg = result.get('error', 'Unknown error')
@@ -1358,6 +1704,258 @@ class TradingBot:
                 notes="Exception during grid execution",
             )
 
+    def _handle_active_grid_signal(self, symbol: str, signal) -> None:
+        """
+        Handle incoming grid signal when grid is already active for symbol.
+
+        Implements intelligent refresh logic:
+        - Calculates drift between current grid center and proposed new center
+        - Evaluates refresh conditions (drift, confidence, cooldown, regime)
+        - Either refreshes (recenters) the grid or skips with detailed logging
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "ETH")
+            signal: New grid trading signal with proposed entry_price and confidence
+
+        Refresh Conditions (all must be met):
+        1. Drift >= GRID_REFRESH_MIN_ATR_DRIFT x ATR (default 1.8x)
+        2. Signal confidence >= GRID_REFRESH_MIN_CONFIDENCE (default 0.72)
+        3. Confidence improvement >= GRID_REFRESH_MIN_CONF_IMPROVE (default 0.08)
+        4. Cooldown period passed (45 minutes, checked in recenter_grid)
+        5. Regime compatibility (new signal regime matches current grid regime)
+        """
+        try:
+            # Get current grid center
+            current_center = self.grid_lifecycle.get_grid_center(symbol)
+            if current_center is None:
+                logger.warning(
+                    f"Grid active for {symbol} but no center price available - skipping signal"
+                )
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason="Active grid has no center price",
+                )
+                return
+
+            # Get proposed center from new signal
+            proposed_center = signal.entry_price
+
+            # Calculate drift in ATR multiples
+            # Fetch 5m candles and calculate ATR
+            atr_current = self._calculate_atr_for_symbol(symbol, timeframe="5m")
+
+            if atr_current is None or atr_current <= 0:
+                logger.warning(
+                    f"Cannot calculate drift for {symbol} - ATR unavailable ({atr_current})"
+                )
+                # Fall back to simple skip with reason
+                reason = f"Grid already active for {symbol} (ATR unavailable for drift calc)"
+                logger.info(f"🔷 {reason}, skipping signal")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return
+
+            drift_atr = abs(proposed_center - current_center) / atr_current
+
+            # Get current grid confidence (stored in grid metadata if available)
+            grid_data = self.grid_lifecycle._grids.get(symbol, {})
+            current_confidence = grid_data.get("signal_confidence", 0.65)
+
+            # Check cooldown period
+            last_refresh = self.grid_lifecycle.get_last_refresh_time(symbol)
+            cooldown_seconds = self.GRID_REFRESH_COOLDOWN_MINUTES * 60
+            cooldown_passed = True
+            cooldown_remaining_min = 0
+
+            if last_refresh:
+                elapsed = (datetime.now() - last_refresh).total_seconds()
+                if elapsed < cooldown_seconds:
+                    cooldown_passed = False
+                    cooldown_remaining_min = (cooldown_seconds - elapsed) / 60
+
+            # Regime compatibility check
+            current_regime = grid_data.get("regime_on_creation", "unknown")
+            new_regime = (
+                signal.market_state.name
+                if hasattr(signal.market_state, "name")
+                else str(signal.market_state)
+            )
+            regime_compatible = current_regime == new_regime
+
+            # Evaluate refresh conditions
+            drift_condition = drift_atr >= self.GRID_REFRESH_MIN_ATR_DRIFT
+            confidence_condition = signal.confidence >= self.GRID_REFRESH_MIN_CONFIDENCE
+            improvement_condition = (
+                signal.confidence - current_confidence
+            ) >= self.GRID_REFRESH_MIN_CONF_IMPROVE
+
+            # Build detailed decision log
+            decision_factors = {
+                "drift_atr": f"{drift_atr:.2f}x (need {self.GRID_REFRESH_MIN_ATR_DRIFT}x)",
+                "drift_passed": drift_condition,
+                "signal_confidence": f"{signal.confidence:.2f} (need {self.GRID_REFRESH_MIN_CONFIDENCE})",
+                "confidence_passed": confidence_condition,
+                "confidence_improvement": f"{signal.confidence - current_confidence:.2f} (need {self.GRID_REFRESH_MIN_CONF_IMPROVE})",
+                "improvement_passed": improvement_condition,
+                "cooldown_passed": cooldown_passed,
+                "regime_compatible": regime_compatible,
+                "current_regime": current_regime,
+                "new_regime": new_regime,
+            }
+
+            # All conditions must be met for refresh
+            should_refresh = (
+                drift_condition
+                and confidence_condition
+                and improvement_condition
+                and cooldown_passed
+                and regime_compatible
+            )
+
+            if should_refresh:
+                # Grid refresh opportunity detected
+                logger.info(
+                    f"🔄 Grid refresh OPPORTUNITY for {symbol}: "
+                    f"drift={drift_atr:.2f}x ATR, "
+                    f"confidence={signal.confidence:.2f} (was {current_confidence:.2f}), "
+                    f"regime={new_regime}"
+                )
+                logger.info(
+                    f"📊 Refresh details: center ${current_center:.4f} → ${proposed_center:.4f} "
+                    f"(delta: ${abs(proposed_center - current_center):.4f})"
+                )
+
+                # Attempt recenter
+                reason = (
+                    f"signal_refresh_drift_{drift_atr:.1f}x_atr_"
+                    f"conf_{signal.confidence:.2f}"
+                )
+                success = self.grid_lifecycle.recenter_grid(
+                    symbol, proposed_center, reason
+                )
+
+                if success:
+                    # Update stored confidence for future comparisons
+                    grid_data["signal_confidence"] = signal.confidence
+                    logger.info(f"✅ Grid refresh SUCCESS for {symbol}")
+                    self.signal_logger.log_signal_executed(
+                        signal=signal,
+                        order_id=f"grid_refresh_{symbol}",
+                        filled_price=proposed_center,
+                        filled_quantity=0,  # Refreshed existing orders
+                        execution_result="grid_refreshed",
+                        notes=f"Recentered: drift={drift_atr:.2f}x ATR, conf={signal.confidence:.2f}",
+                    )
+                else:
+                    logger.warning(f"⚠️ Grid refresh FAILED for {symbol} (recenter_grid returned False)")
+                    self.signal_logger.log_signal_failed(
+                        signal=signal,
+                        error="Grid recenter failed",
+                        notes=f"Drift={drift_atr:.2f}x ATR, reason={reason}",
+                    )
+            else:
+                # Refresh conditions not met - skip with detailed reason
+                skip_reasons = []
+                if not drift_condition:
+                    skip_reasons.append(f"drift {drift_atr:.2f}x < {self.GRID_REFRESH_MIN_ATR_DRIFT}x ATR")
+                if not confidence_condition:
+                    skip_reasons.append(f"confidence {signal.confidence:.2f} < {self.GRID_REFRESH_MIN_CONFIDENCE}")
+                if not improvement_condition:
+                    skip_reasons.append(f"improvement {signal.confidence - current_confidence:.2f} < {self.GRID_REFRESH_MIN_CONF_IMPROVE}")
+                if not cooldown_passed:
+                    skip_reasons.append(f"cooldown {cooldown_remaining_min:.1f}min remaining")
+                if not regime_compatible:
+                    skip_reasons.append(f"regime mismatch ({current_regime} vs {new_regime})")
+
+                reason = f"Grid active for {symbol} - refresh skipped: {', '.join(skip_reasons)}"
+                logger.info(f"🔷 {reason}")
+                logger.debug(f"Grid refresh decision factors: {decision_factors}")
+
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason=reason,
+                    notes=f"Current center: ${current_center:.4f}, Proposed: ${proposed_center:.4f}",
+                )
+
+        except Exception as e:
+            logger.error(
+                f"Error in grid refresh logic for {symbol}: {e}", exc_info=True
+            )
+            # Fallback to simple skip
+            reason = f"Grid already active for {symbol} (refresh logic error: {e})"
+            logger.info(f"🔷 {reason}, skipping signal")
+            self.signal_logger.log_signal_rejected(
+                signal=signal,
+                reason=reason,
+            )
+
+    def _calculate_atr_for_symbol(
+        self, symbol: str, timeframe: str = "5m", period: int = 14
+    ) -> Optional[float]:
+        """
+        Calculate ATR for a symbol using multi-timeframe fetcher data.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "ETH")
+            timeframe: Candle timeframe (default "5m")
+            period: ATR calculation period (default 14)
+
+        Returns:
+            Latest ATR value or None if calculation fails
+        """
+        try:
+            # Fetch candles for the specified timeframe
+            multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
+                symbol=symbol,
+                timeframes=[timeframe],
+                lookback_candles=max(period + 10, 50),  # Ensure enough data
+            )
+
+            if not multi_tf_data or timeframe not in multi_tf_data:
+                logger.debug(f"No candle data available for {symbol} {timeframe}")
+                return None
+
+            candles = multi_tf_data[timeframe]
+            if not candles or len(candles) < period + 1:
+                logger.debug(
+                    f"Insufficient candles for {symbol} {timeframe}: "
+                    f"have {len(candles) if candles else 0}, need {period + 1}"
+                )
+                return None
+
+            # Extract high, low, close from candles
+            # Candles are typically dicts with 'high', 'low', 'close' keys
+            highs = []
+            lows = []
+            closes = []
+
+            for candle in candles:
+                if isinstance(candle, dict):
+                    highs.append(float(candle.get("high", 0)))
+                    lows.append(float(candle.get("low", 0)))
+                    closes.append(float(candle.get("close", 0)))
+                elif hasattr(candle, "high"):
+                    # Handle candle objects
+                    highs.append(float(candle.high))
+                    lows.append(float(candle.low))
+                    closes.append(float(candle.close))
+
+            if len(highs) < period + 1:
+                logger.debug(f"Insufficient valid price data for {symbol} ATR calculation")
+                return None
+
+            # Calculate ATR using indicators module
+            atr_value = calculate_atr(highs, lows, closes, period=period)
+
+            if atr_value and atr_value > 0:
+                logger.debug(f"ATR for {symbol} ({timeframe}): {atr_value:.4f}")
+                return float(atr_value)
+
+            return None
+
+        except Exception as e:
+            logger.debug(f"Error calculating ATR for {symbol}: {e}")
+            return None
+
     def _place_grid_orders(self, signal, allocation_result, log_entry=None):
         """
         Place grid orders using GridLifecycleManager.
@@ -1380,11 +1978,27 @@ class TradingBot:
         """
         try:
             symbol = signal.asset
-            # RiskManager returns "allocated_amount" (not "capital_allocated")
-            capital = allocation_result.get("allocated_amount", 0)
-
+            # Enhanced capital extraction with fallback keys
+            capital_keys = ["allocated_amount", "capital_allocated", "capital", "amount", "allocated"]
+            capital = 0
+            
+            for key in capital_keys:
+                if key in allocation_result and allocation_result[key] is not None:
+                    try:
+                        parsed_capital = float(allocation_result[key])
+                        if parsed_capital > 0:  # Only use positive capital amounts
+                            capital = parsed_capital
+                            logger.info(f"💰 Found capital in '{key}': ${capital:.2f}")
+                            break
+                        else:
+                            logger.debug(f"⚠️ Capital from '{key}' is zero or negative: ${parsed_capital:.2f}")
+                    except (ValueError, TypeError):
+                        logger.warning(f"⚠️ Could not parse capital from '{key}': {allocation_result[key]}")
+                        continue
+            
             if capital <= 0:
-                return {"success": False, "error": "No capital allocated"}
+                logger.error(f"❌ No capital allocated for {symbol}. Available keys: {list(allocation_result.keys())}")
+                return {"success": False, "error": f"No capital allocated (checked keys: {capital_keys})"}
 
             # Calculate grid levels
             grid_levels = self._calculate_grid_levels(
@@ -1400,58 +2014,130 @@ class TradingBot:
                 f"{len(grid_levels['buy_levels'])} BUY, {len(grid_levels['sell_levels'])} SELL"
             )
 
-            # Place grid orders
+            # Place grid orders with tick_size and lot_size compliance
             buy_order_ids = []
             sell_order_ids = []
 
-            # Place BUY orders
+            # Place BUY orders with compliance validation
             for level in grid_levels["buy_levels"]:
                 try:
-                    response = self.client.place_order(
-                        symbol=symbol,
-                        side="buy",
-                        quantity=level["quantity"],
-                        order_type="limit",
-                        price=level["price"],
+                    # Get price and quantity from level
+                    order_price = level["price"]
+                    order_quantity = level["quantity"]
+                    
+                    # Apply final compliance rounding
+                    order_price = self.round_price_to_tick_size(order_price, symbol)
+                    order_quantity = self.round_quantity_to_lot_size(order_quantity, symbol)
+                    
+                    # Pre-flight validation
+                    validation = self.validate_order_compliance(
+                        price=order_price,
+                        quantity=order_quantity,
+                        symbol=symbol
                     )
+                    
+                    if not validation["valid"]:
+                        logger.warning(
+                            f"  ⚠️ BUY order compliance issues for {symbol}: {validation['errors']}. "
+                            f"Using adjusted values: price={validation['adjusted_price']:.4f}, "
+                            f"qty={validation['adjusted_quantity']:.6f}"
+                        )
+                        order_price = validation["adjusted_price"]
+                        order_quantity = validation["adjusted_quantity"]
+                    
+                    # Pre-flight order payload validation
+                    order_params = {
+                        "symbol": symbol,
+                        "side": "buy",
+                        "quantity": float(order_quantity),
+                        "order_type": "limit",
+                        "price": float(order_price),
+                        # Note: Grid orders don't use embedded stop_loss/take_profit to avoid StopOrderInfo JSON errors
+                        # Grid risk is managed through the grid structure itself
+                    }
+                    
+                    # Validate order payload structure before submission
+                    self._validate_order_payload(order_params, symbol)
+                    
+                    # Log order payload for debugging
+                    logger.debug(f"Grid BUY order payload for {symbol}: {json.dumps(order_params, indent=2)}")
+                    
+                    response = self.client.place_order(**order_params)
 
-                    # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    # Validate response using ResponseHandler
+                    validated_response = ResponseHandler.validate_order_response(response)
+                    order_data = validated_response.get("data", {})
                     order_id = order_data.get("order_id") or order_data.get("id")
 
-                    if order_id:
+                    if order_id and validated_response.get("success"):
                         buy_order_ids.append(str(order_id))
                         logger.info(
-                            f"  ✅ BUY order placed: {level['quantity']} @ ${level['price']:.4f} (ID: {order_id})"
+                            f"  ✅ BUY order placed: {order_quantity:.6f} @ ${order_price:.4f} (ID: {order_id})"
                         )
-                    elif response.get("success") is False:
-                        error_msg = response.get("error", "Unknown API error")
+                    else:
+                        error_msg = validated_response.get("error", "Unknown API error")
                         logger.error(f"  ❌ BUY order rejected: {error_msg}")
                 except Exception as e:
                     logger.error(f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}")
 
-            # Place SELL orders
+            # Place SELL orders with compliance validation
             for level in grid_levels["sell_levels"]:
                 try:
-                    response = self.client.place_order(
-                        symbol=symbol,
-                        side="sell",
-                        quantity=level["quantity"],
-                        order_type="limit",
-                        price=level["price"],
+                    # Get price and quantity from level
+                    order_price = level["price"]
+                    order_quantity = level["quantity"]
+                    
+                    # Apply final compliance rounding
+                    order_price = self.round_price_to_tick_size(order_price, symbol)
+                    order_quantity = self.round_quantity_to_lot_size(order_quantity, symbol)
+                    
+                    # Pre-flight validation
+                    validation = self.validate_order_compliance(
+                        price=order_price,
+                        quantity=order_quantity,
+                        symbol=symbol
                     )
+                    
+                    if not validation["valid"]:
+                        logger.warning(
+                            f"  ⚠️ SELL order compliance issues for {symbol}: {validation['errors']}. "
+                            f"Using adjusted values: price={validation['adjusted_price']:.4f}, "
+                            f"qty={validation['adjusted_quantity']:.6f}"
+                        )
+                        order_price = validation["adjusted_price"]
+                        order_quantity = validation["adjusted_quantity"]
+                    
+                    # Pre-flight order payload validation
+                    order_params = {
+                        "symbol": symbol,
+                        "side": "sell",
+                        "quantity": float(order_quantity),
+                        "order_type": "limit",
+                        "price": float(order_price),
+                        # Note: Grid orders don't use embedded stop_loss/take_profit to avoid StopOrderInfo JSON errors
+                        # Grid risk is managed through the grid structure itself
+                    }
+                    
+                    # Validate order payload structure before submission
+                    self._validate_order_payload(order_params, symbol)
+                    
+                    # Log order payload for debugging
+                    logger.debug(f"Grid SELL order payload for {symbol}: {json.dumps(order_params, indent=2)}")
+                    
+                    response = self.client.place_order(**order_params)
 
-                    # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    # Validate response using ResponseHandler
+                    validated_response = ResponseHandler.validate_order_response(response)
+                    order_data = validated_response.get("data", {})
                     order_id = order_data.get("order_id") or order_data.get("id")
 
-                    if order_id:
+                    if order_id and validated_response.get("success"):
                         sell_order_ids.append(str(order_id))
                         logger.info(
-                            f"  ✅ SELL order placed: {level['quantity']} @ ${level['price']:.4f} (ID: {order_id})"
+                            f"  ✅ SELL order placed: {order_quantity:.6f} @ ${order_price:.4f} (ID: {order_id})"
                         )
-                    elif response.get("success") is False:
-                        error_msg = response.get("error", "Unknown API error")
+                    else:
+                        error_msg = validated_response.get("error", "Unknown API error")
                         logger.error(f"  ❌ SELL order rejected: {error_msg}")
                 except Exception as e:
                     logger.error(f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}")
@@ -1470,6 +2156,394 @@ class TradingBot:
             logger.error(f"Error placing grid orders: {e}", exc_info=True)
             return {"success": False, "error": str(e)}
 
+    def _validate_order_payload(self, order_params: Dict[str, Any], symbol: str) -> None:
+        """
+        Validate order payload matches Pacifica API requirements.
+        
+        Args:
+            order_params: Order parameters dictionary
+            symbol: Trading symbol for context
+            
+        Raises:
+            ValueError: If order payload is invalid
+        """
+        required_fields = ['symbol', 'side', 'order_type', 'quantity', 'price']
+        for field in required_fields:
+            if field not in order_params:
+                raise ValueError(f"Missing required field: {field}")
+        
+        # Validate data types are numeric (not strings)
+        if not isinstance(order_params['quantity'], (int, float)):
+            raise ValueError(f"Quantity must be numeric, got {type(order_params['quantity'])}")
+        if not isinstance(order_params['price'], (int, float)):
+            raise ValueError(f"Price must be numeric, got {type(order_params['price'])}")
+        
+        # Validate side
+        if order_params['side'] not in ['buy', 'sell']:
+            raise ValueError(f"Side must be 'buy' or 'sell', got {order_params['side']}")
+        
+        # Validate order_type
+        if order_params['order_type'] not in ['limit', 'market']:
+            raise ValueError(f"Order type must be 'limit' or 'market', got {order_params['order_type']}")
+        
+        # Validate stop_loss and take_profit if present
+        stop_loss = order_params.get('stop_loss')
+        if stop_loss is not None:
+            if not isinstance(stop_loss, (int, float)):
+                raise ValueError(f"Stop loss must be numeric, got {type(stop_loss)}")
+            if stop_loss <= 0:
+                raise ValueError(f"Stop loss must be positive, got {stop_loss}")
+                
+        take_profit = order_params.get('take_profit')
+        if take_profit is not None:
+            if not isinstance(take_profit, (int, float)):
+                raise ValueError(f"Take profit must be numeric, got {type(take_profit)}")
+            if take_profit <= 0:
+                raise ValueError(f"Take profit must be positive, got {take_profit}")
+
+    def _refresh_market_info_cache(self) -> None:
+        """
+        Refresh the market info cache from Pacifica API.
+        
+        Fetches market data from /info endpoint and caches tick_size and lot_size
+        for each symbol. This ensures order compliance with Pacifica's requirements.
+        """
+        try:
+            markets = self.client.get_markets()
+            if not markets:
+                logger.warning("Failed to refresh market info cache: no markets returned")
+                return
+
+            new_cache = {}
+            for market in markets:
+                symbol = market.get("symbol", "").upper().replace("-PERP", "")
+                if not symbol:
+                    continue
+
+                # Extract tick_size and lot_size from market data
+                tick_size = market.get("tick_size")
+                lot_size = market.get("lot_size")
+
+                # Convert to float if present
+                if tick_size is not None:
+                    try:
+                        tick_size = float(tick_size)
+                    except (TypeError, ValueError):
+                        tick_size = None
+
+                if lot_size is not None:
+                    try:
+                        lot_size = float(lot_size)
+                    except (TypeError, ValueError):
+                        lot_size = None
+
+                if tick_size or lot_size:
+                    new_cache[symbol] = {
+                        "tick_size": tick_size,
+                        "lot_size": lot_size,
+                    }
+
+            self._market_info_cache = new_cache
+            self._market_info_cache_timestamp = time.time()
+
+            logger.info(
+                f"Market info cache refreshed: {len(new_cache)} symbols cached "
+                f"(tick_size/lot_size from /info endpoint)"
+            )
+
+        except Exception as e:
+            logger.error(f"Error refreshing market info cache: {e}")
+
+    def _get_cached_market_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get cached market info for a symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH')
+            
+        Returns:
+            Dict with 'tick_size' and 'lot_size' keys (values may be None)
+        """
+        symbol = symbol.upper().replace("-PERP", "")
+
+        # Check if cache needs refresh
+        if (
+            self._market_info_cache_timestamp is None
+            or (time.time() - self._market_info_cache_timestamp) > self._market_info_cache_ttl
+        ):
+            self._refresh_market_info_cache()
+
+        return self._market_info_cache.get(symbol, {"tick_size": None, "lot_size": None})
+
+    def get_symbol_tick_size(self, symbol: str) -> Optional[float]:
+        """
+        Get tick size requirements for a symbol from cached market data.
+        
+        Tick size is the minimum price increment for the symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH')
+            
+        Returns:
+            Tick size requirement, or None if not available from API
+        """
+        market_info = self._get_cached_market_info(symbol)
+        return market_info.get("tick_size")
+
+    def get_symbol_lot_size(self, symbol: str) -> Optional[float]:
+        """
+        Get lot size requirements for a symbol from cached market data.
+        
+        Lot size is the minimum quantity increment for the symbol.
+        Falls back to API call if cache miss or stale data.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH')
+            
+        Returns:
+            Lot size requirement, or None if not available from API
+        """
+        market_info = self._get_cached_market_info(symbol)
+        return market_info.get("lot_size")
+
+    def round_price_to_tick_size(self, price: float, symbol: str) -> float:
+        """
+        Round price to comply with tick size requirements.
+        
+        Args:
+            price: Original price value
+            symbol: Trading symbol
+            
+        Returns:
+            Price rounded to tick size compliance
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        tick_size = self.get_symbol_tick_size(symbol)
+
+        if tick_size is None or tick_size <= 0:
+            logger.debug(f"No tick size available for {symbol}, using original price: {price}")
+            return price
+
+        # Use Decimal for precise arithmetic
+        price_dec = Decimal(str(price))
+        tick_size_dec = Decimal(str(tick_size))
+
+        # Round to nearest tick size
+        ticks = (price_dec / tick_size_dec).to_integral_value(rounding=ROUND_HALF_UP)
+        rounded_price_dec = ticks * tick_size_dec
+
+        rounded_price = float(rounded_price_dec)
+
+        if rounded_price != price:
+            logger.debug(
+                "Price tick size adjustment for %s: %.8f -> %.8f (tick size: %s)",
+                symbol,
+                price,
+                rounded_price,
+                tick_size,
+            )
+
+        return rounded_price
+
+    def round_quantity_to_lot_size(self, quantity: float, symbol: str) -> float:
+        """
+        Round quantity to comply with lot size requirements.
+        
+        Args:
+            quantity: Original quantity value
+            symbol: Trading symbol
+            
+        Returns:
+            Quantity rounded to lot size compliance
+        """
+        from decimal import Decimal, ROUND_DOWN
+
+        lot_size = self.get_symbol_lot_size(symbol)
+
+        if lot_size is None or lot_size <= 0:
+            logger.debug(f"No lot size available for {symbol}, using original quantity: {quantity}")
+            return quantity
+
+        # Use Decimal for precise arithmetic
+        quantity_dec = Decimal(str(quantity))
+        lot_size_dec = Decimal(str(lot_size))
+
+        # Calculate how many lot size units fit into the quantity (round down)
+        lot_units = int((quantity_dec / lot_size_dec).to_integral_value(rounding=ROUND_DOWN))
+
+        if lot_units < 1 and quantity > 0:
+            lot_units = 1
+
+        rounded_quantity_dec = Decimal(lot_units) * lot_size_dec
+        rounded_quantity = float(rounded_quantity_dec)
+
+        if rounded_quantity != quantity:
+            logger.debug(
+                "Quantity lot size adjustment for %s: %.8f -> %.8f (lot size: %s, units: %d)",
+                symbol,
+                quantity,
+                rounded_quantity,
+                lot_size,
+                lot_units,
+            )
+
+        return rounded_quantity
+
+    def validate_order_compliance(
+        self, price: float, quantity: float, symbol: str
+    ) -> Dict[str, Any]:
+        """
+        Validate price and quantity compliance with tick_size and lot_size.
+        
+        Performs pre-flight validation before order placement to prevent 500 errors
+        from Pacifica API due to non-compliant orders.
+        
+        Args:
+            price: Order price to validate
+            quantity: Order quantity to validate
+            symbol: Trading symbol
+            
+        Returns:
+            Dict with validation results:
+            {
+                'valid': bool,
+                'price_compliant': bool,
+                'quantity_compliant': bool,
+                'tick_size': float or None,
+                'lot_size': float or None,
+                'errors': List[str],
+                'adjusted_price': float,
+                'adjusted_quantity': float,
+            }
+        """
+        from decimal import Decimal
+
+        result = {
+            "valid": True,
+            "price_compliant": True,
+            "quantity_compliant": True,
+            "tick_size": None,
+            "lot_size": None,
+            "errors": [],
+            "adjusted_price": price,
+            "adjusted_quantity": quantity,
+        }
+
+        symbol = symbol.upper().replace("-PERP", "")
+
+        # Get market specs
+        tick_size = self.get_symbol_tick_size(symbol)
+        lot_size = self.get_symbol_lot_size(symbol)
+
+        result["tick_size"] = tick_size
+        result["lot_size"] = lot_size
+
+        # Validate price against tick size
+        if tick_size is not None and tick_size > 0:
+            price_dec = Decimal(str(price))
+            tick_size_dec = Decimal(str(tick_size))
+
+            # Check if price is a multiple of tick size
+            remainder = price_dec % tick_size_dec
+            if remainder != 0:
+                result["price_compliant"] = False
+                result["valid"] = False
+                result["errors"].append(
+                    f"Price {price} is not a multiple of tick size {tick_size} "
+                    f"(remainder: {float(remainder):.10f})"
+                )
+                # Calculate adjusted price
+                result["adjusted_price"] = self.round_price_to_tick_size(price, symbol)
+
+        # Validate quantity against lot size
+        if lot_size is not None and lot_size > 0:
+            quantity_dec = Decimal(str(quantity))
+            lot_size_dec = Decimal(str(lot_size))
+
+            # Check if quantity is a multiple of lot size
+            remainder = quantity_dec % lot_size_dec
+            if remainder != 0:
+                result["quantity_compliant"] = False
+                result["valid"] = False
+                result["errors"].append(
+                    f"Quantity {quantity} is not a multiple of lot size {lot_size} "
+                    f"(remainder: {float(remainder):.10f})"
+                )
+                # Calculate adjusted quantity
+                result["adjusted_quantity"] = self.round_quantity_to_lot_size(quantity, symbol)
+
+        # Check if adjusted values are valid (non-zero)
+        if result["adjusted_price"] <= 0:
+            result["valid"] = False
+            result["errors"].append(f"Adjusted price {result['adjusted_price']} is invalid (<= 0)")
+
+        if result["adjusted_quantity"] <= 0:
+            result["valid"] = False
+            result["errors"].append(
+                f"Adjusted quantity {result['adjusted_quantity']} is invalid (<= 0)"
+            )
+
+        return result
+
+    def adjust_quantity_for_lot_size(self, quantity: float, symbol: str) -> float:
+        """
+        Adjust quantity to comply with lot size requirements.
+        
+        Uses cached market data from Pacifica API. Falls back to original
+        quantity if no lot size data available.
+
+        Args:
+            quantity: Original calculated quantity
+            symbol: Trading symbol
+
+        Returns:
+            Adjusted quantity that complies with lot size
+        """
+        return self.round_quantity_to_lot_size(quantity, symbol)
+
+    def validate_lot_size_compliance(self, quantity: float, symbol: str) -> bool:
+        """
+        Validate if quantity complies with lot size requirements.
+        
+        Uses cached market data from Pacifica API.
+
+        Args:
+            quantity: Quantity to validate
+            symbol: Trading symbol
+
+        Returns:
+            True if compliant, False otherwise
+        """
+        from decimal import Decimal
+
+        lot_size = self.get_symbol_lot_size(symbol)
+
+        if lot_size is None or lot_size <= 0:
+            # No lot size info available, assume compliant
+            return True
+
+        # Use Decimal for precise arithmetic
+        quantity_dec = Decimal(str(quantity))
+        lot_size_dec = Decimal(str(lot_size))
+
+        # Check if quantity is a multiple of lot size
+        remainder = quantity_dec % lot_size_dec
+        is_compliant = remainder == 0
+
+        if not is_compliant:
+            difference = float(abs(remainder))
+            logger.warning(
+                "Quantity %.8f for %s is not compliant with lot size %s "
+                "(remainder: %.10f)",
+                quantity,
+                symbol,
+                lot_size,
+                difference,
+            )
+
+        return is_compliant
+
     def _execute_standard_signal_coordinated(
         self, signal, allocation_result, log_entry=None
     ):
@@ -1478,6 +2552,8 @@ class TradingBot:
 
         PHASE 2: Coordinator delegates execution to ExecutionLayer for precise entry timing.
         ExecutionLayer monitors 1m/5m candles for optimal entry conditions.
+        
+        Includes tick_size and lot_size compliance validation using Pacifica API data.
         """
         try:
             symbol = signal.asset
@@ -1490,10 +2566,46 @@ class TradingBot:
             else:
                 quantity = 0
 
+            # Apply tick size to entry price for compliance
+            original_price = signal.entry_price
+            adjusted_price = self.round_price_to_tick_size(original_price, symbol)
+            
+            # Apply lot size to quantity for compliance
+            if quantity > 0:
+                adjusted_quantity = self.round_quantity_to_lot_size(quantity, symbol)
+                quantity = adjusted_quantity
+
+            # Pre-flight validation using comprehensive compliance check
+            validation = self.validate_order_compliance(
+                price=adjusted_price,
+                quantity=quantity,
+                symbol=symbol
+            )
+            
+            if not validation["valid"]:
+                logger.error(
+                    f"❌ Order compliance validation failed for {symbol}: "
+                    f"{'; '.join(validation['errors'])}"
+                )
+                self.signal_logger.log_signal_failed(
+                    signal=signal,
+                    error="Order compliance validation failed",
+                    notes=f"Errors: {validation['errors']}, Tick: {validation['tick_size']}, Lot: {validation['lot_size']}",
+                )
+                
+                # Try to use adjusted values if available
+                if validation["adjusted_price"] > 0 and validation["adjusted_quantity"] > 0:
+                    logger.warning(f"🔄 Attempting with adjusted values for {symbol}")
+                    adjusted_price = validation["adjusted_price"]
+                    quantity = validation["adjusted_quantity"]
+                else:
+                    return
+
             logger.info(
                 f"🔹 Executing {signal.strategy.name} signal for {symbol}: "
-                f"{signal.side.name} {quantity:.6f} @ ${signal.entry_price:.4f} "
-                f"(capital: ${capital_allocated:.2f})"
+                f"{signal.side.name} {quantity:.6f} @ ${adjusted_price:.4f} "
+                f"(capital: ${capital_allocated:.2f}, "
+                f"tick_size: {validation['tick_size']}, lot_size: {validation['lot_size']})"
             )
 
             if quantity <= 0:
@@ -1501,31 +2613,67 @@ class TradingBot:
                 self.signal_logger.log_signal_failed(
                     signal=signal,
                     error="Invalid quantity (<=0)",
-                    notes=f"Capital: ${capital_allocated:.2f}, Price: ${signal.entry_price:.4f}",
+                    notes=f"Capital: ${capital_allocated:.2f}, Price: ${adjusted_price:.4f}, Lot size: {validation['lot_size']}",
                 )
                 return
 
             # Refine signal through ExecutionLayer before execution
-            refined_signal = self.execution_layer.refine_entry(signal, symbol)
-            if refined_signal is None:
-                logger.info(f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable")
-                self.signal_logger.log_signal_rejected(
-                    signal=signal,
-                    reason="ExecutionLayer timing skip",
-                    notes="1m/5m timing conditions not met",
-                )
-                return
+            refined_signal = signal
+            if self.execution_layer is not None:
+                try:
+                    refined_signal = self.execution_layer.refine_entry(signal, symbol)
+                    if refined_signal is None:
+                        logger.info(f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable")
+                        self.signal_logger.log_signal_rejected(
+                            signal=signal,
+                            reason="ExecutionLayer timing skip",
+                            notes="1m/5m timing conditions not met",
+                        )
+                        return
+                    
+                    # Apply tick size to refined entry price
+                    refined_price = self.round_price_to_tick_size(refined_signal.entry_price, symbol)
+                    logger.debug(f"🎯 ExecutionLayer refined {symbol} entry: {signal.entry_price:.6f} → {refined_price:.6f} (tick size adjusted)")
+                    
+                    # Update refined signal with tick-size-compliant price
+                    refined_signal.entry_price = refined_price
+                    adjusted_price = refined_price
+                    
+                except AttributeError as e:
+                    logger.warning(f"⚠️ ExecutionLayer method unavailable: {e}")
+                    logger.info(f"🔄 Using original signal for {symbol}")
+                except Exception as e:
+                    logger.error(f"❌ ExecutionLayer refinement failed for {symbol}: {e}")
+                    logger.info(f"🔄 Using original signal for {symbol}")
+            else:
+                logger.debug(f"🔧 ExecutionLayer unavailable - using original signal for {symbol}")
             
             # Use refined signal for execution
             signal = refined_signal
             side_str = "buy" if signal.side.name == "BUY" else "sell"
 
+            # Final compliance check before placing order
+            final_validation = self.validate_order_compliance(
+                price=adjusted_price,
+                quantity=quantity,
+                symbol=symbol
+            )
+            
+            if not final_validation["valid"]:
+                logger.error(f"❌ Final compliance check failed for {symbol}: {final_validation['errors']}")
+                # Use adjusted values
+                adjusted_price = final_validation["adjusted_price"]
+                quantity = final_validation["adjusted_quantity"]
+
             # Use market order for immediate execution
+            # Include stop loss and take profit for safety
             order_response = self.client.place_order(
                 symbol=symbol,
                 side=side_str,
                 quantity=quantity,
                 order_type="market",
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
             )
 
             # Debug: log raw API response to diagnose parsing issues
@@ -1534,28 +2682,28 @@ class TradingBot:
                 f"value={str(order_response)[:200]}"
             )
 
-            # Extract order data from response wrapper {"success": bool, "data": {...}}
-            if not isinstance(order_response, dict):
-                logger.error(f"Unexpected order response type: {type(order_response).__name__} = {order_response}")
-                execution_result = {
-                    "success": False,
-                    "order_id": None,
-                    "executed_price": signal.entry_price,
-                    "error": f"Unexpected response type: {type(order_response).__name__}",
-                }
-            else:
-                order_data = order_response.get("data", {})
-                if not isinstance(order_data, dict):
-                    order_data = {}
-                order_id = order_data.get("order_id") or order_data.get("id")
+            # Enhanced debugging for ResponseHandler
+            try:
+                logger.debug(f"🔍 About to validate order response for {symbol} using ResponseHandler")
+                validated_response = ResponseHandler.validate_order_response(order_response)
+                logger.debug(f"✅ ResponseHandler validation successful for {symbol}")
+            except Exception as response_error:
+                logger.error(f"🚨 RESPONSEHANDLER ERROR for {symbol}: {response_error}")
+                logger.error(f"🔍 ResponseHandler failed on response: {order_response} (type: {type(order_response)})")
+                logger.error(f"🔍 This might be the source of the 'success' error!")
+                raise response_error
+            
+            # Extract order data from validated response
+            order_data = validated_response.get("data", {})
+            order_id = order_data.get("order_id") or order_data.get("id")
 
-                # Convert to execution result format
-                execution_result = {
-                    "success": order_response.get("success", False) and order_id is not None,
-                    "order_id": order_id,
-                    "executed_price": order_data.get("price", signal.entry_price),
-                    "error": order_response.get("error") if not order_response.get("success") else None,
-                }
+            # Convert to execution result format
+            execution_result = {
+                "success": validated_response.get("success", False) and order_id is not None,
+                "order_id": order_id,
+                "executed_price": order_data.get("price", signal.entry_price),
+                "error": validated_response.get("error"),
+            }
 
             if execution_result.get("success"):
                 logger.info(
@@ -1600,8 +2748,12 @@ class TradingBot:
                 )
 
         except Exception as e:
+            # Use %s formatting to avoid issues with JSON in exception messages
+            # JSON contains {} which can be interpreted as format placeholders
             logger.error(
-                f"Error executing standard signal for {signal.asset}: {e}",
+                "Error executing standard signal for %s: %s",
+                signal.asset,
+                str(e),
                 exc_info=True,
             )
 
@@ -1703,7 +2855,7 @@ class TradingBot:
                             logging.info(
                                 f"Valid signal: {signal.strategy.name} {signal.side.name} "
                                 f"{symbol} @ ${signal.entry_price:.4f} "
-                                f"(confidence: {signal.confidence:.1f}%)"
+                                f"(confidence: {signal.confidence:.1%})"
                             )
 
                             # Execute signal
@@ -1743,28 +2895,64 @@ class TradingBot:
 
     def _get_account_balance(self) -> float:
         """
-        Get current account balance.
+        Get current account balance with enhanced parsing for multiple field formats.
 
         Returns:
             Account balance in USD.
         """
         try:
+            # Check for bypass flag for testing
+            bypass_validation = os.getenv('BYPASS_BALANCE_VALIDATION', 'false').lower() == 'true'
+            if bypass_validation:
+                logger.info("🔧 BYPASS_BALANCE_VALIDATION enabled - using default balance")
+                return 10000.0  # Default test balance
+
             balance = self.client.get_balance()
-            logging.info(f"🔍 Raw balance response: {balance}")
+            logger.info(f"🔍 Raw balance response: {balance}")
             
-            # Pacifica returns "balance" or "account_equity" (as strings), not "equity"
-            balance_str = balance.get("balance", balance.get("account_equity", "0"))
-            logging.info(f"🔍 Extracted balance string: '{balance_str}'")
+            # Enhanced parsing for multiple possible balance field names
+            balance_fields = [
+                "balance",           # Primary field
+                "account_equity",    # Alternative field
+                "equity",           # Another alternative
+                "available_balance", # Available funds
+                "total_equity",      # Total equity
+                "usd_balance",       # USD-specific balance
+                "portfolio_value"    # Portfolio value
+            ]
             
-            equity = float(balance_str) if balance_str else 0.0
-            logging.info(f"🔍 Final account balance: ${equity:.2f}")
+            balance_str = None
+            for field in balance_fields:
+                if field in balance and balance[field] is not None:
+                    balance_str = str(balance[field])
+                    logger.info(f"🔍 Found balance field '{field}': '{balance_str}'")
+                    break
+            
+            if balance_str is None:
+                logger.warning("🔍 No balance field found in response, using 0")
+                balance_str = "0"
+            
+            # Enhanced parsing: handle commas, currency symbols, whitespace
+            try:
+                # Remove common currency symbols and whitespace
+                cleaned = balance_str.strip().replace('$', '').replace(',', '').replace('USD', '').replace(' ', '')
+                equity = float(cleaned)
+                logger.info(f"🔍 Parsed balance: '{balance_str}' -> ${equity:.2f}")
+            except (ValueError, TypeError) as parse_error:
+                logger.error(f"❌ Failed to parse balance '{balance_str}': {parse_error}")
+                equity = 0.0
+            
+            logger.info(f"🔍 Final account balance: ${equity:.2f}")
             
             if equity <= 0:
-                logging.warning(f"⚠️ Account balance is ${equity:.2f} - this will block all executions!")
+                logger.warning(f"⚠️ Account balance is ${equity:.2f} - this will block all executions!")
+                logger.warning(f"⚠️ Available fields in response: {list(balance.keys())}")
+            else:
+                logger.info(f"✅ Account balance validated: ${equity:.2f}")
             
             return equity
         except Exception as e:
-            logging.error(f"❌ Error getting account balance: {e}")
+            logger.error(f"❌ Error getting account balance: {e}")
             return 0.0
 
     def _get_current_exposure(self) -> float:
@@ -1885,6 +3073,8 @@ class TradingBot:
                 side=order_side,
                 quantity=quantity,
                 order_type="MARKET",
+                stop_loss=signal.stop_loss,
+                take_profit=signal.take_profit,
             )
 
             logging.info(
@@ -1908,7 +3098,8 @@ class TradingBot:
             return order
 
         except Exception as e:
-            logging.error(f"Error executing standard signal: {e}")
+            # Use %s formatting to avoid issues with JSON in exception messages
+            logging.error("Error executing standard signal: %s", str(e))
             return None
 
     def _calculate_emergency_stop(self, signal: Signal) -> float:
@@ -2010,6 +3201,8 @@ class TradingBot:
                     quantity=level["quantity"],
                     order_type="LIMIT",
                     price=level["price"],
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
                 )
                 buy_orders.append(order)
                 logging.info(
@@ -2023,6 +3216,8 @@ class TradingBot:
                     quantity=level["quantity"],
                     order_type="LIMIT",
                     price=level["price"],
+                    stop_loss=signal.stop_loss,
+                    take_profit=signal.take_profit,
                 )
                 sell_orders.append(order)
                 logging.info(
@@ -2054,18 +3249,49 @@ class TradingBot:
             return None
 
     def _calculate_grid_levels(
-        self, signal: Signal, total_capital: float
+        self, signal: Signal, total_capital: Optional[float] = None, capital: Optional[float] = None
     ) -> Dict[str, List[Dict]]:
-        """Calculate grid price levels per Grid Trading Brief specifications."""
+        """
+        Calculate grid price levels per Grid Trading Brief specifications.
+        
+        Uses actual tick_size and lot_size from Pacifica API (/info endpoint)
+        to ensure order compliance and prevent 500 errors.
+        """
         try:
+            # Handle backward compatibility: accept both 'capital' and 'total_capital' parameters
+            if total_capital is None and capital is not None:
+                total_capital = capital
+                logger.info(f"🔄 Using 'capital' parameter (${capital:.2f}) for backward compatibility")
+            elif total_capital is not None and capital is not None:
+                logger.warning(f"⚠️ Both 'capital' and 'total_capital' provided, using 'total_capital' (${total_capital:.2f})")
+            elif total_capital is None:
+                logger.error("❌ Neither 'capital' nor 'total_capital' provided to _calculate_grid_levels")
+                return {}
+            
+            if total_capital <= 0:
+                logger.error(f"❌ Invalid capital amount: ${total_capital:.2f}")
+                return {}
+            
+            symbol = signal.asset
+            
             # Get current price
-            ticker = self._get_ticker_ws(signal.asset)
+            ticker = self._get_ticker_ws(symbol)
             current_price = float(ticker.get("last", signal.entry_price))
             if current_price <= 0:
-                logging.error(
-                    f"Invalid current price {current_price} for {signal.asset}"
+                logger.error(
+                    f"Invalid current price {current_price} for {symbol}"
                 )
                 return {}
+
+            # Get actual tick_size and lot_size from Pacifica API cache
+            tick_size = self.get_symbol_tick_size(symbol)
+            lot_size = self.get_symbol_lot_size(symbol)
+            
+            # Log the market specs being used
+            logger.info(
+                f"📊 Grid calculation for {symbol} using Pacifica API specs: "
+                f"tick_size={tick_size}, lot_size={lot_size}"
+            )
 
             # Grid parameters from signal attributes
             num_levels = signal.grid_levels or 10
@@ -2081,43 +3307,47 @@ class TradingBot:
             # Total capital divided by number of levels
             quantity_per_level = total_capital / (num_levels * current_price)
 
-            # Determine lot size and tick size based on price magnitude
-            # Using conservative tick sizes to match Pacifica API requirements
-            if current_price >= 100:
-                tick_decimals = 2  # BTC: 0.01
-                lot_decimals = 4   # 0.0001
-            elif current_price >= 1:
-                tick_decimals = 3  # AVAX, XRP: 0.001
-                lot_decimals = 2   # 0.01
+            # Apply lot size compliance to quantity
+            if lot_size is not None and lot_size > 0:
+                quantity_per_level = self.round_quantity_to_lot_size(quantity_per_level, symbol)
             else:
-                tick_decimals = 5  # SUI: 0.00001
-                lot_decimals = 1   # 0.1 for small coins
-
-            # Round quantity to lot size
-            quantity_per_level = round(quantity_per_level, lot_decimals)
-            min_lot = 10 ** (-lot_decimals)
-            if quantity_per_level < min_lot:
-                quantity_per_level = min_lot
+                # Fallback: use conservative lot size based on price magnitude
+                logger.warning(f"⚠️ No lot_size from API for {symbol}, using fallback calculation")
+                if current_price >= 100:
+                    lot_decimals = 4  # 0.0001
+                elif current_price >= 1:
+                    lot_decimals = 2   # 0.01
+                else:
+                    lot_decimals = 1   # 0.1 for small coins
+                quantity_per_level = round(quantity_per_level, lot_decimals)
+                min_lot = 10 ** (-lot_decimals)
+                if quantity_per_level < min_lot:
+                    quantity_per_level = min_lot
 
             # Generate buy levels (below current price)
             buy_levels = []
             for i in range(1, num_levels // 2 + 1):
                 price = current_price - (i * grid_spacing)
                 if price > 0:  # Only add positive prices
-                    price = round(price, tick_decimals)
+                    # Apply tick size compliance to price
+                    if tick_size is not None and tick_size > 0:
+                        price = self.round_price_to_tick_size(price, symbol)
                     buy_levels.append({"price": price, "quantity": quantity_per_level})
 
             # Generate sell levels (above current price)
             sell_levels = []
             for i in range(1, num_levels // 2 + 1):
                 price = current_price + (i * grid_spacing)
-                price = round(price, tick_decimals)
+                # Apply tick size compliance to price
+                if tick_size is not None and tick_size > 0:
+                    price = self.round_price_to_tick_size(price, symbol)
                 sell_levels.append({"price": price, "quantity": quantity_per_level})
 
             spacing_pct = (grid_spacing / current_price * 100) if current_price > 0 else 0
             logging.info(
-                f"Grid levels calculated: {len(buy_levels)} BUY, {len(sell_levels)} SELL, "
-                f"spacing: ${grid_spacing:.4f} ({spacing_pct:.2f}%), qty/level: {quantity_per_level:.4f}"
+                f"Grid levels calculated for {symbol}: {len(buy_levels)} BUY, {len(sell_levels)} SELL, "
+                f"spacing: ${grid_spacing:.4f} ({spacing_pct:.2f}%), qty/level: {quantity_per_level:.6f}, "
+                f"tick_size: {tick_size}, lot_size: {lot_size}"
             )
 
             return {
@@ -2126,6 +3356,8 @@ class TradingBot:
                 "current_price": current_price,
                 "grid_spacing": grid_spacing,
                 "quantity_per_level": quantity_per_level,
+                "tick_size": tick_size,
+                "lot_size": lot_size,
             }
 
         except Exception as e:

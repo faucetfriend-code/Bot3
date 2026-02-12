@@ -325,6 +325,28 @@ def init_database():
                     );
                 """)
 
+            # Enhanced grid state columns for consistency management
+            grid_state_alter_statements = [
+                "ALTER TABLE grid_states ADD COLUMN center_price REAL",
+                "ALTER TABLE grid_states ADD COLUMN initial_center REAL",
+                "ALTER TABLE grid_states ADD COLUMN orders_placed INTEGER DEFAULT 0",
+                "ALTER TABLE grid_states ADD COLUMN refresh_count INTEGER DEFAULT 0",
+                "ALTER TABLE grid_states ADD COLUMN last_refresh TIMESTAMP",
+                "ALTER TABLE grid_states ADD COLUMN normalized_symbol TEXT GENERATED ALWAYS AS (UPPER(REPLACE(REPLACE(REPLACE(symbol, '-USDT', ''), '/USDT', ''), '_USDT', ''))) VIRTUAL",
+                "ALTER TABLE grid_states ADD COLUMN consistency_checked_at TIMESTAMP",
+                "ALTER TABLE grid_states ADD COLUMN repair_history TEXT",
+            ]
+
+            # Add grid state columns (ignore if they already exist)
+            for alter_sql in grid_state_alter_statements:
+                try:
+                    conn.execute(alter_sql)
+                    logger.debug(f"Added grid state column: {alter_sql}")
+                except Exception as e:
+                    # Column might already exist, ignore error
+                    if "duplicate column name" not in str(e).lower() and "no such column" not in str(e).lower():
+                        logger.warning(f"Failed to add grid state column: {e}")
+
             # Add account_id columns to existing tables if they don't exist
             alter_statements = [
                 "ALTER TABLE trades ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",

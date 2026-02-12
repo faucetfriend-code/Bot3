@@ -1,0 +1,72 @@
+2026-02-11 14:53:03.469 | INFO     | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:296 - DOGE 1m: Raw candle keys: ['timestamp', 'open', 'high', 'low', 'close', 'volume'], count: 53
+2026-02-11 14:53:03.470 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:532 - Parsed 53/53 candles (full keys): close range 0.09 - 0.09
+2026-02-11 14:53:03.470 | INFO     | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:307 - Fetched 53 candles for DOGE 1m (range: 1770836400000 - 1770839520000)
+2026-02-11 14:53:03.471 | DEBUG    | trading_bot_v2.execution_layer:refine_entry:134 - ExecutionLayer DOGE: RSI_5m=17.7, RSI_1m=17.3, momentum_5m=counter, vol_ratio=1.04
+2026-02-11 14:53:03.471 | INFO     | trading_bot_v2.execution_layer:refine_entry:146 - 5m setup not ideal for DOGE: RSI bearish (18) - momentum counter
+2026-02-11 14:53:03.471 | INFO     | trading_bot_v2.execution_layer:refine_entry:170 - ⚠️ 1m timing suboptimal for DOGE: low volume (1.0x)
+2026-02-11 14:53:03.471 | DEBUG    | trading_bot_v2.trading_bot:_execute_standard_signal_coordinated:1779 - 🎯 ExecutionLayer refined DOGE entry: 0.091220 → 0.091220
+2026-02-11 14:53:03.636 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1409 - 🚨 CRITICAL ERROR in signal coordination for DOGE (VWAP_SCALPING): '"success"'
+2026-02-11 14:53:03.637 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1415 - 🔍 Exception Type: KeyError
+2026-02-11 14:53:03.637 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1416 - 🔍 Exception Value: '"success"'
+2026-02-11 14:53:03.637 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1417 - 🔍 Signal Details: Signal(strategy=<StrategyType.VWAP_SCALPING: 'vwap_scalping'>, asset='DOGE', asset_class=<AssetClass.PERPETUAL: 'perpetual'>, side=<OrderSide.BUY: 'buy'>, entry_price=0.09122, stop_loss=0.09099928571428571, take_profit=0.09383644753221139, confidence=0.49979435595948046, quantity=0.0, quality=<TradeQuality.STANDARD: 'standard'>, market_state=<MarketState.RANGE: 'range'>, timeframe='15m', pattern='vwap_mean_reversion', volume_confirmation=True, multi_timeframe_alignment=True, support_resistance_valid=True, rrr_meets_minimum=True, liquidation_buffer_safe=True, account_risk_ok=True, margin_drawdown_ok=True, forbidden_conditions_clear=True, timestamp=datetime.datetime(2026, 2, 11, 14, 53, 2, 577516), indicators={'vwap': 0.09383644753221139, 'stddev': 0.0014072318028138205, 'deviation_sd': 1.8592868118668826, 'macd_histogram': 5.790002092064068e-06, 'macd_line': -5.617609723100603e-05, 'macd_signal': -6.19660993230701e-05, 'atr': 0.00014714285714285562, 'sd1_upper': 0.09524367933502521, 'sd1_lower': 0.09242921572939757, 'sd2_upper': 0.09665091113783902, 'sd2_lower': 0.09102198392658375}, notes='VWAP=$0.0938 | dev=1.86SD | RRR=11.85 | Below VWAP by 1.86 SD | MACD histogram positive (0.0000) | 5m: RSI bearish (18) - momentum counter | 1m timing: low volume (1.0x)', grid_levels=None, grid_capital=None, spacing=None, entry_time=None, risk_profile='medium')
+2026-02-11 14:53:03.638 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1418 - 🔍 Strategy Type: VWAP_SCALPING (enum: StrategyType.VWAP_SCALPING)
+2026-02-11 14:53:03.638 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1419 - 🔍 Execution Path: STANDARD
+2026-02-11 14:53:03.640 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1423 - 🔍 Full Traceback:
+Traceback (most recent call last):
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1794, in _execute_standard_signal_coordinated
+    order_response = self.client.place_order(
+        symbol=symbol,
+    ...<2 lines>...
+        order_type="market",
+    )
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\pacifica_client.py", line 455, in place_order
+    return self._make_signed_request(endpoint, payload, request_type)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 336, in wrapped_f
+    return copy(f, *args, **kw)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 475, in __call__
+    do = self.iter(retry_state=retry_state)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 376, in iter
+    result = action(retry_state)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 398, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\concurrent\futures\_base.py", line 443, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\concurrent\futures\_base.py", line 395, in __get_result
+    raise self._exception
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 478, in __call__
+    result = fn(*args, **kwargs)
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\pacifica_client.py", line 187, in _make_signed_request
+    raise ValueError(f"API error: {response.text}")
+ValueError: API error: {"success":false,"data":null,"error":"Market order amount 20002.661474457356 is not a multiple of lot size 1","code":400}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1397, in _coordinate_signal_execution
+    self._execute_standard_signal_coordinated(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        signal, allocation_result, log_entry
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1873, in _execute_standard_signal_coordinated
+    logger.error(
+    ~~~~~~~~~~~~^
+        f"Error executing standard signal for {signal.asset}: {e}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        exc_info=True,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py", line 2090, in error
+    __self._log("ERROR", False, __self._options, __message, args, kwargs)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py", line 2055, in _log
+    log_record["message"] = message.format(*args, **kwargs)
+                            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: '"success"'
+
+

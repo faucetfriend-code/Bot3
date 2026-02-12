@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-02-11T18:35:05.289732",
+  "checks": {
+    "api_available": false,
+    "grids_endpoint": {
+      "error": "HTTPConnectionPool(host='localhost', port=9999): Max retries exceeded with url: /api/grids (Caused by NewConnectionError('<urllib3.connection.HTTPConnection object at 0x00000194A6DFB4D0>: Failed to establish a new connection: [WinError 10061] No connection could be made because the target machine actively refused it'))"
+    }
+  },
+  "issues": [
+    "API server not available"
+  ],
+  "recommendations": [
+    "Start the trading bot API server",
+    "Verify bot is running on port 8000",
+    "Add comprehensive logging for grid state changes",
+    "Implement periodic grid state consistency checks"
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "timestamp": "2026-02-11T18:38:22.832080",
+  "checks": {
+    "api_available": true,
+    "bot_running": false,
+    "grids_endpoint": {
+      "error": "unexpected_format"
+    },
+    "consistency_analysis": {
+      "status_grids": 0,
+      "grids_api_grids": 0,
+      "avax_grids_count": 0,
+      "consistent": true
+    }
+  },
+  "issues": [],
+  "recommendations": [
+    "System appears consistent - check other causes for AVAX rejection",
+    "Review risk manager validation logic",
+    "Add comprehensive logging for grid state changes",
+    "Implement periodic grid state consistency checks"
+  ]
+}

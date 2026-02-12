@@ -1,0 +1,144 @@
+2026-02-11 15:30:11.221 | INFO     | trading_bot_v2.strategy_manager:generate_signals_for_market:680 - BTC: Regime=trending_strong, strategies=['MACrossover', 'MomentumScalping', 'LiquidationCapture', 'VWAPScalping', 'FundingArb', 'OrderBookImbalance']
+2026-02-11 15:30:11.221 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling MACrossover.generate_signals()
+2026-02-11 15:30:11.226 | DEBUG    | trading_bot_v2.strategies.ma_crossover:generate_signals:182 - BTC 4h indicators: Fast MA=69670.84, Slow MA=84250.69, MACD=-575.11, Signal=-580.00, Volume ratio=0.00x
+2026-02-11 15:30:11.226 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:738 - BTC: MACrossover returned 0 signals
+2026-02-11 15:30:11.226 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling MomentumScalping.generate_signals()
+2026-02-11 15:30:11.226 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:738 - BTC: MomentumScalping returned 0 signals
+2026-02-11 15:30:11.227 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling LiquidationCapture.generate_signals()
+2026-02-11 15:30:11.227 | DEBUG    | trading_bot_v2.strategies.liquidation_capture:generate_signals:174 - BTC liquidation: using 15m for cascade detection
+2026-02-11 15:30:11.227 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:738 - BTC: LiquidationCapture returned 0 signals
+2026-02-11 15:30:11.227 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling VWAPScalping.generate_signals()
+2026-02-11 15:30:11.232 | INFO     | trading_bot_v2.strategies.vwap_scalping:generate_signals:480 - BTC: VWAP scalping buy signal - price=$67202.5179, VWAP=$69038.5026, deviation=4.86SD, confidence=94.00%, RRR=59.92
+2026-02-11 15:30:11.232 | INFO     | trading_bot_v2.strategy_manager:generate_signals_for_market:732 - BTC: VWAPScalping generated 1 signal(s) in trending_strong regime
+2026-02-11 15:30:11.232 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling FundingArb.generate_signals()
+2026-02-11 15:30:11.232 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:738 - BTC: FundingArb returned 0 signals
+2026-02-11 15:30:11.232 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:697 - BTC: Calling OrderBookImbalance.generate_signals()
+2026-02-11 15:30:11.233 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:713 - BTC: No orderbook data for OrderBookImbalance
+2026-02-11 15:30:11.233 | DEBUG    | trading_bot_v2.strategy_manager:generate_signals_for_market:738 - BTC: OrderBookImbalance returned 0 signals
+2026-02-11 15:30:11.233 | INFO     | trading_bot_v2.strategy_manager:generate_signals_for_market:754 - BTC: Single valid signal - buy @ $67202.52 (confidence: 94.00%, RRR: 59.92)
+2026-02-11 15:30:11.236 | DEBUG    | trading_bot_v2.signal_logger:log_signal_generated:217 - 📝 Logged generated signal: BTC:VWAP_SCALPING:BUY:67202.517870
+2026-02-11 15:30:11.237 | INFO     | trading_bot_v2.trading_bot:_generate_and_publish_signals:1107 - ✅ Signal generated: VWAP_SCALPING BUY BTC @ $67202.5179 (confidence: 0.9%, quality: HIGH_CONVICTION)
+2026-02-11 15:30:11.237 | INFO     | trading_bot_v2.trading_bot:_handle_signal_generated:1220 - 🚨 VWAP_SCALPING SIGNAL RECEIVED: BUY BTC (valid=True, confidence=0.94)
+2026-02-11 15:30:11.237 | INFO     | trading_bot_v2.trading_bot:_handle_signal_generated:1224 - 🔍 VWAP_SCALPING Details: entry=67202.51787, stop=67171.87501285714, quality=HIGH_CONVICTION
+2026-02-11 15:30:11.448 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2137 - 🔍 Raw balance response: {'balance': '12165.856046', 'account_equity': '12172.793757', 'equity': '12172.793757', 'available_balance': '12165.856046', 'total_equity': '12172.793757', 'usd_balance': '12165.856046', 'portfolio_value': '12172.793757', 'pending_balance': '0', 'total_margin_used': '19.384952', 'fee_level': 0, 'maker_fee': '0.00015', 'taker_fee': '0.0004', 'raw_response': {'balance': '12165.856046', 'fee_level': 0, 'maker_fee': '0.00015', 'taker_fee': '0.0004', 'account_equity': '12172.793757', 'available_to_spend': '12153.408805', 'available_to_withdraw': '12153.408805', 'pending_balance': '0', 'pending_interest': '0', 'total_margin_used': '19.384952', 'cross_mmr': '9.678124', 'positions_count': 1, 'orders_count': 4, 'stop_orders_count': 0, 'updated_at': 1770841810711}}
+2026-02-11 15:30:11.449 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2154 - 🔍 Found balance field 'balance': '12165.856046'
+2026-02-11 15:30:11.450 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2166 - 🔍 Parsed balance: '12165.856046' -> $12165.86
+2026-02-11 15:30:11.450 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2171 - 🔍 Final account balance: $12165.86
+2026-02-11 15:30:11.451 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2177 - ✅ Account balance validated: $12165.86
+2026-02-11 15:30:11.451 | INFO     | trading_bot_v2.trading_bot:_should_execute_signal:1317 - ✅ Account balance validation passed: $12165.86 available
+2026-02-11 15:30:11.625 | INFO     | trading_bot_v2.trading_bot:_should_execute_signal:1329 - ✅ Signal passed validation: BTC VWAP_SCALPING (balance=$12165.86, exposure=0.0%)
+2026-02-11 15:30:11.625 | INFO     | trading_bot_v2.trading_bot:_handle_signal_generated:1237 - ✅ VWAP_SCALPING validation PASSED for BTC - proceeding to execution
+2026-02-11 15:30:11.792 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2137 - 🔍 Raw balance response: {'balance': '12165.856046', 'account_equity': '12172.793757', 'equity': '12172.793757', 'available_balance': '12165.856046', 'total_equity': '12172.793757', 'usd_balance': '12165.856046', 'portfolio_value': '12172.793757', 'pending_balance': '0', 'total_margin_used': '19.384952', 'fee_level': 0, 'maker_fee': '0.00015', 'taker_fee': '0.0004', 'raw_response': {'balance': '12165.856046', 'fee_level': 0, 'maker_fee': '0.00015', 'taker_fee': '0.0004', 'account_equity': '12172.793757', 'available_to_spend': '12153.408805', 'available_to_withdraw': '12153.408805', 'pending_balance': '0', 'pending_interest': '0', 'total_margin_used': '19.384952', 'cross_mmr': '9.678124', 'positions_count': 1, 'orders_count': 4, 'stop_orders_count': 0, 'updated_at': 1770841810711}}
+2026-02-11 15:30:11.792 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2154 - 🔍 Found balance field 'balance': '12165.856046'
+2026-02-11 15:30:11.793 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2166 - 🔍 Parsed balance: '12165.856046' -> $12165.86
+2026-02-11 15:30:11.793 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2171 - 🔍 Final account balance: $12165.86
+2026-02-11 15:30:11.793 | INFO     | trading_bot_v2.trading_bot:_get_account_balance:2177 - ✅ Account balance validated: $12165.86
+2026-02-11 15:30:11.974 | WARNING  | trading_bot_v2.risk_manager:get_strategy_risk_profile:338 - Unknown strategy type 'vwap_scalping' (normalized: 'vwap_scalping'), using MEDIUM risk profile
+2026-02-11 15:30:11.975 | DEBUG    | trading_bot_v2.risk_manager:get_position_size:144 - Position sizing: notional=$1824.88, quantity=1.0000 @ $67202.52
+2026-02-11 15:30:11.976 | INFO     | trading_bot_v2.risk_manager:request_capital_allocation:428 - Capital allocation APPROVED: BTC VWAP_SCALPING $1824.88 (requested: $67202.52)
+2026-02-11 15:30:11.976 | INFO     | trading_bot_v2.trading_bot:_coordinate_signal_execution:1381 - ✅ Capital allocated: $1824.88 for BTC VWAP_SCALPING
+2026-02-11 15:30:11.976 | DEBUG    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1387 - 🔍 Execution routing for BTC: strategy=VWAP_SCALPING (enum: StrategyType.VWAP_SCALPING)
+2026-02-11 15:30:11.976 | INFO     | trading_bot_v2.trading_bot:_coordinate_signal_execution:1393 - 🔍 Routing BTC to STANDARD execution (strategy: VWAP_SCALPING)
+2026-02-11 15:30:11.976 | INFO     | trading_bot_v2.trading_bot:_coordinate_signal_execution:1396 - ✅ VWAP_SCALPING correctly routed to standard execution for BTC
+2026-02-11 15:30:11.976 | DEBUG    | trading_bot_v2.trading_bot:adjust_quantity_for_lot_size:1783 - Lot size adjustment for BTC: 0.02715491 → 0.02715491 (lot size: 1e-08)
+2026-02-11 15:30:11.977 | INFO     | trading_bot_v2.trading_bot:_execute_standard_signal_coordinated:1859 - 🔹 Executing VWAP_SCALPING signal for BTC: BUY 0.027155 @ $67202.5179 (capital: $1824.88, lot size: 1e-08)
+2026-02-11 15:30:11.977 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:122 - FAST PATH: Checking WS cache for BTC, timeframes=['1m', '5m']
+2026-02-11 15:30:11.977 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:126 - FAST PATH: BTC_1m - ws_data=6, need=50
+2026-02-11 15:30:11.977 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:138 - ❌ WS SYNC MISS: BTC 1m - insufficient data: 6 < 50
+2026-02-11 15:30:11.977 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:126 - FAST PATH: BTC_5m - ws_data=6, need=50
+2026-02-11 15:30:11.977 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:138 - ❌ WS SYNC MISS: BTC 5m - insufficient data: 6 < 50
+2026-02-11 15:30:11.978 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:154 - SLOW PATH: Fetching missing TFs for BTC: ['1m', '5m'] via REST API
+2026-02-11 15:30:11.978 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:220 - WS client available: True
+2026-02-11 15:30:11.979 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:228 - WS lookup: symbol=BTC, ws_symbol=BTC, tf=1m, found=6 candles
+2026-02-11 15:30:11.979 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:267 - Cache MISS: BTC 1m - fetching from REST API
+2026-02-11 15:30:11.979 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:220 - WS client available: True
+2026-02-11 15:30:11.979 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:228 - WS lookup: symbol=BTC, ws_symbol=BTC, tf=5m, found=6 candles
+2026-02-11 15:30:11.980 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:260 - Cache HIT: BTC 5m (age: 0.8s)
+2026-02-11 15:30:12.174 | INFO     | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:296 - BTC 1m: Raw candle keys: ['timestamp', 'open', 'high', 'low', 'close', 'volume'], count: 91
+2026-02-11 15:30:12.175 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_parse_candles:532 - Parsed 91/91 candles (full keys): close range 68367.00 - 68389.00
+2026-02-11 15:30:12.176 | INFO     | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:307 - Fetched 91 candles for BTC 1m (range: 1770836400000 - 1770841800000)
+2026-02-11 15:30:12.177 | DEBUG    | trading_bot_v2.execution_layer:refine_entry:134 - ExecutionLayer BTC: RSI_5m=60.8, RSI_1m=75.2, momentum_5m=aligned, vol_ratio=0.13
+2026-02-11 15:30:12.177 | INFO     | trading_bot_v2.execution_layer:refine_entry:170 - ⚠️ 1m timing suboptimal for BTC: low volume (0.1x)
+2026-02-11 15:30:12.177 | DEBUG    | trading_bot_v2.trading_bot:_execute_standard_signal_coordinated:1887 - 🎯 ExecutionLayer refined BTC entry: 67202.517870 → 67202.517870
+2026-02-11 15:30:12.345 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1409 - 🚨 CRITICAL ERROR in signal coordination for BTC (VWAP_SCALPING): '"success"'
+2026-02-11 15:30:12.345 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1415 - 🔍 Exception Type: KeyError
+2026-02-11 15:30:12.347 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1416 - 🔍 Exception Value: '"success"'
+2026-02-11 15:30:12.347 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1417 - 🔍 Signal Details: Signal(strategy=<StrategyType.VWAP_SCALPING: 'vwap_scalping'>, asset='BTC', asset_class=<AssetClass.PERPETUAL: 'perpetual'>, side=<OrderSide.BUY: 'buy'>, entry_price=67202.51787, stop_loss=67171.87501285714, take_profit=69038.50258212701, confidence=0.94, quantity=0.0, quality=<TradeQuality.HIGH_CONVICTION: 'high_conviction'>, market_state=<MarketState.RANGE: 'range'>, timeframe='15m', pattern='vwap_mean_reversion', volume_confirmation=True, multi_timeframe_alignment=True, support_resistance_valid=True, rrr_meets_minimum=True, liquidation_buffer_safe=True, account_risk_ok=True, margin_drawdown_ok=True, forbidden_conditions_clear=True, timestamp=datetime.datetime(2026, 2, 11, 15, 30, 11, 232218), indicators={'vwap': 69038.50258212701, 'stddev': 377.6754371727905, 'deviation_sd': 4.861276459678874, 'macd_histogram': 4.373359833019717, 'macd_line': -1.3941509681462776, 'macd_signal': -5.767510801165995, 'atr': 20.428571428571427, 'sd1_upper': 69416.1780192998, 'sd1_lower': 68660.82714495422, 'sd2_upper': 69793.85345647259, 'sd2_lower': 68283.15170778144}, notes='VWAP=$69038.5026 | dev=4.86SD | RRR=59.92 | Below VWAP by 4.86 SD | MACD histogram positive (4.3734) | Extreme deviation (SD2+) | Very extreme deviation (SD3+) | 1m timing: low volume (0.1x)', grid_levels=None, grid_capital=None, spacing=None, entry_time=None, risk_profile='medium')
+2026-02-11 15:30:12.347 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1418 - 🔍 Strategy Type: VWAP_SCALPING (enum: StrategyType.VWAP_SCALPING)
+2026-02-11 15:30:12.347 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1419 - 🔍 Execution Path: STANDARD
+2026-02-11 15:30:12.352 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1423 - 🔍 Full Traceback:
+Traceback (most recent call last):
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1902, in _execute_standard_signal_coordinated
+    order_response = self.client.place_order(
+        symbol=symbol,
+    ...<2 lines>...
+        order_type="market",
+    )
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\pacifica_client.py", line 455, in place_order
+    return self._make_signed_request(endpoint, payload, request_type)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 336, in wrapped_f
+    return copy(f, *args, **kw)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 475, in __call__
+    do = self.iter(retry_state=retry_state)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 376, in iter
+    result = action(retry_state)
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 398, in <lambda>
+    self._add_action_func(lambda rs: rs.outcome.result())
+                                     ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\concurrent\futures\_base.py", line 443, in result
+    return self.__get_result()
+           ~~~~~~~~~~~~~~~~~^^
+  File "C:\Python314\Lib\concurrent\futures\_base.py", line 395, in __get_result
+    raise self._exception
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\tenacity\__init__.py", line 478, in __call__
+    result = fn(*args, **kwargs)
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\pacifica_client.py", line 187, in _make_signed_request
+    raise ValueError(f"API error: {response.text}")
+ValueError: API error: {"success":false,"data":null,"error":"Market order amount 0.02715491 is not a multiple of lot size 0.00001","code":400}
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1397, in _coordinate_signal_execution
+    self._execute_standard_signal_coordinated(
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        signal, allocation_result, log_entry
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py", line 1981, in _execute_standard_signal_coordinated
+    logger.error(
+    ~~~~~~~~~~~~^
+        f"Error executing standard signal for {signal.asset}: {e}",
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        exc_info=True,
+        ^^^^^^^^^^^^^^
+    )
+    ^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py", line 2090, in error
+    __self._log("ERROR", False, __self._options, __message, args, kwargs)
+    ~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py", line 2055, in _log
+    log_record["message"] = message.format(*args, **kwargs)
+                            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: '"success"'
+
+2026-02-11 15:30:12.354 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1427 - 🚨 DETECTED THE MYSTERIOUS 'SUCCESS' ERROR - INVESTIGATING FURTHER
+2026-02-11 15:30:12.354 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1428 - 🔍 This error should have been handled by ResponseHandler
+2026-02-11 15:30:12.354 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1429 - 🔍 Possible causes:
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1430 -    1. Exception occurring before ResponseHandler is called
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1431 -    2. Different code path bypassing ResponseHandler
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1432 -    3. ResponseHandler itself throwing an exception
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1433 -    4. VWAP_SCALPING incorrectly routed to grid execution path
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1437 - 🚨 VWAP_SCALPING SIGNAL FAILED - ROUTING ANALYSIS:
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1438 - 🔍 Strategy enum comparison: False
+2026-02-11 15:30:12.355 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1439 - 🔍 Strategy string: StrategyType.VWAP_SCALPING
+2026-02-11 15:30:12.356 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1440 - 🔍 Strategy type: <enum 'StrategyType'>
+2026-02-11 15:30:12.356 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1441 - 🔍 Should use standard execution: True
+2026-02-11 15:30:12.357 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1445 - 🔍 Call Stack Analysis:
+2026-02-11 15:30:12.365 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1447 -    Frame 0: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py:1397 in _coordinate_signal_execution - self._execute_standard_signal_coordinated(
+2026-02-11 15:30:12.365 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1447 -    Frame 1: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\trading_bot.py:1981 in _execute_standard_signal_coordinated - logger.error(
+2026-02-11 15:30:12.365 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1447 -    Frame 2: C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py:2090 in error - __self._log("ERROR", False, __self._options, __message, args, kwargs)
+2026-02-11 15:30:12.365 | ERROR    | trading_bot_v2.trading_bot:_coordinate_signal_execution:1447 -    Frame 3: C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\loguru\_logger.py:2055 in _log - log_record["message"] = message.format(*args, **kwargs)
+

@@ -73,7 +73,7 @@ class MultiTimeframeFetcher:
         )
 
     def get_candles_multi_tf(
-        self, symbol: str, timeframes: List[str] = None, lookback_candles: int = 200
+        self, symbol: str, timeframes: Optional[List[str]] = None, lookback_candles: int = 200
     ) -> Dict[str, Dict[str, List[float]]]:
         """
         Fetch candles for multiple timeframes with intelligent data sources.
@@ -117,25 +117,46 @@ class MultiTimeframeFetcher:
         # WebSocket data is stored in memory - just a dict lookup
         result = {}
         if self.ws_client:
-            import re
-            ws_symbol = re.sub(r"-perp$", "", symbol, flags=re.IGNORECASE).upper()
-            logger.info(f"FAST PATH: Checking WS cache for {ws_symbol}, timeframes={timeframes}")
-            for tf in timeframes:
-                ws_data = self.ws_client.get_kline_data(ws_symbol, tf)
-                min_candles_needed = min(50, lookback_candles)
-                logger.debug(f"FAST PATH: {ws_symbol}_{tf} - ws_data={len(ws_data) if ws_data else 'None'}, need={min_candles_needed}")
-                if ws_data and len(ws_data) >= min_candles_needed:
-                    candles_to_use = ws_data[-lookback_candles:] if len(ws_data) >= lookback_candles else ws_data
-                    parsed_data = self._parse_candles(candles_to_use)
-                    close_count = len(parsed_data.get("close", [])) if parsed_data else 0
-                    logger.debug(f"FAST PATH: {ws_symbol}_{tf} - parsed close_count={close_count}")
-                    if parsed_data and parsed_data.get("close"):
-                        result[tf] = parsed_data
-                        logger.info(f"✅ WS SYNC HIT: {symbol} {tf} - {len(candles_to_use)} candles")
-                    else:
-                        logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - parse failed, close_count={close_count}")
+                import re
+                ws_symbol = re.sub(r"-perp$", "", symbol, flags=re.IGNORECASE).upper()
+                logger.info(f"FAST PATH: Checking WS cache for {ws_symbol}, timeframes={timeframes}")
+                
+                # Check data sufficiency using enhanced WebSocket client if available
+                if hasattr(self.ws_client, 'validate_data_sufficiency'):
+                    min_candles_needed = min(200, lookback_candles)  # Use enhanced minimum
                 else:
-                    logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - insufficient data: {len(ws_data) if ws_data else 0} < {min_candles_needed}")
+                    min_candles_needed = min(50, lookback_candles)  # Legacy fallback
+                    
+                for tf in timeframes:
+                    # Use enhanced data validation if available
+                    if hasattr(self.ws_client, 'validate_data_sufficiency'):
+                        sufficient, message = self.ws_client.validate_data_sufficiency(
+                            ws_symbol, tf, required_candles=min_candles_needed
+                        )
+                        logger.debug(f"FAST PATH: {ws_symbol}_{tf} - {message}")
+                        
+                        if sufficient:
+                            ws_data = self.ws_client.get_kline_data(ws_symbol, tf)
+                        else:
+                            ws_data = None
+                            logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - {message}")
+                    else:
+                        # Legacy validation
+                        ws_data = self.ws_client.get_kline_data(ws_symbol, tf)
+                        logger.debug(f"FAST PATH: {ws_symbol}_{tf} - ws_data={len(ws_data) if ws_data else 'None'}, need={min_candles_needed}")
+                        
+                    if ws_data and len(ws_data) >= min_candles_needed:
+                        candles_to_use = ws_data[-lookback_candles:] if len(ws_data) >= lookback_candles else ws_data
+                        parsed_data = self._parse_candles(candles_to_use)
+                        close_count = len(parsed_data.get("close", [])) if parsed_data else 0
+                        logger.debug(f"FAST PATH: {ws_symbol}_{tf} - parsed close_count={close_count}")
+                        if parsed_data and parsed_data.get("close"):
+                            result[tf] = parsed_data
+                            logger.info(f"✅ WS SYNC HIT: {symbol} {tf} - {len(candles_to_use)} candles")
+                        else:
+                            logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - parse failed, close_count={close_count}")
+                    elif not hasattr(self.ws_client, 'validate_data_sufficiency'):
+                        logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - insufficient data: {len(ws_data) if ws_data else 0} < {min_candles_needed}")
         else:
             logger.warning(f"FAST PATH: No ws_client available for {symbol}")
 

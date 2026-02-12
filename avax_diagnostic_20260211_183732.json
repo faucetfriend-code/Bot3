@@ -1,0 +1,18 @@
+{
+  "timestamp": "2026-02-11T18:37:22.989017",
+  "checks": {
+    "api_available": false,
+    "grids_endpoint": {
+      "error": "unexpected_format"
+    }
+  },
+  "issues": [
+    "API server not available"
+  ],
+  "recommendations": [
+    "Start the trading bot API server",
+    "Verify bot is running on port 8000",
+    "Add comprehensive logging for grid state changes",
+    "Implement periodic grid state consistency checks"
+  ]
+}

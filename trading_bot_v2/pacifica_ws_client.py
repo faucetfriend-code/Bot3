@@ -15,13 +15,141 @@ import json
 import os
 import time
 import threading
-from datetime import datetime, timezone
+from collections import deque
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional, Callable, List, Union
 import websockets
 from websockets.exceptions import ConnectionClosed
 from loguru import logger
 from solders.keypair import Keypair
 import base58
+
+# Enhanced data retention configuration
+MIN_CANDLES_REQUIRED = 200  # Increased from 50 for robust analysis
+DATA_RETENTION_HOURS = 48   # Keep 2 days of data
+MAX_CANDLES_PER_TIMEFRAME = 500  # Maximum candles to store per timeframe
+
+
+class CandleDataBuffer:
+    """Enhanced candle data buffer with extended retention and validation."""
+    
+    def __init__(self, symbol: str, timeframe: str, max_size: int = MAX_CANDLES_PER_TIMEFRAME):
+        """
+        Initialize candle data buffer.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe interval (1m, 5m, 15m, 1h, 4h)
+            max_size: Maximum number of candles to retain
+        """
+        self.symbol = symbol.upper()
+        self.timeframe = timeframe
+        self.max_size = max_size
+        self.candles = deque(maxlen=max_size)
+        self.last_updated = None
+        self.created_at = datetime.utcnow()
+        
+    def add_candle(self, candle: Dict[str, Any]) -> bool:
+        """
+        Add a new candle to the buffer.
+        
+        Args:
+            candle: OHLCV candle data with timestamp
+            
+        Returns:
+            True if candle was added, False if duplicate or invalid
+        """
+        if not self._validate_candle(candle):
+            return False
+            
+        # Check for duplicate timestamp (update existing)
+        candle_ts = candle.get('timestamp', 0)
+        for i, existing_candle in enumerate(self.candles):
+            if existing_candle.get('timestamp') == candle_ts:
+                # Update existing candle
+                self.candles[i] = candle
+                self.last_updated = datetime.utcnow()
+                return True
+        
+        # Add new candle
+        self.candles.append(candle)
+        self.last_updated = datetime.utcnow()
+        return True
+        
+    def get_candles(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get candles from the buffer.
+        
+        Args:
+            limit: Maximum number of candles to return (most recent)
+            
+        Returns:
+            List of candles sorted by timestamp (oldest to newest)
+        """
+        candles = list(self.candles)
+        candles.sort(key=lambda x: x.get('timestamp', 0))
+        
+        if limit:
+            return candles[-limit:] if len(candles) >= limit else candles
+        return candles
+        
+    def is_sufficient(self, required_candles: int = MIN_CANDLES_REQUIRED) -> bool:
+        """Check if buffer has sufficient candles for analysis."""
+        return len(self.candles) >= required_candles
+        
+    def get_data_age_hours(self) -> float:
+        """Get the age of the oldest data in hours."""
+        if not self.candles:
+            return float('inf')
+            
+        oldest_ts = min(c.get('timestamp', 0) for c in self.candles)
+        if oldest_ts == 0:
+            return float('inf')
+            
+        return (datetime.utcnow().timestamp() - oldest_ts / 1000) / 3600
+        
+    def _validate_candle(self, candle: Dict[str, Any]) -> bool:
+        """Validate candle data structure and values."""
+        required_fields = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        
+        # Check required fields
+        for field in required_fields:
+            if field not in candle:
+                return False
+                
+        # Validate numeric values
+        try:
+            for field in ['open', 'high', 'low', 'close', 'volume']:
+                value = float(candle[field])
+                # Check for NaN or Inf
+                if value != value or value == float('inf') or value == float('-inf'):
+                    return False
+                # Prices must be positive
+                if field != 'volume' and value <= 0:
+                    return False
+                    
+            # Validate timestamp
+            ts = int(candle['timestamp'])
+            if ts <= 0:
+                return False
+                
+        except (ValueError, TypeError):
+            return False
+            
+        return True
+        
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert buffer to dictionary for serialization."""
+        return {
+            'symbol': self.symbol,
+            'timeframe': self.timeframe,
+            'max_size': self.max_size,
+            'candles': list(self.candles),
+            'last_updated': self.last_updated.isoformat() if self.last_updated else None,
+            'created_at': self.created_at.isoformat(),
+            'is_sufficient': self.is_sufficient(),
+            'data_age_hours': self.get_data_age_hours()
+        }
 
 
 class PacificaWebSocketClient:
@@ -43,12 +171,15 @@ class PacificaWebSocketClient:
         "_position_cache",
         "_balance_cache",
         "_kline_cache",
+        "_candle_buffers",  # Enhanced candle data buffers
         "_orderbook_cache",
         "_ui_callbacks",
         "_channel_callbacks",
         "_last_heartbeat",
         "_running",
         "_message_count",
+        "_data_recovery_task",  # Background data recovery task
+        "_cache_save_task",  # Background cache persistence task
     )
 
     def __new__(cls):
@@ -88,13 +219,19 @@ class PacificaWebSocketClient:
         }
         self._kline_cache: Dict[
             str, List[Dict[str, Any]]
-        ] = {}  # Real-time Kline data: {symbol_interval: [candles]}
+        ] = {}  # Legacy Kline cache for backward compatibility
+        
+        # Enhanced candle data buffers with extended retention
+        self._candle_buffers: Dict[str, CandleDataBuffer] = {}
+        
         self._orderbook_cache: Dict[
             str, Dict[str, Any]
         ] = {}  # Orderbook data: {symbol: {"bids": [...], "asks": [...], "timestamp": int}}
 
-        # Debug counters
+        # Debug counters and background tasks
         self._message_count = 0
+        self._data_recovery_task = None
+        self._cache_save_task = None
 
         # Load keys from environment (same as REST client)
         agent_private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY")
@@ -118,11 +255,56 @@ class PacificaWebSocketClient:
         if self._running:
             return
         self._running = True
+        
+        # Start main WebSocket connection
         asyncio.run_coroutine_threadsafe(self._run(), self._loop)
+        
+        # Start background tasks
+        asyncio.run_coroutine_threadsafe(self._start_background_tasks(), self._loop)
+
+    async def _start_background_tasks(self):
+        """Start background data management tasks."""
+        # Load cached data first
+        await self._load_all_cached_data()
+        
+        # Start background recovery task
+        self._data_recovery_task = asyncio.create_task(self.background_data_recovery())
+        
+        # Start background cache persistence task
+        self._cache_save_task = asyncio.create_task(self.background_cache_persistence())
+        
+        logger.info("Background data management tasks started")
+
+    async def _load_all_cached_data(self):
+        """Load all cached candle data on startup."""
+        logger.info("Loading cached candle data on startup")
+        
+        loaded_count = 0
+        for symbol in ["BTC", "ETH", "SOL", "SUI", "ADA", "AVAX", "LTC", "LINK", "DOGE", "WLD"]:
+            for timeframe in ["1m", "5m", "15m", "1h", "4h"]:
+                candles = await self.load_candle_data_from_cache(symbol, timeframe)
+                if candles:
+                    buffer = self._get_or_create_buffer(symbol, timeframe)
+                    for candle in candles:
+                        buffer.add_candle(candle)
+                    
+                    # Update legacy cache
+                    cache_key = f"{symbol.upper()}_{timeframe}"
+                    self._kline_cache[cache_key] = buffer.get_candles()
+                    loaded_count += 1
+                    
+        logger.info(f"Loaded {loaded_count} candle datasets from cache")
 
     def stop(self):
         """Stop the client"""
         self._running = False
+        
+        # Cancel background tasks
+        if self._data_recovery_task:
+            self._data_recovery_task.cancel()
+        if self._cache_save_task:
+            self._cache_save_task.cancel()
+            
         if hasattr(self, "_task") and self._task:
             self._task.cancel()
 
@@ -138,20 +320,26 @@ class PacificaWebSocketClient:
         """Get all current positions (read-only view to avoid memory copies)"""
         from types import MappingProxyType
 
-        return MappingProxyType(self._position_cache)
+        return dict(MappingProxyType(self._position_cache))
 
     def get_balance(self) -> Dict[str, Any]:
         """Get latest balance info (read-only view to avoid memory copies)"""
         from types import MappingProxyType
 
-        return MappingProxyType(self._balance_cache)
+        return dict(MappingProxyType(self._balance_cache))
 
     def get_kline_data(
         self, symbol: str, interval: str
     ) -> Optional[List[Dict[str, Any]]]:
         """Get cached real-time Kline data for a symbol/interval in REST API format"""
-        cache_key = f"{symbol.upper()}_{interval}"
-        candle_list = self._kline_cache.get(cache_key)
+        buffer_key = f"{symbol.upper()}_{interval}"
+        
+        # Try enhanced buffer first
+        if buffer_key in self._candle_buffers:
+            candle_list = self._candle_buffers[buffer_key].get_candles()
+        else:
+            # Fallback to legacy cache
+            candle_list = self._kline_cache.get(buffer_key)
 
         if not candle_list:
             return None
@@ -241,8 +429,8 @@ class PacificaWebSocketClient:
     def bootstrap_kline_cache(
         self,
         rest_client,
-        symbols: List[str] = None,
-        intervals: List[str] = None,
+        symbols: Optional[List[str]] = None,
+        intervals: Optional[List[str]] = None,
         lookback: int = 250,
         use_disk_cache: bool = True,
         max_concurrent: int = 3,
@@ -479,9 +667,9 @@ class PacificaWebSocketClient:
 
         # Run all subscriptions concurrently
         if subscription_tasks:
-            asyncio.run_coroutine_threadsafe(
-                asyncio.gather(*subscription_tasks, return_exceptions=True), self._loop
-            )
+            async def _run_subscriptions():
+                await asyncio.gather(*subscription_tasks, return_exceptions=True)
+            asyncio.run_coroutine_threadsafe(_run_subscriptions(), self._loop)
             logger.info(
                 f"✅ Updated WebSocket subscriptions for {len(normalized_symbols)} symbols: {normalized_symbols}"
             )
@@ -510,6 +698,357 @@ class PacificaWebSocketClient:
         }
         event_type = channel_map.get(str(channel_type), str(channel_type))
         self._channel_callbacks[event_type] = callback
+
+    # ====================== ENHANCED DATA MANAGEMENT ======================
+
+    def _get_or_create_buffer(self, symbol: str, timeframe: str) -> CandleDataBuffer:
+        """Get or create candle data buffer for symbol/timeframe."""
+        buffer_key = f"{symbol.upper()}_{timeframe}"
+        
+        if buffer_key not in self._candle_buffers:
+            self._candle_buffers[buffer_key] = CandleDataBuffer(
+                symbol=symbol.upper(),
+                timeframe=timeframe,
+                max_size=MAX_CANDLES_PER_TIMEFRAME
+            )
+            logger.debug(f"Created candle buffer: {buffer_key}")
+            
+        return self._candle_buffers[buffer_key]
+
+    def validate_data_sufficiency(
+        self, symbol: str, timeframe: str, required_candles: int = MIN_CANDLES_REQUIRED
+    ) -> tuple[bool, str]:
+        """
+        Check if symbol has sufficient data for analysis.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe interval
+            required_candles: Minimum candles required (default: 200)
+            
+        Returns:
+            Tuple of (is_sufficient, message)
+        """
+        buffer_key = f"{symbol.upper()}_{timeframe}"
+        
+        if buffer_key not in self._candle_buffers:
+            return False, f"No data buffer for {symbol} {timeframe}"
+            
+        buffer = self._candle_buffers[buffer_key]
+        
+        if not buffer.is_sufficient(required_candles):
+            return (
+                False, 
+                f"Insufficient data: {len(buffer.candles)} < {required_candles} candles"
+            )
+            
+        return True, f"Data sufficient: {len(buffer.candles)} candles"
+
+    def get_data_sufficiency_report(self, symbols: Optional[List[str]] = None, 
+                                  timeframes: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Generate comprehensive data sufficiency report for all symbols.
+        
+        Args:
+            symbols: List of symbols to check (default: all symbols with buffers)
+            timeframes: List of timeframes to check (default: all timeframes)
+            
+        Returns:
+            Dictionary with detailed sufficiency information
+        """
+        if not symbols:
+            symbols = []
+            symbol_set = set()
+            for buffer_key in self._candle_buffers.keys():
+                symbol = buffer_key.split('_')[0]
+                symbol_set.add(symbol)
+            symbols = list(symbol_set)
+            
+        if not timeframes:
+            timeframes = ["1m", "5m", "15m", "1h", "4h"]
+            
+        report = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "min_candles_required": MIN_CANDLES_REQUIRED,
+            "symbols_checked": len(symbols),
+            "timeframes_checked": timeframes,
+            "summary": {
+                "total_buffers": len(self._candle_buffers),
+                "sufficient_buffers": 0,
+                "insufficient_buffers": 0,
+                "missing_buffers": 0
+            },
+            "details": {}
+        }
+        
+        for symbol in symbols:
+            report["details"][symbol] = {}
+            for timeframe in timeframes:
+                sufficient, message = self.validate_data_sufficiency(symbol, timeframe)
+                buffer_key = f"{symbol.upper()}_{timeframe}"
+                
+                if buffer_key in self._candle_buffers:
+                    buffer = self._candle_buffers[buffer_key]
+                    candle_count = len(buffer.candles)
+                    data_age_hours = buffer.get_data_age_hours()
+                    
+                    if sufficient:
+                        report["summary"]["sufficient_buffers"] += 1
+                    else:
+                        report["summary"]["insufficient_buffers"] += 1
+                else:
+                    candle_count = 0
+                    data_age_hours = float('inf')
+                    report["summary"]["missing_buffers"] += 1
+                    
+                report["details"][symbol][timeframe] = {
+                    "sufficient": sufficient,
+                    "candle_count": candle_count,
+                    "required": MIN_CANDLES_REQUIRED,
+                    "message": message,
+                    "data_age_hours": data_age_hours,
+                    "has_buffer": buffer_key in self._candle_buffers
+                }
+                
+        return report
+
+    async def save_candle_data_to_cache(self, symbol: str, timeframe: str, 
+                                       candles: List[Dict[str, Any]]) -> bool:
+        """
+        Save candle data to disk cache for recovery.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe interval
+            candles: List of candle data
+            
+        Returns:
+            True if save successful, False otherwise
+        """
+        try:
+            cache_dir = os.path.join(os.path.dirname(__file__), ".candle_cache")
+            os.makedirs(cache_dir, exist_ok=True)
+            
+            cache_file = os.path.join(
+                cache_dir, 
+                f"candle_cache_{symbol.upper()}_{timeframe}.json"
+            )
+            
+            data = {
+                'symbol': symbol.upper(),
+                'timeframe': timeframe,
+                'candles': candles,
+                'saved_at': datetime.utcnow().isoformat(),
+                'candle_count': len(candles)
+            }
+            
+            with open(cache_file, 'w') as f:
+                json.dump(data, f, indent=2)
+                
+            logger.debug(f"Saved {len(candles)} candles to cache: {cache_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to save candle cache for {symbol} {timeframe}: {e}")
+            return False
+
+    async def load_candle_data_from_cache(self, symbol: str, timeframe: str) -> List[Dict[str, Any]]:
+        """
+        Load cached candle data from disk.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe interval
+            
+        Returns:
+            List of candle data (empty list if no cache)
+        """
+        try:
+            cache_dir = os.path.join(os.path.dirname(__file__), ".candle_cache")
+            cache_file = os.path.join(
+                cache_dir, 
+                f"candle_cache_{symbol.upper()}_{timeframe}.json"
+            )
+            
+            if not os.path.exists(cache_file):
+                return []
+                
+            with open(cache_file, 'r') as f:
+                data = json.load(f)
+                
+            candles = data.get('candles', [])
+            saved_at = data.get('saved_at', '')
+            
+            # Check cache age (reject if older than 24 hours)
+            if saved_at:
+                saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
+                age_hours = (datetime.utcnow() - saved_time).total_seconds() / 3600
+                if age_hours > 24:
+                    logger.info(f"Candle cache too old for {symbol} {timeframe}: {age_hours:.1f}h")
+                    os.remove(cache_file)  # Remove stale cache
+                    return []
+                    
+            logger.debug(f"Loaded {len(candles)} candles from cache: {symbol} {timeframe}")
+            return candles
+            
+        except Exception as e:
+            logger.error(f"Failed to load candle cache for {symbol} {timeframe}: {e}")
+            return []
+
+    async def fill_data_gap_rest(self, symbol: str, timeframe: str, 
+                                lookback: int = MIN_CANDLES_REQUIRED) -> bool:
+        """
+        Fill data gap using REST API for insufficient data.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe interval
+            lookback: Number of candles to fetch
+            
+        Returns:
+            True if gap fill successful, False otherwise
+        """
+        try:
+            # Import here to avoid circular dependencies
+            from .pacifica_client import PacificaClient
+            
+            # Create REST client
+            agent_private_key = os.getenv("AGENT_WALLET_PRIVATE_KEY")
+            account_pubkey = os.getenv("ACCOUNT_PUBLIC_KEY")
+            
+            if not agent_private_key or not account_pubkey:
+                logger.error("Missing Pacifica credentials for gap fill")
+                return False
+                
+            client = PacificaClient(
+                agent_wallet_private_key=agent_private_key,
+                account_public_key=account_pubkey
+            )
+            
+            # Calculate start time
+            interval_minutes = self._interval_to_minutes(timeframe)
+            start_time = datetime.utcnow() - timedelta(minutes=interval_minutes * lookback)
+            
+            # Fetch candles
+            candles_data = client.get_candles(
+                market=f"{symbol.upper()}-PERP",
+                interval=timeframe,
+                start_time=int(start_time.timestamp() * 1000),
+                limit=lookback
+            )
+            
+            if not candles_data:
+                logger.warning(f"No REST data available for gap fill: {symbol} {timeframe}")
+                return False
+                
+            # Convert to internal format and add to buffer
+            buffer = self._get_or_create_buffer(symbol, timeframe)
+            added_count = 0
+            
+            for candle in candles_data:
+                ohlcv_candle = {
+                    "timestamp": int(candle.get("t", 0)),
+                    "open": float(candle.get("o", 0)),
+                    "high": float(candle.get("h", 0)),
+                    "low": float(candle.get("l", 0)),
+                    "close": float(candle.get("c", 0)),
+                    "volume": float(candle.get("v", 0)),
+                    "trades": int(candle.get("n", 0)),
+                }
+                
+                if buffer.add_candle(ohlcv_candle):
+                    added_count += 1
+                    
+            # Update legacy cache for backward compatibility
+            if added_count > 0:
+                cache_key = f"{symbol.upper()}_{timeframe}"
+                self._kline_cache[cache_key] = buffer.get_candles()
+                
+                # Save to persistent cache
+                await self.save_candle_data_to_cache(symbol, timeframe, buffer.get_candles())
+                
+            logger.info(f"Gap fill successful: {symbol} {timeframe} - added {added_count}/{len(candles_data)} candles")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to fill data gap for {symbol} {timeframe}: {e}")
+            return False
+
+    def _interval_to_minutes(self, interval: str) -> int:
+        """Convert interval string to minutes."""
+        interval = interval.lower().strip()
+        
+        if interval.endswith('m'):
+            return int(interval[:-1])
+        elif interval.endswith('h'):
+            return int(interval[:-1]) * 60
+        elif interval.endswith('d'):
+            return int(interval[:-1]) * 24 * 60
+        else:
+            raise ValueError(f"Unknown interval format: {interval}")
+
+    async def background_data_recovery(self):
+        """Background task to monitor and recover data gaps."""
+        logger.info("Starting background data recovery task")
+        
+        while self._running:
+            try:
+                # Get sufficiency report
+                report = self.get_data_sufficiency_report()
+                
+                recovery_count = 0
+                
+                # Check each symbol/timeframe combination
+                for symbol, details in report["details"].items():
+                    for timeframe, status in details.items():
+                        if not status["sufficient"]:
+                            logger.warning(
+                                f"Data gap detected: {symbol} {timeframe} - "
+                                f"{status['candle_count']}/{status['required']} candles"
+                            )
+                            
+                            # Attempt to fill gap
+                            if await self.fill_data_gap_rest(symbol, timeframe):
+                                recovery_count += 1
+                                
+                if recovery_count > 0:
+                    logger.info(f"Background recovery: filled {recovery_count} data gaps")
+                    
+                # Check every 5 minutes
+                await asyncio.sleep(300)
+                
+            except Exception as e:
+                logger.error(f"Error in background data recovery: {e}")
+                await asyncio.sleep(60)  # Short retry on error
+
+    async def background_cache_persistence(self):
+        """Background task to persist candle data to disk periodically."""
+        logger.info("Starting background cache persistence task")
+        
+        while self._running:
+            try:
+                # Save all buffers to cache every hour
+                saved_count = 0
+                
+                for buffer_key, buffer in self._candle_buffers.items():
+                    if buffer.candles:  # Only save non-empty buffers
+                        symbol = buffer.symbol
+                        timeframe = buffer.timeframe
+                        
+                        if await self.save_candle_data_to_cache(
+                            symbol, timeframe, buffer.get_candles()
+                        ):
+                            saved_count += 1
+                            
+                if saved_count > 0:
+                    logger.debug(f"Cache persistence: saved {saved_count} buffers to disk")
+                    
+                # Run every hour
+                await asyncio.sleep(3600)
+                
+            except Exception as e:
+                logger.error(f"Error in background cache persistence: {e}")
+                await asyncio.sleep(300)  # Short retry on error
 
     # ====================== INTERNAL ======================
 
@@ -760,18 +1299,13 @@ class PacificaWebSocketClient:
                         "trades": int(candle_data.get("n", 0)),
                     }
 
-                    # Store in cache (maintain last N candles for each symbol/interval)
+                    # Store in enhanced candle buffer
+                    buffer = self._get_or_create_buffer(symbol, interval)
+                    buffer.add_candle(ohlcv_candle)
+                    
+                    # Update legacy cache for backward compatibility
                     cache_key = f"{symbol}_{interval}"
-                    if cache_key not in self._kline_cache:
-                        self._kline_cache[cache_key] = []
-
-                    # Keep only recent candles (limit to prevent memory growth)
-                    candle_list = self._kline_cache[cache_key]
-                    candle_list.append(ohlcv_candle)
-
-                    # Sort by timestamp and keep most recent 250 candles (for 200 MA)
-                    candle_list.sort(key=lambda x: x["timestamp"])
-                    self._kline_cache[cache_key] = candle_list[-250:]
+                    self._kline_cache[cache_key] = buffer.get_candles()
 
                     event = {
                         "type": "candle_update",
@@ -829,7 +1363,12 @@ class PacificaWebSocketClient:
         """Call the specific channel callback"""
         if event_type in self._channel_callbacks:
             try:
-                asyncio.create_task(self._channel_callbacks[event_type](event))
+                callback = self._channel_callbacks[event_type]
+                if callback and callable(callback):
+                    if asyncio.iscoroutinefunction(callback):
+                        asyncio.run_coroutine_threadsafe(callback(event), self._loop)
+                    else:
+                        callback(event)  # Sync callback
             except Exception as e:
                 logger.error(f"Channel callback error for {event_type}: {e}")
 

@@ -100,6 +100,69 @@ class Config:
             os.getenv("GRID_PARTIAL_UNWIND_ENABLED", "true").lower() == "true"
         )
 
+        # Grid refresh/recenter configuration
+        try:
+            self.grid_refresh_min_atr_drift: float = float(
+                os.getenv("GRID_REFRESH_MIN_ATR_DRIFT", "1.8")
+            )
+        except ValueError:
+            self.grid_refresh_min_atr_drift = 1.8
+
+        try:
+            self.grid_refresh_min_confidence: float = float(
+                os.getenv("GRID_REFRESH_MIN_CONFIDENCE", "0.72")
+            )
+        except ValueError:
+            self.grid_refresh_min_confidence = 0.72
+
+        try:
+            self.grid_refresh_min_conf_improve: float = float(
+                os.getenv("GRID_REFRESH_MIN_CONF_IMPROVE", "0.08")
+            )
+        except ValueError:
+            self.grid_refresh_min_conf_improve = 0.08
+
+        try:
+            self.grid_refresh_cooldown_minutes: int = int(
+                os.getenv("GRID_REFRESH_COOLDOWN_MINUTES", "45")
+            )
+        except ValueError:
+            self.grid_refresh_cooldown_minutes = 45
+
+        try:
+            self.grid_refresh_max_per_day: int = int(
+                os.getenv("GRID_REFRESH_MAX_PER_DAY", "3")
+            )
+        except ValueError:
+            self.grid_refresh_max_per_day = 3
+
+        # Dynamic spacing configuration
+        self.grid_dynamic_spacing_enabled: bool = (
+            os.getenv("GRID_DYNAMIC_SPACING_ENABLED", "true").lower() == "true"
+        )
+
+        try:
+            self.grid_dynamic_spacing_recalc_minutes: int = int(
+                os.getenv("GRID_DYNAMIC_SPACING_RECALC_MINUTES", "30")
+            )
+        except ValueError:
+            self.grid_dynamic_spacing_recalc_minutes = 30
+
+        try:
+            self.grid_spacing_volatility_multiplier: float = float(
+                os.getenv("GRID_SPACING_VOLATILITY_MULTIPLIER", "1.2")
+            )
+        except ValueError:
+            self.grid_spacing_volatility_multiplier = 1.2
+
+        # Safety thresholds
+        try:
+            self.grid_emergency_drift_threshold: float = float(
+                os.getenv("GRID_EMERGENCY_DRIFT_THRESHOLD", "3.0")
+            )
+        except ValueError:
+            self.grid_emergency_drift_threshold = 3.0
+
         try:
             self.default_leverage: int = int(os.getenv("DEFAULT_LEVERAGE", "10"))
         except ValueError:

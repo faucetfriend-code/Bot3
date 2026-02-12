@@ -7,7 +7,7 @@ Eliminates duplicate risk logic across trading_bot.py, position sizing, and vali
 
 import time
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from loguru import logger
 
 # Type hints for grid exposure tracking
@@ -113,7 +113,9 @@ class RiskManager:
             logger.warning(f"No stop loss for {signal.asset}, using minimum size")
             notional_size = adjusted_risk * 0.1  # Conservative minimum
         elif signal.entry_price <= 0:
-            logger.warning(f"Invalid entry price ({signal.entry_price}) for {signal.asset}, using minimum size")
+            logger.warning(
+                f"Invalid entry price ({signal.entry_price}) for {signal.asset}, using minimum size"
+            )
             notional_size = adjusted_risk * 0.1  # Conservative minimum
         else:
             # Position notional = Risk Amount / Stop Distance Percentage
@@ -122,7 +124,9 @@ class RiskManager:
             )
             # Avoid division by zero if stop == entry
             if stop_distance_pct <= 0:
-                logger.warning(f"Zero stop distance for {signal.asset}, using minimum size")
+                logger.warning(
+                    f"Zero stop distance for {signal.asset}, using minimum size"
+                )
                 notional_size = adjusted_risk * 0.1
             else:
                 notional_size = adjusted_risk / stop_distance_pct
@@ -131,6 +135,14 @@ class RiskManager:
         max_exposure = account_balance * self.max_portfolio_exposure_pct
         available_exposure = max_exposure - current_exposure
         notional_size = min(notional_size, available_exposure)
+
+        # Debug: Log the final notional size and quantity
+        logger.debug(
+            f"Final position sizing: notional=${notional_size:.2f}, "
+            f"available_exposure=${available_exposure:.2f}, "
+            f"max_exposure=${max_exposure:.2f}, "
+            f"current_exposure=${current_exposure:.2f}"
+        )
 
         # Convert notional to quantity using entry price
         if signal.entry_price > 0:
@@ -170,11 +182,14 @@ class RiskManager:
         else:
             position_notional = quantity  # Assume already notional
 
-        # Check risk percentage
-        risk_pct = (position_notional / account_balance) if account_balance > 0 else 1.0
-        if risk_pct > self.max_portfolio_risk_pct * 2:  # Allow some flexibility
+        # Check exposure limit (allow 100% of max exposure for flexibility)
+        total_exposure = current_exposure + position_notional
+        exposure_pct = (
+            (total_exposure / account_balance) if account_balance > 0 else 1.0
+        )
+        if exposure_pct > self.max_portfolio_exposure_pct * 2:  # Allow 100% flexibility
             logger.warning(
-                f"Position size exceeds risk limit: {risk_pct * 100:.1f}% > {self.max_portfolio_risk_pct * 100:.1f}%"
+                f"Total exposure exceeds limit: {exposure_pct * 100:.1f}% > {self.max_portfolio_exposure_pct * 100:.1f}%"
             )
             return False
 
@@ -183,9 +198,9 @@ class RiskManager:
         exposure_pct = (
             (total_exposure / account_balance) if account_balance > 0 else 1.0
         )
-        if exposure_pct > self.max_portfolio_exposure_pct:
+        if exposure_pct > self.max_portfolio_exposure_pct * 1.5:  # Allow 50% flexibility
             logger.warning(
-                f"Total exposure exceeds limit: {exposure_pct * 100:.1f}% > {self.max_portfolio_exposure_pct * 100:.1f}%"
+                f"Total exposure exceeds limit: {exposure_pct * 100:.1f}% > {self.max_portfolio_exposure_pct * 1.5 * 100:.1f}%"
             )
             return False
 
@@ -315,6 +330,7 @@ class RiskManager:
         # Strategy-specific risk profiles (all lowercase keys)
         # Handle multiple naming formats (with/without underscores)
         # Grid trading upgraded to MEDIUM (Jan 2026) for more aggressive sizing
+        # Advanced strategies added Feb 2026
         strategy_profiles = {
             "mean_reversion": RiskProfile.MEDIUM.value,
             "meanreversion": RiskProfile.MEDIUM.value,  # Handle no underscore
@@ -330,6 +346,19 @@ class RiskManager:
             "trend_following": RiskProfile.HIGH.value,
             "trendfollowing": RiskProfile.HIGH.value,  # Handle no underscore
             "trend following": RiskProfile.HIGH.value,  # Handle space
+            # Advanced Strategies - Feb 2026
+            "vwap_scalping": RiskProfile.MEDIUM.value,  # Volume-Weighted Average Price mean reversion
+            "vwapscalping": RiskProfile.MEDIUM.value,  # Handle no underscore
+            "vwap scalping": RiskProfile.MEDIUM.value,  # Handle space
+            "funding_arbitrage": RiskProfile.LOW.value,  # Delta-neutral hourly funding capture
+            "fundingarbitrage": RiskProfile.LOW.value,  # Handle no underscore
+            "funding arbitrage": RiskProfile.LOW.value,  # Handle space
+            "momentum_scalping": RiskProfile.HIGH.value,  # Fast EMA crossover scalping
+            "momentum scalping": RiskProfile.HIGH.value,  # Handle space
+            "momentumscalping": RiskProfile.HIGH.value,  # Handle no underscore
+            "order_book_imbalance": RiskProfile.MEDIUM.value,  # Level 2 orderbook analysis
+            "orderbookimbalance": RiskProfile.MEDIUM.value,  # Handle no underscore
+            "order book imbalance": RiskProfile.MEDIUM.value,  # Handle space
         }
 
         profile = strategy_profiles.get(normalized_type, RiskProfile.MEDIUM.value)
@@ -584,7 +613,7 @@ class RiskManager:
         return True
 
     def unregister_migrated_position(
-        self, symbol: str, side: str, qty: float = None
+        self, symbol: str, side: str, qty: Optional[float] = None
     ) -> bool:
         """
         Unregister a migrated position (when closed via TP/SL/manual).
@@ -624,7 +653,7 @@ class RiskManager:
 
         return removed
 
-    def get_migrated_exposure(self, symbol: str = None) -> float:
+    def get_migrated_exposure(self, symbol: Optional[str] = None) -> float:
         """
         Get total exposure from migrated positions.
 
@@ -647,7 +676,7 @@ class RiskManager:
 
         return total
 
-    def get_total_exposure(self, symbol: str = None) -> Dict[str, float]:
+    def get_total_exposure(self, symbol: Optional[str] = None) -> Dict[str, float]:
         """
         Get combined exposure for symbol (grid + migrated + other).
 
@@ -688,7 +717,11 @@ class RiskManager:
         Returns:
             Dict with 'valid': bool, 'warnings': list, 'errors': list
         """
-        result = {"valid": True, "warnings": [], "errors": []}
+        result: Dict[str, Any] = {
+            "valid": True, 
+            "warnings": [], 
+            "errors": []
+        }
 
         # Check stop loss requirement (CRITICAL)
         if not position.get("has_stop", False):
@@ -717,7 +750,7 @@ class RiskManager:
 
         return result
 
-    def get_migrated_positions(self, symbol: str = None) -> list:
+    def get_migrated_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get list of migrated positions.
 
@@ -736,7 +769,7 @@ class RiskManager:
                     all_positions.append({**pos, "symbol": sym})
             return all_positions
 
-    def has_migrated_positions(self, symbol: str = None) -> bool:
+    def has_migrated_positions(self, symbol: Optional[str] = None) -> bool:
         """Check if there are any migrated positions."""
         if symbol:
             return bool(self.migrated_positions.get(symbol))

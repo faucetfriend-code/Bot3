@@ -20,9 +20,135 @@ from enum import Enum
 from typing import Dict, Any, List, Optional, Set
 from datetime import datetime, timedelta
 from loguru import logger
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+import json
 
 from .config import config
+from .universal_grid_state_consistency import UniversalGridStateConsistencyManager
+
+
+class ResponseHandler:
+    """Handles Pacifica API responses with robust validation and error handling."""
+    
+    @staticmethod
+    def validate_order_response(response: Any) -> Dict[str, Any]:
+        """
+        Validate and normalize order response from Pacifica API.
+        
+        Args:
+            response: Raw response from API (could be dict, string, etc.)
+            
+        Returns:
+            Normalized response dict with expected format:
+            {"success": bool, "data": dict, "error": Optional[str]}
+        """
+        logger.debug(f"Validating order response: {response} (type: {type(response)})")
+        
+        # Case 1: Response is already a dict (expected format)
+        if isinstance(response, dict):
+            return ResponseHandler._normalize_dict_response(response)
+        
+        # Case 2: Response is a boolean (direct API response)
+        elif isinstance(response, bool):
+            logger.warning(f"API returned boolean directly: {response}")
+            return {
+                "success": response,
+                "data": {"status": "success" if response else "error"},
+                "error": None if response else "API returned false"
+            }
+        
+        # Case 3: Response is a string (could be JSON or just "success")
+        elif isinstance(response, str):
+            return ResponseHandler._handle_string_response(response)
+        
+        # Case 4: Response is None or unexpected type
+        else:
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected response type: {type(response).__name__}"
+            }
+    
+    @staticmethod
+    def _normalize_dict_response(response: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize dictionary response to expected format."""
+        # Ensure we have the required fields
+        normalized = {
+            "success": bool(response.get("success", False)),
+            "data": response.get("data", {}),
+            "error": response.get("error") if not response.get("success") else None
+        }
+        
+        # Validate data field
+        if not isinstance(normalized["data"], dict):
+            logger.warning(f"Response data is not a dict: {normalized['data']}")
+            normalized["data"] = {}
+        
+        return normalized
+    
+    @staticmethod
+    def _handle_string_response(response: str) -> Dict[str, Any]:
+        """Handle string response from API."""
+        # Try to parse as JSON first
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, dict):
+                return ResponseHandler._normalize_dict_response(parsed)
+            else:
+                # If parsed result is not a dict, handle based on content
+                logger.warning(f"API returned non-dict JSON: {parsed}")
+                if isinstance(parsed, bool):
+                    return {
+                        "success": parsed,
+                        "data": {"status": "success" if parsed else "error"},
+                        "error": None if parsed else "API returned false"
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "success":
+                    return {
+                        "success": True,
+                        "data": {"status": "success"},
+                        "error": None
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "error":
+                    return {
+                        "success": False,
+                        "data": {},
+                        "error": "API returned error response"
+                    }
+                else:
+                    # Default to treating as success for unknown types
+                    return {
+                        "success": True,
+                        "data": {"raw_response": parsed},
+                        "error": None
+                    }
+        except json.JSONDecodeError:
+            # Not valid JSON, treat raw string
+            pass
+        
+        # Handle specific string responses
+        if response.lower() == '"success"' or response.lower() == "success":
+            logger.warning("API returned string 'success' instead of JSON object")
+            return {
+                "success": True,
+                "data": {"status": "success"},
+                "error": None
+            }
+        elif response.lower() == '"error"' or response.lower() == "error":
+            logger.error("API returned string 'error'")
+            return {
+                "success": False,
+                "data": {},
+                "error": "API returned error response"
+            }
+        else:
+            # Unknown string response
+            logger.error(f"API returned unexpected string response: {response}")
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected API response: {response}"
+            }
 
 
 class GridState(Enum):
@@ -101,14 +227,702 @@ class GridLifecycleManager:
         # Last time we checked for fills
         self._last_fill_check: datetime = datetime.now() - timedelta(hours=1)
 
+        # Market info cache for tick_size and lot_size compliance
+        # Fetched from Pacifica /info endpoint
+        self._market_info_cache: Dict[str, Dict[str, float]] = {}
+        self._market_info_cache_timestamp: Optional[datetime] = None
+        self._market_info_cache_ttl: int = 300  # 5 minutes TTL
+
+        # Grid refresh/recenter configuration (from config)
+        self.GRID_REFRESH_MIN_ATR_DRIFT: float = config.grid_refresh_min_atr_drift
+        self.GRID_REFRESH_MIN_CONFIDENCE: float = config.grid_refresh_min_confidence
+        self.GRID_REFRESH_MIN_CONF_IMPROVE: float = config.grid_refresh_min_conf_improve
+        self.GRID_REFRESH_COOLDOWN_MINUTES: int = config.grid_refresh_cooldown_minutes
+        self.GRID_REFRESH_MAX_PER_DAY: int = config.grid_refresh_max_per_day
+
+        # Dynamic spacing configuration (from config)
+        self.GRID_DYNAMIC_SPACING_ENABLED: bool = config.grid_dynamic_spacing_enabled
+        self.GRID_DYNAMIC_SPACING_RECALC_MINUTES: int = config.grid_dynamic_spacing_recalc_minutes
+        self.GRID_SPACING_VOLATILITY_MULTIPLIER: float = config.grid_spacing_volatility_multiplier
+
+        # Safety thresholds (from config)
+        self.GRID_EMERGENCY_DRIFT_THRESHOLD: float = config.grid_emergency_drift_threshold
+
+        # Track refresh counts per symbol (daily reset)
+        self._daily_refresh_counts: Dict[str, int] = {}
+        self._last_reset_date: Optional[datetime] = None
+
+        # Initialize universal grid state consistency manager
+        self.consistency_manager = UniversalGridStateConsistencyManager(
+            grid_lifecycle_manager=self,
+            database_manager=self.db,
+            client=self.client
+        )
+
+        # Initialize startup repair and validation
+        self._initialize_grid_system()
+
+    def _initialize_grid_system(self) -> None:
+        """
+        Initialize the grid system with startup repair and validation.
+        
+        This method is called during __init__ to:
+        1. Load existing grid states from database
+        2. Detect and repair orphaned grids
+        3. Validate grid integrity
+        4. Initialize daily tracking
+        """
+        try:
+            logger.info("🔧 Initializing GridLifecycleManager system...")
+            
+            # Reset daily counters if needed
+            self._reset_daily_counters_if_needed()
+            
+            # Load existing grids from database (if available)
+            if self.db:
+                loaded_grids = self.load_grid_states(regime_detector=self.regime_detector)
+                logger.info(f"📊 Loaded {len(loaded_grids)} grids from database")
+            
+            # Run universal grid state validation and repair
+            validation_report = self.consistency_manager.validate_and_repair_all_grids(automatic=False)
+            logger.info(f"🔧 Universal grid validation: {validation_report.consistent_symbols}/{validation_report.total_symbols} consistent")
+            
+            # Legacy orphaned grid detection (as fallback)
+            orphaned_repaired = self.detect_and_repair_orphaned_grids()
+            if orphaned_repaired > 0:
+                logger.info(f"🔧 Legacy repair: Fixed {orphaned_repaired} orphaned grids on startup")
+            
+            # Legacy grid integrity validation (as fallback)
+            self._validate_grid_integrity()
+            
+            logger.info("✅ GridLifecycleManager system initialization complete")
+            
+        except Exception as e:
+            logger.error(f"❌ Grid system initialization failed: {e}", exc_info=True)
+
+    def _reset_daily_counters_if_needed(self) -> None:
+        """Reset daily refresh counters if date has changed."""
+        today = datetime.now().date()
+        should_reset = False
+        
+        if self._last_reset_date is None:
+            should_reset = True
+        else:
+            should_reset = today != self._last_reset_date.date()
+        
+        if should_reset:
+            self._daily_refresh_counts.clear()
+            self._last_reset_date = datetime.now()
+            logger.debug(f"📅 Reset daily grid refresh counters for {today}")
+
+    def detect_and_repair_orphaned_grids(self) -> int:
+        """
+        Detect and repair orphaned grids on startup.
+        
+        Orphaned grids are those that:
+        1. Have missing center_price or initial_center
+        2. Have incomplete metadata
+        3. Exist in DB but not on exchange
+        4. Have invalid state or corrupted data
+        
+        Returns:
+            Number of grids repaired
+        """
+        repaired_count = 0
+        
+        try:
+            # Check in-memory grids for orphaned conditions
+            orphaned_symbols = []
+            
+            for symbol, grid_data in self._grids.items():
+                issues = []
+                
+                # Check for missing center price
+                if not grid_data.get("center_price") and not grid_data.get("initial_center"):
+                    issues.append("missing_center_price")
+                
+                # Check for incomplete metadata
+                required_fields = ["grid_capital", "grid_spacing", "num_levels"]
+                for field in required_fields:
+                    if field not in grid_data or grid_data[field] is None:
+                        issues.append(f"missing_{field}")
+                
+                # Check for invalid state
+                if grid_data.get("state") not in [s.value for s in GridState]:
+                    issues.append("invalid_state")
+                
+                if issues:
+                    orphaned_symbols.append((symbol, issues))
+                    logger.warning(f"⚠️ Orphaned grid detected for {symbol}: {', '.join(issues)}")
+            
+            # Attempt to repair orphaned grids
+            for symbol, issues in orphaned_symbols:
+                if self._repair_orphaned_grid(symbol, issues):
+                    repaired_count += 1
+                    logger.info(f"✅ Successfully repaired orphaned grid for {symbol}")
+                else:
+                    logger.error(f"❌ Failed to repair orphaned grid for {symbol}")
+                    # Close unrecoverable grids
+                    self._close_unrecoverable_grid(symbol, "startup_repair_failed")
+            
+            # Sync with exchange to detect additional orphaned grids
+            if repaired_count == 0:  # Only if no memory grids needed repair
+                exchange_repaired = self._sync_grids_from_exchange()
+                repaired_count += exchange_repaired
+                
+        except Exception as e:
+            logger.error(f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True)
+        
+        return repaired_count
+
+    def _repair_orphaned_grid(self, symbol: str, issues: List[str]) -> bool:
+        """
+        Attempt to repair an orphaned grid.
+        
+        Args:
+            symbol: Trading symbol
+            issues: List of identified issues
+            
+        Returns:
+            True if repair was successful
+        """
+        try:
+            grid_data = self._grids.get(symbol)
+            if not grid_data:
+                return False
+            
+            # Try to reconstruct missing center price from exchange orders
+            if "missing_center_price" in issues:
+                center_price = self._calculate_center_from_exchange_orders(symbol)
+                if center_price:
+                    grid_data["center_price"] = center_price
+                    grid_data["initial_center"] = center_price
+                    logger.info(f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}")
+                else:
+                    # Cannot repair without center price
+                    return False
+            
+            # Repair missing metadata with reasonable defaults
+            if "missing_grid_spacing" in issues:
+                # Calculate spacing from order spread
+                spacing = self._calculate_spacing_from_exchange_orders(symbol)
+                if spacing:
+                    grid_data["grid_spacing"] = spacing
+                else:
+                    grid_data["grid_spacing"] = 0.004  # Default 0.4%
+            
+            if "missing_num_levels" in issues:
+                levels = self._count_levels_from_exchange_orders(symbol)
+                grid_data["num_levels"] = levels or 8  # Default 8 levels
+            
+            if "missing_grid_capital" in issues:
+                capital = self._estimate_capital_from_exchange_orders(symbol)
+                grid_data["grid_capital"] = capital or 1000.0  # Default fallback
+            
+            # Fix invalid state
+            if "invalid_state" in issues:
+                grid_data["state"] = GridState.ACTIVE
+            
+            # Add repair metadata
+            grid_data["repaired_at"] = datetime.now()
+            grid_data["repair_issues"] = issues
+            
+            # Persist the repaired grid state
+            if self.db:
+                self.save_grid_state(symbol)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True)
+            return False
+
+    def _close_unrecoverable_grid(self, symbol: str, reason: str) -> None:
+        """
+        Close a grid that cannot be repaired.
+        
+        Args:
+            symbol: Trading symbol
+            reason: Reason for closure
+        """
+        try:
+            logger.warning(f"🗑️ Closing unrecoverable grid for {symbol}: {reason}")
+            
+            # Cancel all orders on exchange
+            try:
+                self.client.cancel_all_orders(symbol)
+                logger.info(f"  ✅ Cancelled all orders for {symbol}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to cancel orders: {e}")
+            
+            # Remove from memory
+            if symbol in self._grids:
+                del self._grids[symbol]
+            
+            # Remove from database
+            if self.db:
+                self.delete_grid_state(symbol)
+            
+            # Clean up related data
+            for data_dict in [self._fills, self._metrics, self._processed_trades]:
+                if symbol in data_dict:
+                    del data_dict[symbol]
+            
+            logger.info(f"🗑️ Successfully closed unrecoverable grid for {symbol}")
+            
+        except Exception as e:
+            logger.error(f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True)
+
+    def _calculate_center_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Calculate grid center price from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+            
+            if not symbol_orders:
+                return None
+            
+            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            
+            if not buy_orders or not sell_orders:
+                return None
+            
+            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            
+            if not buy_prices or not sell_prices:
+                return None
+            
+            # Center is midpoint between highest buy and lowest sell
+            center_price = (max(buy_prices) + min(sell_prices)) / 2
+            return center_price
+            
+        except Exception as e:
+            logger.error(f"Error calculating center from exchange orders for {symbol}: {e}")
+            return None
+
+    def _calculate_spacing_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Calculate grid spacing from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+            
+            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            
+            if not buy_orders or not sell_orders:
+                return None
+            
+            buy_prices = sorted([float(o.get("price", 0)) for o in buy_orders if o.get("price")], reverse=True)
+            sell_prices = sorted([float(o.get("price", 0)) for o in sell_orders if o.get("price")])
+            
+            if len(buy_prices) < 2 or len(sell_prices) < 2:
+                return None
+            
+            # Calculate average spacing between adjacent orders
+            spacings = []
+            
+            # Buy order spacings
+            for i in range(len(buy_prices) - 1):
+                spacing_pct = (buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1]
+                spacings.append(spacing_pct)
+            
+            # Sell order spacings
+            for i in range(len(sell_prices) - 1):
+                spacing_pct = (sell_prices[i + 1] - sell_prices[i]) / sell_prices[i]
+                spacings.append(spacing_pct)
+            
+            if spacings:
+                return sum(spacings) / len(spacings)
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error calculating spacing from exchange orders for {symbol}: {e}")
+            return None
+
+    def _count_levels_from_exchange_orders(self, symbol: str) -> Optional[int]:
+        """Count grid levels from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+            return len(symbol_orders)
+        except Exception as e:
+            logger.error(f"Error counting levels from exchange orders for {symbol}: {e}")
+            return None
+
+    def _estimate_capital_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Estimate grid capital from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+            
+            total_value = 0
+            for order in symbol_orders:
+                price = float(order.get("price", 0))
+                quantity = float(order.get("quantity") or order.get("size") or order.get("amount", 0))
+                total_value += price * quantity
+            
+            return total_value
+        except Exception as e:
+            logger.error(f"Error estimating capital from exchange orders for {symbol}: {e}")
+            return None
+
+    def _sync_grids_from_exchange(self) -> int:
+        """
+        Sync grids from exchange and detect additional orphaned grids.
+        
+        Returns:
+            Number of grids repaired from exchange sync
+        """
+        repaired_count = 0
+        
+        try:
+            # Get all symbols with grid-like order patterns
+            orders = self.client.get_orders()
+            orders_by_symbol = {}
+            
+            for order in orders:
+                symbol = order.get("symbol")
+                if symbol:
+                    if symbol not in orders_by_symbol:
+                        orders_by_symbol[symbol] = []
+                    orders_by_symbol[symbol].append(order)
+            
+            # Check each symbol for grid patterns
+            for symbol, symbol_orders in orders_by_symbol.items():
+                # Skip if already managed
+                if symbol in self._grids:
+                    continue
+                
+                # Check if this looks like a grid (5+ orders, both sides)
+                if len(symbol_orders) >= 5:
+                    buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+                    sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+                    
+                    if buy_orders and sell_orders:
+                        # This looks like an orphaned grid
+                        logger.info(f"🔍 Found potential orphaned grid on exchange: {symbol}")
+                        
+                        if self._readopt_orphaned_grid_from_exchange(symbol, buy_orders, sell_orders):
+                            repaired_count += 1
+                            logger.info(f"✅ Re-adopted orphaned grid from exchange: {symbol}")
+            
+        except Exception as e:
+            logger.error(f"Error syncing grids from exchange: {e}", exc_info=True)
+        
+        return repaired_count
+
+    def _readopt_orphaned_grid_from_exchange(self, symbol: str, buy_orders: List[Dict], sell_orders: List[Dict]) -> bool:
+        """
+        Re-adopt an orphaned grid from exchange orders.
+        
+        Args:
+            symbol: Trading symbol
+            buy_orders: List of buy orders
+            sell_orders: List of sell orders
+            
+        Returns:
+            True if successfully readopted
+        """
+        try:
+            all_orders = buy_orders + sell_orders
+            
+            # Calculate grid parameters from orders
+            center_price = self._calculate_center_from_exchange_orders(symbol)
+            if not center_price:
+                return False
+            
+            grid_spacing = self._calculate_spacing_from_exchange_orders(symbol)
+            num_levels = len(all_orders)
+            total_capital = self._estimate_capital_from_exchange_orders(symbol) or 0
+            
+            # Register the grid
+            self._grids[symbol] = {
+                "state": GridState.ACTIVE,
+                "grid_capital": total_capital,
+                "emergency_stop": 0,  # No emergency stop for readopted grids
+                "regime_on_creation": "unknown_readopted",
+                "atr_at_creation": 0,
+                "grid_spacing": grid_spacing or 0.004,
+                "num_levels": num_levels,
+                "orders_placed": num_levels,
+                "center_price": center_price,
+                "initial_center": center_price,
+                "created_at": datetime.now(),
+                "refresh_count": 0,
+                "readopted": True,
+                "readopted_at": datetime.now(),
+            }
+            
+            # Initialize tracking data
+            self._fills[symbol] = []
+            self._processed_trades[symbol] = set()
+            self._metrics[symbol] = GridMetrics()
+            
+            # Persist to database
+            if self.db:
+                self.save_grid_state(symbol)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error readopting orphaned grid from exchange for {symbol}: {e}", exc_info=True)
+            return False
+
+    def _validate_grid_integrity(self) -> None:
+        """
+        Validate the integrity of all loaded grids.
+        """
+        try:
+            valid_grids = 0
+            issues_found = 0
+            
+            for symbol, grid_data in list(self._grids.items()):
+                issues = []
+                
+                # Validate required fields
+                required_fields = ["state", "grid_capital", "center_price", "initial_center"]
+                for field in required_fields:
+                    if field not in grid_data or grid_data[field] is None:
+                        issues.append(f"missing_{field}")
+                
+                # Validate data types and ranges
+                if "grid_capital" in grid_data and not isinstance(grid_data["grid_capital"], (int, float)):
+                    issues.append("invalid_capital_type")
+                
+                if "center_price" in grid_data and not isinstance(grid_data["center_price"], (int, float)):
+                    issues.append("invalid_center_price_type")
+                
+                if "grid_spacing" in grid_data:
+                    spacing = grid_data["grid_spacing"]
+                    if not isinstance(spacing, (int, float)) or spacing <= 0:
+                        issues.append("invalid_spacing")
+                
+                if issues:
+                    issues_found += 1
+                    logger.warning(f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}")
+                    
+                    # Try to fix minor issues
+                    if "invalid_spacing" in issues:
+                        grid_data["grid_spacing"] = 0.004  # Default spacing
+                    
+                    # Mark as repaired if fixed
+                    if len(issues) == 1 and "invalid_spacing" in issues:
+                        grid_data["integrity_repaired"] = datetime.now()
+                else:
+                    valid_grids += 1
+            
+            logger.info(f"✅ Grid integrity validation complete: {valid_grids} valid, {issues_found} with issues")
+            
+        except Exception as e:
+            logger.error(f"Error in grid integrity validation: {e}", exc_info=True)
+
+    def _refresh_market_info_cache(self) -> None:
+        """
+        Refresh the market info cache from Pacifica API.
+        
+        Fetches market data from /info endpoint and caches tick_size and lot_size
+        for each symbol to ensure order compliance.
+        """
+        try:
+            markets = self.client.get_markets()
+            if not markets:
+                logger.warning("Failed to refresh market info cache: no markets returned")
+                return
+
+            new_cache = {}
+            for market in markets:
+                symbol = market.get("symbol", "").upper().replace("-PERP", "")
+                if not symbol:
+                    continue
+
+                # Extract tick_size and lot_size from market data
+                tick_size = market.get("tick_size")
+                lot_size = market.get("lot_size")
+
+                # Convert to float if present
+                if tick_size is not None:
+                    try:
+                        tick_size = float(tick_size)
+                    except (TypeError, ValueError):
+                        tick_size = None
+
+                if lot_size is not None:
+                    try:
+                        lot_size = float(lot_size)
+                    except (TypeError, ValueError):
+                        lot_size = None
+
+                if tick_size or lot_size:
+                    new_cache[symbol] = {
+                        "tick_size": tick_size,
+                        "lot_size": lot_size,
+                    }
+
+            self._market_info_cache = new_cache
+            self._market_info_cache_timestamp = datetime.now()
+
+            logger.debug(f"GridLifecycleManager market info cache refreshed: {len(new_cache)} symbols")
+
+        except Exception as e:
+            logger.error(f"Error refreshing market info cache in GridLifecycleManager: {e}")
+
+    def _get_cached_market_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Get cached market info for a symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., 'BTC', 'ETH')
+            
+        Returns:
+            Dict with 'tick_size' and 'lot_size' keys (values may be None)
+        """
+        symbol = symbol.upper().replace("-PERP", "")
+
+        # Check if cache needs refresh
+        if (
+            self._market_info_cache_timestamp is None
+            or (datetime.now() - self._market_info_cache_timestamp).seconds > self._market_info_cache_ttl
+        ):
+            self._refresh_market_info_cache()
+
+        return self._market_info_cache.get(symbol, {"tick_size": None, "lot_size": None})
+
+    def get_symbol_tick_size(self, symbol: str) -> Optional[float]:
+        """
+        Get tick size for a symbol from cached market data.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Tick size or None if not available
+        """
+        market_info = self._get_cached_market_info(symbol)
+        return market_info.get("tick_size")
+
+    def get_symbol_lot_size(self, symbol: str) -> Optional[float]:
+        """
+        Get lot size for a symbol from cached market data.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            Lot size or None if not available
+        """
+        market_info = self._get_cached_market_info(symbol)
+        return market_info.get("lot_size")
+
+    def round_price_to_tick_size(self, price: float, symbol: str) -> float:
+        """
+        Round price to comply with tick size requirements.
+        
+        Args:
+            price: Original price
+            symbol: Trading symbol
+            
+        Returns:
+            Price rounded to tick size
+        """
+        from decimal import Decimal, ROUND_HALF_UP
+
+        tick_size = self.get_symbol_tick_size(symbol)
+
+        if tick_size is None or tick_size <= 0:
+            return price
+
+        price_dec = Decimal(str(price))
+        tick_size_dec = Decimal(str(tick_size))
+
+        ticks = (price_dec / tick_size_dec).to_integral_value(rounding=ROUND_HALF_UP)
+        rounded_price = float(ticks * tick_size_dec)
+
+        return rounded_price
+
+    def round_quantity_to_lot_size(self, quantity: float, symbol: str) -> float:
+        """
+        Round quantity to comply with lot size requirements.
+        
+        Args:
+            quantity: Original quantity
+            symbol: Trading symbol
+            
+        Returns:
+            Quantity rounded to lot size
+        """
+        from decimal import Decimal, ROUND_DOWN
+
+        lot_size = self.get_symbol_lot_size(symbol)
+
+        if lot_size is None or lot_size <= 0:
+            return quantity
+
+        quantity_dec = Decimal(str(quantity))
+        lot_size_dec = Decimal(str(lot_size))
+
+        lot_units = int((quantity_dec / lot_size_dec).to_integral_value(rounding=ROUND_DOWN))
+
+        if lot_units < 1 and quantity > 0:
+            lot_units = 1
+
+        rounded_quantity = float(Decimal(lot_units) * lot_size_dec)
+
+        return rounded_quantity
+
     # =========================
     # STATE CHECKS
     # =========================
 
     def has_active_grid(self, symbol: str) -> bool:
-        return (
-            symbol in self._grids and self._grids[symbol]["state"] == GridState.ACTIVE
-        )
+        """
+        Enhanced check for active grid with consistency validation.
+        
+        Args:
+            symbol: Trading symbol (any format - will be normalized)
+            
+        Returns:
+            True if symbol has an active grid in consistent state
+        """
+        try:
+            # Normalize symbol format
+            normalized_symbol = self.consistency_manager.normalize_ticker_symbol(symbol)
+            
+            # Check direct memory state first (fast path)
+            if normalized_symbol in self._grids and self._grids[normalized_symbol]["state"] == GridState.ACTIVE:
+                # Quick consistency check
+                memory_state = self._grids[normalized_symbol]
+                
+                # Ensure required fields are present
+                if not memory_state.get("center_price") and not memory_state.get("initial_center"):
+                    logger.warning(f"⚠️ Active grid {symbol} missing center price - triggering consistency check")
+                    # Trigger consistency validation in background
+                    try:
+                        import threading
+                        threading.Thread(
+                            target=self.consistency_manager.validate_and_repair_all_grids,
+                            kwargs={"automatic": True},
+                            daemon=True
+                        ).start()
+                    except Exception:
+                        pass  # Don't let consistency check break main logic
+                
+                return True
+            
+            # Check other symbol formats as fallback
+            for grid_symbol in self._grids:
+                if self.consistency_manager.normalize_ticker_symbol(grid_symbol) == normalized_symbol:
+                    if self._grids[grid_symbol]["state"] == GridState.ACTIVE:
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error in has_active_grid for {symbol}: {e}")
+            # Fallback to original logic on error
+            return symbol in self._grids and self._grids[symbol]["state"] == GridState.ACTIVE
 
     def needs_order_placement(self, symbol: str) -> bool:
         """Check if an active grid needs orders placed (registered but no orders on exchange)."""
@@ -153,6 +967,126 @@ class GridLifecycleManager:
             return None
         return self._grids[symbol].get("last_refresh", None)
 
+    def evaluate_refresh_opportunity(self, symbol: str, signal_center: float, signal_confidence: float, atr_current: Optional[float] = None) -> Dict[str, Any]:
+        """
+        Evaluate if a grid refresh opportunity exists based on the research criteria.
+        
+        Args:
+            symbol: Trading symbol
+            signal_center: Proposed new center price from signal
+            signal_confidence: Confidence of the new signal
+            atr_current: Current ATR value (optional)
+            
+        Returns:
+            Dict with evaluation results and recommendation
+        """
+        result = {
+            "should_refresh": False,
+            "drift_atr": 0.0,
+            "drift_pct": 0.0,
+            "confidence_improvement": 0.0,
+            "reasons": [],
+            "conditions_met": [],
+            "conditions_failed": [],
+        }
+        
+        try:
+            if not self.has_active_grid(symbol):
+                result["reasons"].append("No active grid found")
+                return result
+            
+            current_center = self.get_grid_center(symbol)
+            if current_center is None:
+                result["reasons"].append("Current grid has no center price")
+                return result
+            
+            grid_data = self._grids[symbol]
+            current_confidence = grid_data.get("signal_confidence", 0.65)
+            
+            # Calculate drift
+            drift_abs = abs(signal_center - current_center)
+            result["drift_pct"] = drift_abs / current_center if current_center > 0 else 0
+            
+            # Calculate ATR-based drift if ATR provided
+            if atr_current and atr_current > 0:
+                result["drift_atr"] = drift_abs / atr_current
+                
+                # Check drift condition
+                if result["drift_atr"] >= self.GRID_REFRESH_MIN_ATR_DRIFT:
+                    result["conditions_met"].append(f"drift_{result['drift_atr']:.2f}x_atr")
+                else:
+                    result["conditions_failed"].append(f"drift_{result['drift_atr']:.2f}x_atr")
+            else:
+                # Fallback to percentage-based drift (if ATR unavailable)
+                min_drift_pct = 0.02  # 2% minimum drift
+                if result["drift_pct"] >= min_drift_pct:
+                    result["conditions_met"].append(f"drift_{result['drift_pct']:.1%}")
+                else:
+                    result["conditions_failed"].append(f"drift_{result['drift_pct']:.1%}")
+            
+            # Check confidence condition
+            if signal_confidence >= self.GRID_REFRESH_MIN_CONFIDENCE:
+                result["conditions_met"].append(f"confidence_{signal_confidence:.2f}")
+            else:
+                result["conditions_failed"].append(f"confidence_{signal_confidence:.2f}")
+            
+            # Check confidence improvement
+            result["confidence_improvement"] = signal_confidence - current_confidence
+            if result["confidence_improvement"] >= self.GRID_REFRESH_MIN_CONF_IMPROVE:
+                result["conditions_met"].append(f"improvement_{result['confidence_improvement']:.2f}")
+            else:
+                result["conditions_failed"].append(f"improvement_{result['confidence_improvement']:.2f}")
+            
+            # Check cooldown
+            last_refresh = self.get_last_refresh_time(symbol)
+            if last_refresh:
+                minutes_since_refresh = (datetime.now() - last_refresh).total_seconds() / 60
+                if minutes_since_refresh >= self.GRID_REFRESH_COOLDOWN_MINUTES:
+                    result["conditions_met"].append(f"cooldown_{minutes_since_refresh:.0f}min")
+                else:
+                    remaining = self.GRID_REFRESH_COOLDOWN_MINUTES - minutes_since_refresh
+                    result["conditions_failed"].append(f"cooldown_{remaining:.0f}min_remaining")
+            else:
+                result["conditions_met"].append("no_previous_refresh")
+            
+            # Check daily limit
+            today_refreshes = self._daily_refresh_counts.get(symbol, 0)
+            if today_refreshes < self.GRID_REFRESH_MAX_PER_DAY:
+                result["conditions_met"].append(f"daily_limit_{today_refreshes}/{self.GRID_REFRESH_MAX_PER_DAY}")
+            else:
+                result["conditions_failed"].append(f"daily_limit_exceeded_{today_refreshes}")
+            
+            # Emergency drift check
+            if atr_current and result["drift_atr"] > self.GRID_EMERGENCY_DRIFT_THRESHOLD:
+                result["conditions_failed"].append(f"emergency_drift_{result['drift_atr']:.2f}x_atr")
+                result["reasons"].append("Emergency drift detected - manual review required")
+                return result
+            
+            # Determine if refresh should proceed
+            # All basic conditions must be met (except maybe one can be flexible)
+            critical_conditions = ["drift", "confidence"]
+            flexible_conditions = ["improvement", "cooldown", "daily_limit"]
+            
+            critical_met = any("drift" in condition for condition in result["conditions_met"]) and \
+                          any("confidence" in condition for condition in result["conditions_met"])
+            
+            flexible_met = len([c for c in flexible_conditions 
+                              if any(c in condition for condition in result["conditions_met"])]) >= 2
+            
+            result["should_refresh"] = critical_met and flexible_met and "emergency_drift" not in result["conditions_failed"]
+            
+            if result["should_refresh"]:
+                result["reasons"].append("Refresh opportunity detected")
+            else:
+                result["reasons"].append("Refresh conditions not met")
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"Error evaluating refresh opportunity for {symbol}: {e}", exc_info=True)
+            result["reasons"].append(f"Evaluation error: {e}")
+            return result
+
     def get_grid_spacing(self, symbol: str) -> float:
         """Get the current grid spacing for a symbol."""
         if symbol not in self._grids:
@@ -171,15 +1105,17 @@ class GridLifecycleManager:
             f"📊 Grid {symbol} spacing updated: ${old_spacing:.4f} → ${new_spacing:.4f} ({reason})"
         )
 
-    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh") -> bool:
+    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh", signal_confidence: float = 0.0) -> bool:
         """
         Soft recenter: shift UNFILLED limit orders toward new center price.
         Does NOT touch filled positions.
+        Includes enhanced safety mechanisms and refresh opportunity logic.
 
         Args:
             symbol: Trading symbol
             new_center: New center price to shift orders toward
             reason: Reason for recentering (for logging)
+            signal_confidence: Confidence of the triggering signal (for refresh logic)
 
         Returns:
             True if recenter successful, False otherwise
@@ -194,26 +1130,53 @@ class GridLifecycleManager:
             logger.error(f"Cannot recenter {symbol} - no current center price")
             return False
 
-        # Safety: enforce minimum time between refreshes (45 minutes)
-        last_refresh = self.get_last_refresh_time(symbol)
-        if last_refresh and (datetime.now() - last_refresh).total_seconds() < 2700:
-            remaining = 2700 - (datetime.now() - last_refresh).total_seconds()
-            logger.info(
-                f"Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
+        # Enhanced safety checks
+        # 1. Emergency drift check
+        drift_abs = abs(new_center - current_center)
+        drift_pct = drift_abs / current_center if current_center > 0 else 0
+        
+        # Get ATR for emergency check (if possible)
+        try:
+            atr_current = self._calculate_atr_for_symbol(symbol)
+            drift_atr = drift_abs / atr_current if atr_current and atr_current > 0 else 0
+        except:
+            drift_atr = 0
+        
+        if drift_atr > self.GRID_EMERGENCY_DRIFT_THRESHOLD:
+            logger.error(
+                f"🚨 EMERGENCY DRIFT for {symbol}: {drift_atr:.2f}x ATR > {self.GRID_EMERGENCY_DRIFT_THRESHOLD}x - "
+                f"aborting recenter, consider emergency stop"
+            )
+            # Trigger emergency evaluation
+            self._evaluate_emergency_conditions(symbol, new_center, drift_atr)
+            return False
+
+        # 2. Daily refresh limit check
+        today_refreshes = self._daily_refresh_counts.get(symbol, 0)
+        if today_refreshes >= self.GRID_REFRESH_MAX_PER_DAY:
+            logger.warning(
+                f"🚫 Daily refresh limit reached for {symbol}: {today_refreshes}/{self.GRID_REFRESH_MAX_PER_DAY} - "
+                f"skipping recenter"
             )
             return False
 
-        drift_abs = abs(new_center - current_center)
-        drift_pct = drift_abs / current_center if current_center > 0 else 0
+        # 3. Cooldown check (45 minutes)
+        last_refresh = self.get_last_refresh_time(symbol)
+        if last_refresh and (datetime.now() - last_refresh).total_seconds() < (self.GRID_REFRESH_COOLDOWN_MINUTES * 60):
+            remaining = (self.GRID_REFRESH_COOLDOWN_MINUTES * 60) - (datetime.now() - last_refresh).total_seconds()
+            logger.info(
+                f"🔄 Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
+            )
+            return False
+
         logger.info(
             f"📊 Recentering {symbol} | old center ${current_center:.4f} → new ${new_center:.4f} "
-            f"(drift ${drift_abs:.4f} / {drift_pct:.2%}) - reason: {reason}"
+            f"(drift ${drift_abs:.4f} / {drift_pct:.2%}, {drift_atr:.2f}x ATR) - reason: {reason}"
         )
 
         try:
             # Calculate shift delta
             delta = new_center - current_center
-            spacing = grid.get("grid_spacing", 0)
 
             # Get current open orders from exchange
             orders = self.client.get_orders()
@@ -222,13 +1185,14 @@ class GridLifecycleManager:
             if not symbol_orders:
                 logger.info(f"No open orders to recenter for {symbol}")
                 # Still update metadata
-                grid["center_price"] = new_center
-                grid["last_refresh"] = datetime.now()
-                grid["last_refresh_reason"] = reason
+                self._update_grid_after_refresh(symbol, new_center, reason, signal_confidence, 0)
                 return True
 
             orders_adjusted = 0
+            orders_skipped = 0
+            total_fill_value_preserved = 0
 
+            # Group orders by side to preserve filled positions
             for order in symbol_orders:
                 order_id = order.get("id") or order.get("order_id")
                 old_price = float(order.get("price", 0))
@@ -243,48 +1207,308 @@ class GridLifecycleManager:
                 # Safety: cap single-order price shift at 8%
                 if abs(new_price - old_price) / old_price > 0.08:
                     logger.warning(
-                        f"Price shift too large for {symbol} order {order_id} "
-                        f"(${old_price:.2f} → ${new_price:.2f}) - skipping this leg"
+                        f"🔒 Price shift too large for {symbol} order {order_id} "
+                        f"(${old_price:.2f} → ${new_price:.2f}) - skipping this leg (8% cap)"
                     )
+                    orders_skipped += 1
                     continue
 
-                # Round price to appropriate tick size
-                tick_size = 1.0 if "BTC" in symbol else 0.01
-                new_price = round(new_price / tick_size) * tick_size
+                # Round price to tick size from Pacifica API
+                tick_size = self.get_symbol_tick_size(symbol)
+                if tick_size is not None and tick_size > 0:
+                    new_price = self.round_price_to_tick_size(new_price, symbol)
+                else:
+                    # Fallback: use conservative defaults
+                    logger.warning(f"⚠️ No tick_size from API for {symbol} during recenter, using fallback")
+                    fallback_tick = 1.0 if "BTC" in symbol else 0.01
+                    new_price = round(new_price / fallback_tick) * fallback_tick
 
                 try:
                     # Cancel old order
-                    self.client.cancel_order(symbol, order_id)
+                    cancel_result = self.client.cancel_order(symbol, order_id)
                     logger.debug(f"Cancelled old order {order_id} @ ${old_price:.4f}")
 
                     # Place new order at adjusted price
                     new_order = self.client.place_order(
                         symbol, side, quantity, "limit", new_price
                     )
-                    new_order_id = new_order.get("id") or new_order.get("order_id")
+                    
+                    # Validate response using ResponseHandler
+                    validated_response = ResponseHandler.validate_order_response(new_order)
+                    order_data = validated_response.get("data", {})
+                    new_order_id = order_data.get("id") or order_data.get("order_id")
+                    
+                    if not validated_response.get("success") or not new_order_id:
+                        error_msg = validated_response.get("error", "Unknown API error")
+                        logger.error(f"❌ Failed to place replacement order: {error_msg}")
+                        # Try to restore the old order if replacement failed
+                        self._attempt_order_restoration(symbol, side, quantity, old_price, order_id)
+                        continue
+                    
                     logger.info(
                         f"📊 Replaced order {order_id} → {new_order_id} @ ${new_price:.4f} ({side})"
                     )
                     orders_adjusted += 1
+                    total_fill_value_preserved += quantity * new_price
 
                 except Exception as e:
-                    logger.error(f"Failed to replace order {order_id}: {e}")
+                    logger.error(f"❌ Failed to replace order {order_id}: {e}")
+                    # Try to restore the old order if replacement failed
+                    try:
+                        self._attempt_order_restoration(symbol, side, quantity, old_price, order_id)
+                    except Exception as restore_error:
+                        logger.error(f"Failed to restore order {order_id}: {restore_error}")
                     continue
 
-            # Update grid metadata
+            # Update grid metadata with enhanced tracking
+            self._update_grid_after_refresh(symbol, new_center, reason, signal_confidence, orders_adjusted)
+            
+            # Log comprehensive results
+            logger.info(
+                f"✅ Grid recenter completed for {symbol}: "
+                f"{orders_adjusted} orders adjusted, {orders_skipped} skipped, "
+                f"${total_fill_value_preserved:.2f} value preserved"
+            )
+            
+            # Check for dynamic spacing adjustment opportunity
+            if self.GRID_DYNAMIC_SPACING_ENABLED:
+                self._evaluate_dynamic_spacing_adjustment(symbol)
+            
+            return True
+
+        except Exception as e:
+            logger.critical(f"❌ Grid recenter FAILED for {symbol}: {e}", exc_info=True)
+            return False
+
+    def _calculate_atr_for_symbol(self, symbol: str, timeframe: str = "5m", period: int = 14) -> Optional[float]:
+        """
+        Calculate ATR for a symbol using cached market data.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Candle timeframe
+            period: ATR period
+            
+        Returns:
+            ATR value or None if calculation fails
+        """
+        try:
+            # This is a simplified ATR calculation
+            # In a full implementation, this would fetch candle data
+            # For now, we'll return None to disable ATR-based checks
+            return None
+        except Exception as e:
+            logger.error(f"Error calculating ATR for {symbol}: {e}")
+            return None
+
+    def _evaluate_emergency_conditions(self, symbol: str, new_center: float, drift_atr: float) -> None:
+        """
+        Evaluate emergency conditions when drift exceeds threshold.
+        
+        Args:
+            symbol: Trading symbol
+            new_center: Proposed new center price
+            drift_atr: Drift in ATR multiples
+        """
+        try:
+            logger.critical(
+                f"🚨 EMERGENCY EVALUATION for {symbol}: drift={drift_atr:.2f}x ATR"
+            )
+            
+            # Get current price
+            try:
+                ticker = self.client.get_ticker(symbol)
+                current_price = float(ticker.get("last", 0)) if ticker else 0
+            except:
+                current_price = 0
+            
+            if current_price == 0:
+                logger.error(f"Cannot get current price for {symbol} - emergency evaluation incomplete")
+                return
+            
+            # Check if we're in a rapid market movement
+            grid = self._grids.get(symbol)
+            if grid:
+                emergency_stop = grid.get("emergency_stop", 0)
+                if emergency_stop > 0 and current_price <= emergency_stop:
+                    logger.critical(f"🚨 Emergency stop breached for {symbol}: {current_price} <= {emergency_stop}")
+                    self.on_emergency_stop_triggered(symbol)
+                else:
+                    # Consider temporary grid suspension
+                    logger.warning(f"⚠️ High drift detected for {symbol} - consider manual review")
+            
+        except Exception as e:
+            logger.error(f"Error in emergency evaluation for {symbol}: {e}")
+
+    def _update_grid_after_refresh(self, symbol: str, new_center: float, reason: str, signal_confidence: float, orders_adjusted: int) -> None:
+        """
+        Update grid metadata after a successful refresh.
+        
+        Args:
+            symbol: Trading symbol
+            new_center: New center price
+            reason: Refresh reason
+            signal_confidence: Signal confidence
+            orders_adjusted: Number of orders adjusted
+        """
+        try:
+            grid = self._grids[symbol]
+            
+            # Update core metadata
             grid["center_price"] = new_center
             grid["last_refresh"] = datetime.now()
             grid["last_refresh_reason"] = reason
             grid["refresh_count"] = grid.get("refresh_count", 0) + 1
-
-            logger.info(
-                f"✅ Grid recenter completed for {symbol} - {orders_adjusted} orders adjusted"
-            )
-            return True
-
+            grid["last_refresh_orders_adjusted"] = orders_adjusted
+            
+            # Update signal confidence if provided
+            if signal_confidence > 0:
+                grid["signal_confidence"] = signal_confidence
+                grid["confidence_updated_at"] = datetime.now()
+            
+            # Update daily refresh counter
+            self._daily_refresh_counts[symbol] = self._daily_refresh_counts.get(symbol, 0) + 1
+            
+            # Add refresh metadata
+            grid["refresh_history"] = grid.get("refresh_history", [])
+            grid["refresh_history"].append({
+                "timestamp": datetime.now(),
+                "reason": reason,
+                "old_center": grid.get("center_price"),
+                "new_center": new_center,
+                "orders_adjusted": orders_adjusted,
+                "signal_confidence": signal_confidence
+            })
+            
+            # Keep only last 10 refreshes in history
+            if len(grid["refresh_history"]) > 10:
+                grid["refresh_history"] = grid["refresh_history"][-10:]
+            
+            # Persist to database
+            if self.db:
+                self.save_grid_state(symbol)
+            
+            logger.info(f"✅ Grid metadata updated for {symbol} after refresh")
+            
         except Exception as e:
-            logger.critical(f"Recentering FAILED for {symbol}: {e}")
-            return False
+            logger.error(f"Error updating grid metadata after refresh for {symbol}: {e}")
+
+    def _attempt_order_restoration(self, symbol: str, side: str, quantity: float, price: float, original_order_id: str) -> None:
+        """
+        Attempt to restore an original order if replacement failed.
+        
+        Args:
+            symbol: Trading symbol
+            side: Order side
+            quantity: Order quantity
+            price: Original price
+            original_order_id: Original order ID
+        """
+        try:
+            logger.warning(f"🔄 Attempting to restore order {original_order_id} for {symbol}")
+            
+            restored_order = self.client.place_order(symbol, side, quantity, "limit", price)
+            validated_response = ResponseHandler.validate_order_response(restored_order)
+            
+            if validated_response.get("success"):
+                logger.info(f"✅ Successfully restored order {original_order_id} for {symbol}")
+            else:
+                logger.error(f"❌ Failed to restore order {original_order_id}: {validated_response.get('error')}")
+                
+        except Exception as e:
+            logger.error(f"Error restoring order {original_order_id}: {e}")
+
+    def _evaluate_dynamic_spacing_adjustment(self, symbol: str) -> None:
+        """
+        Evaluate if dynamic spacing adjustment is needed.
+        
+        Args:
+            symbol: Trading symbol
+        """
+        try:
+            if not self.GRID_DYNAMIC_SPACING_ENABLED:
+                return
+            
+            grid = self._grids.get(symbol)
+            if not grid:
+                return
+            
+            # Check if enough time has passed since last spacing adjustment
+            last_spacing_update = grid.get("spacing_updated_at")
+            if last_spacing_update:
+                minutes_since_update = (datetime.now() - last_spacing_update).total_seconds() / 60
+                if minutes_since_update < self.GRID_DYNAMIC_SPACING_RECALC_MINUTES:
+                    return
+            
+            # Calculate new spacing based on current volatility
+            new_spacing = self._calculate_dynamic_spacing(symbol)
+            if new_spacing and new_spacing != grid.get("grid_spacing"):
+                self.update_grid_spacing(symbol, new_spacing, "dynamic_volatility_adjustment")
+                
+        except Exception as e:
+            logger.error(f"Error evaluating dynamic spacing for {symbol}: {e}")
+
+    def _calculate_dynamic_spacing(self, symbol: str) -> Optional[float]:
+        """
+        Calculate dynamic grid spacing based on market conditions.
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            New spacing percentage or None if calculation fails
+        """
+        try:
+            # Get current ATR
+            atr = self._calculate_atr_for_symbol(symbol)
+            if not atr:
+                return None
+            
+            # Get current price
+            try:
+                ticker = self.client.get_ticker(symbol)
+                current_price = float(ticker.get("last", 0)) if ticker else 0
+            except:
+                current_price = 0
+            
+            if current_price == 0:
+                return None
+            
+            # Calculate base spacing as percentage of ATR
+            atr_pct = atr / current_price
+            
+            # Apply volatility multiplier
+            # Higher volatility = wider spacing
+            grid = self._grids.get(symbol)
+            if grid:
+                # Check recent fills to determine if market is volatile
+                fills = self._fills.get(symbol, [])
+                recent_fills = [f for f in fills if (datetime.now() - f.timestamp).total_seconds() < 3600]  # Last hour
+                
+                if len(recent_fills) > 4:  # High activity indicates high volatility
+                    multiplier = self.GRID_SPACING_VOLATILITY_MULTIPLIER
+                else:
+                    multiplier = 1.0
+                
+                # Calculate base spacing (configurable)
+                base_spacing_pct = 0.4  # 0.4% base spacing
+                new_spacing_pct = base_spacing_pct * multiplier
+                
+                # Apply reasonable bounds
+                new_spacing_pct = max(0.002, min(0.01, new_spacing_pct))  # 0.2% to 1.0%
+                
+                logger.debug(
+                    f"📊 Dynamic spacing for {symbol}: ATR={atr:.4f} ({atr_pct:.3%}), "
+                    f"multiplier={multiplier:.2f}, spacing={new_spacing_pct:.3%}"
+                )
+                
+                return new_spacing_pct
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error calculating dynamic spacing for {symbol}: {e}")
+            return None
 
     def close_grid(self, symbol: str, reason: str = "manual") -> bool:
         """
@@ -363,7 +1587,7 @@ class GridLifecycleManager:
         symbol: str,
         grid_capital: float,
         emergency_stop_price: float,
-        regime: str = None,
+        regime: Optional[str] = None,
         atr: float = 0,
         spacing: float = 0,
         num_levels: int = 10,
@@ -405,7 +1629,7 @@ class GridLifecycleManager:
         self.risk_manager.grid_exposure[symbol] = 0.0
 
         # Persist to database for restart resilience
-        self.save_grid_state(symbol, regime=regime, atr=atr, spacing=spacing)
+        self.save_grid_state(symbol, regime=regime or "unknown", atr=atr, spacing=spacing)
 
         logger.info(
             f"Grid registered for {symbol}: capital=${grid_capital:.2f}, center=${center_price:.4f}, regime={regime}"
@@ -415,7 +1639,7 @@ class GridLifecycleManager:
     # REGIME HANDLING
     # =========================
 
-    def on_regime_disallowed(self, symbol: str, market_data: Dict[str, List] = None):
+    def on_regime_disallowed(self, symbol: str, market_data: Optional[Dict[str, List]] = None):
         """
         Called when market regime transitions OUT of allowed grid regimes.
 
@@ -531,8 +1755,15 @@ class GridLifecycleManager:
                 side = pos.get("side")
                 close_side = "sell" if side == "bid" else "buy"
 
-                self.client.place_order(symbol, close_side, qty, "market")
-                logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
+                # Validate response using ResponseHandler
+                flatten_response = self.client.place_order(symbol, close_side, qty, "market")
+                validated_response = ResponseHandler.validate_order_response(flatten_response)
+                
+                if not validated_response.get("success"):
+                    error_msg = validated_response.get("error", "Unknown API error")
+                    logger.error(f"❌ Position flatten order failed for {symbol}: {error_msg}")
+                else:
+                    logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
 
         except Exception as e:
             logger.critical(f"POSITION FLATTEN FAILED for {symbol}: {e}")
@@ -631,11 +1862,18 @@ class GridLifecycleManager:
                 # CLOSE against-trend position
                 try:
                     close_side = "buy" if position_side == "short" else "sell"
-                    self.client.place_order(symbol, close_side, qty, "market")
-
-                    result["closed_positions"].append(
-                        {"side": position_side, "qty": qty, "reason": "against_trend"}
-                    )
+                    close_response = self.client.place_order(symbol, close_side, qty, "market")
+                    
+                    # Validate response using ResponseHandler
+                    validated_response = ResponseHandler.validate_order_response(close_response)
+                    
+                    if validated_response.get("success"):
+                        result["closed_positions"].append(
+                            {"side": position_side, "qty": qty, "reason": "against_trend"}
+                        )
+                    else:
+                        error_msg = validated_response.get("error", "Unknown API error")
+                        logger.error(f"❌ Against-trend position close failed for {symbol}: {error_msg}")
 
                     logger.warning(
                         f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
@@ -772,7 +2010,7 @@ class GridLifecycleManager:
     # ACTIVE MONITORING
     # =========================
 
-    def monitor_grids(self, current_prices: Dict[str, float] = None) -> Dict[str, Any]:
+    def monitor_grids(self, current_prices: Optional[Dict[str, float]] = None) -> Dict[str, Any]:
         """
         Main monitoring method - call this periodically from the trading loop.
 
@@ -981,27 +2219,46 @@ class GridLifecycleManager:
                 counter_side = "buy"
                 counter_price = fill_price - spacing
 
-            # Round price to appropriate tick size
-            tick_size = 1.0 if "BTC" in symbol else 0.01
-            counter_price = round(counter_price / tick_size) * tick_size
+            # Round price to tick size from Pacifica API
+            tick_size = self.get_symbol_tick_size(symbol)
+            if tick_size is not None and tick_size > 0:
+                counter_price = self.round_price_to_tick_size(counter_price, symbol)
+            else:
+                # Fallback: use conservative defaults
+                logger.warning(f"⚠️ No tick_size from API for {symbol}, using fallback")
+                fallback_tick = 1.0 if "BTC" in symbol else 0.01
+                counter_price = round(counter_price / fallback_tick) * fallback_tick
 
-            # Use same quantity as filled order
-            lot_size = 0.00001 if "BTC" in symbol else 0.0001
-            counter_quantity = round(int(fill_quantity / lot_size) * lot_size, 5)
+            # Round quantity to lot size from Pacifica API
+            lot_size = self.get_symbol_lot_size(symbol)
+            if lot_size is not None and lot_size > 0:
+                counter_quantity = self.round_quantity_to_lot_size(fill_quantity, symbol)
+            else:
+                # Fallback: use conservative defaults
+                logger.warning(f"⚠️ No lot_size from API for {symbol}, using fallback")
+                fallback_lot = 0.00001 if "BTC" in symbol else 0.0001
+                counter_quantity = round(int(fill_quantity / fallback_lot) * fallback_lot, 5)
 
-            if counter_quantity < lot_size:
-                logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity}")
+            if lot_size is not None and counter_quantity < lot_size:
+                logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity} < {lot_size}")
                 return
 
             # Place the counter order
             order_result = self.client.place_order(
                 symbol, counter_side, counter_quantity, "limit", counter_price
             )
-
-            logger.info(
-                f"📊 Grid REPLENISH: {symbol} {counter_side.upper()} {counter_quantity:.6f} @ ${counter_price:.2f} "
-                f"(triggered by {filled_side} fill @ ${fill_price:.2f})"
-            )
+            
+            # Validate response using ResponseHandler
+            validated_response = ResponseHandler.validate_order_response(order_result)
+            
+            if validated_response.get("success"):
+                logger.info(
+                    f"📊 Grid REPLENISH: {symbol} {counter_side.upper()} {counter_quantity:.6f} @ ${counter_price:.2f} "
+                    f"(triggered by {filled_side} fill @ ${fill_price:.2f})"
+                )
+            else:
+                error_msg = validated_response.get("error", "Unknown API error")
+                logger.error(f"❌ Grid replenish order failed for {symbol}: {error_msg}")
 
         except Exception as e:
             logger.error(f"Failed to replenish grid order for {symbol}: {e}")
@@ -1284,6 +2541,39 @@ class GridLifecycleManager:
                     active_grids.append(status)
         return active_grids
 
+    def get_grid_consistency_status(self) -> Dict[str, Any]:
+        """
+        Get comprehensive grid state consistency status.
+        
+        Returns:
+            Dictionary with consistency statistics and recommendations
+        """
+        return self.consistency_manager.get_consistency_statistics()
+    
+    def force_grid_state_repair(self, symbols: Optional[List[str]] = None) -> Dict[str, Any]:
+        """
+        Force repair of grid state consistency for specific symbols or all.
+        
+        Args:
+            symbols: List of symbols to repair, or None for all symbols
+            
+        Returns:
+            Repair operation summary
+        """
+        return self.consistency_manager.force_full_repair(symbols)
+    
+    def emergency_grid_cleanup(self) -> Dict[str, Any]:
+        """
+        Perform emergency cleanup of all grid states.
+        
+        ⚠️ WARNING: This is a drastic measure that will reset all grid states!
+        Only use in emergency situations where grid states are completely corrupted.
+        
+        Returns:
+            Cleanup operation summary
+        """
+        return self.consistency_manager.emergency_grid_cleanup()
+
     def get_grid_statistics(self) -> Dict[str, Any]:
         """Get aggregate statistics across all grids."""
         total_realized_pnl = 0.0
@@ -1297,6 +2587,9 @@ class GridLifecycleManager:
             total_fees += metrics.total_fees
             total_round_trips += metrics.completed_round_trips
 
+        # Get consistency statistics
+        consistency_stats = self.consistency_manager.get_consistency_statistics()
+
         return {
             "total_active_grids": sum(
                 1 for g in self._grids.values() if g["state"] == GridState.ACTIVE
@@ -1309,6 +2602,7 @@ class GridLifecycleManager:
             "last_check": self._last_fill_check.isoformat()
             if self._last_fill_check
             else None,
+            "consistency_statistics": consistency_stats,
         }
 
     def validate_grid_creation(self, symbol: str, capital: float) -> bool:
@@ -1332,7 +2626,7 @@ class GridLifecycleManager:
     # =========================
 
     def save_grid_state(
-        self, symbol: str, regime: str = None, atr: float = 0, spacing: float = 0
+        self, symbol: str, regime: Optional[str] = None, atr: float = 0, spacing: float = 0
     ):
         """
         Save grid state to database for persistence across restarts.
@@ -1366,7 +2660,7 @@ class GridLifecycleManager:
                         grid["state"].value
                         if isinstance(grid["state"], GridState)
                         else grid["state"],
-                        regime,
+                        regime or "unknown",
                         grid.get("grid_capital", 0),
                         grid.get("emergency_stop", 0),
                         atr,

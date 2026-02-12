@@ -1,0 +1,162 @@
+Starting trading bot with PYTHONPATH=C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\
+C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\api_server.py:1085: DeprecationWarning:
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+  @app.on_event("startup")
+C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\trading_bot_v2\api_server.py:1097: DeprecationWarning:
+        on_event is deprecated, use lifespan event handlers instead.
+
+        Read more about it in the
+        [FastAPI docs for Lifespan Events](https://fastapi.tiangolo.com/advanced/events/).
+
+  @app.on_event("shutdown")
+INFO:     Started server process [5708]
+INFO:     Waiting for application startup.
+2026-02-12 08:12:13,581 - trading_bot_v2.api_server - INFO - Initializing bot components...
+2026-02-12 08:12:13,588 - trading_bot_v2.database - INFO - Database initialized successfully with performance indexes
+2026-02-12 08:12:13,588 - trading_bot_v2.api_server - INFO - DatabaseManager initialized
+2026-02-12 08:12:13,589 - trading_bot_v2.pacifica_client - INFO - PacificaClient initialized with connection pooling
+2026-02-12 08:12:13,589 - trading_bot_v2.api_server - INFO - PacificaClient initialized
+2026-02-12 08:12:13,591 - trading_bot_v2.api_server - INFO - WebSocket client started for real-time market data
+2026-02-12 08:12:13.591 | INFO     | trading_bot_v2.pacifica_ws_client:_run:517 - Starting Pacifica WebSocket client...
+2026-02-12 08:12:13,592 - trading_bot_v2.api_server - INFO - ⚡ Fast bootstrap: 8 symbols × 3 timeframes (1m/5m from WebSocket)
+2026-02-12 08:12:13.596 | INFO     | trading_bot_v2.pacifica_ws_client:bootstrap_kline_cache:284 - ⚡ Fast bootstrap: 8 symbols × 3 intervals (max 3 concurrent, disk_cache=True)
+2026-02-12 08:12:13.611 | INFO     | trading_bot_v2.pacifica_ws_client:bootstrap_kline_cache:312 - ⚡ Loaded 30 kline pairs from disk cache (1.6h old, valid for 4h)
+2026-02-12 08:12:13,612 - trading_bot_v2.api_server - INFO - ✅ Kline cache ready for 8 symbols
+2026-02-12 08:12:13.612 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: BTC (agg_level=10)
+2026-02-12 08:12:13.613 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: ETH (agg_level=10)
+2026-02-12 08:12:13.613 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: SOL (agg_level=10)
+2026-02-12 08:12:13.613 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: SUI (agg_level=10)
+2026-02-12 08:12:13.614 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: AVAX (agg_level=10)
+2026-02-12 08:12:13.614 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: XRP (agg_level=10)
+2026-02-12 08:12:13.615 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: DOGE (agg_level=10)
+2026-02-12 08:12:13.615 | INFO     | trading_bot_v2.pacifica_ws_client:subscribe_orderbook:239 - 📚 Subscribed to orderbook: LTC (agg_level=10)
+2026-02-12 08:12:13,615 - trading_bot_v2.api_server - INFO - 📚 Subscribed to orderbook for 8 symbols (agg_level=10)
+2026-02-12 08:12:13.616 | INFO     | trading_bot_v2.market_regime:__init__:82 - MarketRegimeDetector initialized: ADX trending=30.0, moderate=25.0, ranging=25.0, volatility percentile=65.0%, cache_ttl=4h
+2026-02-12 08:12:13,616 - trading_bot_v2.api_server - INFO - MarketRegimeDetector initialized
+2026-02-12 08:12:13.616 | INFO     | trading_bot_v2.multi_timeframe_fetcher:__init__:71 - MultiTimeframeFetcher initialized with tiered TTL (1m:60s, 5m:120s, 15m+:300s), WS client: False
+2026-02-12 08:12:13,617 - trading_bot_v2.api_server - INFO - MultiTimeframeFetcher initialized
+2026-02-12 08:12:13.617 | INFO     | trading_bot_v2.risk_manager:__init__:67 - RiskManager initialized (AUTHORITATIVE MODE): max_risk=5.0%, max_exposure=15.0%
+2026-02-12 08:12:13,617 - trading_bot_v2.api_server - INFO - RiskManager initialized
+2026-02-12 08:12:13.618 | INFO     | trading_bot_v2.universal_grid_state_consistency:_start_continuous_monitoring:136 - 🔄 Started continuous grid state monitoring
+2026-02-12 08:12:13.618 | INFO     | trading_bot_v2.universal_grid_state_consistency:__init__:121 - 🔧 Universal Grid State Consistency Manager initialized
+2026-02-12 08:12:13.619 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:276 - 🔧 Initializing GridLifecycleManager system...
+2026-02-12 08:12:13.619 | DEBUG    | trading_bot_v2.grid_lifecycle_manager:_reset_daily_counters_if_needed:316 - 📅 Reset daily grid refresh counters for 2026-02-12
+2026-02-12 08:12:13.619 | INFO     | trading_bot_v2.grid_lifecycle_manager:load_grid_states:2757 - 📊 Loaded grid from DB: AVAX (regime: unknown)
+2026-02-12 08:12:13.620 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:284 - 📊 Loaded 1 grids from database
+2026-02-12 08:12:13.620 | INFO     | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:188 - 🔍 Manual grid state validation started2026-02-12 08:12:13.620 | ERROR    | trading_bot_v2.universal_grid_state_consistency:_get_database_grid_states:342 - Error getting database grid states: 'DatabaseManager' object has no attribute 'get_db_connection'
+2026-02-12 08:12:13.621 | WARNING  | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:220 - ⚠️ Orphaned memory grid detected: AVAX
+2026-02-12 08:12:13.621 | INFO     | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:263 - 📊 Grid validation complete: 0/1 consistent, 1 orphaned memory, 0 orphaned database
+2026-02-12 08:12:13.622 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:288 - 🔧 Universal grid validation: 0/1 consistent
+2026-02-12 08:12:13.622 | WARNING  | trading_bot_v2.grid_lifecycle_manager:detect_and_repair_orphaned_grids:356 - ⚠️ Orphaned grid detected for AVAX: missing_center_price, invalid_state
+2026-02-12 08:12:14.148 | SUCCESS  | trading_bot_v2.pacifica_ws_client:_run:530 - Connected to Pacifica WebSocket
+2026-02-12 08:12:14.150 | INFO     | trading_bot_v2.pacifica_ws_client:_authenticate:571 - Sent auth message
+2026-02-12 08:12:14.150 | INFO     | trading_bot_v2.pacifica_ws_client:_subscribe_public:578 - Subscribed to prices stream (all markets)
+2026-02-12 08:12:14.151 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: BTC 1m
+2026-02-12 08:12:14.197 | INFO     | trading_bot_v2.grid_lifecycle_manager:_repair_orphaned_grid:400 - 🔧 Reconstructed center price for AVAX: $8.7230
+2026-02-12 08:12:14.201 | DEBUG    | trading_bot_v2.grid_lifecycle_manager:save_grid_state:2676 - Grid state saved to DB: AVAX
+2026-02-12 08:12:14.202 | INFO     | trading_bot_v2.grid_lifecycle_manager:detect_and_repair_orphaned_grids:362 - ✅ Successfully repaired orphaned grid for AVAX
+2026-02-12 08:12:14.203 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:293 - 🔧 Legacy repair: Fixed 1 orphaned grids on startup
+2026-02-12 08:12:14.203 | WARNING  | trading_bot_v2.grid_lifecycle_manager:_validate_grid_integrity:705 - ⚠️ Grid integrity issues for AVAX: invalid_spacing
+2026-02-12 08:12:14.203 | INFO     | trading_bot_v2.grid_lifecycle_manager:_validate_grid_integrity:717 - ✅ Grid integrity validation complete: 0 valid, 1 with issues
+2026-02-12 08:12:14.204 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:298 - ✅ GridLifecycleManager system initialization complete
+2026-02-12 08:12:14,205 - trading_bot_v2.api_server - INFO - GridLifecycleManager initialized
+2026-02-12 08:12:14.205 | INFO     | trading_bot_v2.strategy_manager:__init__:152 - Strategy enable flags: MeanReversion=True, MACrossover=True, GridTrading=True, LiquidationCapture=True, TrendFollowing=False, VWAPScalping=True, FundingArb=True, MomentumScalping=True, OrderBookImbalance=True
+2026-02-12 08:12:14.205 | INFO     | trading_bot_v2.strategies.mean_reversion:__init__:122 - MeanReversionStrategy initialized: RSI 35.0/65.0, BB period=20, ATR stop=2.0x, min_confidence=0.45
+2026-02-12 08:12:14.207 | INFO     | trading_bot_v2.strategy_manager:__init__:171 - Mean Reversion strategy enabled
+2026-02-12 08:12:14.208 | INFO     | trading_bot_v2.strategies.ma_crossover:__init__:115 - MACrossoverStrategy initialized: MA 50/200, pullback 2.0%-4.0%, ATR stop=2.5x, min_confidence=0.5
+2026-02-12 08:12:14.208 | INFO     | trading_bot_v2.strategy_manager:__init__:175 - MA Crossover strategy enabled
+2026-02-12 08:12:14.209 | INFO     | trading_bot_v2.strategies.grid_trading:__init__:82 - GridTradingStrategy initialized: 8 levels, spacing=0.4x ATR, max positions=10, emergency stop=5.0%, dynamic spacing bounds=0.3%-6.0%
+2026-02-12 08:12:14.209 | INFO     | trading_bot_v2.strategy_manager:__init__:207 - Grid Trading strategy enabled: 8 levels, spacing=0.4x ATR, max positions=10
+2026-02-12 08:12:14.210 | INFO     | trading_bot_v2.strategies.liquidation_capture:__init__:101 - LiquidationCaptureStrategy initialized: price threshold=3.0%, volume spike=3.0x, RSI oversold=15.0/overbought=85.0, BIDIRECTIONAL (detects both long liquidations and short squeezes)
+2026-02-12 08:12:14.210 | INFO     | trading_bot_v2.strategy_manager:__init__:241 - Liquidation Capture strategy enabled: price threshold=3.0%, volume spike=3.0x, RRR target=3.0x
+2026-02-12 08:12:14.211 | INFO     | trading_bot_v2.strategies.vwap_scalping:__init__:137 - VWAPScalpingStrategy initialized: SD threshold=1.8, ATR stop=1.5x, MACD(12,26,9), min_confidence=0.62, cooldown=8min
+2026-02-12 08:12:14.211 | INFO     | trading_bot_v2.strategy_manager:__init__:261 - VWAP Scalping strategy enabled: SD threshold=1.8, ATR stop=1.5x, min_confidence=62%
+2026-02-12 08:12:14.212 | INFO     | trading_bot_v2.strategies.funding_arb:__init__:61 - FundingArbStrategy initialized: min_rate=0.0100%, max_alloc=20%, rebalance_threshold=2.0%
+2026-02-12 08:12:14.212 | INFO     | trading_bot_v2.strategy_manager:__init__:282 - Funding Arb strategy enabled: min_rate=0.0100%, max_alloc=20%, rebalance=2.0%
+2026-02-12 08:12:14.214 | INFO     | trading_bot_v2.strategies.momentum_scalping:__init__:190 - MomentumScalpingStrategy initialized: EMA 9/21, RSI 35.0-65.0, ATR stop=1.5x target=2.5x
+2026-02-12 08:12:14.215 | INFO     | trading_bot_v2.strategy_manager:__init__:320 - Momentum Scalping strategy enabled: EMA 9/21, ATR stop=1.5x, target=2.5x, min_confidence=60%2026-02-12 08:12:14.215 | INFO     | trading_bot_v2.strategies.orderbook_imbalance:__init__:103 - OrderBookImbalanceStrategy initialized: levels=10, long>62%, short<38%, ATR stop=0.75x, target=1.5x
+2026-02-12 08:12:14.216 | INFO     | trading_bot_v2.strategy_manager:__init__:353 - Order Book Imbalance strategy enabled: levels=10, long>62%, short<38%, ATR stop=0.75x, target=1.5x
+2026-02-12 08:12:14.218 | INFO     | trading_bot_v2.strategy_manager:__init__:359 - StrategyManager initialized with 8 strategies: ['MeanReversion', 'MACrossover', 'GridTrading', 'LiquidationCapture', 'VWAPScalping', 'FundingArb', 'MomentumScalping', 'OrderBookImbalance']
+2026-02-12 08:12:14,218 - trading_bot_v2.api_server - INFO - StrategyManager initialized2026-02-12 08:12:14.218 | INFO     | trading_bot_v2.signal_logger:__init__:66 - SignalLogger initialized - CSV path: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\signals_log.csv, dedup window: 60s
+2026-02-12 08:12:14.219 | INFO     | trading_bot_v2.trading_bot:__init__:267 - Signal logger initialized - logging to signals_log.csv
+2026-02-12 08:12:14.236 | INFO     | trading_bot_v2.trading_bot:_refresh_market_info_cache:2185 - Market info cache refreshed: 61 symbols cached (tick_size/lot_size from /info endpoint)
+2026-02-12 08:12:14,236 - root - INFO - WebSocket client initialized (not started)
+2026-02-12 08:12:14.237 | INFO     | trading_bot_v2.multi_timeframe_fetcher:__init__:71 - MultiTimeframeFetcher initialized with tiered TTL (1m:60s, 5m:120s, 15m+:300s), WS client: True
+2026-02-12 08:12:14.237 | INFO     | trading_bot_v2.market_regime:__init__:82 - MarketRegimeDetector initialized: ADX trending=30.0, moderate=25.0, ranging=25.0, volatility percentile=65.0%, cache_ttl=4h
+2026-02-12 08:12:14.237 | INFO     | trading_bot_v2.strategy_manager:__init__:152 - Strategy enable flags: MeanReversion=True, MACrossover=True, GridTrading=True, LiquidationCapture=True, TrendFollowing=False, VWAPScalping=True, FundingArb=True, MomentumScalping=True, OrderBookImbalance=True
+2026-02-12 08:12:14.240 | INFO     | trading_bot_v2.strategies.mean_reversion:__init__:122 - MeanReversionStrategy initialized: RSI 35.0/65.0, BB period=20, ATR stop=2.0x, min_confidence=0.45
+2026-02-12 08:12:14.241 | INFO     | trading_bot_v2.strategy_manager:__init__:171 - Mean Reversion strategy enabled
+2026-02-12 08:12:14.241 | INFO     | trading_bot_v2.strategies.ma_crossover:__init__:115 - MACrossoverStrategy initialized: MA 50/200, pullback 2.0%-4.0%, ATR stop=2.5x, min_confidence=0.5
+2026-02-12 08:12:14.242 | INFO     | trading_bot_v2.strategy_manager:__init__:175 - MA Crossover strategy enabled
+2026-02-12 08:12:14.242 | INFO     | trading_bot_v2.strategies.grid_trading:__init__:82 - GridTradingStrategy initialized: 8 levels, spacing=0.4x ATR, max positions=10, emergency stop=5.0%, dynamic spacing bounds=0.3%-6.0%
+2026-02-12 08:12:14.245 | INFO     | trading_bot_v2.strategy_manager:__init__:207 - Grid Trading strategy enabled: 8 levels, spacing=0.4x ATR, max positions=10
+2026-02-12 08:12:14.245 | INFO     | trading_bot_v2.strategies.liquidation_capture:__init__:101 - LiquidationCaptureStrategy initialized: price threshold=3.0%, volume spike=3.0x, RSI oversold=15.0/overbought=85.0, BIDIRECTIONAL (detects both long liquidations and short squeezes)2026-02-12 08:12:14.246 | INFO     | trading_bot_v2.strategy_manager:__init__:241 - Liquidation Capture strategy enabled: price threshold=3.0%, volume spike=3.0x, RRR target=3.0x
+2026-02-12 08:12:14.247 | INFO     | trading_bot_v2.strategies.vwap_scalping:__init__:137 - VWAPScalpingStrategy initialized: SD threshold=1.8, ATR stop=1.5x, MACD(12,26,9), min_confidence=0.62, cooldown=8min
+2026-02-12 08:12:14.247 | INFO     | trading_bot_v2.strategy_manager:__init__:261 - VWAP Scalping strategy enabled: SD threshold=1.8, ATR stop=1.5x, min_confidence=62%
+2026-02-12 08:12:14.250 | INFO     | trading_bot_v2.strategies.funding_arb:__init__:61 - FundingArbStrategy initialized: min_rate=0.0100%, max_alloc=20%, rebalance_threshold=2.0%
+2026-02-12 08:12:14.253 | INFO     | trading_bot_v2.strategy_manager:__init__:282 - Funding Arb strategy enabled: min_rate=0.0100%, max_alloc=20%, rebalance=2.0%
+2026-02-12 08:12:14.253 | INFO     | trading_bot_v2.strategies.momentum_scalping:__init__:190 - MomentumScalpingStrategy initialized: EMA 9/21, RSI 35.0-65.0, ATR stop=1.5x target=2.5x
+2026-02-12 08:12:14.254 | INFO     | trading_bot_v2.strategy_manager:__init__:320 - Momentum Scalping strategy enabled: EMA 9/21, ATR stop=1.5x, target=2.5x, min_confidence=60%
+2026-02-12 08:12:14.254 | INFO     | trading_bot_v2.strategies.orderbook_imbalance:__init__:103 - OrderBookImbalanceStrategy initialized: levels=10, long>62%, short<38%, ATR stop=0.75x, target=1.5x
+2026-02-12 08:12:14.254 | INFO     | trading_bot_v2.strategy_manager:__init__:353 - Order Book Imbalance strategy enabled: levels=10, long>62%, short<38%, ATR stop=0.75x, target=1.5x
+2026-02-12 08:12:14.258 | INFO     | trading_bot_v2.strategy_manager:__init__:359 - StrategyManager initialized with 8 strategies: ['MeanReversion', 'MACrossover', 'GridTrading', 'LiquidationCapture', 'VWAPScalping', 'FundingArb', 'MomentumScalping', 'OrderBookImbalance']
+2026-02-12 08:12:14.259 | INFO     | trading_bot_v2.universal_grid_state_consistency:_start_continuous_monitoring:136 - 🔄 Started continuous grid state monitoring
+2026-02-12 08:12:14.259 | INFO     | trading_bot_v2.universal_grid_state_consistency:__init__:121 - 🔧 Universal Grid State Consistency Manager initialized
+2026-02-12 08:12:14.259 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:276 - 🔧 Initializing GridLifecycleManager system...
+2026-02-12 08:12:14.260 | DEBUG    | trading_bot_v2.grid_lifecycle_manager:_reset_daily_counters_if_needed:316 - 📅 Reset daily grid refresh counters for 2026-02-12
+2026-02-12 08:12:14.260 | INFO     | trading_bot_v2.grid_lifecycle_manager:load_grid_states:2757 - 📊 Loaded grid from DB: AVAX (regime: unknown)
+2026-02-12 08:12:14.263 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:284 - 📊 Loaded 1 grids from database
+2026-02-12 08:12:14.263 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: BTC 5m
+2026-02-12 08:12:14.266 | INFO     | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:188 - 🔍 Manual grid state validation started
+2026-02-12 08:12:14.267 | ERROR    | trading_bot_v2.universal_grid_state_consistency:_get_database_grid_states:342 - Error getting database grid states: 'DatabaseManager' object has no attribute 'get_db_connection'
+2026-02-12 08:12:14.267 | WARNING  | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:220 - ⚠️ Orphaned memory grid detected: AVAX
+2026-02-12 08:12:14.267 | INFO     | trading_bot_v2.universal_grid_state_consistency:validate_and_repair_all_grids:263 - 📊 Grid validation complete: 0/1 consistent, 1 orphaned memory, 0 orphaned database
+2026-02-12 08:12:14.271 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:288 - 🔧 Universal grid validation: 0/1 consistent
+2026-02-12 08:12:14.272 | WARNING  | trading_bot_v2.grid_lifecycle_manager:detect_and_repair_orphaned_grids:356 - ⚠️ Orphaned grid detected for AVAX: missing_center_price, invalid_state
+2026-02-12 08:12:14.372 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: BTC 15m
+2026-02-12 08:12:14.461 | INFO     | trading_bot_v2.grid_lifecycle_manager:_repair_orphaned_grid:400 - 🔧 Reconstructed center price for AVAX: $8.7230
+2026-02-12 08:12:14.468 | DEBUG    | trading_bot_v2.grid_lifecycle_manager:save_grid_state:2676 - Grid state saved to DB: AVAX
+2026-02-12 08:12:14.472 | INFO     | trading_bot_v2.grid_lifecycle_manager:detect_and_repair_orphaned_grids:362 - ✅ Successfully repaired orphaned grid for AVAX
+2026-02-12 08:12:14.472 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:293 - 🔧 Legacy repair: Fixed 1 orphaned grids on startup
+2026-02-12 08:12:14.473 | WARNING  | trading_bot_v2.grid_lifecycle_manager:_validate_grid_integrity:705 - ⚠️ Grid integrity issues for AVAX: invalid_spacing
+2026-02-12 08:12:14.474 | INFO     | trading_bot_v2.grid_lifecycle_manager:_validate_grid_integrity:717 - ✅ Grid integrity validation complete: 0 valid, 1 with issues
+2026-02-12 08:12:14.474 | INFO     | trading_bot_v2.grid_lifecycle_manager:_initialize_grid_system:298 - ✅ GridLifecycleManager system initialization complete
+2026-02-12 08:12:14.474 | INFO     | trading_bot_v2.grid_lifecycle_manager:load_grid_states:2757 - 📊 Loaded grid from DB: AVAX (regime: unknown)
+2026-02-12 08:12:14.480 | INFO     | trading_bot_v2.trading_bot:__init__:347 - Restored 1 grid(s) from database: ['AVAX']
+2026-02-12 08:12:14.481 | INFO     | trading_bot_v2.migrated_position_manager:__init__:195 - MigratedPositionManager initialized
+2026-02-12 08:12:14.481 | INFO     | trading_bot_v2.execution_layer:__init__:76 - ExecutionLayer initialized (enabled=True)
+2026-02-12 08:12:14.482 | INFO     | trading_bot_v2.trading_bot:__init__:362 - 🔧 ExecutionLayer initialized successfully
+2026-02-12 08:12:14,488 - trading_bot_v2.component_registry - INFO - Component registered: TradingBot
+2026-02-12 08:12:14.482 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: BTC 1h
+2026-02-12 08:12:14,494 - trading_bot_v2.component_registry - INFO - Component registered: StrategyManager
+2026-02-12 08:12:14,494 - trading_bot_v2.component_registry - INFO - Component registered: MarketRegimeDetector
+2026-02-12 08:12:14,495 - trading_bot_v2.component_registry - INFO - Component registered: DatabaseManager
+2026-02-12 08:12:14,495 - trading_bot_v2.component_registry - INFO - Component registered: GridLifecycleManager
+2026-02-12 08:12:14.495 | INFO     | trading_bot_v2.trading_bot:_register_components:425 - Components registered with component registry
+2026-02-12 08:12:14.495 | INFO     | trading_bot_v2.trading_bot:_setup_event_subscriptions:1265 - Event subscriptions configured
+2026-02-12 08:12:14,501 - root - INFO - Trading bot initialized
+2026-02-12 08:12:14,508 - trading_bot_v2.api_server - INFO - TradingBot initialized
+2026-02-12 08:12:14,508 - trading_bot_v2.api_server - INFO - All bot components initialized successfully
+2026-02-12 08:12:14,508 - trading_bot_v2.api_server - INFO - API server started with bot integration
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50232 - "WebSocket /ws" [accepted]
+2026-02-12 08:12:14,513 - trading_bot_v2.api_server - INFO - WebSocket client connected. Total connections: 1
+2026-02-12 08:12:14,514 - trading_bot_v2.database - INFO - get_positions: fetched 10 positions in 0.000s
+2026-02-12 08:12:14,514 - trading_bot_v2.database - INFO - get_trades: fetched 0 trades in 0.000s
+2026-02-12 08:12:14.603 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: BTC 4h
+2026-02-12 08:12:14.711 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: LTC 1m
+2026-02-12 08:12:14.822 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: LTC 5m
+2026-02-12 08:12:14.933 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: LTC 15m
+2026-02-12 08:12:14.985 | INFO     | trading_bot_v2.market_regime:detect_regime:146 - Regime: TRENDING_STRONG (ADX=39.77 > 30.0)
+2026-02-12 08:12:14.986 | DEBUG    | trading_bot_v2.market_regime:detect_regime_cached:230 - Regime recalculated for BTC: trending_strong
+INFO:     connection open
+2026-02-12 08:12:15.043 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: LTC 1h
+2026-02-12 08:12:15.153 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: LTC 4h
+2026-02-12 08:12:15.262 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: ETH 1m
+2026-02-12 08:12:15,308 - trading_bot_v2.database - INFO - get_trades: fetched 0 trades in 0.000s
+2026-02-12 08:12:15.370 | DEBUG    | trading_bot_v2.pacifica_ws_client:_subscribe_public:602 - 📊 Subscribed to candle: ETH 5m

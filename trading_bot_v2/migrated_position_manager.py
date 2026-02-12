@@ -22,8 +22,132 @@ This module works in conjunction with:
 """
 
 from typing import Dict, Any, List, Optional
-from datetime import datetime
 from loguru import logger
+import json
+
+
+class ResponseHandler:
+    """Handles Pacifica API responses with robust validation and error handling."""
+    
+    @staticmethod
+    def validate_order_response(response: Any) -> Dict[str, Any]:
+        """
+        Validate and normalize order response from Pacifica API.
+        
+        Args:
+            response: Raw response from API (could be dict, string, etc.)
+            
+        Returns:
+            Normalized response dict with expected format:
+            {"success": bool, "data": dict, "error": Optional[str]}
+        """
+        logger.debug(f"Validating order response: {response} (type: {type(response)})")
+        
+        # Case 1: Response is already a dict (expected format)
+        if isinstance(response, dict):
+            return ResponseHandler._normalize_dict_response(response)
+        
+        # Case 2: Response is a boolean (direct API response)
+        elif isinstance(response, bool):
+            logger.warning(f"API returned boolean directly: {response}")
+            return {
+                "success": response,
+                "data": {"status": "success" if response else "error"},
+                "error": None if response else "API returned false"
+            }
+        
+        # Case 3: Response is a string (could be JSON or just "success")
+        elif isinstance(response, str):
+            return ResponseHandler._handle_string_response(response)
+        
+        # Case 4: Response is None or unexpected type
+        else:
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected response type: {type(response).__name__}"
+            }
+    
+    @staticmethod
+    def _normalize_dict_response(response: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize dictionary response to expected format."""
+        # Ensure we have the required fields
+        normalized = {
+            "success": bool(response.get("success", False)),
+            "data": response.get("data", {}),
+            "error": response.get("error") if not response.get("success") else None
+        }
+        
+        # Validate data field
+        if not isinstance(normalized["data"], dict):
+            logger.warning(f"Response data is not a dict: {normalized['data']}")
+            normalized["data"] = {}
+        
+        return normalized
+    
+    @staticmethod
+    def _handle_string_response(response: str) -> Dict[str, Any]:
+        """Handle string response from API."""
+        # Try to parse as JSON first
+        try:
+            parsed = json.loads(response)
+            if isinstance(parsed, dict):
+                return ResponseHandler._normalize_dict_response(parsed)
+            else:
+                # If parsed result is not a dict, handle based on content
+                logger.warning(f"API returned non-dict JSON: {parsed}")
+                if isinstance(parsed, bool):
+                    return {
+                        "success": parsed,
+                        "data": {"status": "success" if parsed else "error"},
+                        "error": None if parsed else "API returned false"
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "success":
+                    return {
+                        "success": True,
+                        "data": {"status": "success"},
+                        "error": None
+                    }
+                elif isinstance(parsed, str) and parsed.lower() == "error":
+                    return {
+                        "success": False,
+                        "data": {},
+                        "error": "API returned error response"
+                    }
+                else:
+                    # Default to treating as success for unknown types
+                    return {
+                        "success": True,
+                        "data": {"raw_response": parsed},
+                        "error": None
+                    }
+        except json.JSONDecodeError:
+            # Not valid JSON, treat raw string
+            pass
+        
+        # Handle specific string responses
+        if response.lower() == '"success"' or response.lower() == "success":
+            logger.warning("API returned string 'success' instead of JSON object")
+            return {
+                "success": True,
+                "data": {"status": "success"},
+                "error": None
+            }
+        elif response.lower() == '"error"' or response.lower() == "error":
+            logger.error("API returned string 'error'")
+            return {
+                "success": False,
+                "data": {},
+                "error": "API returned error response"
+            }
+        else:
+            # Unknown string response
+            logger.error(f"API returned unexpected string response: {response}")
+            return {
+                "success": False,
+                "data": {},
+                "error": f"Unexpected API response: {response}"
+            }
 
 
 class MigratedPositionManager:
@@ -192,7 +316,6 @@ class MigratedPositionManager:
         Returns:
             ATR value, or 0 if calculation fails
         """
-        from datetime import datetime
         import time
 
         # Check cache
@@ -325,7 +448,6 @@ class MigratedPositionManager:
             True if stop was updated
         """
         side = pos.get("side")
-        entry_price = pos.get("entry_price", 0)
 
         # Get ATR for stop distance
         atr = self._get_atr(symbol, market_data)
@@ -446,7 +568,15 @@ class MigratedPositionManager:
 
             try:
                 close_side = "sell" if side == "long" else "buy"
-                self.client.place_order(symbol, close_side, partial_qty, "market")
+                order_response = self.client.place_order(symbol, close_side, partial_qty, "market")
+                
+                # Validate and normalize response using ResponseHandler
+                validated_response = ResponseHandler.validate_order_response(order_response)
+                
+                if not validated_response.get("success"):
+                    error_msg = validated_response.get("error", "Unknown API error")
+                    logger.error(f"❌ Partial take profit order failed for {symbol}: {error_msg}")
+                    return False
 
                 tp_info["partial_taken"] = True
 
@@ -481,7 +611,15 @@ class MigratedPositionManager:
         try:
             # Place market close order
             close_side = "sell" if side == "long" else "buy"
-            self.client.place_order(symbol, close_side, qty, "market")
+            order_response = self.client.place_order(symbol, close_side, qty, "market")
+            
+            # Validate and normalize response using ResponseHandler
+            validated_response = ResponseHandler.validate_order_response(order_response)
+            
+            if not validated_response.get("success"):
+                error_msg = validated_response.get("error", "Unknown API error")
+                logger.error(f"❌ Position close order failed for {symbol}: {error_msg}")
+                return False
 
             # Unregister from RiskManager
             self.risk_manager.unregister_migrated_position(symbol, side, qty)
@@ -499,9 +637,12 @@ class MigratedPositionManager:
 
             # Update database
             self._update_db_position(symbol, side, qty, reason)
+            
+            return True
 
         except Exception as e:
             logger.error(f"Failed to close migrated position {symbol} {side}: {e}")
+            return False
 
     def _update_db_position(self, symbol: str, side: str, qty: float, exit_reason: str):
         """Update position status in database."""
