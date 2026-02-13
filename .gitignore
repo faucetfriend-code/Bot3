@@ -2,3 +2,6 @@
 *.log
 nul
 signals_log.csv
+signals_log.csv
+trading_bot.db
+trading_bot.db

@@ -1,0 +1,26 @@
+{
+  "symbol": "ETH",
+  "timeframe": "4h",
+  "candles": [
+    {
+      "timestamp": 1770926400000,
+      "open": 2004.4,
+      "high": 2008.5,
+      "low": 2003.5,
+      "close": 2004.5,
+      "volume": 14.3402,
+      "trades": 1876
+    },
+    {
+      "timestamp": 1770940800000,
+      "open": 2004.5,
+      "high": 2013.9,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 5.4206,
+      "trades": 856
+    }
+  ],
+  "saved_at": "2026-02-13T04:32:13.309354",
+  "candle_count": 2
+}

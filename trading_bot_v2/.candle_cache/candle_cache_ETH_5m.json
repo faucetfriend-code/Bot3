@@ -1,0 +1,305 @@
+{
+  "symbol": "ETH",
+  "timeframe": "5m",
+  "candles": [
+    {
+      "timestamp": 1770937500000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770937800000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2003.5,
+      "close": 2004.5,
+      "volume": 0.0184,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770938100000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.004,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770938400000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770938700000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770939000000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2003.5,
+      "close": 2004.5,
+      "volume": 0.0186,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770939300000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770939600000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770939900000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2004.5,
+      "close": 2004.5,
+      "volume": 0.004,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770940200000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 0.0184,
+      "trades": 39
+    },
+    {
+      "timestamp": 1770940500000,
+      "open": 2003.5,
+      "high": 2004.5,
+      "low": 2003.5,
+      "close": 2004.5,
+      "volume": 0.0184,
+      "trades": 39
+    },
+    {
+      "timestamp": 1770940800000,
+      "open": 2004.5,
+      "high": 2004.5,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.004,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770941100000,
+      "open": 2003.5,
+      "high": 2003.6,
+      "low": 2003.5,
+      "close": 2003.6,
+      "volume": 0.0184,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770941400000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770941700000,
+      "open": 2003.6,
+      "high": 2013.9,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770942000000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 0.0184,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770942300000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770942600000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770942900000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770943200000,
+      "open": 2003.6,
+      "high": 2005.7,
+      "low": 2003.5,
+      "close": 2005.7,
+      "volume": 0.0186,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770943500000,
+      "open": 2005.7,
+      "high": 2005.7,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770943800000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770944100000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770944400000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.5,
+      "close": 2003.6,
+      "volume": 0.0184,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770944700000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770945000000,
+      "open": 2003.6,
+      "high": 2003.6,
+      "low": 2003.6,
+      "close": 2003.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770945300000,
+      "open": 2003.6,
+      "high": 2005.6,
+      "low": 2003.6,
+      "close": 2005.6,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770945600000,
+      "open": 2005.6,
+      "high": 2005.6,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 0.0186,
+      "trades": 41
+    },
+    {
+      "timestamp": 1770945900000,
+      "open": 2003.5,
+      "high": 2003.5,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 0.0038,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770946200000,
+      "open": 2003.5,
+      "high": 2005.6,
+      "low": 2003.5,
+      "close": 2005.6,
+      "volume": 0.0184,
+      "trades": 39
+    },
+    {
+      "timestamp": 1770946500000,
+      "open": 2005.6,
+      "high": 2005.6,
+      "low": 2003.5,
+      "close": 2005.6,
+      "volume": 0.0184,
+      "trades": 38
+    },
+    {
+      "timestamp": 1770946800000,
+      "open": 2005.6,
+      "high": 2005.6,
+      "low": 2005.6,
+      "close": 2005.6,
+      "volume": 0.004,
+      "trades": 40
+    },
+    {
+      "timestamp": 1770947100000,
+      "open": 2005.6,
+      "high": 2007.6,
+      "low": 2003.5,
+      "close": 2003.5,
+      "volume": 5.2378,
+      "trades": 48
+    }
+  ],
+  "saved_at": "2026-02-13T04:32:13.306318",
+  "candle_count": 33
+}

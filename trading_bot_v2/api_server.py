@@ -19,6 +19,7 @@ sys.path.insert(
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from contextlib import asynccontextmanager
 import uvicorn
 
 # Import real bot components - support both module and script execution
@@ -53,11 +54,35 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
+# Create FastAPI app with lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    try:
+        bot_integration.initialize()
+        logger.info("API server started with bot integration")
+    except Exception as e:
+        logger.error(f"Failed to initialize bot on startup: {e}")
+        # Continue running server even if bot init fails
+    
+    yield  # Server is running
+    
+    # Shutdown
+    try:
+        if bot_integration._is_running:
+            await bot_integration.stop()
+        bot_integration.shutdown()
+        logger.info("API server shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+
+
 app = FastAPI(
     title="Trading Bot Control Interface",
     description="Professional trading bot control interface with real-time monitoring",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -366,7 +391,11 @@ class BotIntegration:
             if self.database:
                 db_positions = self.database.get_positions()
                 if db_positions:
-                    positions = db_positions
+                    # Filter out zero-quantity positions
+                    positions = [
+                        p for p in db_positions
+                        if float(p.get('quantity', 0)) > 0
+                    ]
 
             # Enrich with live data from Pacifica
             if self.pacifica_client and positions:
@@ -486,10 +515,10 @@ class BotIntegration:
             if self.grid_manager:
                 active_grids = self.grid_manager.get_all_active_grids()
                 if active_grids:
-                    for symbol, grid_data in active_grids.items():
+                    for grid_data in active_grids:
                         grids.append(
                             {
-                                "symbol": symbol,
+                                "symbol": grid_data.get("symbol"),
                                 "state": grid_data.get("state", "unknown"),
                                 "grid_levels": grid_data.get("levels", []),
                                 "upper_price": grid_data.get("upper_price"),
@@ -705,6 +734,14 @@ class BotIntegration:
                             "symbol": "unknown",
                             "error": "Position missing symbol field"
                         })
+                        continue
+
+                    # Skip zero-quantity positions early
+                    quantity = float(pos.get("quantity", pos.get("size", 0)))
+                    if quantity <= 0:
+                        logger.debug(
+                            f"Skipping zero-quantity position for {symbol}: qty={quantity}"
+                        )
                         continue
 
                     try:
@@ -1080,30 +1117,6 @@ bot_integration = BotIntegration()
 
 # WebSocket connections for real-time updates
 active_connections: List[WebSocket] = []
-
-
-@app.on_event("startup")
-async def startup_event():
-    """Initialize bot components on server startup."""
-    try:
-        bot_integration.initialize()
-        logger.info("API server started with bot integration")
-    except Exception as e:
-        logger.error(f"Failed to initialize bot on startup: {e}")
-        # Continue running server even if bot init fails
-        # User can retry via API
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Gracefully stop bot on server shutdown."""
-    try:
-        if bot_integration._is_running:
-            await bot_integration.stop()
-        bot_integration.shutdown()
-        logger.info("API server shutdown complete")
-    except Exception as e:
-        logger.error(f"Error during server shutdown: {e}")
 
 
 @app.websocket("/ws")

@@ -1,0 +1,26 @@
+{
+  "symbol": "BTC",
+  "timeframe": "4h",
+  "candles": [
+    {
+      "timestamp": 1770926400000,
+      "open": 68134.0,
+      "high": 69004.0,
+      "low": 65229.0,
+      "close": 66237.0,
+      "volume": 79.39692,
+      "trades": 2023
+    },
+    {
+      "timestamp": 1770940800000,
+      "open": 66177.0,
+      "high": 66568.0,
+      "low": 65834.0,
+      "close": 66495.0,
+      "volume": 0.02016,
+      "trades": 856
+    }
+  ],
+  "saved_at": "2026-02-13T04:32:13.297025",
+  "candle_count": 2
+}

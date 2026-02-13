@@ -1740,24 +1740,35 @@ class TradingBot:
             # Get proposed center from new signal
             proposed_center = signal.entry_price
 
+            # Get current grid data (includes atr_at_creation from when grid was created)
+            grid_data = self.grid_lifecycle._grids.get(symbol, {})
+            
             # Calculate drift in ATR multiples
             # Fetch 5m candles and calculate ATR
             atr_current = self._calculate_atr_for_symbol(symbol, timeframe="5m")
 
+            # Use stored ATR as fallback if current ATR unavailable
+            atr_stored = grid_data.get("atr_at_creation", 0) if grid_data else 0
+            
             if atr_current is None or atr_current <= 0:
-                logger.warning(
-                    f"Cannot calculate drift for {symbol} - ATR unavailable ({atr_current})"
-                )
-                # Fall back to simple skip with reason
-                reason = f"Grid already active for {symbol} (ATR unavailable for drift calc)"
-                logger.info(f"🔷 {reason}, skipping signal")
-                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
-                return
+                if atr_stored and atr_stored > 0:
+                    logger.info(
+                        f"Using stored ATR for {symbol}: {atr_stored:.4f} (current ATR unavailable)"
+                    )
+                    atr_current = atr_stored
+                else:
+                    logger.warning(
+                        f"Cannot calculate drift for {symbol} - ATR unavailable (current: {atr_current}, stored: {atr_stored})"
+                    )
+                    # Fall back to simple skip with reason
+                    reason = f"Grid already active for {symbol} (ATR unavailable for drift calc)"
+                    logger.info(f"🔷 {reason}, skipping signal")
+                    self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                    return
 
             drift_atr = abs(proposed_center - current_center) / atr_current
 
             # Get current grid confidence (stored in grid metadata if available)
-            grid_data = self.grid_lifecycle._grids.get(symbol, {})
             current_confidence = grid_data.get("signal_confidence", 0.65)
 
             # Check cooldown period

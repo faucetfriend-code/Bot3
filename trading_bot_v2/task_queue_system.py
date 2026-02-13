@@ -292,7 +292,7 @@ class TaskExecutor:
                     result = await execution_task
                     task.result = result
                     if self._circuit_breaker and hasattr(self._circuit_breaker, 'record_success'):
-                        self._circuit_breaker.record_success()
+                        await self._circuit_breaker.record_success()
                         
                 except asyncio.TimeoutError:
                     task.status = TaskStatus.TIMEOUT
@@ -301,7 +301,7 @@ class TaskExecutor:
                 except Exception as e:
                     task.status = TaskStatus.FAILED
                     if self._circuit_breaker and hasattr(self._circuit_breaker, 'record_failure'):
-                        self._circuit_breaker.record_failure()
+                        await self._circuit_breaker.record_failure()
                     raise TaskError(f"Task {task_id} failed: {str(e)}", task_id=task_id)
                 
                 finally:

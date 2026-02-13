@@ -6,6 +6,7 @@ import base58
 import json
 from collections import defaultdict, deque
 from datetime import datetime, timedelta
+from decimal import Decimal
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 from enum import Enum
 
@@ -948,10 +949,20 @@ class PacificaClient:
             raise ValueError(f"Unsupported order type: {order_type}")
 
         # Include stop loss and take profit if provided
+        # API expects: {"stop_price": "0.90"} format
+        # Round to tick size to avoid API errors like "price is not a multiple of tick size"
         if stop_loss is not None and stop_loss > 0:
-            payload["stop_loss"] = str(stop_loss)
+            tick_size = self._get_tick_size(symbol)
+            rounded_stop_loss = float(
+                Decimal(str(tick_size)) * Decimal(str(round(stop_loss / tick_size)))
+            )
+            payload["stop_loss"] = {"stop_price": str(rounded_stop_loss)}
         if take_profit is not None and take_profit > 0:
-            payload["take_profit"] = str(take_profit)
+            tick_size = self._get_tick_size(symbol)
+            rounded_take_profit = float(
+                Decimal(str(tick_size)) * Decimal(str(round(take_profit / tick_size)))
+            )
+            payload["take_profit"] = {"stop_price": str(rounded_take_profit)}
 
         # Use critical priority for order placement
         return self._execute_request_immediately(endpoint, payload, 'POST')
@@ -1039,6 +1050,32 @@ class PacificaClient:
         """
         response = self._make_get_request("/info")
         return response.get("data", [])
+
+    def _get_tick_size(self, symbol: str) -> float:
+        """
+        Get the tick size for a given symbol.
+
+        Args:
+            symbol: Trading symbol (e.g., "BTC", "SOL").
+
+        Returns:
+            Tick size as a float (default 0.00001 if not found).
+        """
+        try:
+            markets = self.get_markets()
+            # Handle both uppercase and lowercase symbol lookup
+            symbol_upper = symbol.upper()
+            for market in markets:
+                market_symbol = market.get("symbol", "").upper()
+                if market_symbol == symbol_upper or market_symbol == f"{symbol_upper}-PERP":
+                    tick_size = market.get("tick_size")
+                    if tick_size is not None:
+                        return float(tick_size)
+            logger.warning(f"Tick size not found for {symbol}, using default 0.00001")
+            return 0.00001
+        except Exception as e:
+            logger.warning(f"Failed to get tick size for {symbol}: {e}, using default 0.00001")
+            return 0.00001
 
     def _safe_float_convert(self, value, default: float = 0.0) -> float:
         """Safely convert value to float with validation."""

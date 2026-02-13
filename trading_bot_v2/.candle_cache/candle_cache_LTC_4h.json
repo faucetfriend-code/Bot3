@@ -1,0 +1,26 @@
+{
+  "symbol": "LTC",
+  "timeframe": "4h",
+  "candles": [
+    {
+      "timestamp": 1770926400000,
+      "open": 53.03,
+      "high": 53.29,
+      "low": 52.39,
+      "close": 53.19,
+      "volume": 447.54,
+      "trades": 2037
+    },
+    {
+      "timestamp": 1770940800000,
+      "open": 53.19,
+      "high": 53.29,
+      "low": 52.71,
+      "close": 53.29,
+      "volume": 18.64,
+      "trades": 844
+    }
+  ],
+  "saved_at": "2026-02-13T04:32:13.305524",
+  "candle_count": 2
+}
