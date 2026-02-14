@@ -86,7 +86,7 @@ class SignalLogger:
             "confidence",
             "quality",
             "regime",
-            "status",  # generated, executed, rejected, failed
+            "status",  # generated, executed, rejected, failed, position_updated
             "rejection_reason",
             "execution_result",
             "order_id",
@@ -111,10 +111,13 @@ class SignalLogger:
             symbol = getattr(signal, 'asset', str(signal))
             strategy = getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else ""
             side = getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else ""
-            entry_price = getattr(signal, 'entry_price', 0)
             
-            # Create unique ID from identifying fields
-            signal_id = f"{symbol}:{strategy}:{side}:{entry_price:.6f}"
+            # Create unique ID from identifying fields (EXCLUDING entry_price!)
+            # Entry price is excluded because:
+            # 1. Prices change frequently in the market (~30s intervals)
+            # 2. We want to prevent duplicate signal EXECUTION within the dedup window
+            # 3. Including price would create a new ID for each price change, defeating dedup
+            signal_id = f"{symbol}:{strategy}:{side}"
             return signal_id
         except Exception as e:
             logger.warning(f"Failed to generate signal ID: {e}")
@@ -283,6 +286,7 @@ class SignalLogger:
         execution_result: str = "success",
         regime: str = "",
         notes: str = "",
+        status: str = "executed",
     ) -> Dict[str, Any]:
         """
         Log an executed signal.
@@ -295,10 +299,16 @@ class SignalLogger:
             execution_result: Result description
             regime: Current market regime
             notes: Additional notes
+            status: Signal status - "executed" for new positions, "position_updated" for updates
 
         Returns:
             Log entry dict
         """
+        # Validate status - only allow "executed" or "position_updated"
+        if status not in ("executed", "position_updated"):
+            logger.warning(f"Invalid status '{status}' - defaulting to 'executed'")
+            status = "executed"
+            
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "symbol": getattr(signal, 'asset', str(signal)),
@@ -310,7 +320,7 @@ class SignalLogger:
             "confidence": getattr(signal, 'confidence', 0),
             "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
             "regime": regime,
-            "status": "executed",
+            "status": status,
             "rejection_reason": "",
             "execution_result": execution_result,
             "order_id": str(order_id),
@@ -321,6 +331,12 @@ class SignalLogger:
         }
 
         self._add_entry(entry)
+        
+        if status == "position_updated":
+            logger.info(f"📝 Logged position update: {getattr(signal, 'asset', str(signal))} {getattr(signal.strategy, 'name', str(signal.strategy))}")
+        else:
+            logger.debug(f"📝 Logged signal execution: {getattr(signal, 'asset', str(signal))}")
+            
         return entry
 
     def log_signal_failed(

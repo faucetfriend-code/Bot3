@@ -217,6 +217,7 @@ class BotIntegration:
                 enable_trend_following=False,
                 enable_grid_trading=True,
                 enable_liquidation_capture=True,
+                risk_manager=self.risk_manager,  # Pass RiskManager for grid capital allocation
                 client=self.pacifica_client,  # For FundingArb API calls
                 ws_client=self.ws_client,  # For OrderBookImbalance
             )

@@ -42,7 +42,7 @@ class GridTradingStrategy:
         grid_spacing_atr_multiplier: float = 0.5,
         max_positions_per_symbol: int = 10,
         emergency_stop_loss_pct: float = 0.05,
-        adx_regime_threshold: float = 25.0,  # Prompt 057: Lowered from 50 to 25 (was 20 originally)
+        adx_regime_threshold: float = 20.0,  # Lowered from 25.0 to 20.0 for more grid signals
         atr_period: int = 14,
         adx_period: int = 14,
         min_confidence: float = 0.45,  # Prompt 057: Lowered from 0.6 to 0.45
@@ -153,12 +153,18 @@ class GridTradingStrategy:
                             f"possible data issue - skipping ADX filter"
                         )
                         # Don't block, continue to other checks
-                    elif regime_adx > self.adx_threshold:
+                    else:
+                        # VERBOSE LOGGING: Show exact ADX value before threshold check
                         logger.info(
-                            f"{symbol}: Grid blocked - ADX {regime_adx:.1f} > threshold {self.adx_threshold} "
-                            f"(trend developing on {regime_tf} timeframe, unsafe for grid)"
+                            f"{symbol}: ADX value = {regime_adx:.2f}, threshold = {self.adx_threshold}, "
+                            f"regime_tf = {regime_tf}"
                         )
-                        return []
+                        if regime_adx > self.adx_threshold:
+                            logger.info(
+                                f"{symbol}: Grid blocked - ADX {regime_adx:.1f} > threshold {self.adx_threshold} "
+                                f"(trend developing on {regime_tf} timeframe, unsafe for grid)"
+                            )
+                            return []
                 except Exception as e:
                     logger.warning(
                         f"{symbol}: Could not calculate regime ADX filter: {e}"

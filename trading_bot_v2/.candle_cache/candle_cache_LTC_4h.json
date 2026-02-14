@@ -19,8 +19,62 @@
       "close": 53.29,
       "volume": 18.64,
       "trades": 844
+    },
+    {
+      "timestamp": 1770955200000,
+      "open": 53.11,
+      "high": 53.11,
+      "low": 52.32,
+      "close": 52.71,
+      "volume": 35.12,
+      "trades": 1481
+    },
+    {
+      "timestamp": 1770984000000,
+      "open": 53.29,
+      "high": 53.29,
+      "low": 52.88,
+      "close": 53.27,
+      "volume": 43.34,
+      "trades": 1874
+    },
+    {
+      "timestamp": 1770998400000,
+      "open": 53.27,
+      "high": 53.3,
+      "low": 53.27,
+      "close": 53.27,
+      "volume": 44.4,
+      "trades": 1876
+    },
+    {
+      "timestamp": 1771012800000,
+      "open": 53.27,
+      "high": 53.32,
+      "low": 53.11,
+      "close": 53.27,
+      "volume": 163.76,
+      "trades": 408
+    },
+    {
+      "timestamp": 1771027200000,
+      "open": 53.27,
+      "high": 53.36,
+      "low": 53.03,
+      "close": 53.28,
+      "volume": 241.06,
+      "trades": 1890
+    },
+    {
+      "timestamp": 1771041600000,
+      "open": 53.28,
+      "high": 53.36,
+      "low": 53.28,
+      "close": 53.36,
+      "volume": 3.0,
+      "trades": 139
     }
   ],
-  "saved_at": "2026-02-13T04:32:13.305524",
-  "candle_count": 2
+  "saved_at": "2026-02-14T04:17:51.126070",
+  "candle_count": 8
 }

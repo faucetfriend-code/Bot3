@@ -280,9 +280,11 @@ class TradingBot:
         # Initialize risk manager
         if risk_manager is None:
             self.risk_manager = RiskManager(
-                db=self.db,
-                client=self.client,
-                risk_profile=RiskProfile[config.risk_profile.upper()],
+                max_portfolio_risk_pct=0.05,
+                max_portfolio_exposure_pct=0.15,
+                client=self.client,  # Pass client for margin data retrieval
+                max_margin_utilization_pct=0.75,  # 75% max margin utilization
+                maintenance_margin_buffer_pct=0.15,  # 15% buffer above maintenance margin
             )
         else:
             self.risk_manager = risk_manager
@@ -1163,11 +1165,20 @@ class TradingBot:
                         # Log signal BEFORE publishing event (event bus is synchronous)
                         signals_generated += 1
                         regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
-                        self.signal_logger.log_signal_generated(
+                        log_result = self.signal_logger.log_signal_generated(
                             signal=signal,
                             regime=regime_str,
                             notes=f"Generated from {signal.strategy.name}",
                         )
+                        
+                        # Check if signal was rejected as duplicate (log_signal_generated returns empty dict)
+                        if not log_result:
+                            logger.info(
+                                f"🚫 Duplicate signal rejected by deduplication: {signal.strategy.name} {signal.side.name} "
+                                f"{symbol} @ ${signal.entry_price:.4f} "
+                                f"(same signal executed within {self.signal_logger._dedup_window_seconds}s window)"
+                            )
+                            continue
 
                         logger.info(
                             f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
@@ -1203,6 +1214,7 @@ class TradingBot:
         PHASE 2: Monitor risk using RiskManager.
 
         Coordinator role: Check risk limits and publish events if exceeded.
+        Includes margin safety monitoring.
         """
         try:
             # Get account balance
@@ -1224,15 +1236,56 @@ class TradingBot:
                     f"(${exposure:.2f} / ${balance:.2f})"
                 )
 
+            # MARGIN SAFETY MONITORING
+            try:
+                margin_summary = self.risk_manager.get_margin_summary()
+                if margin_summary.get("status") != "unavailable":
+                    utilization_pct = margin_summary.get("utilization_pct", 0)
+                    status = margin_summary.get("status", "unknown")
+
+                    # Log margin status
+                    if status == "critical":
+                        logger.critical(
+                            f"🚨 CRITICAL MARGIN LEVEL: {utilization_pct:.1f}% utilized! "
+                            f"Equity: ${margin_summary.get('account_equity', 0):.2f}, "
+                            f"Used: ${margin_summary.get('total_margin_used', 0):.2f}"
+                        )
+                    elif status == "warning":
+                        logger.warning(
+                            f"⚠️ HIGH MARGIN UTILIZATION: {utilization_pct:.1f}% "
+                            f"(max: {margin_summary.get('max_utilization_pct', 75):.0f}%)"
+                        )
+                    else:
+                        logger.debug(
+                            f"📊 Margin status: {utilization_pct:.1f}% utilized, "
+                            f"${margin_summary.get('available_margin', 0):.2f} available"
+                        )
+
+                    # Add margin data to published event
+                    margin_data = {
+                        "margin_utilization_pct": utilization_pct,
+                        "margin_status": status,
+                        "account_equity": margin_summary.get("account_equity"),
+                        "available_margin": margin_summary.get("available_margin"),
+                    }
+                else:
+                    margin_data = {"margin_status": "unavailable"}
+            except Exception as margin_error:
+                logger.debug(f"Margin monitoring error: {margin_error}")
+                margin_data = {"margin_status": "error", "error": str(margin_error)}
+
             # Publish risk event for monitoring
+            event_data = {
+                "balance": balance,
+                "exposure": exposure,
+                "risk_pct": risk_pct,
+                "timestamp": time.time(),
+            }
+            event_data.update(margin_data)
+
             self.event_bus.publish_event(
                 event_type=EventType.CAPITAL_REQUESTED,
-                data={
-                    "balance": balance,
-                    "exposure": exposure,
-                    "risk_pct": risk_pct,
-                    "timestamp": time.time(),
-                },
+                data=event_data,
                 source="trading_bot",
             )
 
@@ -1384,29 +1437,63 @@ class TradingBot:
             # Check if position already exists for this symbol
             try:
                 existing_positions = self.client.get_positions()
-                for pos in existing_positions:
-                    if pos.get("symbol") == signal.asset:
-                        # Check if it's the same side
+                if existing_positions:
+                    for pos in existing_positions:
+                        pos_symbol = pos.get("symbol", "")
                         pos_side = pos.get("side", "").lower()
+                        pos_size = pos.get("size", 0) or pos.get("position_size", 0) or pos.get("quantity", 0)
                         signal_side = "long" if signal.side.name == "BUY" else "short"
-                        if pos_side == signal_side:
-                            reason = f"Position already exists for {signal.asset} {signal.side.name}"
-                            logger.info(f"🔁 {reason} - skipping duplicate signal")
-                            self.signal_logger.log_signal_rejected(
-                                signal=signal,
-                                reason=reason,
-                                notes="Duplicate position prevention"
+                        
+                        if pos_symbol == signal.asset:
+                            # For GridTrading, allow multiple positions - grid trading is designed
+                            # to have multiple levels at different prices
+                            is_grid_signal = hasattr(signal, 'strategy') and (
+                                signal.strategy.name == 'GRID_TRADING' if hasattr(signal.strategy, 'name') else 
+                                str(signal.strategy) == 'GRID_TRADING'
                             )
-                            return False
-                        else:
-                            # Opposite side - could be a hedge or flip
+                            
+                            if is_grid_signal:
+                                logger.info(
+                                    f"🟢 Grid signal for {signal.asset}: Allowing multiple positions "
+                                    f"(existing: side={pos_side}, size={pos_size})"
+                                )
+                                # For grid trading, don't block - continue to check next position
+                                continue
+                            
                             logger.info(
-                                f"⚠️ Opposite position exists for {signal.asset}: "
-                                f"existing={pos_side}, signal={signal_side}"
+                                f"🔍 Position check: Found position for {signal.asset} - "
+                                f"side={pos_side}, size={pos_size}, signal_side={signal_side}"
                             )
+                            
+                            if pos_side == signal_side:
+                                reason = (
+                                    f"Position already exists for {signal.asset} {signal.side.name} "
+                                    f"(existing: side={pos_side}, size={pos_size})"
+                                )
+                                logger.info(f"🔁 {reason} - skipping duplicate signal")
+                                self.signal_logger.log_signal_rejected(
+                                    signal=signal,
+                                    reason=reason,
+                                    notes=f"Duplicate position: {pos_symbol} {pos_side} size={pos_size}"
+                                )
+                                return False
+                            else:
+                                # Opposite side - could be a hedge or flip
+                                logger.info(
+                                    f"⚠️ Opposite position exists for {signal.asset}: "
+                                    f"existing={pos_side} (size={pos_size}), signal={signal_side}"
+                                )
+                else:
+                    logger.debug(f"ℹ️ No existing positions found for {signal.asset}")
             except Exception as e:
-                logger.warning(f"Could not check existing positions: {e}")
-                # Continue anyway but log warning
+                reason = f"Failed to check existing positions: {str(e)}"
+                logger.error(f"🚨 {reason} - rejecting signal for safety")
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason=reason,
+                    notes="Position check exception - safety rejection"
+                )
+                return False
 
             # Check account balance
             balance = self._get_account_balance()
@@ -1428,6 +1515,45 @@ class TradingBot:
                 logger.warning(f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
+
+            # MARGIN SAFETY CHECK: Validate margin levels before execution
+            try:
+                # Calculate proposed position notional for margin check
+                position_size = self.risk_manager.get_position_size(
+                    signal=signal,
+                    account_balance=balance,
+                    current_exposure=current_exposure,
+                )
+                proposed_notional = position_size * signal.entry_price
+
+                # Validate margin safety
+                margin_validation = self.risk_manager.validate_margin_for_position(
+                    position_notional=proposed_notional,
+                    leverage=getattr(signal, 'leverage', 1.0),
+                )
+
+                if not margin_validation.get("safe", True):
+                    reason = f"Margin safety check failed: {margin_validation.get('reason', 'unknown')}"
+                    logger.warning(f"🚫 {reason} for {signal.asset}")
+                    self.signal_logger.log_signal_rejected(
+                        signal=signal,
+                        reason=reason,
+                        notes=f"Available margin: ${margin_validation.get('available_margin', 0):.2f}"
+                    )
+                    return False
+
+                # Log margin status
+                margin_summary = self.risk_manager.get_margin_summary()
+                logger.info(
+                    f"✅ Margin safety check passed for {signal.asset}: "
+                    f"utilization={margin_summary.get('utilization_pct', 0):.1f}%, "
+                    f"available=${margin_validation.get('available_margin', 0):.2f}"
+                )
+
+            except Exception as e:
+                # Log but don't block execution if margin check fails
+                # This maintains backward compatibility
+                logger.warning(f"⚠️ Margin safety check failed (non-blocking): {e}")
 
             logger.info(
                 f"✅ Signal passed validation: {signal.asset} {signal.strategy.name} "
@@ -1485,6 +1611,78 @@ class TradingBot:
                 f"✅ Capital allocated: ${allocation_result.get('allocated_amount', 0):.2f} "
                 f"for {signal.asset} {signal.strategy.name}"
             )
+
+            # MARGIN SAFETY CHECK: Final validation before execution
+            try:
+                allocated_amount = allocation_result.get('allocated_amount', 0)
+                margin_validation = self.risk_manager.validate_margin_for_position(
+                    position_notional=allocated_amount,
+                    leverage=getattr(signal, 'leverage', 1.0),
+                )
+
+                if not margin_validation.get("safe", True):
+                    reason = f"Margin safety check failed at execution: {margin_validation.get('reason', 'unknown')}"
+                    logger.error(f"🚫 {reason} for {signal.asset}")
+                    self.signal_logger.log_signal_rejected(
+                        signal=signal,
+                        reason=reason,
+                        notes="Margin check failed after capital allocation - potential race condition"
+                    )
+                    return
+
+                logger.info(
+                    f"✅ Final margin check passed for {signal.asset}: "
+                    f"available=${margin_validation.get('available_margin', 0):.2f}"
+                )
+
+            except Exception as e:
+                logger.warning(f"⚠️ Final margin check error (proceeding): {e}")
+
+            # PHASE 3: Final position re-check before execution (race condition prevention)
+            # This is a critical second check to prevent duplicates that may have opened
+            # between the initial check in _should_execute_signal() and now
+            logger.info(f"🔍 Final position re-check for {signal.asset} before execution...")
+            try:
+                recheck_positions = self.client.get_positions()
+                signal_side = "long" if signal.side.name == "BUY" else "short"
+                
+                duplicate_found = False
+                for pos in recheck_positions:
+                    pos_symbol = pos.get("symbol", "")
+                    pos_side = pos.get("side", "").lower()
+                    pos_size = pos.get("size", 0) or pos.get("position_size", 0) or pos.get("quantity", 0)
+                    
+                    if pos_symbol == signal.asset and pos_side == signal_side and pos_size > 0:
+                        reason = (
+                            f"Duplicate position detected at execution time for {signal.asset} "
+                            f"(existing: side={pos_side}, size={pos_size})"
+                        )
+                        logger.warning(
+                            f"🚫 RACE CONDITION PREVENTED: {reason}"
+                        )
+                        self.signal_logger.log_signal_rejected(
+                            signal=signal,
+                            reason=reason,
+                            notes="Duplicate detected at execution re-check - race condition prevented"
+                        )
+                        duplicate_found = True
+                        break
+                
+                if duplicate_found:
+                    return
+                    
+                logger.info(f"✅ Final position re-check passed for {signal.asset} - no duplicates found")
+                
+            except Exception as e:
+                # If we can't verify, we should NOT proceed for safety
+                reason = f"Failed to perform final position re-check: {str(e)}"
+                logger.error(f"🚨 {reason} - rejecting signal for safety")
+                self.signal_logger.log_signal_rejected(
+                    signal=signal,
+                    reason=reason,
+                    notes="Execution-time position check failed - safety rejection"
+                )
+                return
 
             # Execute signal based on type
             logger.debug(f"🔍 Execution routing for {signal.asset}: strategy={signal.strategy.name} (enum: {signal.strategy})")
@@ -1663,12 +1861,15 @@ class TradingBot:
                 # Add defensive check for register_new_grid method
                 if self.grid_lifecycle and hasattr(self.grid_lifecycle, 'register_new_grid'):
                     try:
+                        # Calculate ATR at grid creation time for later drift calculation
+                        atr_at_creation = self._calculate_atr_for_symbol(symbol, timeframe="5m") or 0
+
                         self.grid_lifecycle.register_new_grid(
                             symbol=symbol,
                             grid_capital=capital_allocated,
                             emergency_stop_price=signal.stop_loss,
                             regime=signal.market_state.name if hasattr(signal.market_state, 'name') else str(signal.market_state),
-                            atr=0,  # ATR not stored in signal, grid manager will recalculate if needed
+                            atr=atr_at_creation,  # Pass calculated ATR
                             spacing=signal.spacing or 0,
                             num_levels=signal.grid_levels or 10,
                             center_price=signal.entry_price,
