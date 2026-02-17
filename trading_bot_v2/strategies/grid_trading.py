@@ -154,17 +154,13 @@ class GridTradingStrategy:
                         )
                         # Don't block, continue to other checks
                     else:
-                        # VERBOSE LOGGING: Show exact ADX value before threshold check
+                        # Regime detection already verified this is a ranging market.
+                        # ADX check here is redundant - trust the regime detection.
+                        # Keep ADX calculation for confidence scoring but don't block signals.
                         logger.info(
                             f"{symbol}: ADX value = {regime_adx:.2f}, threshold = {self.adx_threshold}, "
-                            f"regime_tf = {regime_tf}"
+                            f"regime_tf = {regime_tf} (regime approved - not blocking)"
                         )
-                        if regime_adx > self.adx_threshold:
-                            logger.info(
-                                f"{symbol}: Grid blocked - ADX {regime_adx:.1f} > threshold {self.adx_threshold} "
-                                f"(trend developing on {regime_tf} timeframe, unsafe for grid)"
-                            )
-                            return []
                 except Exception as e:
                     logger.warning(
                         f"{symbol}: Could not calculate regime ADX filter: {e}"

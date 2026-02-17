@@ -477,7 +477,7 @@ class PacificaWebSocketClient:
         # Disk cache location
         cache_dir = os.path.join(os.path.dirname(__file__), ".kline_cache")
         cache_file = os.path.join(cache_dir, "bootstrap_cache.json")
-        cache_max_age_hours = 4  # Cache valid for 4 hours
+        cache_max_age_hours = 12  # Cache valid for 12 hours (was 4h)
 
         # Try loading from disk cache first
         if use_disk_cache and os.path.exists(cache_file):

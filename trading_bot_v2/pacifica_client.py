@@ -910,6 +910,7 @@ class PacificaClient:
         price: Optional[float] = None,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
+        client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Place a new order with critical priority.
@@ -922,6 +923,8 @@ class PacificaClient:
             price: Order price (required for limit orders).
             stop_loss: Stop loss price (optional but recommended for safety).
             take_profit: Take profit price (optional).
+            client_order_id: Optional client order ID. If not provided, a UUID is generated.
+                           Use "grid_<uuid>" prefix for grid orders to enable filtering.
 
         Returns:
             Order data as dict.
@@ -930,7 +933,7 @@ class PacificaClient:
             "symbol": symbol,
             "amount": str(quantity),
             "side": "bid" if side == "buy" else "ask",
-            "client_order_id": str(uuid.uuid4()),
+            "client_order_id": client_order_id if client_order_id else str(uuid.uuid4()),
             "reduce_only": False,  # Required field - set to True to only reduce existing position
         }
 

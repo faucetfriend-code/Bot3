@@ -2,6 +2,9 @@
 *.log
 nul
 signals_log.csv
+<<<<<<< Updated upstream
 signals_log.csv
 trading_bot.db
+=======
+>>>>>>> Stashed changes
 trading_bot.db

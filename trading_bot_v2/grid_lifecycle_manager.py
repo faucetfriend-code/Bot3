@@ -23,6 +23,7 @@ from loguru import logger
 from dataclasses import dataclass
 import json
 import asyncio
+import uuid
 
 from .config import config
 from .universal_grid_state_consistency import UniversalGridStateConsistencyManager
@@ -1315,7 +1316,8 @@ class GridLifecycleManager:
             drift_atr = (
                 drift_abs / atr_current if atr_current and atr_current > 0 else 0
             )
-        except:
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.debug(f"Could not calculate ATR for {symbol}: {e}")
             drift_atr = 0
 
         if drift_atr > self.GRID_EMERGENCY_DRIFT_THRESHOLD:
@@ -1349,134 +1351,100 @@ class GridLifecycleManager:
             )
             return False
 
-        logger.info(
-            f"📊 Recentering {symbol} | old center ${current_center:.4f} → new ${new_center:.4f} "
-            f"(drift ${drift_abs:.4f} / {drift_pct:.2%}, {drift_atr:.2f}x ATR) - reason: {reason}"
-        )
+            logger.info(
+                f"🔍 Recentering {symbol} | old center ${current_center:.4f} → new ${new_center:.4f} "
+                f"(drift ${drift_abs:.4f} / {drift_pct:.2%}, {drift_atr:.2f}x ATR) - reason: {reason}"
+            )
 
-        try:
-            # Calculate shift delta
-            delta = new_center - current_center
+            try:
+                # Cancel ALL existing orders for this symbol first (more reliable than individual cancels)
+                logger.info(f"🗑️ Cancelling all orders for {symbol} before recentering...")
+                cancel_result = self.client.cancel_all_orders(symbol)
+                logger.info(f"✅ Cancel result for {symbol}: {cancel_result}")
 
-            # Get current open orders from exchange
-            orders = self.client.get_orders()
-            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+                # Small delay to ensure cancels are processed
+                import time
+                time.sleep(0.5)
 
-            if not symbol_orders:
-                logger.info(f"No open orders to recenter for {symbol}")
-                # Still update metadata
+                # Now place the new grid orders at the new center
+                # Calculate grid levels around new center
+                atr_value = atr_current if atr_current and atr_current > 0 else (new_center * 0.02)  # 2% fallback
+                spacing = atr_value * 0.5  # 0.5x ATR spacing
+                
+                # Calculate number of levels
+                num_levels = grid.get("num_levels", 10)
+                
+                # Get current price to determine buy/sell levels
+                current_price = new_center
+                
+                # Calculate prices for both buy and sell sides
+                buy_levels = []
+                sell_levels = []
+                
+                # Generate grid levels: 5 buys below, 5 sells above center
+                for i in range(1, num_levels + 1):
+                    buy_price = new_center - (spacing * i)
+                    sell_price = new_center + (spacing * i)
+                    
+                    # Apply tick size
+                    tick_size = self.get_symbol_tick_size(symbol)
+                    if tick_size:
+                        buy_price = self.round_price_to_tick_size(buy_price, symbol)
+                        sell_price = self.round_price_to_tick_size(sell_price, symbol)
+                    
+                    buy_levels.append(buy_price)
+                    sell_levels.append(sell_price)
+                
+                # Calculate quantity per order based on capital
+                grid_capital = grid.get("grid_capital", 1000)
+                total_orders = len(buy_levels) + len(sell_levels)
+                quantity_per_order = (grid_capital / new_center) / total_orders if new_center > 0 else 0
+                quantity_per_order = round(quantity_per_order, 2)
+                
+                orders_placed = 0
+                
+                # Place buy orders
+                for buy_price in buy_levels:
+                    if buy_price > 0:
+                        try:
+                            new_order = self.client.place_order(
+                                symbol, "buy", quantity_per_order, "limit", buy_price,
+                                client_order_id=str(uuid.uuid4())
+                            )
+                            validated = ResponseHandler.validate_order_response(new_order)
+                            if validated.get("success"):
+                                orders_placed += 1
+                                logger.debug(f"✅ Placed BUY order @ ${buy_price:.4f}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to place BUY order @ ${buy_price:.4f}: {e}")
+                
+                # Place sell orders
+                for sell_price in sell_levels:
+                    if sell_price > 0:
+                        try:
+                            new_order = self.client.place_order(
+                                symbol, "sell", quantity_per_order, "limit", sell_price,
+                                client_order_id=str(uuid.uuid4())
+                            )
+                            validated = ResponseHandler.validate_order_response(new_order)
+                            if validated.get("success"):
+                                orders_placed += 1
+                                logger.debug(f"✅ Placed SELL order @ ${sell_price:.4f}")
+                        except Exception as e:
+                            logger.error(f"❌ Failed to place SELL order @ ${sell_price:.4f}: {e}")
+                
+                logger.info(f"✅ Grid recenter completed for {symbol}: {orders_placed} new orders placed")
+                
+                # Update grid metadata
                 self._update_grid_after_refresh(
-                    symbol, new_center, reason, signal_confidence, 0
+                    symbol, new_center, reason, signal_confidence, orders_placed
                 )
+                
                 return True
 
-            orders_adjusted = 0
-            orders_skipped = 0
-            total_fill_value_preserved = 0
-
-            # Group orders by side to preserve filled positions
-            for order in symbol_orders:
-                order_id = order.get("id") or order.get("order_id")
-                old_price = float(order.get("price", 0))
-                side = order.get("side", "").lower()
-                quantity = float(
-                    order.get("quantity") or order.get("size") or order.get("amount", 0)
-                )
-
-                if not order_id or not old_price or not quantity:
-                    continue
-
-                new_price = old_price + delta
-
-                # Safety: cap single-order price shift at 8%
-                if abs(new_price - old_price) / old_price > 0.08:
-                    logger.warning(
-                        f"🔒 Price shift too large for {symbol} order {order_id} "
-                        f"(${old_price:.2f} → ${new_price:.2f}) - skipping this leg (8% cap)"
-                    )
-                    orders_skipped += 1
-                    continue
-
-                # Round price to tick size from Pacifica API
-                tick_size = self.get_symbol_tick_size(symbol)
-                if tick_size is not None and tick_size > 0:
-                    new_price = self.round_price_to_tick_size(new_price, symbol)
-                else:
-                    # Fallback: use conservative defaults
-                    logger.warning(
-                        f"⚠️ No tick_size from API for {symbol} during recenter, using fallback"
-                    )
-                    fallback_tick = 1.0 if "BTC" in symbol else 0.01
-                    new_price = round(new_price / fallback_tick) * fallback_tick
-
-                try:
-                    # Cancel old order
-                    cancel_result = self.client.cancel_order(symbol, order_id)
-                    logger.debug(f"Cancelled old order {order_id} @ ${old_price:.4f}")
-
-                    # Place new order at adjusted price
-                    new_order = self.client.place_order(
-                        symbol, side, quantity, "limit", new_price
-                    )
-
-                    # Validate response using ResponseHandler
-                    validated_response = ResponseHandler.validate_order_response(
-                        new_order
-                    )
-                    order_data = validated_response.get("data", {})
-                    new_order_id = order_data.get("id") or order_data.get("order_id")
-
-                    if not validated_response.get("success") or not new_order_id:
-                        error_msg = validated_response.get("error", "Unknown API error")
-                        logger.error(
-                            f"❌ Failed to place replacement order: {error_msg}"
-                        )
-                        # Try to restore the old order if replacement failed
-                        self._attempt_order_restoration(
-                            symbol, side, quantity, old_price, order_id
-                        )
-                        continue
-
-                    logger.info(
-                        f"📊 Replaced order {order_id} → {new_order_id} @ ${new_price:.4f} ({side})"
-                    )
-                    orders_adjusted += 1
-                    total_fill_value_preserved += quantity * new_price
-
-                except Exception as e:
-                    logger.error(f"❌ Failed to replace order {order_id}: {e}")
-                    # Try to restore the old order if replacement failed
-                    try:
-                        self._attempt_order_restoration(
-                            symbol, side, quantity, old_price, order_id
-                        )
-                    except Exception as restore_error:
-                        logger.error(
-                            f"Failed to restore order {order_id}: {restore_error}"
-                        )
-                    continue
-
-            # Update grid metadata with enhanced tracking
-            self._update_grid_after_refresh(
-                symbol, new_center, reason, signal_confidence, orders_adjusted
-            )
-
-            # Log comprehensive results
-            logger.info(
-                f"✅ Grid recenter completed for {symbol}: "
-                f"{orders_adjusted} orders adjusted, {orders_skipped} skipped, "
-                f"${total_fill_value_preserved:.2f} value preserved"
-            )
-
-            # Check for dynamic spacing adjustment opportunity
-            if self.GRID_DYNAMIC_SPACING_ENABLED:
-                self._evaluate_dynamic_spacing_adjustment(symbol)
-
-            return True
-
-        except Exception as e:
-            logger.critical(f"❌ Grid recenter FAILED for {symbol}: {e}", exc_info=True)
-            return False
+            except Exception as e:
+                logger.critical(f"❌ Grid recenter FAILED for {symbol}: {e}", exc_info=True)
+                return False
 
     def _calculate_atr_for_symbol(
         self, symbol: str, timeframe: str = "5m", period: int = 14
@@ -1521,7 +1489,8 @@ class GridLifecycleManager:
             try:
                 ticker = self.client.get_ticker(symbol)
                 current_price = float(ticker.get("last", 0)) if ticker else 0
-            except:
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not get ticker for {symbol}: {e}")
                 current_price = 0
 
             if current_price == 0:
@@ -1638,7 +1607,8 @@ class GridLifecycleManager:
             )
 
             restored_order = self.client.place_order(
-                symbol, side, quantity, "limit", price
+                symbol, side, quantity, "limit", price,
+                client_order_id=str(uuid.uuid4())
             )
             validated_response = ResponseHandler.validate_order_response(restored_order)
 
@@ -1708,7 +1678,8 @@ class GridLifecycleManager:
             try:
                 ticker = self.client.get_ticker(symbol)
                 current_price = float(ticker.get("last", 0)) if ticker else 0
-            except:
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not get ticker for {symbol}: {e}")
                 current_price = 0
 
             if current_price == 0:
@@ -1839,7 +1810,8 @@ class GridLifecycleManager:
     ):
         """
         Register a grid AFTER emergency stop has been successfully placed.
-        HARD FAIL if grid already exists.
+        
+        If grid already exists, updates the existing grid instead of failing.
 
         Args:
             symbol: Trading symbol
@@ -1851,8 +1823,25 @@ class GridLifecycleManager:
             num_levels: Number of grid levels
             center_price: Initial center price for the grid
         """
+        # Check if grid already exists - update instead of fail
         if symbol in self._grids:
-            raise RuntimeError(f"Grid already active for {symbol}")
+            logger.info(f"Grid already exists for {symbol} - updating grid data")
+            # Update existing grid instead of failing
+            self._grids[symbol].update({
+                "grid_capital": grid_capital,
+                "emergency_stop": emergency_stop_price,
+                "regime_on_creation": regime,
+                "atr_at_creation": atr,
+                "grid_spacing": spacing,
+                "num_levels": num_levels,
+                "center_price": center_price,
+                "initial_center": center_price,
+                "updated_at": datetime.now(),
+            })
+            # Save to database
+            self.save_grid_state(symbol, regime=regime, atr=atr, spacing=spacing)
+            logger.info(f"✅ Grid updated for {symbol}")
+            return
 
         self._grids[symbol] = {
             "state": GridState.ACTIVE,
@@ -2196,15 +2185,18 @@ class GridLifecycleManager:
         # Update grid state
         if symbol in self._grids:
             if result["kept_positions"]:
-                # Mark grid as disabled but with migrated positions
-                self._grids[symbol]["state"] = GridState.DISABLED_BY_REGIME
+                # Keep grid ACTIVE but mark it as having migrated positions
+                # This allows the grid manager to continue monitoring it for updates
+                self._grids[symbol]["state"] = GridState.ACTIVE
                 self._grids[symbol]["has_migrated_positions"] = True
                 self._grids[symbol]["migrated_positions"] = result["kept_positions"]
                 self._grids[symbol]["trend_direction"] = trend_direction
+                self._grids[symbol]["migration_time"] = datetime.now().isoformat()
 
                 logger.info(
-                    f"📊 Partial grid exit complete for {symbol}: "
-                    f"closed={len(result['closed_positions'])}, kept={len(result['kept_positions'])}"
+                    f"📊 Grid migrated to trend-following for {symbol}: "
+                    f"closed={len(result['closed_positions'])}, kept={len(result['kept_positions'])}, "
+                    f"grid remains ACTIVE for monitoring"
                 )
             else:
                 # No positions kept - clear grid entirely
@@ -2517,9 +2509,10 @@ class GridLifecycleManager:
                 )
                 return
 
-            # Place the counter order
+            # Place the counter order with grid prefix
             order_result = self.client.place_order(
-                symbol, counter_side, counter_quantity, "limit", counter_price
+                symbol, counter_side, counter_quantity, "limit", counter_price,
+                client_order_id=str(uuid.uuid4())
             )
 
             # Validate response using ResponseHandler
@@ -2784,10 +2777,22 @@ class GridLifecycleManager:
 
         grid = self._grids[symbol]
         metrics = self._metrics.get(symbol, GridMetrics())
+        state = grid["state"]
+        has_migrated = grid.get("has_migrated_positions", False)
+
+        # Determine display state for user interface
+        # Show "migrated" if grid has migrated positions (regardless of actual state)
+        if has_migrated:
+            display_state = "migrated"
+        else:
+            display_state = state.value
 
         return {
             "symbol": symbol,
-            "state": grid["state"].value,
+            "state": state.value,
+            "display_state": display_state,
+            "has_migrated_positions": has_migrated,
+            "migrated_positions": grid.get("migrated_positions", []),
             "grid_capital": grid.get("grid_capital", 0),
             "emergency_stop": grid.get("emergency_stop", 0),
             "metrics": {
@@ -2808,10 +2813,19 @@ class GridLifecycleManager:
         }
 
     def get_all_active_grids(self) -> List[Dict[str, Any]]:
-        """Get status for all active grids."""
+        """Get status for all active grids, including migrated grids."""
         active_grids = []
         for symbol in self._grids:
-            if self._grids[symbol]["state"] == GridState.ACTIVE:
+            grid = self._grids[symbol]
+            state = grid.get("state")
+            has_migrated = grid.get("has_migrated_positions", False)
+
+            # Include grids that are either:
+            # 1. ACTIVE state (includes migrated grids that remain active), OR
+            # 2. DISABLED_BY_REGIME state with has_migrated_positions=True (backward compatibility)
+            if state == GridState.ACTIVE or (
+                state == GridState.DISABLED_BY_REGIME and has_migrated
+            ):
                 status = self.get_grid_status(symbol)
                 if status:
                     active_grids.append(status)

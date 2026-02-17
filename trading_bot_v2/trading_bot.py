@@ -5,6 +5,7 @@ import sys
 import os
 import warnings
 import json
+import uuid
 from typing import Dict, List, Any, Optional
 from datetime import datetime
 import urllib3
@@ -300,10 +301,12 @@ class TradingBot:
 
         # Initialize market info cache for lot_size and tick_size compliance
         # Fetched from Pacifica /info endpoint via get_markets()
+        # OPTIMIZATION: Don't fetch at __init__ - lazy load on first use to speed up startup
         self._market_info_cache: Dict[str, Dict[str, float]] = {}
         self._market_info_cache_timestamp: Optional[float] = None
         self._market_info_cache_ttl: int = 300  # 5 minutes TTL
-        self._refresh_market_info_cache()  # Initial population
+        # Lazy loading - fetch on first use, not at startup
+        # self._refresh_market_info_cache()  # Commented out for faster startup
 
         # Initialize WebSocket client if enabled
         if self.config.enable_websocket:
@@ -439,30 +442,9 @@ class TradingBot:
                 self.ws_client.start()
                 logger.info("WebSocket client started for real-time price data")
 
-                # Bootstrap kline cache with historical data for immediate RSI calculation
-                if hasattr(self.ws_client, "bootstrap_kline_cache") and self.client:
-                    try:
-                        # Bootstrap core trading symbols with historical candles
-                        # This eliminates the 4h delay before RSI/indicators become available
-                        core_symbols = [
-                            "BTC",
-                            "ETH",
-                            "SOL",
-                            "SUI",
-                            "AVAX",
-                            "DOGE",
-                        ]
-                        self.ws_client.bootstrap_kline_cache(
-                            rest_client=self.client,
-                            symbols=core_symbols,
-                            intervals=["1m", "5m", "1h"],
-                            lookback=100,
-                        )
-                        logger.info(
-                            f"✅ Kline cache bootstrapped for {len(core_symbols)} symbols (1m, 5m, 1h)"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Kline cache bootstrap failed: {e}")
+                # OPTIMIZATION: Kline bootstrap is now done in api_server.initialize()
+                # to avoid duplicate API calls and rate limiting.
+                # All timeframes (1m, 5m, 15m, 1h, 4h) are fetched there once.
 
             except Exception as e:
                 logger.error(f"WebSocket client start failed: {e}")
@@ -622,9 +604,10 @@ class TradingBot:
             "🔄 Trading Bot coordinator loop STARTED - running every 30 seconds (was 120s)"
         )
 
-        # Wait for WebSocket prices to cache before first iteration
-        logger.info("⏳ Waiting 5 seconds for WebSocket price cache to populate...")
-        time.sleep(5)
+        # Wait briefly for WebSocket prices to cache before first iteration
+        # OPTIMIZATION: Reduced from 5s to 2s - WebSocket usually connects fast
+        logger.info("⏳ Waiting 2 seconds for WebSocket price cache to populate...")
+        time.sleep(2)
 
         # GRID MONITORING: Sync existing grids from exchange on startup
         self._sync_existing_grids()
@@ -1435,8 +1418,12 @@ class TradingBot:
                 logger.debug(f"✅ Stop loss validated: ${signal.stop_loss:.4f} for {signal.asset}")
 
             # Check if position already exists for this symbol
+            # If position exists and is active, we should UPDATE it (adjust TP/SL), not reject
             try:
                 existing_positions = self.client.get_positions()
+                self._has_active_position = False
+                self._existing_position_info = None
+                
                 if existing_positions:
                     for pos in existing_positions:
                         pos_symbol = pos.get("symbol", "")
@@ -1444,47 +1431,36 @@ class TradingBot:
                         pos_size = pos.get("size", 0) or pos.get("position_size", 0) or pos.get("quantity", 0)
                         signal_side = "long" if signal.side.name == "BUY" else "short"
                         
-                        if pos_symbol == signal.asset:
-                            # For GridTrading, allow multiple positions - grid trading is designed
-                            # to have multiple levels at different prices
-                            is_grid_signal = hasattr(signal, 'strategy') and (
-                                signal.strategy.name == 'GRID_TRADING' if hasattr(signal.strategy, 'name') else 
-                                str(signal.strategy) == 'GRID_TRADING'
-                            )
-                            
-                            if is_grid_signal:
-                                logger.info(
-                                    f"🟢 Grid signal for {signal.asset}: Allowing multiple positions "
-                                    f"(existing: side={pos_side}, size={pos_size})"
-                                )
-                                # For grid trading, don't block - continue to check next position
-                                continue
-                            
+                        if pos_symbol == signal.asset and pos_size > 0:
+                            # Position exists - check if it's the same side
                             logger.info(
                                 f"🔍 Position check: Found position for {signal.asset} - "
                                 f"side={pos_side}, size={pos_size}, signal_side={signal_side}"
                             )
                             
                             if pos_side == signal_side:
-                                reason = (
-                                    f"Position already exists for {signal.asset} {signal.side.name} "
-                                    f"(existing: side={pos_side}, size={pos_size})"
+                                # Same side - this is a POSITION UPDATE (adjust TP/SL)
+                                # Don't reject - allow the signal to update the position
+                                self._has_active_position = True
+                                self._existing_position_info = {
+                                    "side": pos_side,
+                                    "size": pos_size,
+                                    "symbol": pos_symbol
+                                }
+                                logger.info(
+                                    f"🔄 Position UPDATE detected for {signal.asset} - "
+                                    f"will update existing position (side={pos_side}, size={pos_size})"
                                 )
-                                logger.info(f"🔁 {reason} - skipping duplicate signal")
-                                self.signal_logger.log_signal_rejected(
-                                    signal=signal,
-                                    reason=reason,
-                                    notes=f"Duplicate position: {pos_symbol} {pos_side} size={pos_size}"
-                                )
-                                return False
+                                # Don't return False - continue with execution but mark as update
                             else:
                                 # Opposite side - could be a hedge or flip
+                                # For now, allow it (could close and reverse)
                                 logger.info(
                                     f"⚠️ Opposite position exists for {signal.asset}: "
                                     f"existing={pos_side} (size={pos_size}), signal={signal_side}"
                                 )
                 else:
-                    logger.debug(f"ℹ️ No existing positions found for {signal.asset}")
+                    logger.debug(f"ℹ️ No existing positions found for {signal.asset} - will create new position")
             except Exception as e:
                 reason = f"Failed to check existing positions: {str(e)}"
                 logger.error(f"🚨 {reason} - rejecting signal for safety")
@@ -1494,6 +1470,39 @@ class TradingBot:
                     notes="Position check exception - safety rejection"
                 )
                 return False
+
+            # PACIFICA TRADE COUNT CHECK: Count trades by TP/SL orders
+            # Use this to verify position exists (for update) or detect duplicates
+            # If we already detected an active position above, this confirms it
+            # If no position detected above, this check can still catch duplicates
+            try:
+                trade_count = self._count_trades_by_tp_sl(signal.asset)
+                
+                # If we already have an active position from position check, trade_count should match
+                # If position check missed it but TP/SL found it, we still have an active position
+                if trade_count > 0 and not self._has_active_position:
+                    # TP/SL found a trade but position check didn't - treat as active position
+                    self._has_active_position = True
+                    self._existing_position_info = {
+                        "side": "unknown",  # TP/SL found but side unknown from orders
+                        "size": 0,  # Unknown size but trade exists
+                        "symbol": signal.asset
+                    }
+                    logger.info(
+                        f"🔄 Position UPDATE detected via TP/SL for {signal.asset} - "
+                        f"found {trade_count} trade(s)"
+                    )
+                elif trade_count == 0 and self._has_active_position:
+                    # Position check found it but TP/SL didn't - still valid, continue
+                    logger.debug(f"✅ Position exists (confirmed via position check) for {signal.asset}")
+                elif trade_count > 0 and self._has_active_position:
+                    # Both found it - confirmed
+                    logger.debug(f"✅ Position exists (confirmed via both checks) for {signal.asset}")
+                    
+                logger.debug(f"📊 Trade count for {signal.asset}: {trade_count}, has_active: {self._has_active_position}")
+            except Exception as e:
+                # Don't block execution if TP/SL check fails - log warning but continue
+                logger.warning(f"⚠️ TP/SL trade count check failed (non-blocking): {e}")
 
             # Check account balance
             balance = self._get_account_balance()
@@ -1639,53 +1648,58 @@ class TradingBot:
                 logger.warning(f"⚠️ Final margin check error (proceeding): {e}")
 
             # PHASE 3: Final position re-check before execution (race condition prevention)
-            # This is a critical second check to prevent duplicates that may have opened
-            # between the initial check in _should_execute_signal() and now
+            # This is a critical second check - but now we ALLOW position UPDATES
+            # If position exists with same side, it's an UPDATE not a duplicate
             logger.info(f"🔍 Final position re-check for {signal.asset} before execution...")
             try:
                 recheck_positions = self.client.get_positions()
                 signal_side = "long" if signal.side.name == "BUY" else "short"
                 
-                duplicate_found = False
+                position_found_for_update = False
                 for pos in recheck_positions:
                     pos_symbol = pos.get("symbol", "")
                     pos_side = pos.get("side", "").lower()
                     pos_size = pos.get("size", 0) or pos.get("position_size", 0) or pos.get("quantity", 0)
                     
                     if pos_symbol == signal.asset and pos_side == signal_side and pos_size > 0:
-                        reason = (
-                            f"Duplicate position detected at execution time for {signal.asset} "
-                            f"(existing: side={pos_side}, size={pos_size})"
+                        # Position exists with same side - this is an UPDATE, not a duplicate
+                        logger.info(
+                            f"🔄 Position UPDATE confirmed at execution time for {signal.asset} - "
+                            f"existing: side={pos_side}, size={pos_size}"
                         )
-                        logger.warning(
-                            f"🚫 RACE CONDITION PREVENTED: {reason}"
-                        )
-                        self.signal_logger.log_signal_rejected(
-                            signal=signal,
-                            reason=reason,
-                            notes="Duplicate detected at execution re-check - race condition prevented"
-                        )
-                        duplicate_found = True
+                        position_found_for_update = True
+                        # Store this info for the execution methods to use
+                        signal._is_position_update = True
+                        signal._existing_position_size = pos_size
                         break
                 
-                if duplicate_found:
-                    return
-                    
-                logger.info(f"✅ Final position re-check passed for {signal.asset} - no duplicates found")
+                if position_found_for_update:
+                    logger.info(f"✅ Final position re-check: UPDATE mode for {signal.asset}")
+                else:
+                    logger.info(f"✅ Final position re-check: NEW POSITION mode for {signal.asset}")
                 
             except Exception as e:
-                # If we can't verify, we should NOT proceed for safety
-                reason = f"Failed to perform final position re-check: {str(e)}"
-                logger.error(f"🚨 {reason} - rejecting signal for safety")
-                self.signal_logger.log_signal_rejected(
-                    signal=signal,
-                    reason=reason,
-                    notes="Execution-time position check failed - safety rejection"
-                )
-                return
+                # If we can't verify, log warning but continue (position check already passed)
+                logger.warning(f"⚠️ Final position re-check failed (non-blocking): {e}")
 
             # Execute signal based on type
             logger.debug(f"🔍 Execution routing for {signal.asset}: strategy={signal.strategy.name} (enum: {signal.strategy})")
+            
+            # Check if this is a GRID position update (grid already exists) or new position
+            if signal.strategy == StrategyType.GRID_TRADING:
+                # Check if grid already exists in GridLifecycleManager
+                existing_grid = None
+                if self.grid_lifecycle and hasattr(self.grid_lifecycle, '_grids'):
+                    existing_grid = self.grid_lifecycle._grids.get(signal.asset)
+                
+                if existing_grid:
+                    # Grid already exists - this is a position update
+                    logger.info(f"🔄 Grid already active for {signal.asset} - marking as position update")
+                    signal._is_position_update = True
+                    signal._existing_position_size = existing_grid.get("grid_capital", 0)
+                else:
+                    # New grid - clear the update flag
+                    signal._is_position_update = False
             
             if signal.strategy == StrategyType.GRID_TRADING:
                 logger.info(f"🔍 Routing {signal.asset} to GRID execution (strategy: {signal.strategy.name})")
@@ -1847,6 +1861,10 @@ class TradingBot:
                     f"{buy_orders} BUY, {sell_orders} SELL"
                 )
 
+                # Determine if this is a position update or new position
+                is_position_update = getattr(signal, '_is_position_update', False)
+                execution_status = "position_updated" if is_position_update else "executed"
+
                 # Log successful grid execution
                 self.signal_logger.log_signal_executed(
                     signal=signal,
@@ -1855,10 +1873,12 @@ class TradingBot:
                     filled_quantity=buy_orders + sell_orders,
                     execution_result=f"Grid placed: {buy_orders} BUY, {sell_orders} SELL",
                     notes=f"Capital allocated: ${capital_allocated:.2f}",
+                    status=execution_status,
                 )
 
                 # Register grid with GridLifecycleManager for monitoring
                 # Add defensive check for register_new_grid method
+                logger.info(f"🔍 Checking grid_lifecycle for registration: {self.grid_lifecycle is not None}")
                 if self.grid_lifecycle and hasattr(self.grid_lifecycle, 'register_new_grid'):
                     try:
                         # Calculate ATR at grid creation time for later drift calculation
@@ -1875,8 +1895,16 @@ class TradingBot:
                             center_price=signal.entry_price,
                         )
                         logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+                        
+                        # DEBUG: Verify grid was registered
+                        if symbol in self.grid_lifecycle._grids:
+                            logger.info(f"✅ VERIFIED: Grid for {symbol} is now in _grids")
+                        else:
+                            logger.error(f"❌ FAILED: Grid for {symbol} NOT in _grids after registration!")
                     except Exception as e:
                         logger.error(f"❌ Failed to register grid with GridLifecycleManager: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
                         logger.warning(f"⚠️ Grid orders placed but registration failed - monitoring may be limited")
                 else:
                     logger.warning(f"⚠️ GridLifecycleManager not available or missing register_new_grid method")
@@ -1951,6 +1979,9 @@ class TradingBot:
             # Use stored ATR as fallback if current ATR unavailable
             atr_stored = grid_data.get("atr_at_creation", 0) if grid_data else 0
             
+            # Track if we're using percentage-based drift (no ATR available)
+            using_pct_drift = False
+            
             if atr_current is None or atr_current <= 0:
                 if atr_stored and atr_stored > 0:
                     logger.info(
@@ -1958,16 +1989,30 @@ class TradingBot:
                     )
                     atr_current = atr_stored
                 else:
-                    logger.warning(
-                        f"Cannot calculate drift for {symbol} - ATR unavailable (current: {atr_current}, stored: {atr_stored})"
-                    )
-                    # Fall back to simple skip with reason
-                    reason = f"Grid already active for {symbol} (ATR unavailable for drift calc)"
-                    logger.info(f"🔷 {reason}, skipping signal")
-                    self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
-                    return
+                    # ATR unavailable - use percentage-based drift as fallback
+                    # This allows grid refresh even without ATR data
+                    if current_center > 0:
+                        using_pct_drift = True
+                        pct_drift = abs(proposed_center - current_center) / current_center * 100  # % drift
+                        logger.warning(
+                            f"ATR unavailable for {symbol} (current: {atr_current}, stored: {atr_stored}) - "
+                            f"using percentage-based drift: {pct_drift:.2f}%"
+                        )
+                    else:
+                        logger.warning(
+                            f"Cannot calculate drift for {symbol} - ATR unavailable (current: {atr_current}, stored: {atr_stored}) "
+                            f"and no center price"
+                        )
+                        reason = f"Grid already active for {symbol} (ATR unavailable for drift calc)"
+                        logger.info(f"🔷 {reason}, skipping signal")
+                        self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                        return
 
-            drift_atr = abs(proposed_center - current_center) / atr_current
+            # Calculate drift (either ATR-based or percentage-based)
+            if using_pct_drift:
+                drift_atr = abs(proposed_center - current_center) / current_center * 100  # Already in %
+            else:
+                drift_atr = abs(proposed_center - current_center) / atr_current
 
             # Get current grid confidence (stored in grid metadata if available)
             current_confidence = grid_data.get("signal_confidence", 0.65)
@@ -2001,8 +2046,9 @@ class TradingBot:
             ) >= self.GRID_REFRESH_MIN_CONF_IMPROVE
 
             # Build detailed decision log
+            drift_unit = "%" if using_pct_drift else "x"
             decision_factors = {
-                "drift_atr": f"{drift_atr:.2f}x (need {self.GRID_REFRESH_MIN_ATR_DRIFT}x)",
+                "drift_atr": f"{drift_atr:.2f}{drift_unit} (need {self.GRID_REFRESH_MIN_ATR_DRIFT}{drift_unit})",
                 "drift_passed": drift_condition,
                 "signal_confidence": f"{signal.confidence:.2f} (need {self.GRID_REFRESH_MIN_CONFIDENCE})",
                 "confidence_passed": confidence_condition,
@@ -2049,6 +2095,11 @@ class TradingBot:
                     # Update stored confidence for future comparisons
                     grid_data["signal_confidence"] = signal.confidence
                     logger.info(f"✅ Grid refresh SUCCESS for {symbol}")
+                    
+                    # Determine if this is a position update or new position
+                    is_position_update = getattr(signal, '_is_position_update', False)
+                    execution_status = "position_updated" if is_position_update else "executed"
+                    
                     self.signal_logger.log_signal_executed(
                         signal=signal,
                         order_id=f"grid_refresh_{symbol}",
@@ -2056,6 +2107,7 @@ class TradingBot:
                         filled_quantity=0,  # Refreshed existing orders
                         execution_result="grid_refreshed",
                         notes=f"Recentered: drift={drift_atr:.2f}x ATR, conf={signal.confidence:.2f}",
+                        status=execution_status,
                     )
                 else:
                     logger.warning(f"⚠️ Grid refresh FAILED for {symbol} (recenter_grid returned False)")
@@ -2264,16 +2316,17 @@ class TradingBot:
                         "quantity": float(order_quantity),
                         "order_type": "limit",
                         "price": float(order_price),
+                        "client_order_id": str(uuid.uuid4()),
                         # Note: Grid orders don't use embedded stop_loss/take_profit to avoid StopOrderInfo JSON errors
                         # Grid risk is managed through the grid structure itself
                     }
-                    
+
                     # Validate order payload structure before submission
                     self._validate_order_payload(order_params, symbol)
-                    
+
                     # Log order payload for debugging
                     logger.debug(f"Grid BUY order payload for {symbol}: {json.dumps(order_params, indent=2)}")
-                    
+
                     response = self.client.place_order(**order_params)
 
                     # Validate response using ResponseHandler
@@ -2326,16 +2379,17 @@ class TradingBot:
                         "quantity": float(order_quantity),
                         "order_type": "limit",
                         "price": float(order_price),
+                        "client_order_id": str(uuid.uuid4()),
                         # Note: Grid orders don't use embedded stop_loss/take_profit to avoid StopOrderInfo JSON errors
                         # Grid risk is managed through the grid structure itself
                     }
-                    
+
                     # Validate order payload structure before submission
                     self._validate_order_payload(order_params, symbol)
-                    
+
                     # Log order payload for debugging
                     logger.debug(f"Grid SELL order payload for {symbol}: {json.dumps(order_params, indent=2)}")
-                    
+
                     response = self.client.place_order(**order_params)
 
                     # Validate response using ResponseHandler
@@ -2924,6 +2978,10 @@ class TradingBot:
                     f"Price=${execution_result.get('executed_price'):.4f}"
                 )
 
+                # Determine if this is a position update or new position
+                is_position_update = getattr(signal, '_is_position_update', False)
+                execution_status = "position_updated" if is_position_update else "executed"
+
                 # Log successful execution to CSV/database
                 self.signal_logger.log_signal_executed(
                     signal=signal,
@@ -2932,6 +2990,7 @@ class TradingBot:
                     filled_quantity=quantity,
                     execution_result="success",
                     notes=f"Capital allocated: ${capital_allocated:.2f}",
+                    status=execution_status,
                 )
 
                 # Publish ORDER_PLACED event
@@ -3082,6 +3141,87 @@ class TradingBot:
 
         except Exception as e:
             logging.error(f"Error checking signals: {e}")
+
+    def _count_trades_by_tp_sl(self, symbol: str) -> int:
+        """
+        Count number of trades for a symbol by checking TP/SL orders.
+        
+        Pacifica allows only 1 position per token. Each trade creates its own
+        take profit and stop loss orders. By counting these, we can detect
+        if a position already exists for this symbol.
+        
+        Args:
+            symbol: Trading symbol (e.g., "SOL/USD")
+            
+        Returns:
+            Number of trades detected (0 = no position, >0 = position exists)
+        """
+        try:
+            # Get all orders from Pacifica
+            orders = self.client.get_orders()
+            
+            if not orders:
+                return 0
+            
+            # Count orders that are TP or SL for this symbol
+            # TP/SL orders typically have specific types or statuses
+            trade_count = 0
+            seen_parents = set()  # Track parent order IDs to avoid double-counting
+            
+            for order in orders:
+                order_symbol = order.get("symbol", "")
+                
+                # Match symbol (handle both formats: "SOL/USD" vs "SOL-USD")
+                if order_symbol.replace("-", "/") != symbol.replace("-", "/"):
+                    continue
+                
+                # Check if this is a TP or SL order
+                order_type = order.get("type", "").lower()
+                order_side = order.get("side", "").lower()
+                order_status = order.get("status", "").lower()
+                
+                # TP/SL orders are typically "stop_loss" or "take_profit" type
+                # or have specific trigger types
+                is_tp_sl = (
+                    order_type in ("stop_loss", "take_profit", "stop", "tp", "sl") or
+                    "stop" in order_type or
+                    order.get("stop_price") is not None or
+                    order.get("trigger_price") is not None
+                )
+                
+                # Only count active/filled TP/SL orders (not cancelled/expired)
+                is_active = order_status in ("", "open", "active", "filled", "partially_filled", "new")
+                
+                if is_tp_sl and is_active:
+                    # Use parent_order_id or order_id to avoid double-counting
+                    # Each trade has 1 TP and 1 SL, so we divide by 2
+                    parent_id = order.get("parent_order_id") or order.get("order_id")
+                    
+                    if parent_id and parent_id not in seen_parents:
+                        seen_parents.add(parent_id)
+                        trade_count += 1
+            
+            # If we couldn't determine cleanly, fallback to simple count / 2
+            if trade_count == 0:
+                tp_sl_orders = [
+                    o for o in orders
+                    if o.get("symbol", "").replace("-", "/") == symbol.replace("-", "/")
+                    and (
+                        o.get("type", "").lower() in ("stop_loss", "take_profit", "stop", "tp", "sl")
+                        or o.get("stop_price") is not None
+                        or o.get("trigger_price") is not None
+                    )
+                    and o.get("status", "").lower() in ("", "open", "active", "filled", "partially_filled", "new")
+                ]
+                # Each trade has TP + SL = 2 orders, so divide by 2
+                trade_count = len(tp_sl_orders) // 2
+            
+            logger.debug(f"📊 Trade count for {symbol}: {trade_count} (via TP/SL check)")
+            return trade_count
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to count trades via TP/SL: {e}")
+            return 0  # Don't block execution on check failure
 
     def _calculate_position_size(self, signal: Signal) -> float:
         """

@@ -148,23 +148,25 @@ class BotIntegration:
                 # OPTIMIZED: Only fetch strategy timeframes (15m, 1h, 4h) on startup
                 # Execution timeframes (1m, 5m) will be populated by WebSocket in real-time
                 key_symbols = ["BTC", "ETH", "SOL", "SUI", "AVAX", "XRP", "DOGE", "LTC"]
-                regime_intervals = ["15m", "1h", "4h"]  # For regime detection & strategies
+                # Include ALL timeframes needed - both strategy (15m, 1h, 4h) and execution (1m, 5m)
+                # This single bootstrap replaces the duplicate in trading_bot.start()
+                all_intervals = ["1m", "5m", "15m", "1h", "4h"]
 
                 if self.pacifica_client:
                     logger.info(
-                        f"⚡ Fast bootstrap: {len(key_symbols)} symbols × {len(regime_intervals)} timeframes "
-                        "(1m/5m from WebSocket)"
+                        f"⚡ Fast bootstrap: {len(key_symbols)} symbols × {len(all_intervals)} timeframes "
+                        "(all timeframes in one call)"
                     )
                     self.ws_client.bootstrap_kline_cache(
                         rest_client=self.pacifica_client,
                         symbols=key_symbols,
-                        intervals=regime_intervals,  # Only strategy timeframes
+                        intervals=all_intervals,  # All timeframes at once
                         lookback=250,
                         use_disk_cache=True,  # Cache to disk for faster restarts
-                        max_concurrent=3,  # Rate-limited parallelism
+                        max_concurrent=2,  # Conservative rate limiting (was 3)
                     )
                     logger.info(
-                        f"✅ Kline cache ready for {len(key_symbols)} symbols"
+                        f"✅ Kline cache ready for {len(key_symbols)} symbols (all timeframes)"
                     )
 
                     # Subscribe to orderbook for OrderBookImbalance strategy
@@ -509,7 +511,7 @@ class BotIntegration:
         return orders
 
     def get_grids(self) -> List[Dict]:
-        """Get active grid trading configurations."""
+        """Get active grid trading configurations, including migrated grids."""
         grids = []
 
         try:
@@ -517,10 +519,15 @@ class BotIntegration:
                 active_grids = self.grid_manager.get_all_active_grids()
                 if active_grids:
                     for grid_data in active_grids:
+                        # Use display_state if available (for migrated grids), fallback to state
+                        display_state = grid_data.get("display_state", grid_data.get("state", "unknown"))
                         grids.append(
                             {
                                 "symbol": grid_data.get("symbol"),
                                 "state": grid_data.get("state", "unknown"),
+                                "display_state": display_state,
+                                "has_migrated_positions": grid_data.get("has_migrated_positions", False),
+                                "migrated_positions": grid_data.get("migrated_positions", []),
                                 "grid_levels": grid_data.get("levels", []),
                                 "upper_price": grid_data.get("upper_price"),
                                 "lower_price": grid_data.get("lower_price"),
@@ -715,6 +722,12 @@ class BotIntegration:
             except Exception as e:
                 logger.warning(f"Could not fetch existing positions from database: {e}")
 
+            # Debug: Log what Pacifica returned
+            logger.info(f"🔍 Sync positions: Got {len(live_positions) if live_positions else 0} positions from Pacifica")
+            if live_positions:
+                for p in live_positions[:3]:  # Log first 3 positions
+                    logger.info(f"   Position: {p.get('symbol')} - keys: {list(p.keys())}")
+
             # Build set of active symbols from Pacifica
             active_symbols = set()
             for pos in (live_positions or []):
@@ -737,11 +750,20 @@ class BotIntegration:
                         })
                         continue
 
-                    # Skip zero-quantity positions early
-                    quantity = float(pos.get("quantity", pos.get("size", 0)))
+                    # Skip zero-quantity positions early - check ALL possible quantity field names
+                    quantity = 0.0
+                    for key in ("size", "amount", "quantity", "position_size", "pos_size"):
+                        if key in pos and pos[key] is not None:
+                            try:
+                                quantity = float(pos[key])
+                                if quantity > 0:
+                                    break
+                            except (TypeError, ValueError):
+                                continue
+                    
                     if quantity <= 0:
                         logger.debug(
-                            f"Skipping zero-quantity position for {symbol}: qty={quantity}"
+                            f"Skipping zero-quantity position for {symbol}: qty={quantity}, fields={list(pos.keys())}"
                         )
                         continue
 
@@ -1412,29 +1434,6 @@ async def clear_grid(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/grids")
-async def get_grids():
-    """Get all active grids."""
-    try:
-        # Use trading_bot's grid_lifecycle (authoritative source)
-        grid_mgr = None
-        if bot_integration.trading_bot and hasattr(
-            bot_integration.trading_bot, "grid_lifecycle"
-        ):
-            grid_mgr = bot_integration.trading_bot.grid_lifecycle
-        elif bot_integration.grid_manager:
-            grid_mgr = bot_integration.grid_manager
-
-        if grid_mgr:
-            grids = grid_mgr.get_all_active_grids()
-            return {"success": True, "data": grids}
-        else:
-            return {"success": True, "data": []}
-    except Exception as e:
-        logger.error(f"Error getting grids: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/api/grids/consistency")
 async def get_grid_consistency():
     """Get grid state consistency status and statistics."""
@@ -1778,6 +1777,10 @@ async def get_signal_statistics():
             return {"success": False, "error": "Signal logger not available"}
 
         stats = bot.signal_logger.get_statistics()
+        # Debug logging to diagnose stats
+        logger.info(f"Signal stats: total={stats.get('total')}, executed={stats.get('executed')}, "
+                   f"position_updated={stats.get('position_updated')}, rejected={stats.get('rejected')}, "
+                   f"by_status={stats.get('by_status')}")
         return {"success": True, "data": stats}
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2324,7 +2327,6 @@ async def call_actual_generate_signals():
 
                 # This is the part that might be failing - let's see what happens
                 try:
-                    regime_data = multi_tf_data.get("4h", multi_tf_data.get("1h", {}))
                     cached_regime = bot.strategy_manager.regime_detector._regime_cache.get(symbol) if hasattr(bot.strategy_manager.regime_detector, '_regime_cache') else None
                     trace["steps"].append(f"{symbol}: cached_regime type={type(cached_regime).__name__}, value={cached_regime}")
                 except Exception as e:

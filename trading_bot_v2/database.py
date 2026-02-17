@@ -731,36 +731,6 @@ class DatabaseManager:
 
         return result
 
-    def get_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get recent trades with caching."""
-        cache_key = f"trades_recent_{limit}"
-
-        # Try cache first
-        cached = _data_cache.get(cache_key)
-        if cached:
-            logger.debug(f"get_trades: cache hit for {limit} trades")
-            return cached
-
-        start_time = time.time()
-        with get_db_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM trades
-                ORDER BY entry_time DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            result = [dict(row) for row in cursor.fetchall()]
-
-        query_time = time.time() - start_time
-        logger.info(f"get_trades: fetched {len(result)} trades in {query_time:.3f}s")
-
-        # Cache result for 60 seconds
-        _data_cache.set(cache_key, result, ttl=60)
-
-        return result
-
     def close_position(
         self, symbol: str, side: str, exit_price: Optional[float] = None
     ):

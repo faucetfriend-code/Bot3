@@ -483,6 +483,7 @@ class SignalLogger:
                 "total": total,
                 "generated": generated,
                 "executed": executed,
+                "position_updated": by_status.get("position_updated", 0),
                 "rejected": by_status.get("rejected", 0),
                 "failed": by_status.get("failed", 0),
                 "execution_rate": (executed / generated * 100) if generated > 0 else 0,

@@ -684,26 +684,41 @@
             </section>
 
             <section>
-                <h2>Active Grids <span id="grids-count">(0)</span> <span id="grids-pnl"></span></h2>
-                <table id="grids-table">
+                <h2>Signal Log <span id="signals-count">(0)</span></h2>
+                <table id="signals-table">
                     <thead>
                         <tr>
+                            <th>Time</th>
                             <th>Symbol</th>
-                            <th>Orders</th>
-                            <th>Price Range</th>
-                            <th>Fills (B/S)</th>
-                            <th>Net Pos</th>
-                            <th>Realized P&L</th>
-                            <th>Total P&L</th>
+                            <th>Strategy</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>Confidence</th>
                             <th>Status</th>
+                            <th>Quality</th>
                         </tr>
                     </thead>
-                    <tbody id="grids-tbody">
+                    <tbody id="signals-tbody">
                         <tr>
-                            <td colspan="8" style="text-align: center;">No active grids</td>
+                            <td colspan="10" style="text-align: center;">No signals yet</td>
                         </tr>
                     </tbody>
                 </table>
+                <div class="last-update" id="signals-last-update">Last updated: Never</div>
+            </section>
+
+            <section>
+                <h2>Signal Statistics</h2>
+                <div id="signal-stats" class="stats-cards">
+                    <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-updated">0</div><div class="card-label">Updated</div></div>
+                    <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
+                </div>
             </section>
 
             <section>
@@ -754,40 +769,26 @@
             </section>
 
             <section>
-                <h2>Signal Log <span id="signals-count">(0)</span></h2>
-                <table id="signals-table">
+                <h2>Active Grids <span id="grids-count">(0)</span> <span id="grids-pnl"></span></h2>
+                <table id="grids-table">
                     <thead>
                         <tr>
-                            <th>Time</th>
                             <th>Symbol</th>
-                            <th>Strategy</th>
-                            <th>Side</th>
-                            <th>Entry</th>
-                            <th>SL</th>
-                            <th>TP</th>
-                            <th>Confidence</th>
+                            <th>Orders</th>
+                            <th>Price Range</th>
+                            <th>Fills (B/S)</th>
+                            <th>Net Pos</th>
+                            <th>Realized P&L</th>
+                            <th>Total P&L</th>
                             <th>Status</th>
-                            <th>Quality</th>
                         </tr>
                     </thead>
-                    <tbody id="signals-tbody">
+                    <tbody id="grids-tbody">
                         <tr>
-                            <td colspan="10" style="text-align: center;">No signals yet</td>
+                            <td colspan="8" style="text-align: center;">No active grids</td>
                         </tr>
                     </tbody>
                 </table>
-                <div class="last-update" id="signals-last-update">Last updated: Never</div>
-            </section>
-
-            <section>
-                <h2>Signal Statistics</h2>
-                <div id="signal-stats" class="stats-cards">
-                    <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
-                    <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
-                    <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
-                    <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
-                    <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
-                </div>
             </section>
 
             <section>
@@ -1627,10 +1628,14 @@
                         if (tp) tpCell.className = 'positive';
                         row.appendChild(tpCell);
 
-                        // Confidence
+                        // Confidence - handle both decimal (0-1) and percentage (0-100) formats
                         const confCell = document.createElement('td');
-                        const conf = parseFloat(signal.confidence || 0);
-                        confCell.textContent = conf.toFixed(0) + '%';
+                        let conf = parseFloat(signal.confidence || 0);
+                        // If confidence is a decimal (less than 1), convert to percentage
+                        if (conf > 0 && conf < 1) {
+                            conf = conf * 100;
+                        }
+                        confCell.textContent = conf.toFixed(1) + '%';
                         if (conf >= 70) {
                             confCell.className = 'positive';
                         } else if (conf >= 50) {
@@ -1654,9 +1659,12 @@
                             'rejected': 'negative',
                             'failed': 'negative',
                             'valid': 'positive',
-                            'invalid': 'negative'
+                            'invalid': 'negative',
+                            'position_updated': 'positive'
                         };
-                        statusCell.textContent = status;
+                        // Display "updated" instead of "position_updated"
+                        const displayStatus = status === 'position_updated' ? 'updated' : status;
+                        statusCell.textContent = displayStatus;
                         statusCell.className = statusColors[status] || '';
                         row.appendChild(statusCell);
 
@@ -1683,7 +1691,7 @@
         async function updateSignalStats() {
             try {
                 // Try to get stats from signal logger API
-                let total = 0, executed = 0, rejected = 0, failed = 0;
+                let total = 0, executed = 0, updated = 0, rejected = 0, failed = 0;
                 let statsAvailable = false;
 
                 try {
@@ -1691,12 +1699,13 @@
                     if (response.success && response.data) {
                         const stats = response.data;
                         // Signal logger stats include 'generated' status which causes double-counting
-                        // We only want meaningful outcomes: executed, rejected, failed
+                        // We only want meaningful outcomes: executed, updated, rejected, failed
                         executed = stats.executed || 0;
+                        updated = stats.position_updated || 0;
                         rejected = stats.rejected || 0;
                         failed = stats.failed || 0;
                         // Total = only signals that reached a conclusion (not just generated)
-                        total = executed + rejected + failed;
+                        total = executed + updated + rejected + failed;
                         statsAvailable = true;
                     }
                 } catch (e) {
@@ -1728,6 +1737,7 @@
                     // Count by status - only meaningful outcomes
                     total = meaningfulSignals.length;
                     executed = meaningfulSignals.filter(s => s.status === 'executed').length;
+                    updated = meaningfulSignals.filter(s => s.status === 'position_updated').length;
                     rejected = meaningfulSignals.filter(s => s.status === 'rejected').length;
                     failed = meaningfulSignals.filter(s => s.status === 'failed').length;
                 }
@@ -1735,10 +1745,11 @@
                 // Update the UI
                 document.getElementById('stat-total').textContent = total;
                 document.getElementById('stat-executed').textContent = executed;
+                document.getElementById('stat-updated').textContent = updated;
                 document.getElementById('stat-rejected').textContent = rejected;
                 document.getElementById('stat-failed').textContent = failed;
 
-                const execRate = total > 0 ? ((executed / total) * 100) : 0;
+                const execRate = total > 0 ? (((executed + updated) / total) * 100) : 0;
                 document.getElementById('stat-exec-rate').textContent = execRate.toFixed(1) + '%';
 
             } catch (error) {
@@ -1746,6 +1757,7 @@
                 // Set defaults on error
                 document.getElementById('stat-total').textContent = '0';
                 document.getElementById('stat-executed').textContent = '0';
+                document.getElementById('stat-updated').textContent = '0';
                 document.getElementById('stat-rejected').textContent = '0';
                 document.getElementById('stat-failed').textContent = '0';
                 document.getElementById('stat-exec-rate').textContent = '0%';
@@ -1863,6 +1875,27 @@
             }
         }
 
+        let signalsInterval;
+
+        function startAutoUpdate() {
+            // Clear existing interval if any
+            if (signalsInterval) {
+                clearInterval(signalsInterval);
+            }
+            // Update signals every 8 seconds for timely updates without spam
+            signalsInterval = setInterval(() => {
+                updateSignals();
+                updateSignalStats();
+            }, 8000);
+        }
+
+        function stopAutoUpdate() {
+            if (signalsInterval) {
+                clearInterval(signalsInterval);
+                signalsInterval = null;
+            }
+        }
+
         window.onload = function() {
             // Load saved theme
             loadTheme();
@@ -1872,6 +1905,9 @@
 
             // Initial data load
             refreshData();
+
+            // Start auto-update for signals (separate interval for frequent updates)
+            startAutoUpdate();
 
             // Reduced polling frequency since we have real-time updates
             setInterval(refreshData, 300000);  // 5 minutes instead of 1 minute

@@ -1,0 +1,107 @@
+2026-02-14 11:10:33.663 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: NEAR = $1.064727
+2026-02-14 11:10:33.663 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: JUP = $0.160498
+2026-02-14 11:10:33.664 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: BP = $0.600726
+2026-02-14 11:10:33.664 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: PIPPIN = $0.66202
+2026-02-14 11:10:33.664 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: AVAX = $9.36736
+2026-02-14 11:10:33.665 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: WLFI = $0.105622
+2026-02-14 11:10:33.665 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: XAU = $5036.36566
+2026-02-14 11:10:33.665 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: UNI = $3.57158
+2026-02-14 11:10:33.665 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: LINEA = $0.003972
+2026-02-14 11:10:33.666 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: TSLA = $417.581166
+2026-02-14 11:10:33.666 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: MEGA = $0.1262
+2026-02-14 11:10:33.666 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: 2Z = $0.08133
+2026-02-14 11:10:33.667 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: XPL = $0.098895
+2026-02-14 11:10:33.667 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: ETH = $2081.464152
+2026-02-14 11:10:33.668 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: XAG = $77.442665
+2026-02-14 11:10:33.668 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: DOGE = $0.103564
+2026-02-14 11:10:33.668 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: HYPE = $31.218405
+2026-02-14 11:10:33.669 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: BCH = $565.574646
+2026-02-14 11:10:33.669 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: PENGU = $0.007293
+2026-02-14 11:10:33.669 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: PAXG = $5027.672779
+2026-02-14 11:10:33.678 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: XMR = $354.884
+2026-02-14 11:10:33.678 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: WLD = $0.42229
+2026-02-14 11:10:33.678 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: FARTCOIN = $0.196719
+2026-02-14 11:10:33.678 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: XRP = $1.461501
+2026-02-14 11:10:33.679 | DEBUG    | trading_bot_v2.pacifica_ws_client:_handle_message:1206 - Price update: STRK = $0.050995
+2026-02-14 11:10:33.730 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2346 -   ❌ Failed to place BUY order @ $0.9764: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:33.731 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2328 - Grid BUY order payload for SUI: {
+  "symbol": "SUI",
+  "side": "buy",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 0.97144,
+  "client_order_id": "grid_fff9cea0-e9f0-4d69-a515-1d17e3aa0cd6"
+}
+2026-02-14 11:10:34.186 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2346 -   ❌ Failed to place BUY order @ $0.9714: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:34.187 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2391 - Grid SELL order payload for SUI: {
+  "symbol": "SUI",
+  "side": "sell",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 1.00133,
+  "client_order_id": "grid_17ddf6d6-bbac-4038-9f27-cdc40db4916d"
+}
+2026-02-14 11:10:34.356 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2409 -   ❌ Failed to place SELL order @ $1.0013: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:34.356 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2391 - Grid SELL order payload for SUI: {
+  "symbol": "SUI",
+  "side": "sell",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 1.00631,
+  "client_order_id": "grid_d33d582e-7613-43df-b0ac-623e2dcfef09"
+}
+2026-02-14 11:10:34.848 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2409 -   ❌ Failed to place SELL order @ $1.0063: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:34.848 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2391 - Grid SELL order payload for SUI: {
+  "symbol": "SUI",
+  "side": "sell",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 1.01129,
+  "client_order_id": "grid_7f7298bd-4445-4ed5-b4a8-8717b62e2277"
+}
+2026-02-14 11:10:35.011 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2409 -   ❌ Failed to place SELL order @ $1.0113: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:35.011 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2391 - Grid SELL order payload for SUI: {
+  "symbol": "SUI",
+  "side": "sell",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 1.01627,
+  "client_order_id": "grid_bd5c8a8b-23c0-4ddd-b307-2b9d0e2bc223"
+}
+2026-02-14 11:10:35.181 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2409 -   ❌ Failed to place SELL order @ $1.0163: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:35.182 | DEBUG    | trading_bot_v2.trading_bot:_place_grid_orders:2391 - Grid SELL order payload for SUI: {
+  "symbol": "SUI",
+  "side": "sell",
+  "quantity": 38.6,
+  "order_type": "limit",
+  "price": 1.02126,
+  "client_order_id": "grid_dc530942-f027-4d0c-88f5-86a9f829b205"
+}
+2026-02-14 11:10:35.667 | ERROR    | trading_bot_v2.trading_bot:_place_grid_orders:2409 -   ❌ Failed to place SELL order @ $1.0213: API error: Json deserialize error: UUID parsing failed: invalid character: expected an optional prefix of `urn:uuid:` followed by [0-9a-fA-F-], found `g` at 1 at line 1 column 392
+2026-02-14 11:10:35.668 | ERROR    | trading_bot_v2.trading_bot:_execute_grid_signal_coordinated:1915 - ❌ Grid order placement failed for SUI: Unknown error
+2026-02-14 11:10:35.673 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:122 - FAST PATH: Checking WS cache for ADA, timeframes=['5m', '15m', '1h', '4h']
+2026-02-14 11:10:35.673 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:136 - FAST PATH: ADA_5m - No data buffer for ADA 5m
+2026-02-14 11:10:35.673 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:142 - ❌ WS SYNC MISS: ADA 5m - No data buffer for ADA 5m
+2026-02-14 11:10:35.674 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:136 - FAST PATH: ADA_15m - No data buffer for ADA 15m
+2026-02-14 11:10:35.674 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:142 - ❌ WS SYNC MISS: ADA 15m - No data buffer for ADA 15m
+2026-02-14 11:10:35.674 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:136 - FAST PATH: ADA_1h - No data buffer for ADA 1h
+2026-02-14 11:10:35.674 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:142 - ❌ WS SYNC MISS: ADA 1h - No data buffer for ADA 1h
+2026-02-14 11:10:35.674 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:136 - FAST PATH: ADA_4h - No data buffer for ADA 4h
+2026-02-14 11:10:35.675 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:142 - ❌ WS SYNC MISS: ADA 4h - No data buffer for ADA 4h
+2026-02-14 11:10:35.675 | INFO     | trading_bot_v2.multi_timeframe_fetcher:get_candles_multi_tf:175 - SLOW PATH: Fetching missing TFs for ADA: ['5m', '15m', '1h', '4h'] via REST API
+2026-02-14 11:10:35.676 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:241 - WS client available: True
+2026-02-14 11:10:35.676 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:249 - WS lookup: symbol=ADA, ws_symbol=ADA, tf=5m, found=0 candles
+2026-02-14 11:10:35.676 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:288 - Cache MISS: ADA 5m - fetching from REST API
+2026-02-14 11:10:35.677 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:241 - WS client available: True
+2026-02-14 11:10:35.677 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:249 - WS lookup: symbol=ADA, ws_symbol=ADA, tf=15m, found=0 candles
+2026-02-14 11:10:35.678 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:288 - Cache MISS: ADA 15m - fetching from REST API
+2026-02-14 11:10:35.678 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:241 - WS client available: True
+2026-02-14 11:10:35.679 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:249 - WS lookup: symbol=ADA, ws_symbol=ADA, tf=1h, found=0 candles
+2026-02-14 11:10:35.679 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:281 - Cache HIT: ADA 1h (age: 274.8s)
+2026-02-14 11:10:35.679 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:241 - WS client available: True
+2026-02-14 11:10:35.679 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:249 - WS lookup: symbol=ADA, ws_symbol=ADA, tf=4h, found=0 candles
+2026-02-14 11:10:35.680 | DEBUG    | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:281 - Cache HIT: ADA 4h (age: 274.5s)
+2026-02-14 11:10:35.680 | WARNING  | trading_bot_v2.multi_timeframe_fetcher:_fetch_single_timeframe:311 - No candles returned for ADA 15m
+2026-02-14 11:10:35,846 - trading_bot_v2.pacifica_client - WARNING - Rate limit hit (429) for GET /kline, backing off...
+2026-02-14 11:10:35,847 - trading_bot_v2.pacifica_client - WARNING - Circuit breaker activated for 30 seconds due to rate limiting
+2026-02-14 11:10:35,848 - trading_bot_v2.pacifica_client - WARNING - Retrying trading_bot_v2.pacifica_client.PacificaClient._make_get_request in 2.0 seconds as it raised RateLimitError: Rate limit exceeded - retrying with exponential backoff.
