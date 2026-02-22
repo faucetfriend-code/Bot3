@@ -102,6 +102,387 @@ class GridLifecycleManager:
         self._last_fill_check: datetime = datetime.now() - timedelta(hours=1)
 
     # =========================
+    # ORPHAN DETECTION & REPAIR
+    # =========================
+
+    def detect_and_repair_orphaned_grids(self) -> int:
+        """
+        Detect and repair orphaned grids on startup.
+
+        Orphaned grids are those that:
+        1. Have missing center_price or initial_center
+        2. Have incomplete metadata (grid_capital, grid_spacing, num_levels)
+        3. Have invalid state or corrupted data
+
+        Returns:
+            Number of grids repaired
+        """
+        repaired_count = 0
+
+        try:
+            orphaned_symbols = []
+
+            for symbol, grid_data in self._grids.items():
+                issues = []
+
+                # Check for missing center price
+                if not grid_data.get("center_price") and not grid_data.get("initial_center"):
+                    issues.append("missing_center_price")
+
+                # Check for incomplete metadata
+                for req_field in ["grid_capital", "grid_spacing", "num_levels"]:
+                    if req_field not in grid_data or grid_data[req_field] is None:
+                        issues.append(f"missing_{req_field}")
+
+                # Check for invalid state
+                state_value = grid_data.get("state")
+                if state_value is not None:
+                    state_str = state_value.value if hasattr(state_value, "value") else str(state_value)
+                    if state_str not in [s.value for s in GridState]:
+                        issues.append("invalid_state")
+
+                if issues:
+                    orphaned_symbols.append((symbol, issues))
+                    logger.warning(
+                        f"⚠️ Orphaned grid detected for {symbol}: {', '.join(issues)}"
+                    )
+
+            # Attempt to repair orphaned grids
+            for symbol, issues in orphaned_symbols:
+                if self._repair_orphaned_grid(symbol, issues):
+                    repaired_count += 1
+                    logger.info(f"✅ Successfully repaired orphaned grid for {symbol}")
+                else:
+                    logger.error(f"❌ Failed to repair orphaned grid for {symbol}")
+                    self._close_unrecoverable_grid(symbol, "startup_repair_failed")
+
+            # If no memory grids needed repair, also sync from exchange
+            if repaired_count == 0:
+                exchange_repaired = self._sync_grids_from_exchange()
+                repaired_count += exchange_repaired
+
+        except Exception as e:
+            logger.error(f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True)
+
+        return repaired_count
+
+    def _repair_orphaned_grid(self, symbol: str, issues: List[str]) -> bool:
+        """
+        Attempt to repair an orphaned grid by reconstructing data from exchange orders.
+
+        Returns:
+            True if repair was successful
+        """
+        try:
+            grid_data = self._grids.get(symbol)
+            if not grid_data:
+                return False
+
+            # Try to reconstruct missing center price from exchange orders
+            if "missing_center_price" in issues:
+                center_price = self._calculate_center_from_exchange_orders(symbol)
+                if center_price:
+                    grid_data["center_price"] = center_price
+                    grid_data["initial_center"] = center_price
+                    logger.info(f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}")
+                else:
+                    return False
+
+            # Repair missing metadata with exchange data or defaults
+            if "missing_grid_spacing" in issues:
+                spacing = self._calculate_spacing_from_exchange_orders(symbol)
+                grid_data["grid_spacing"] = spacing if spacing else 0.004
+
+            if "missing_num_levels" in issues:
+                levels = self._count_levels_from_exchange_orders(symbol)
+                grid_data["num_levels"] = levels or 8
+
+            if "missing_grid_capital" in issues:
+                capital = self._estimate_capital_from_exchange_orders(symbol)
+                grid_data["grid_capital"] = capital or 1000.0
+
+            if "invalid_state" in issues:
+                grid_data["state"] = GridState.ACTIVE
+
+            # Add repair metadata
+            grid_data["repaired_at"] = datetime.now()
+            grid_data["repair_issues"] = issues
+
+            # Persist the repaired grid state
+            if self.db:
+                self.save_grid_state(symbol)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True)
+            return False
+
+    def _close_unrecoverable_grid(self, symbol: str, reason: str) -> None:
+        """Close a grid that cannot be repaired."""
+        try:
+            logger.warning(f"🗑️ Closing unrecoverable grid for {symbol}: {reason}")
+
+            try:
+                self.client.cancel_all_orders(symbol)
+                logger.info(f"  ✅ Cancelled all orders for {symbol}")
+            except Exception as e:
+                logger.error(f"  ❌ Failed to cancel orders: {e}")
+
+            if symbol in self._grids:
+                del self._grids[symbol]
+            if self.db:
+                self.delete_grid_state(symbol)
+
+            for data_dict in [self._fills, self._metrics, self._processed_trades]:
+                if symbol in data_dict:
+                    del data_dict[symbol]
+
+        except Exception as e:
+            logger.error(f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True)
+
+    def _calculate_center_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Calculate grid center price from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+
+            if not symbol_orders:
+                return None
+
+            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+
+            if not buy_orders or not sell_orders:
+                return None
+
+            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+
+            if not buy_prices or not sell_prices:
+                return None
+
+            return (max(buy_prices) + min(sell_prices)) / 2
+
+        except Exception as e:
+            logger.error(f"Error calculating center from exchange orders for {symbol}: {e}")
+            return None
+
+    def _calculate_spacing_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Calculate grid spacing from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+
+            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+
+            if not buy_orders or not sell_orders:
+                return None
+
+            buy_prices = sorted(
+                [float(o.get("price", 0)) for o in buy_orders if o.get("price")],
+                reverse=True,
+            )
+            sell_prices = sorted(
+                [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            )
+
+            if len(buy_prices) < 2 and len(sell_prices) < 2:
+                return None
+
+            spacings = []
+            for i in range(len(buy_prices) - 1):
+                if buy_prices[i + 1] > 0:
+                    spacings.append((buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1])
+            for i in range(len(sell_prices) - 1):
+                if sell_prices[i] > 0:
+                    spacings.append((sell_prices[i + 1] - sell_prices[i]) / sell_prices[i])
+
+            return sum(spacings) / len(spacings) if spacings else None
+
+        except Exception as e:
+            logger.error(f"Error calculating spacing from exchange orders for {symbol}: {e}")
+            return None
+
+    def _count_levels_from_exchange_orders(self, symbol: str) -> Optional[int]:
+        """Count grid levels from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            return len([o for o in orders if o.get("symbol") == symbol])
+        except Exception as e:
+            logger.error(f"Error counting levels from exchange orders for {symbol}: {e}")
+            return None
+
+    def _estimate_capital_from_exchange_orders(self, symbol: str) -> Optional[float]:
+        """Estimate grid capital from current exchange orders."""
+        try:
+            orders = self.client.get_orders()
+            symbol_orders = [o for o in orders if o.get("symbol") == symbol]
+
+            total_value = 0
+            for order in symbol_orders:
+                price = float(order.get("price", 0))
+                quantity = float(
+                    order.get("quantity") or order.get("size") or order.get("amount") or order.get("initial_amount", 0)
+                )
+                total_value += price * quantity
+
+            return total_value if total_value > 0 else None
+        except Exception as e:
+            logger.error(f"Error estimating capital from exchange orders for {symbol}: {e}")
+            return None
+
+    def _sync_grids_from_exchange(self) -> int:
+        """
+        Sync grids from exchange - detect orphaned grids not in memory.
+
+        Returns:
+            Number of grids re-adopted from exchange
+        """
+        repaired_count = 0
+
+        try:
+            orders = self.client.get_orders()
+            orders_by_symbol: Dict[str, list] = {}
+
+            for order in orders:
+                symbol = order.get("symbol")
+                if symbol:
+                    if symbol not in orders_by_symbol:
+                        orders_by_symbol[symbol] = []
+                    orders_by_symbol[symbol].append(order)
+
+            for symbol, symbol_orders in orders_by_symbol.items():
+                if symbol in self._grids:
+                    continue
+
+                if len(symbol_orders) >= 5:
+                    buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
+                    sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+
+                    if buy_orders and sell_orders:
+                        logger.info(f"🔍 Found potential orphaned grid on exchange: {symbol}")
+
+                        if self._readopt_orphaned_grid_from_exchange(symbol, buy_orders, sell_orders):
+                            repaired_count += 1
+                            logger.info(f"✅ Re-adopted orphaned grid from exchange: {symbol}")
+
+        except Exception as e:
+            logger.error(f"Error syncing grids from exchange: {e}", exc_info=True)
+
+        return repaired_count
+
+    def _readopt_orphaned_grid_from_exchange(
+        self, symbol: str, buy_orders: List[Dict], sell_orders: List[Dict]
+    ) -> bool:
+        """Re-adopt an orphaned grid detected from exchange orders."""
+        try:
+            all_orders = buy_orders + sell_orders
+
+            center_price = self._calculate_center_from_exchange_orders(symbol)
+            if not center_price:
+                return False
+
+            grid_spacing = self._calculate_spacing_from_exchange_orders(symbol)
+            num_levels = len(all_orders)
+            total_capital = self._estimate_capital_from_exchange_orders(symbol) or 0
+
+            self._grids[symbol] = {
+                "state": GridState.ACTIVE,
+                "grid_capital": total_capital,
+                "emergency_stop": 0,
+                "regime_on_creation": "unknown_readopted",
+                "atr_at_creation": 0,
+                "grid_spacing": grid_spacing or 0.004,
+                "num_levels": num_levels,
+                "orders_placed": num_levels,
+                "center_price": center_price,
+                "initial_center": center_price,
+                "created_at": datetime.now(),
+                "refresh_count": 0,
+                "readopted": True,
+                "readopted_at": datetime.now(),
+            }
+
+            self._fills[symbol] = []
+            self._processed_trades[symbol] = set()
+            self._metrics[symbol] = GridMetrics()
+
+            if self.db:
+                self.save_grid_state(symbol)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Error readopting orphaned grid for {symbol}: {e}", exc_info=True)
+            return False
+
+    def _validate_grid_integrity(self) -> None:
+        """Validate the integrity of all loaded grids."""
+        try:
+            valid_grids = 0
+            issues_found = 0
+
+            for symbol, grid_data in list(self._grids.items()):
+                issues = []
+
+                for req_field in ["state", "grid_capital"]:
+                    if req_field not in grid_data or grid_data[req_field] is None:
+                        issues.append(f"missing_{req_field}")
+
+                if "grid_spacing" in grid_data:
+                    spacing = grid_data["grid_spacing"]
+                    if not isinstance(spacing, (int, float)) or spacing <= 0:
+                        issues.append("invalid_spacing")
+
+                if issues:
+                    issues_found += 1
+                    logger.warning(f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}")
+
+                    if "invalid_spacing" in issues:
+                        grid_data["grid_spacing"] = 0.004
+                        if self.db:
+                            self.save_grid_state(symbol)
+                else:
+                    valid_grids += 1
+
+            if issues_found > 0:
+                logger.info(f"Grid integrity check: {valid_grids} valid, {issues_found} with issues")
+            else:
+                logger.debug(f"Grid integrity check: all {valid_grids} grids valid")
+
+        except Exception as e:
+            logger.error(f"Error validating grid integrity: {e}", exc_info=True)
+
+    def initialize_grid_system(self) -> None:
+        """
+        Initialize the grid system with startup repair and validation.
+
+        Called after construction to:
+        1. Load existing grid states from database
+        2. Detect and repair orphaned grids
+        3. Validate grid integrity
+        """
+        try:
+            logger.info("🔧 Initializing GridLifecycleManager repair system...")
+
+            if self.db:
+                loaded_grids = self.load_grid_states(regime_detector=self.regime_detector)
+                logger.info(f"📊 Loaded {len(loaded_grids)} grids from database")
+
+            orphaned_repaired = self.detect_and_repair_orphaned_grids()
+            if orphaned_repaired > 0:
+                logger.info(f"🔧 Fixed {orphaned_repaired} orphaned grids on startup")
+
+            self._validate_grid_integrity()
+
+            logger.info("✅ GridLifecycleManager repair system initialization complete")
+
+        except Exception as e:
+            logger.error(f"❌ Grid system initialization failed: {e}", exc_info=True)
+
+    # =========================
     # STATE CHECKS
     # =========================
 
@@ -1349,6 +1730,31 @@ class GridLifecycleManager:
         grid = self._grids[symbol]
         metrics = self._metrics.get(symbol, GridMetrics())
 
+        # Use grid data for regime/atr/spacing if not explicitly provided
+        if not regime:
+            regime = grid.get("regime_on_creation", "")
+        if atr == 0:
+            atr = grid.get("atr_at_creation", 0)
+        if spacing == 0:
+            spacing = grid.get("grid_spacing", 0)
+
+        # Build repair history JSON if present
+        import json
+        repair_history = None
+        if grid.get("repair_issues") or grid.get("readopted"):
+            repair_entries = grid.get("repair_history_entries", [])
+            if grid.get("repair_issues"):
+                repair_entries.append({
+                    "at": grid.get("repaired_at", datetime.now()).isoformat() if isinstance(grid.get("repaired_at"), datetime) else str(grid.get("repaired_at", "")),
+                    "issues": grid.get("repair_issues", []),
+                })
+            if grid.get("readopted"):
+                repair_entries.append({
+                    "at": grid.get("readopted_at", datetime.now()).isoformat() if isinstance(grid.get("readopted_at"), datetime) else str(grid.get("readopted_at", "")),
+                    "type": "readopted_from_exchange",
+                })
+            repair_history = json.dumps(repair_entries[-10:])  # Keep last 10
+
         try:
             from .database import get_db_connection
 
@@ -1358,8 +1764,13 @@ class GridLifecycleManager:
                     INSERT OR REPLACE INTO grid_states
                     (symbol, state, regime_on_creation, grid_capital, emergency_stop,
                      atr_at_creation, grid_spacing, num_levels, total_buy_fills,
-                     total_sell_fills, realized_pnl, total_fees, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                     total_sell_fills, realized_pnl, total_fees,
+                     center_price, initial_center, orders_placed, refresh_count,
+                     last_refresh, consistency_checked_at, repair_history,
+                     updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?,
+                            CURRENT_TIMESTAMP)
                 """,
                     (
                         symbol,
@@ -1376,6 +1787,13 @@ class GridLifecycleManager:
                         metrics.total_sell_fills,
                         metrics.realized_pnl,
                         metrics.total_fees,
+                        grid.get("center_price"),
+                        grid.get("initial_center"),
+                        grid.get("orders_placed", 0),
+                        grid.get("refresh_count", 0),
+                        grid.get("last_refresh"),
+                        datetime.now().isoformat(),
+                        repair_history,
                     ),
                 )
                 conn.commit()
@@ -1406,7 +1824,9 @@ class GridLifecycleManager:
                 cursor = conn.execute("""
                     SELECT symbol, state, regime_on_creation, grid_capital, emergency_stop,
                            atr_at_creation, grid_spacing, num_levels, total_buy_fills,
-                           total_sell_fills, realized_pnl, total_fees
+                           total_sell_fills, realized_pnl, total_fees,
+                           center_price, initial_center, orders_placed, refresh_count,
+                           last_refresh, repair_history
                     FROM grid_states
                     WHERE state = 'active'
                 """)
@@ -1437,7 +1857,7 @@ class GridLifecycleManager:
                                 )
                                 continue
 
-                    # Load into memory
+                    # Load into memory with full column set
                     self._grids[symbol] = {
                         "state": GridState.ACTIVE,
                         "grid_capital": row[3],
@@ -1447,6 +1867,11 @@ class GridLifecycleManager:
                         "num_levels": row[7],
                         "loaded_from_db": True,
                         "regime_on_creation": regime_on_creation,
+                        "center_price": row[12],
+                        "initial_center": row[13],
+                        "orders_placed": row[14] or 0,
+                        "refresh_count": row[15] or 0,
+                        "last_refresh": row[16],
                     }
 
                     # Initialize metrics from DB
@@ -1460,8 +1885,11 @@ class GridLifecycleManager:
                     self._processed_trades[symbol] = set()
 
                     loaded_grids[symbol] = self._grids[symbol]
+
+                    center_str = f"center=${row[12]:.4f}" if row[12] else "no_center"
                     logger.info(
-                        f"📊 Loaded grid from DB: {symbol} (regime: {regime_on_creation})"
+                        f"📊 Loaded grid from DB: {symbol} (regime: {regime_on_creation}, "
+                        f"{center_str}, orders={row[14] or 0})"
                     )
 
         except Exception as e:

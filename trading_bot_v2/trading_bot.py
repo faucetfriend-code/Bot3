@@ -180,14 +180,11 @@ class TradingBot:
             client=self.client,
             risk_manager=self.risk_manager,
             db=self.db,
+            regime_detector=self.market_regime,
         )
 
-        # Load persisted grid states from database (survives restarts)
-        loaded_grids = self.grid_lifecycle.load_grid_states(
-            regime_detector=self.market_regime
-        )
-        if loaded_grids:
-            logger.info(f"Restored {len(loaded_grids)} grid(s) from database: {list(loaded_grids.keys())}")
+        # Initialize grid system: load from DB, repair orphans, validate integrity
+        self.grid_lifecycle.initialize_grid_system()
 
         # Initialize migrated position manager
         self.migrated_position_manager = MigratedPositionManager(
@@ -198,9 +195,15 @@ class TradingBot:
         )
 
         # Initialize execution layer for precise 1m/5m entry timing
-        self.execution_layer = ExecutionLayer(
-            fetcher=self.multi_tf_fetcher,
-        )
+        try:
+            self.execution_layer = ExecutionLayer(
+                fetcher=self.multi_tf_fetcher,
+            )
+            logger.info("ExecutionLayer initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize ExecutionLayer: {e}")
+            self.execution_layer = None
+            logger.warning("Trading will continue without ExecutionLayer refinement")
 
         # Thread control
         self._running_event = threading.Event()
@@ -273,30 +276,9 @@ class TradingBot:
                 self.ws_client.start()
                 logger.info("WebSocket client started for real-time price data")
 
-                # Bootstrap kline cache with historical data for immediate RSI calculation
-                if hasattr(self.ws_client, "bootstrap_kline_cache") and self.client:
-                    try:
-                        # Bootstrap core trading symbols with historical candles
-                        # This eliminates the 4h delay before RSI/indicators become available
-                        core_symbols = [
-                            "BTC",
-                            "ETH",
-                            "SOL",
-                            "SUI",
-                            "AVAX",
-                            "DOGE",
-                        ]
-                        self.ws_client.bootstrap_kline_cache(
-                            rest_client=self.client,
-                            symbols=core_symbols,
-                            intervals=["1m", "5m", "1h"],
-                            lookback=100,
-                        )
-                        logger.info(
-                            f"✅ Kline cache bootstrapped for {len(core_symbols)} symbols (1m, 5m, 1h)"
-                        )
-                    except Exception as e:
-                        logger.warning(f"Kline cache bootstrap failed: {e}")
+                # OPTIMIZATION: Kline bootstrap is now done in api_server.initialize()
+                # to avoid duplicate API calls and rate limiting.
+                # All timeframes (1m, 5m, 15m, 1h, 4h) are fetched there once.
 
             except Exception as e:
                 logger.error(f"WebSocket client start failed: {e}")
@@ -457,8 +439,9 @@ class TradingBot:
         )
 
         # Wait for WebSocket prices to cache before first iteration
-        logger.info("⏳ Waiting 5 seconds for WebSocket price cache to populate...")
-        time.sleep(5)
+        # OPTIMIZATION: Reduced from 5s to 2s - WebSocket usually connects fast
+        logger.info("⏳ Waiting 2 seconds for WebSocket price cache to populate...")
+        time.sleep(2)
 
         # GRID MONITORING: Sync existing grids from exchange on startup
         self._sync_existing_grids()
@@ -624,7 +607,18 @@ class TradingBot:
             # Get all open orders from exchange
             open_orders = self.client.get_orders()
             if not open_orders:
-                logger.info("No open orders found on exchange - no grids to sync")
+                # No orders on exchange - clear any stale grids loaded from DB
+                if self.grid_lifecycle and self.grid_lifecycle._grids:
+                    stale_symbols = list(self.grid_lifecycle._grids.keys())
+                    for symbol in stale_symbols:
+                        self.grid_lifecycle.delete_grid_state(symbol)
+                    self.grid_lifecycle._grids.clear()
+                    logger.warning(
+                        f"Cleared {len(stale_symbols)} stale grid(s) from DB "
+                        f"(no orders on exchange): {stale_symbols}"
+                    )
+                else:
+                    logger.info("No open orders found on exchange - no grids to sync")
                 return
 
             logger.info(f"📋 Found {len(open_orders)} open orders on exchange")
@@ -672,6 +666,27 @@ class TradingBot:
                     f"({len(buy_orders)} bid, {len(sell_orders)} ask) - RE-ADOPTING"
                 )
                 self._readopt_orphaned_grid(symbol, buy_orders, sell_orders)
+
+            # Clean up grids loaded from DB that have no matching exchange orders
+            if self.grid_lifecycle and self.grid_lifecycle._grids:
+                confirmed_grid_symbols = set()
+                for symbol, orders in orders_by_symbol.items():
+                    buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
+                    sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                    if len(orders) >= 5 and buy_orders and sell_orders:
+                        confirmed_grid_symbols.add(symbol)
+
+                stale_symbols = [
+                    s for s in self.grid_lifecycle._grids
+                    if s not in confirmed_grid_symbols
+                ]
+                for symbol in stale_symbols:
+                    self.grid_lifecycle.delete_grid_state(symbol)
+                    del self.grid_lifecycle._grids[symbol]
+                    logger.warning(
+                        f"Cleared stale grid for {symbol} "
+                        f"(no matching grid orders on exchange)"
+                    )
 
         except Exception as e:
             logger.error(f"Error syncing existing grids: {e}", exc_info=True)
@@ -965,16 +980,25 @@ class TradingBot:
                         # Log signal BEFORE publishing event (event bus is synchronous)
                         signals_generated += 1
                         regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
-                        self.signal_logger.log_signal_generated(
+                        log_result = self.signal_logger.log_signal_generated(
                             signal=signal,
                             regime=regime_str,
                             notes=f"Generated from {signal.strategy.name}",
                         )
 
+                        # Check if signal was rejected as duplicate
+                        if not log_result:
+                            logger.info(
+                                f"Duplicate signal rejected by deduplication: {signal.strategy.name} {signal.side.name} "
+                                f"{symbol} @ ${signal.entry_price:.4f} "
+                                f"(same signal executed within {self.signal_logger._dedup_window_seconds}s window)"
+                            )
+                            continue
+
                         logger.info(
                             f"✅ Signal generated: {signal.strategy.name} {signal.side.name} "
                             f"{symbol} @ ${signal.entry_price:.4f} "
-                            f"(confidence: {signal.confidence:.1f}%, quality: {signal.quality.name})"
+                            f"(confidence: {signal.confidence:.1%}, quality: {signal.quality.name})"
                         )
 
                         # Publish signal event (synchronous - will execute immediately)
@@ -1132,9 +1156,10 @@ class TradingBot:
 
         Checks:
         1. Signal is valid (8 validation flags)
-        2. Account has sufficient capital
-        3. Risk limits not exceeded
-        4. No conflicting positions
+        2. Stop loss is present and valid (CRITICAL SAFETY CHECK)
+        3. Account has sufficient capital
+        4. Risk limits not exceeded
+        5. No conflicting positions
         """
         try:
             # Check signal validity
@@ -1152,6 +1177,13 @@ class TradingBot:
                 failed = [k for k, v in flags.items() if not v]
                 reason = f"Signal invalid - failed flags: {failed}"
                 logger.info(f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}")
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
+            # CRITICAL: Validate stop loss is present
+            if not signal.stop_loss or signal.stop_loss <= 0:
+                reason = "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                logger.error(f"{reason} for {signal.asset}")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 

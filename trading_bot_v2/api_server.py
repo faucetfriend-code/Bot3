@@ -19,6 +19,7 @@ sys.path.insert(
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
+from contextlib import asynccontextmanager
 import uvicorn
 
 # Import real bot components - support both module and script execution
@@ -53,11 +54,34 @@ except ImportError:
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
+# Create FastAPI app with lifespan context manager
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup and shutdown events."""
+    # Startup
+    try:
+        bot_integration.initialize()
+        logger.info("API server started with bot integration")
+    except Exception as e:
+        logger.error(f"Failed to initialize bot on startup: {e}")
+
+    yield  # Server is running
+
+    # Shutdown
+    try:
+        if bot_integration._is_running:
+            await bot_integration.stop()
+        bot_integration.shutdown()
+        logger.info("API server shutdown complete")
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+
+
 app = FastAPI(
     title="Trading Bot Control Interface",
     description="Professional trading bot control interface with real-time monitoring",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 
@@ -120,26 +144,26 @@ class BotIntegration:
                 logger.info("WebSocket client started for real-time market data")
 
                 # Bootstrap kline cache for key trading symbols
-                # OPTIMIZED: Only fetch strategy timeframes (15m, 1h, 4h) on startup
-                # Execution timeframes (1m, 5m) will be populated by WebSocket in real-time
+                # Include ALL timeframes needed - both strategy (15m, 1h, 4h) and execution (1m, 5m)
+                # This single bootstrap replaces the duplicate in trading_bot.start()
                 key_symbols = ["BTC", "ETH", "SOL", "SUI", "AVAX", "XRP", "DOGE", "LTC"]
-                regime_intervals = ["15m", "1h", "4h"]  # For regime detection & strategies
+                all_intervals = ["1m", "5m", "15m", "1h", "4h"]
 
                 if self.pacifica_client:
                     logger.info(
-                        f"⚡ Fast bootstrap: {len(key_symbols)} symbols × {len(regime_intervals)} timeframes "
-                        "(1m/5m from WebSocket)"
+                        f"⚡ Fast bootstrap: {len(key_symbols)} symbols x {len(all_intervals)} timeframes "
+                        "(all timeframes in one call)"
                     )
                     self.ws_client.bootstrap_kline_cache(
                         rest_client=self.pacifica_client,
                         symbols=key_symbols,
-                        intervals=regime_intervals,  # Only strategy timeframes
+                        intervals=all_intervals,  # All timeframes at once
                         lookback=250,
                         use_disk_cache=True,  # Cache to disk for faster restarts
-                        max_concurrent=3,  # Rate-limited parallelism
+                        max_concurrent=2,  # Conservative rate limiting (was 3)
                     )
                     logger.info(
-                        f"✅ Kline cache ready for {len(key_symbols)} symbols"
+                        f"✅ Kline cache ready for {len(key_symbols)} symbols (all timeframes)"
                     )
 
                     # Subscribe to orderbook for OrderBookImbalance strategy
@@ -366,7 +390,11 @@ class BotIntegration:
             if self.database:
                 db_positions = self.database.get_positions()
                 if db_positions:
-                    positions = db_positions
+                    # Filter out zero-quantity positions
+                    positions = [
+                        p for p in db_positions
+                        if float(p.get('quantity', 0)) > 0
+                    ]
 
             # Enrich with live data from Pacifica
             if self.pacifica_client and positions:
@@ -505,32 +533,172 @@ class BotIntegration:
 
         return grids
 
-    async def sync_positions(self) -> int:
-        """Sync positions from exchange to database."""
-        synced = 0
+    def _normalize_position_side(self, side: Optional[str]) -> str:
+        """Normalize position side from Pacifica format to database format.
+
+        Pacifica uses non-standard side names: 'bid'/'ask'/'long'/'short'
+        """
+        if not side:
+            return "LONG"
+        side_lower = str(side).lower()
+        if side_lower in ("long", "bid", "buy"):
+            return "LONG"
+        elif side_lower in ("short", "ask", "sell"):
+            return "SHORT"
+        side_upper = str(side).upper()
+        return side_upper if side_upper in ("LONG", "SHORT") else "LONG"
+
+    def _map_pacifica_position(self, pos: Dict[str, Any]) -> Dict[str, Any]:
+        """Map Pacifica position fields to database format."""
+        symbol = pos.get("symbol", "")
+
+        quantity = 0.0
+        for key in ("size", "amount", "quantity", "position_size", "pos_size"):
+            if key in pos and pos[key] is not None:
+                try:
+                    quantity = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        entry_price = 0.0
+        for key in ("avg_entry_price", "entry_price", "average_entry", "avg_price", "entry"):
+            if key in pos and pos[key] is not None:
+                try:
+                    entry_price = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        current_price = 0.0
+        for key in ("mark_price", "current_price", "last_price", "price"):
+            if key in pos and pos[key] is not None:
+                try:
+                    current_price = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        if current_price == 0 and symbol and self.ws_client:
+            try:
+                ws_price = self.ws_client.get_price(symbol)
+                if ws_price:
+                    current_price = ws_price
+            except Exception:
+                pass
+
+        if current_price == 0:
+            current_price = entry_price
+
+        side = self._normalize_position_side(pos.get("side"))
+
+        opened_at = None
+        for key in ("created_at", "opened_at", "timestamp", "open_time"):
+            if key in pos and pos[key] is not None:
+                opened_at = pos[key]
+                break
+        if not opened_at:
+            from datetime import datetime
+            opened_at = datetime.utcnow().isoformat()
+
+        unrealized_pnl = 0.0
+        for key in ("unrealized_pnl", "upnl", "floating_pnl"):
+            if key in pos and pos[key] is not None:
+                try:
+                    unrealized_pnl = float(pos[key])
+                    break
+                except (TypeError, ValueError):
+                    continue
+
+        if unrealized_pnl == 0 and entry_price > 0 and current_price > 0 and quantity > 0:
+            if side == "LONG":
+                unrealized_pnl = (current_price - entry_price) * quantity
+            else:
+                unrealized_pnl = (entry_price - current_price) * quantity
+
+        return {
+            "symbol": symbol,
+            "side": side,
+            "quantity": quantity,
+            "entry_price": entry_price,
+            "current_price": current_price,
+            "opened_at": opened_at,
+            "asset_class": pos.get("asset_class", "perpetual"),
+            "unrealized_pnl": round(unrealized_pnl, 2),
+        }
+
+    async def sync_positions(self) -> Dict[str, Any]:
+        """Sync positions from Pacifica exchange to database.
+
+        Returns:
+            Dict with synced/inserted/updated/closed counts and errors.
+        """
+        result = {
+            "success": False,
+            "synced_count": 0,
+            "inserted_count": 0,
+            "updated_count": 0,
+            "closed_count": 0,
+            "errors": [],
+        }
 
         try:
-            if self.trading_bot and hasattr(self.trading_bot, "_update_positions"):
-                # _update_positions is synchronous
-                self.trading_bot._update_positions()
+            if not self.pacifica_client or not self.database:
+                result["errors"].append("Client or database not available")
+                return result
 
-                # Count synced positions
-                if self.database:
-                    positions = self.database.get_positions()
-                    synced = len(positions) if positions else 0
+            live_positions = self.pacifica_client.get_positions()
 
-            elif self.pacifica_client and self.database:
-                # Manual sync if trading bot method not available
-                live_positions = self.pacifica_client.get_positions()
-                if live_positions:
-                    for pos in live_positions:
-                        self.database.upsert_position(pos)
-                    synced = len(live_positions)
+            # Get existing DB positions for insert vs update detection
+            existing_positions = {}
+            try:
+                db_positions = self.database.get_positions()
+                if db_positions:
+                    existing_positions = {
+                        p.get("symbol"): p for p in db_positions if p.get("symbol")
+                    }
+            except Exception as e:
+                logger.warning(f"Could not fetch existing DB positions: {e}")
+
+            # Filter and map live positions
+            active_symbols = set()
+            if live_positions:
+                for pos in live_positions:
+                    try:
+                        mapped = self._map_pacifica_position(pos)
+                        if mapped["quantity"] <= 0:
+                            continue
+
+                        symbol = mapped["symbol"]
+                        active_symbols.add(symbol)
+
+                        self.database.upsert_position(mapped)
+
+                        if symbol in existing_positions:
+                            result["updated_count"] += 1
+                        else:
+                            result["inserted_count"] += 1
+
+                        result["synced_count"] += 1
+                    except Exception as e:
+                        result["errors"].append(f"Error syncing {pos.get('symbol', '?')}: {e}")
+
+            # Remove positions closed on exchange
+            for symbol in existing_positions:
+                if symbol not in active_symbols:
+                    try:
+                        self.database.close_position(symbol)
+                        result["closed_count"] += 1
+                    except Exception as e:
+                        result["errors"].append(f"Error closing {symbol}: {e}")
+
+            result["success"] = True
 
         except Exception as e:
             logger.error(f"Error syncing positions: {e}")
+            result["errors"].append(str(e))
 
-        return synced
+        return result
 
     def get_activity(self, limit: int = 50) -> List[Dict]:
         """Get market activity with regime detection and RSI for each market."""
@@ -971,12 +1139,13 @@ async def get_activity(limit: int = 50):
 async def sync_positions():
     """Sync positions from exchange to database."""
     try:
-        synced_count = await bot_integration.sync_positions()
+        sync_result = await bot_integration.sync_positions()
+        synced_count = sync_result.get("synced_count", 0) if isinstance(sync_result, dict) else sync_result
         await broadcast_update("positions_synced", {"count": synced_count})
         return {
-            "success": True,
+            "success": sync_result.get("success", True) if isinstance(sync_result, dict) else True,
             "message": f"Synced {synced_count} positions",
-            "data": {"synced_count": synced_count},
+            "data": sync_result if isinstance(sync_result, dict) else {"synced_count": synced_count},
         }
     except Exception as e:
         logger.error(f"Error syncing positions: {e}")

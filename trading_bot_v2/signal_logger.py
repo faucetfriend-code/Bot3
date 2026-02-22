@@ -10,8 +10,9 @@ Features:
 import csv
 import os
 import threading
+import time
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Set
 from pathlib import Path
 from loguru import logger
 
@@ -47,6 +48,11 @@ class SignalLogger:
         # In-memory log
         self._signal_log: List[Dict[str, Any]] = []
 
+        # Signal deduplication tracking (60-second window)
+        self._recent_signal_ids: Set[str] = set()
+        self._signal_timestamps: Dict[str, float] = {}
+        self._dedup_window_seconds: int = 60
+
         # CSV setup
         if csv_path:
             self.csv_path = Path(csv_path)
@@ -57,7 +63,7 @@ class SignalLogger:
         # Initialize CSV with headers if it doesn't exist
         self._init_csv()
 
-        logger.info(f"SignalLogger initialized - CSV path: {self.csv_path}")
+        logger.info(f"SignalLogger initialized - CSV path: {self.csv_path}, dedup window: {self._dedup_window_seconds}s")
 
     def _init_csv(self):
         """Initialize CSV file with headers if it doesn't exist."""
@@ -80,7 +86,7 @@ class SignalLogger:
             "confidence",
             "quality",
             "regime",
-            "status",  # generated, executed, rejected, failed
+            "status",  # generated, executed, rejected, failed, position_updated
             "rejection_reason",
             "execution_result",
             "order_id",
@@ -89,6 +95,41 @@ class SignalLogger:
             "pnl",
             "notes",
         ]
+
+    def _generate_signal_id(self, signal) -> str:
+        """Generate unique signal ID from key fields (excludes price for dedup)."""
+        try:
+            symbol = getattr(signal, 'asset', str(signal))
+            strategy = getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else ""
+            side = getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else ""
+            return f"{symbol}:{strategy}:{side}"
+        except Exception as e:
+            logger.warning(f"Failed to generate signal ID: {e}")
+            return str(signal)
+
+    def _is_duplicate(self, signal_id: str) -> bool:
+        """Check if signal ID is a duplicate within deduplication window."""
+        current_time = time.time()
+        self._cleanup_old_signals(current_time)
+
+        if signal_id in self._recent_signal_ids:
+            logger.debug(f"Duplicate signal detected: {signal_id}")
+            return True
+
+        self._recent_signal_ids.add(signal_id)
+        self._signal_timestamps[signal_id] = current_time
+        return False
+
+    def _cleanup_old_signals(self, current_time: float) -> None:
+        """Remove signals outside the deduplication window."""
+        cutoff_time = current_time - self._dedup_window_seconds
+        old_signal_ids = [
+            signal_id for signal_id, timestamp in self._signal_timestamps.items()
+            if timestamp < cutoff_time
+        ]
+        for signal_id in old_signal_ids:
+            self._recent_signal_ids.discard(signal_id)
+            del self._signal_timestamps[signal_id]
 
     def log_signal_generated(
         self,
@@ -105,8 +146,14 @@ class SignalLogger:
             notes: Additional notes
 
         Returns:
-            Log entry dict
+            Log entry dict (empty if duplicate)
         """
+        # Check for duplicate signals
+        signal_id = self._generate_signal_id(signal)
+        if self._is_duplicate(signal_id):
+            logger.debug(f"Skipping duplicate signal log: {signal_id}")
+            return {}
+
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "symbol": getattr(signal, 'asset', str(signal)),
@@ -183,6 +230,7 @@ class SignalLogger:
         execution_result: str = "success",
         regime: str = "",
         notes: str = "",
+        status: str = "executed",
     ) -> Dict[str, Any]:
         """
         Log an executed signal.
@@ -195,10 +243,15 @@ class SignalLogger:
             execution_result: Result description
             regime: Current market regime
             notes: Additional notes
+            status: Signal status - "executed" for new positions, "position_updated" for updates
 
         Returns:
             Log entry dict
         """
+        if status not in ("executed", "position_updated"):
+            logger.warning(f"Invalid status '{status}' - defaulting to 'executed'")
+            status = "executed"
+
         entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "symbol": getattr(signal, 'asset', str(signal)),
@@ -210,7 +263,7 @@ class SignalLogger:
             "confidence": getattr(signal, 'confidence', 0),
             "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
             "regime": regime,
-            "status": "executed",
+            "status": status,
             "rejection_reason": "",
             "execution_result": execution_result,
             "order_id": str(order_id),
@@ -293,30 +346,37 @@ class SignalLogger:
             logger.error(f"Failed to write signal to CSV: {e}")
 
     def _save_to_database(self, entry: Dict[str, Any]):
-        """Save entry to database."""
+        """Save signal to database."""
         if not self.db_manager:
             return
 
         try:
-            import json
             from datetime import datetime
+
+            # Defensive: Ensure all keys exist to prevent KeyError
+            safe_entry = entry.copy()
+            for key in ["symbol", "asset_class", "strategy", "signal_type", "confidence",
+                       "side", "entry_price", "stop_loss", "take_profit", "quality",
+                       "regime", "status", "rejection_reason", "notes", "timestamp"]:
+                safe_entry.setdefault(key, "" if key in ["symbol", "asset_class", "strategy", "signal_type", "side", "quality", "regime", "status", "rejection_reason", "notes"] else 0)
+
             signal_data = {
-                "symbol": entry.get("symbol", ""),
-                "asset_class": entry.get("asset_class", "perpetual"),
-                "signal_type": entry.get("strategy", entry.get("signal_type", "unknown")),
-                "strength": entry.get("confidence", 0),
+                "symbol": safe_entry.get("symbol", ""),
+                "asset_class": safe_entry.get("asset_class", "perpetual"),
+                "signal_type": safe_entry.get("strategy", safe_entry.get("signal_type", "unknown")),
+                "strength": safe_entry.get("confidence", 0),
                 "indicators": {
-                    "side": entry.get("side", ""),
-                    "entry_price": entry.get("entry_price", 0),
-                    "stop_loss": entry.get("stop_loss", 0),
-                    "take_profit": entry.get("take_profit", 0),
-                    "quality": entry.get("quality", ""),
-                    "regime": entry.get("regime", ""),
-                    "status": entry.get("status", ""),
-                    "rejection_reason": entry.get("rejection_reason", ""),
-                    "notes": entry.get("notes", ""),
+                    "side": safe_entry.get("side", ""),
+                    "entry_price": safe_entry.get("entry_price", 0),
+                    "stop_loss": safe_entry.get("stop_loss", 0),
+                    "take_profit": safe_entry.get("take_profit", 0),
+                    "quality": safe_entry.get("quality", ""),
+                    "regime": safe_entry.get("regime", ""),
+                    "status": safe_entry.get("status", ""),
+                    "rejection_reason": safe_entry.get("rejection_reason", ""),
+                    "notes": safe_entry.get("notes", ""),
                 },
-                "timestamp": entry.get("timestamp", datetime.now().isoformat()),
+                "timestamp": safe_entry.get("timestamp", datetime.now().isoformat()),
             }
             self.db_manager.save_signal(signal_data)
         except Exception as e:
@@ -363,6 +423,7 @@ class SignalLogger:
                 "total": total,
                 "generated": generated,
                 "executed": executed,
+                "position_updated": by_status.get("position_updated", 0),
                 "rejected": by_status.get("rejected", 0),
                 "failed": by_status.get("failed", 0),
                 "execution_rate": (executed / generated * 100) if generated > 0 else 0,

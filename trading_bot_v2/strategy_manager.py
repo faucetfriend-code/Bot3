@@ -189,8 +189,8 @@ class StrategyManager:
             grid_max_positions = int(os.getenv("GRID_MAX_POSITIONS_PER_SYMBOL", "10"))
             grid_emergency_stop = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
             grid_adx_threshold = float(
-                os.getenv("GRID_ADX_THRESHOLD", "25.0")
-            )  # Was 20.0 - align with regime
+                os.getenv("GRID_ADX_THRESHOLD", "20.0")
+            )  # Lowered from 25.0 to 20.0 for more grid signals
             grid_min_confidence = float(
                 os.getenv("GRID_MIN_CONFIDENCE", "0.45")
             )  # Was 0.6 - more signals
@@ -802,7 +802,21 @@ class StrategyManager:
         if not signals:
             return []
 
+        # Separate signals by direction
+        buy_signals = [s for s in signals if s.side == OrderSide.BUY]
+        sell_signals = [s for s in signals if s.side == OrderSide.SELL]
+
+        # SPECIAL CASE: Grid Trading BUY + SELL signals (not conflicting)
+        # Grid trading generates both sides simultaneously to set up the grid
+        # Handle this FIRST to ensure grid signals are not blocked by high-conviction filter
+        if buy_signals and sell_signals:
+            grid_signals = self._handle_grid_signals(buy_signals, sell_signals, regime)
+            if grid_signals:
+                return grid_signals
+            # If not a valid grid setup, continue to normal conflict resolution
+
         # Check for HIGH_CONVICTION signals (automatic priority)
+        # Note: Grid signals already handled above, so this won't block grid signals
         high_conviction_signals = [
             s for s in signals if s.quality == TradeQuality.HIGH_CONVICTION
         ]
@@ -815,18 +829,6 @@ class StrategyManager:
                 f"{best_signal.strategy.value} {best_signal.side.value} @ {best_signal.confidence:.2%}"
             )
             return [best_signal]
-
-        # Separate signals by direction
-        buy_signals = [s for s in signals if s.side == OrderSide.BUY]
-        sell_signals = [s for s in signals if s.side == OrderSide.SELL]
-
-        # SPECIAL CASE: Grid Trading BUY + SELL signals (not conflicting)
-        # Grid trading generates both sides simultaneously to set up the grid
-        if buy_signals and sell_signals:
-            grid_signals = self._handle_grid_signals(buy_signals, sell_signals, regime)
-            if grid_signals:
-                return grid_signals
-            # If not a valid grid setup, continue to normal conflict resolution
 
         # Case 1: All signals same direction → Combine
         if buy_signals and not sell_signals:

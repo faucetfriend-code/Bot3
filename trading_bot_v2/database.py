@@ -325,6 +325,24 @@ def init_database():
                     );
                 """)
 
+            # Enhanced grid state columns for consistency management
+            grid_state_alter_statements = [
+                "ALTER TABLE grid_states ADD COLUMN center_price REAL",
+                "ALTER TABLE grid_states ADD COLUMN initial_center REAL",
+                "ALTER TABLE grid_states ADD COLUMN orders_placed INTEGER DEFAULT 0",
+                "ALTER TABLE grid_states ADD COLUMN refresh_count INTEGER DEFAULT 0",
+                "ALTER TABLE grid_states ADD COLUMN last_refresh TIMESTAMP",
+                "ALTER TABLE grid_states ADD COLUMN consistency_checked_at TIMESTAMP",
+                "ALTER TABLE grid_states ADD COLUMN repair_history TEXT",
+            ]
+
+            for alter_sql in grid_state_alter_statements:
+                try:
+                    conn.execute(alter_sql)
+                except Exception as e:
+                    if "duplicate column name" not in str(e).lower():
+                        logger.warning(f"Failed to add grid state column: {e}")
+
             # Add account_id columns to existing tables if they don't exist
             alter_statements = [
                 "ALTER TABLE trades ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
@@ -706,36 +724,6 @@ class DatabaseManager:
 
         # Cache result for 30 seconds
         _data_cache.set(cache_key, result, ttl=30)
-
-        return result
-
-    def get_trades(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Get recent trades with caching."""
-        cache_key = f"trades_recent_{limit}"
-
-        # Try cache first
-        cached = _data_cache.get(cache_key)
-        if cached:
-            logger.debug(f"get_trades: cache hit for {limit} trades")
-            return cached
-
-        start_time = time.time()
-        with get_db_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM trades
-                ORDER BY entry_time DESC
-                LIMIT ?
-                """,
-                (limit,),
-            )
-            result = [dict(row) for row in cursor.fetchall()]
-
-        query_time = time.time() - start_time
-        logger.info(f"get_trades: fetched {len(result)} trades in {query_time:.3f}s")
-
-        # Cache result for 60 seconds
-        _data_cache.set(cache_key, result, ttl=60)
 
         return result
 

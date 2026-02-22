@@ -684,6 +684,44 @@
             </section>
 
             <section>
+                <h2>Signal Log <span id="signals-count">(0)</span></h2>
+                <table id="signals-table">
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Symbol</th>
+                            <th>Strategy</th>
+                            <th>Side</th>
+                            <th>Entry</th>
+                            <th>SL</th>
+                            <th>TP</th>
+                            <th>Confidence</th>
+                            <th>Status</th>
+                            <th>Quality</th>
+                        </tr>
+                    </thead>
+                    <tbody id="signals-tbody">
+                        <tr>
+                            <td colspan="10" style="text-align: center;">No signals yet</td>
+                        </tr>
+                    </tbody>
+                </table>
+                <div class="last-update" id="signals-last-update">Last updated: Never</div>
+            </section>
+
+            <section>
+                <h2>Signal Statistics</h2>
+                <div id="signal-stats" class="stats-cards">
+                    <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-updated">0</div><div class="card-label">Updated</div></div>
+                    <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
+                    <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
+                </div>
+            </section>
+
+            <section>
                 <h2>Active Grids <span id="grids-count">(0)</span> <span id="grids-pnl"></span></h2>
                 <table id="grids-table">
                     <thead>
@@ -751,43 +789,6 @@
                     </tbody>
                 </table>
                 <div class="last-update" id="orders-last-update">Last updated: Never</div>
-            </section>
-
-            <section>
-                <h2>Signal Log <span id="signals-count">(0)</span></h2>
-                <table id="signals-table">
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Symbol</th>
-                            <th>Strategy</th>
-                            <th>Side</th>
-                            <th>Entry</th>
-                            <th>SL</th>
-                            <th>TP</th>
-                            <th>Confidence</th>
-                            <th>Status</th>
-                            <th>Quality</th>
-                        </tr>
-                    </thead>
-                    <tbody id="signals-tbody">
-                        <tr>
-                            <td colspan="10" style="text-align: center;">No signals yet</td>
-                        </tr>
-                    </tbody>
-                </table>
-                <div class="last-update" id="signals-last-update">Last updated: Never</div>
-            </section>
-
-            <section>
-                <h2>Signal Statistics</h2>
-                <div id="signal-stats" class="stats-cards">
-                    <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
-                    <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
-                    <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
-                    <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
-                    <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
-                </div>
             </section>
 
             <section>
@@ -1065,8 +1066,9 @@
 
                         // Side with color
                         const sideCell = document.createElement('td');
-                        sideCell.textContent = pos.side;
-                        sideCell.className = pos.side === 'long' ? 'positive' : 'negative';
+                        const side = (pos.side || '').toLowerCase();
+                        sideCell.textContent = side;
+                        sideCell.className = side === 'long' ? 'positive' : 'negative';
                         row.appendChild(sideCell);
 
                         // Quantity
@@ -1150,8 +1152,9 @@
 
                         // Side with color
                         const sideCell = document.createElement('td');
-                        sideCell.textContent = trade.side;
-                        sideCell.className = trade.side === 'BUY' || trade.side === 'buy' ? 'positive' : 'negative';
+                        const tradeSide = (trade.side || '').toUpperCase();
+                        sideCell.textContent = tradeSide;
+                        sideCell.className = (tradeSide === 'BUY' || tradeSide === 'LONG') ? 'positive' : 'negative';
                         row.appendChild(sideCell);
 
                         // Quantity
@@ -1343,8 +1346,9 @@
 
                         // Side with color
                         const sideCell = document.createElement('td');
-                        sideCell.textContent = order.side;
-                        sideCell.className = order.side === 'BUY' || order.side === 'buy' || order.side === 'bid' ? 'positive' : 'negative';
+                        const orderSide = (order.side || '').toUpperCase();
+                        sideCell.textContent = orderSide;
+                        sideCell.className = (orderSide === 'BUY' || orderSide === 'BID' || orderSide === 'LONG') ? 'positive' : 'negative';
                         row.appendChild(sideCell);
 
                         // Type
@@ -1402,7 +1406,7 @@
 
                 // Calculate total P&L across all grids
                 let totalPnl = 0;
-                data.forEach(g => totalPnl += (g.total_pnl || 0));
+                data.forEach(g => totalPnl += (g.realized_pnl || g.total_pnl || 0));
                 const pnlSpan = document.getElementById('grids-pnl');
                 if (totalPnl !== 0) {
                     pnlSpan.textContent = `P&L: $${totalPnl.toFixed(4)}`;
@@ -1435,7 +1439,9 @@
 
                         // Price Range
                         const rangeCell = document.createElement('td');
-                        rangeCell.textContent = `$${(grid.price_low || 0).toLocaleString()} - $${(grid.price_high || 0).toLocaleString()}`;
+                        const priceLow = grid.lower_price || grid.price_low || 0;
+                        const priceHigh = grid.upper_price || grid.price_high || 0;
+                        rangeCell.textContent = `$${parseFloat(priceLow).toLocaleString()} - $${parseFloat(priceHigh).toLocaleString()}`;
                         row.appendChild(rangeCell);
 
                         // Fills (Buy/Sell)

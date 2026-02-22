@@ -2,7 +2,8 @@ import json
 import time
 import uuid
 import base58
-from typing import Dict, List, Any, Optional
+from collections import defaultdict, deque
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 from enum import Enum
 
 import requests
@@ -27,6 +28,211 @@ class RateLimitError(Exception):
     """Custom exception for HTTP 429 rate limit errors - allows retry with backoff."""
 
     pass
+
+
+class RequestPriority(Enum):
+    """Priority levels for API requests."""
+
+    CRITICAL = 3  # Trading operations (place/cancel orders)
+    HIGH = 2  # Market data needed for trading decisions
+    NORMAL = 1  # Background refreshes and non-critical data
+    LOW = 0  # Statistics and monitoring
+
+
+class RateLimitManager:
+    """Manages API rate limiting with circuit breaker patterns."""
+
+    def __init__(self, max_requests_per_minute: int = 30):
+        """
+        Initialize rate limit manager.
+
+        Args:
+            max_requests_per_minute: Maximum requests per minute (conservative limit)
+        """
+        self.max_rpm = max_requests_per_minute
+        self.requests = deque(maxlen=max_requests_per_minute)
+        self.last_reset = time.time()
+        self.circuit_breaker_active = False
+        self.circuit_breaker_until = 0
+        self.rate_limit_hits = 0
+        self.total_requests = 0
+        self.priority_stats = defaultdict(lambda: {"count": 0, "success": 0})
+
+    def can_make_request(
+        self, priority: Union[str, RequestPriority] = RequestPriority.NORMAL
+    ) -> bool:
+        """Check if request can be made based on rate limits and circuit breaker."""
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+
+        now = time.time()
+
+        # Reset counter every minute
+        if now - self.last_reset > 60:
+            self.requests.clear()
+            self.last_reset = now
+            self.circuit_breaker_active = False
+            self.rate_limit_hits = 0
+
+        # Check circuit breaker
+        if self.circuit_breaker_active:
+            if now < self.circuit_breaker_until:
+                return False
+            else:
+                self.circuit_breaker_active = False
+
+        # Allow critical requests even near rate limit
+        if priority == RequestPriority.CRITICAL:
+            if len(self.requests) < self.max_rpm:
+                return True
+            else:
+                logger.error(
+                    f"Critical request blocked by rate limit: {len(self.requests)}/{self.max_rpm}"
+                )
+                return False
+
+        return len(self.requests) < self.max_rpm
+
+    def record_request(
+        self,
+        priority: Union[str, RequestPriority] = RequestPriority.NORMAL,
+        success: bool = True,
+    ):
+        """Record a request was made."""
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+
+        self.requests.append(time.time())
+        self.total_requests += 1
+        self.priority_stats[priority]["count"] += 1
+        if success:
+            self.priority_stats[priority]["success"] += 1
+
+    def record_rate_limit_hit(self):
+        """Record a rate limit hit and activate circuit breaker if needed."""
+        self.rate_limit_hits += 1
+
+        recent_hits = sum(
+            1 for req_time in self.requests if time.time() - req_time < 60
+        )
+        if recent_hits >= 3:
+            self.activate_circuit_breaker(duration=30)
+
+    def activate_circuit_breaker(self, duration: int = 30):
+        """Temporarily pause requests due to rate limit."""
+        self.circuit_breaker_active = True
+        self.circuit_breaker_until = time.time() + duration
+        logger.warning(
+            f"Circuit breaker activated for {duration} seconds due to rate limiting"
+        )
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get rate limiting statistics."""
+        return {
+            "total_requests": self.total_requests,
+            "rate_limit_hits": self.rate_limit_hits,
+            "circuit_breaker_active": self.circuit_breaker_active,
+            "current_usage": len(self.requests),
+            "max_rpm": self.max_rpm,
+            "reset_in": max(0, 60 - (time.time() - self.last_reset)),
+        }
+
+
+class SmartCache:
+    """Intelligent caching system with TTL and invalidation."""
+
+    def __init__(self, rate_manager: RateLimitManager):
+        self.cache: Dict[str, Tuple[Any, float, RequestPriority]] = {}
+        self.cache_stats = defaultdict(lambda: {"hits": 0, "misses": 0})
+        self.rate_manager = rate_manager
+
+        # TTL by data type (in seconds)
+        self.ttl_config = {
+            "market_data": 10,
+            "candles_1m": 60,
+            "candles_5m": 120,
+            "candles_15m": 300,
+            "account_data": 30,
+            "positions": 30,
+            "orders": 60,
+            "markets": 3600,
+            "funding": 300,
+        }
+
+    def get(
+        self,
+        key: str,
+        fetch_func: Callable[[], Any],
+        ttl: Optional[int] = None,
+        priority: Union[str, RequestPriority] = RequestPriority.NORMAL,
+    ) -> Any:
+        """Get cached data or fetch if not available."""
+        if isinstance(priority, str):
+            priority = RequestPriority[priority.upper()]
+
+        # Check cache
+        if key in self.cache:
+            data, timestamp, cached_priority = self.cache[key]
+            cache_ttl = ttl or self._get_ttl_for_key(key)
+
+            if time.time() - timestamp < cache_ttl:
+                self.cache_stats[key]["hits"] += 1
+                return data
+            else:
+                del self.cache[key]
+
+        # Cache miss - check rate limit before fetching
+        if not self.rate_manager.can_make_request(priority):
+            self._wait_for_rate_limit(priority)
+
+        self.cache_stats[key]["misses"] += 1
+        try:
+            data = fetch_func()
+            self.cache[key] = (data, time.time(), priority)
+            self.rate_manager.record_request(priority, success=True)
+            return data
+        except Exception as e:
+            self.rate_manager.record_request(priority, success=False)
+            if "rate limit" in str(e).lower() or "429" in str(e):
+                self.rate_manager.record_rate_limit_hit()
+            raise
+
+    def _get_ttl_for_key(self, key: str) -> int:
+        """Get TTL for a cache key based on its type."""
+        for pattern, ttl in self.ttl_config.items():
+            if pattern in key:
+                return ttl
+        return 300  # Default 5 minutes
+
+    def _wait_for_rate_limit(self, priority: RequestPriority):
+        """Wait until rate limit allows requests."""
+        wait_count = 0
+        while not self.rate_manager.can_make_request(priority):
+            wait_count += 1
+            if wait_count > 60:
+                raise RateLimitError("Extended rate limit exceeded")
+            time.sleep(1)
+
+    def invalidate(self, pattern: Optional[str] = None):
+        """Invalidate cache entries matching pattern (or all if None)."""
+        if pattern is None:
+            self.cache.clear()
+        else:
+            keys_to_remove = [k for k in self.cache if pattern in k]
+            for key in keys_to_remove:
+                del self.cache[key]
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get cache statistics."""
+        total_hits = sum(s["hits"] for s in self.cache_stats.values())
+        total_misses = sum(s["misses"] for s in self.cache_stats.values())
+        total = total_hits + total_misses
+        return {
+            "total_entries": len(self.cache),
+            "total_hits": total_hits,
+            "total_misses": total_misses,
+            "hit_rate": (total_hits / total * 100) if total > 0 else 0,
+        }
 
 
 class PacificaEnvironment(Enum):
@@ -113,7 +319,12 @@ class PacificaClient:
         # Connection pooling - reuse TCP connections for better performance
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
-        logger.info("PacificaClient initialized with connection pooling")
+
+        # Rate limiting and caching
+        self.rate_manager = RateLimitManager(max_requests_per_minute=30)
+        self.cache = SmartCache(self.rate_manager)
+
+        logger.info("PacificaClient initialized with connection pooling, rate limiting, and smart caching")
 
     @retry(
         stop=stop_after_attempt(5),

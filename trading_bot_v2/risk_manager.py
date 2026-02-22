@@ -7,11 +7,17 @@ Eliminates duplicate risk logic across trading_bot.py, position sizing, and vali
 
 import time
 from enum import Enum
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, TYPE_CHECKING
 from loguru import logger
+
+if TYPE_CHECKING:
+    from .pacifica_client import PacificaClient
 
 # Type hints for grid exposure tracking
 GridExposure = Dict[str, float]
+
+# Margin data cache structure
+MarginData = Dict[str, Any]
 
 
 class RiskProfile(Enum):
@@ -42,9 +48,17 @@ class RiskManager:
         max_portfolio_risk_pct: float = 0.05,  # Was 0.02 - 5% max per trade (increased for more trades)
         max_portfolio_exposure_pct: float = 0.15,  # Was 0.10 - 15% max total exposure
         risk_profiles: Optional[Dict[str, float]] = None,
+        client: Optional["PacificaClient"] = None,
+        max_margin_utilization_pct: float = 0.75,  # 75% max margin utilization
+        maintenance_margin_buffer_pct: float = 0.15,  # 15% buffer above maintenance margin
     ):
         self.max_portfolio_risk_pct = max_portfolio_risk_pct
         self.max_portfolio_exposure_pct = max_portfolio_exposure_pct
+        self.client = client  # Pacifica client for margin data retrieval
+
+        # Margin safety parameters
+        self.max_margin_utilization_pct = max_margin_utilization_pct
+        self.maintenance_margin_buffer_pct = maintenance_margin_buffer_pct
 
         # Grid exposure tracking per Grid Trading Brief
         self.grid_exposure: GridExposure = {}  # Track grid exposure per symbol
@@ -64,8 +78,16 @@ class RiskManager:
             RiskProfile.HIGH.value: 1.5,  # 150% of base risk
         }
 
+        # Margin data cache for reducing API calls
+        self._margin_data_cache: Optional[MarginData] = None
+        self._margin_cache_timestamp: float = 0.0
+        self._margin_cache_ttl: int = 30  # 30 seconds cache TTL
+
         logger.info(
-            f"RiskManager initialized (AUTHORITATIVE MODE): max_risk={max_portfolio_risk_pct * 100}%, max_exposure={max_portfolio_exposure_pct * 100}%"
+            f"RiskManager initialized (AUTHORITATIVE MODE): max_risk={max_portfolio_risk_pct * 100}%, "
+            f"max_exposure={max_portfolio_exposure_pct * 100}%, "
+            f"max_margin_util={max_margin_utilization_pct * 100}%, "
+            f"mm_buffer={maintenance_margin_buffer_pct * 100}%"
         )
 
     def get_position_size(
@@ -330,6 +352,19 @@ class RiskManager:
             "trend_following": RiskProfile.HIGH.value,
             "trendfollowing": RiskProfile.HIGH.value,  # Handle no underscore
             "trend following": RiskProfile.HIGH.value,  # Handle space
+            # Advanced Strategies
+            "vwap_scalping": RiskProfile.MEDIUM.value,
+            "vwapscalping": RiskProfile.MEDIUM.value,
+            "vwap scalping": RiskProfile.MEDIUM.value,
+            "funding_arbitrage": RiskProfile.LOW.value,
+            "fundingarbitrage": RiskProfile.LOW.value,
+            "funding arbitrage": RiskProfile.LOW.value,
+            "momentum_scalping": RiskProfile.HIGH.value,
+            "momentum scalping": RiskProfile.HIGH.value,
+            "momentumscalping": RiskProfile.HIGH.value,
+            "order_book_imbalance": RiskProfile.MEDIUM.value,
+            "orderbookimbalance": RiskProfile.MEDIUM.value,
+            "order book imbalance": RiskProfile.MEDIUM.value,
         }
 
         profile = strategy_profiles.get(normalized_type, RiskProfile.MEDIUM.value)
@@ -584,7 +619,7 @@ class RiskManager:
         return True
 
     def unregister_migrated_position(
-        self, symbol: str, side: str, qty: float = None
+        self, symbol: str, side: str, qty: Optional[float] = None
     ) -> bool:
         """
         Unregister a migrated position (when closed via TP/SL/manual).
@@ -624,7 +659,7 @@ class RiskManager:
 
         return removed
 
-    def get_migrated_exposure(self, symbol: str = None) -> float:
+    def get_migrated_exposure(self, symbol: Optional[str] = None) -> float:
         """
         Get total exposure from migrated positions.
 
@@ -647,7 +682,7 @@ class RiskManager:
 
         return total
 
-    def get_total_exposure(self, symbol: str = None) -> Dict[str, float]:
+    def get_total_exposure(self, symbol: Optional[str] = None) -> Dict[str, float]:
         """
         Get combined exposure for symbol (grid + migrated + other).
 
@@ -717,7 +752,7 @@ class RiskManager:
 
         return result
 
-    def get_migrated_positions(self, symbol: str = None) -> list:
+    def get_migrated_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get list of migrated positions.
 
@@ -736,7 +771,7 @@ class RiskManager:
                     all_positions.append({**pos, "symbol": sym})
             return all_positions
 
-    def has_migrated_positions(self, symbol: str = None) -> bool:
+    def has_migrated_positions(self, symbol: Optional[str] = None) -> bool:
         """Check if there are any migrated positions."""
         if symbol:
             return bool(self.migrated_positions.get(symbol))
@@ -768,6 +803,234 @@ class RiskManager:
 
         return False
 
+    # =========================
+    # MARGIN SAFETY SYSTEM
+    # =========================
+
+    def get_margin_data(self, force_refresh: bool = False) -> Optional[MarginData]:
+        """
+        Fetch and cache margin data from Pacifica API.
+
+        Args:
+            force_refresh: If True, bypass cache and fetch fresh data
+
+        Returns:
+            Dict with margin data or None if client not available
+        """
+        if not self.client:
+            logger.debug("No Pacifica client available for margin data retrieval")
+            return None
+
+        current_time = time.time()
+        if (
+            not force_refresh
+            and self._margin_data_cache is not None
+            and (current_time - self._margin_cache_timestamp) < self._margin_cache_ttl
+        ):
+            return self._margin_data_cache
+
+        try:
+            balance_response = self.client.get_balance()
+
+            if not balance_response:
+                logger.warning("Empty balance response from Pacifica API")
+                return None
+
+            raw_data = balance_response if isinstance(balance_response, dict) else {}
+
+            margin_data: MarginData = {
+                "account_equity": self._parse_float_safe(
+                    raw_data.get("account_equity", "0")
+                ),
+                "total_margin_used": self._parse_float_safe(
+                    raw_data.get("total_margin_used", "0")
+                ),
+                "cross_mmr": self._parse_float_safe(raw_data.get("cross_mmr", "0")),
+                "available_to_spend": self._parse_float_safe(
+                    raw_data.get("available_to_spend", raw_data.get("available_balance", "0"))
+                ),
+                "balance": self._parse_float_safe(
+                    raw_data.get("balance", "0")
+                ),
+                "timestamp": current_time,
+            }
+
+            if margin_data["account_equity"] > 0:
+                margin_data["margin_utilization_pct"] = (
+                    margin_data["total_margin_used"] / margin_data["account_equity"]
+                )
+            else:
+                margin_data["margin_utilization_pct"] = 0.0
+
+            self._margin_data_cache = margin_data
+            self._margin_cache_timestamp = current_time
+
+            logger.debug(
+                f"Margin data refreshed: equity=${margin_data['account_equity']:.2f}, "
+                f"margin_used=${margin_data['total_margin_used']:.2f}, "
+                f"utilization={margin_data['margin_utilization_pct']*100:.1f}%"
+            )
+
+            return margin_data
+
+        except Exception as e:
+            logger.error(f"Error fetching margin data: {e}")
+            if self._margin_data_cache is not None:
+                logger.warning("Returning stale margin data due to fetch error")
+                return self._margin_data_cache
+            return None
+
+    def _parse_float_safe(self, value: Any, default: float = 0.0) -> float:
+        """Safely parse a value to float, handling strings and None."""
+        if value is None:
+            return default
+        try:
+            if isinstance(value, str):
+                value = value.replace(",", "").replace("$", "").strip()
+            return float(value)
+        except (ValueError, TypeError):
+            return default
+
+    def check_margin_safety(self, proposed_margin: float = 0.0) -> Dict[str, Any]:
+        """
+        Check if margin levels are safe for opening new positions.
+
+        Args:
+            proposed_margin: Estimated margin required for proposed position
+
+        Returns:
+            Dict with 'safe', 'utilization_after', 'available_margin', 'reason', 'warnings'
+        """
+        result: Dict[str, Any] = {
+            "safe": True,
+            "utilization_after": 0.0,
+            "available_margin": 0.0,
+            "reason": "",
+            "warnings": [],
+        }
+
+        margin_data = self.get_margin_data()
+
+        if not margin_data:
+            result["warnings"].append("Unable to retrieve margin data - proceeding with caution")
+            logger.warning("Margin safety check skipped - no margin data available")
+            return result
+
+        account_equity = margin_data.get("account_equity", 0.0)
+        total_margin_used = margin_data.get("total_margin_used", 0.0)
+        cross_mmr = margin_data.get("cross_mmr", 0.0)
+
+        # Check 1: Current utilization
+        if account_equity > 0:
+            current_utilization = total_margin_used / account_equity
+            result["utilization_after"] = (total_margin_used + proposed_margin) / account_equity
+        else:
+            current_utilization = 0.0
+            result["utilization_after"] = 0.0
+
+        if current_utilization >= self.max_margin_utilization_pct:
+            result["safe"] = False
+            result["reason"] = (
+                f"Current margin utilization ({current_utilization*100:.1f}%) "
+                f"exceeds maximum ({self.max_margin_utilization_pct*100:.1f}%)"
+            )
+            logger.warning(result["reason"])
+            return result
+
+        # Check 2: Proposed utilization
+        if result["utilization_after"] > self.max_margin_utilization_pct:
+            result["safe"] = False
+            result["reason"] = (
+                f"Position would exceed max margin utilization: "
+                f"{result['utilization_after']*100:.1f}% > {self.max_margin_utilization_pct*100:.1f}%"
+            )
+            logger.warning(result["reason"])
+            return result
+
+        # Check 3: Maintenance margin buffer
+        if cross_mmr > 0 and account_equity > 0:
+            required_equity = cross_mmr * (1.0 + self.maintenance_margin_buffer_pct)
+            if account_equity < required_equity:
+                result["safe"] = False
+                result["reason"] = (
+                    f"Account equity (${account_equity:.2f}) below safe level "
+                    f"(${required_equity:.2f}) for maintenance margin"
+                )
+                logger.warning(result["reason"])
+                return result
+
+            safety_buffer = account_equity - cross_mmr
+            if safety_buffer < cross_mmr * 0.1:
+                result["warnings"].append(
+                    f"Low maintenance margin buffer: ${safety_buffer:.2f}"
+                )
+
+        # Check 4: Available margin
+        result["available_margin"] = self._calculate_available_margin(margin_data)
+
+        if proposed_margin > 0 and result["available_margin"] < proposed_margin:
+            result["safe"] = False
+            result["reason"] = (
+                f"Insufficient available margin: ${result['available_margin']:.2f} < "
+                f"${proposed_margin:.2f} required"
+            )
+            logger.warning(result["reason"])
+            return result
+
+        return result
+
+    def _calculate_available_margin(self, margin_data: MarginData) -> float:
+        """Calculate available margin for new positions."""
+        account_equity = margin_data.get("account_equity", 0.0)
+        total_margin_used = margin_data.get("total_margin_used", 0.0)
+        available_to_spend = margin_data.get("available_to_spend", 0.0)
+
+        max_margin_allowed = account_equity * self.max_margin_utilization_pct
+        equity_based_available = max(0.0, max_margin_allowed - total_margin_used)
+
+        return min(available_to_spend, equity_based_available)
+
+    def get_margin_summary(self) -> Dict[str, Any]:
+        """Get comprehensive margin status summary."""
+        margin_data = self.get_margin_data()
+
+        if not margin_data:
+            return {"status": "unavailable", "error": "Unable to retrieve margin data"}
+
+        account_equity = margin_data.get("account_equity", 0.0)
+        total_margin_used = margin_data.get("total_margin_used", 0.0)
+        cross_mmr = margin_data.get("cross_mmr", 0.0)
+        available_to_spend = margin_data.get("available_to_spend", 0.0)
+
+        utilization_pct = (
+            (total_margin_used / account_equity * 100) if account_equity > 0 else 0.0
+        )
+        available_margin = self._calculate_available_margin(margin_data)
+
+        if utilization_pct >= self.max_margin_utilization_pct * 100:
+            status = "critical"
+        elif utilization_pct >= self.max_margin_utilization_pct * 100 * 0.8:
+            status = "warning"
+        else:
+            status = "healthy"
+
+        mm_buffer = (
+            (account_equity - cross_mmr) / cross_mmr * 100 if cross_mmr > 0 else 100.0
+        )
+
+        return {
+            "status": status,
+            "account_equity": account_equity,
+            "total_margin_used": total_margin_used,
+            "cross_mmr": cross_mmr,
+            "available_to_spend": available_to_spend,
+            "available_margin": available_margin,
+            "utilization_pct": utilization_pct,
+            "max_utilization_pct": self.max_margin_utilization_pct * 100,
+            "maintenance_margin_buffer_pct": mm_buffer,
+            "safe_for_new_positions": status != "critical",
+        }
+
     def emergency_stop_all(self):
         """
         Emergency stop - revoke all allocations and reset exposure tracking.
@@ -790,5 +1053,10 @@ class RiskManager:
                 f"POSITIONS STILL EXIST ON EXCHANGE!"
             )
         self.migrated_positions.clear()
+
+        # Clear margin data cache
+        if self._margin_data_cache is not None:
+            self._margin_data_cache = None
+            self._margin_cache_timestamp = 0.0
 
         logger.critical("All capital allocations revoked and exposure reset")
