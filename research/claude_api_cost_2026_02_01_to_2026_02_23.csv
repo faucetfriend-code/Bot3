@@ -1,0 +1,12 @@
+usage_date_utc,model,workspace,api_key,usage_type,context_window,token_type,cost_usd,cost_type,inference_geo,speed
+2026-02-10,Claude Haiku 4.5,Claude Code,claude_code_key_faucetfriend_wwjj,message,≤ 200k,input_no_cache,0.00,token,not_available,
+2026-02-10,Claude Haiku 4.5,Claude Code,claude_code_key_faucetfriend_wwjj,message,≤ 200k,output,0.00,token,not_available,
+2026-02-22,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_no_cache,0.00,token,not_available,
+2026-02-22,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_cache_read,1.46,token,not_available,
+2026-02-22,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_cache_write_5m,3.38,token,not_available,
+2026-02-22,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_cache_write_5m,0.10,token,not_available,
+2026-02-22,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,output,0.66,token,not_available,
+2026-02-23,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_no_cache,0.00,token,not_available,
+2026-02-23,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_cache_read,0.04,token,not_available,
+2026-02-23,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,input_cache_write_5m,0.19,token,not_available,
+2026-02-23,Claude Haiku 4.5,Default,openclawaccess,message,≤ 200k,output,0.01,token,not_available,
