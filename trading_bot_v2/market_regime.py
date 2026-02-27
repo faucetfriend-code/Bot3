@@ -79,6 +79,11 @@ class MarketRegimeDetector:
         self._trend_direction_cache: Dict[str, Dict] = {}
         self._trend_cache_ttl_minutes = 5  # Trend direction cache TTL
 
+        # ADX value cache — stores the last calculated ADX per symbol so downstream
+        # components can use it without recalculating from raw data
+        self._last_adx: Dict[str, float] = {}
+        self._last_calculated_adx: Optional[float] = None  # Set during detect_regime()
+
         logger.info(
             f"MarketRegimeDetector initialized: "
             f"ADX trending={adx_trending_threshold}, "
@@ -137,6 +142,7 @@ class MarketRegimeDetector:
         # Step 1: Calculate ADX
         try:
             adx = calculate_adx(highs, lows, closes, period=self.adx_period)
+            self._last_calculated_adx = adx  # Store for get_last_adx() callers
         except Exception as e:
             logger.error(f"Error calculating ADX: {e}")
             raise
@@ -220,6 +226,11 @@ class MarketRegimeDetector:
         # Cache miss or expired - check for pending regime change
         new_regime = self._detect_regime_with_confirmation(symbol, market_data)
 
+        # Store the ADX value that was calculated during regime detection
+        # so downstream components can use it without recalculating
+        if self._last_calculated_adx is not None:
+            self._last_adx[symbol] = self._last_calculated_adx
+
         # Update cache
         self._regime_cache[symbol] = {
             "regime": new_regime,
@@ -229,6 +240,17 @@ class MarketRegimeDetector:
 
         logger.debug(f"Regime recalculated for {symbol}: {new_regime.value}")
         return new_regime
+
+    def get_last_adx(self, symbol: str) -> Optional[float]:
+        """
+        Return the last ADX value calculated for this symbol during regime detection.
+
+        This allows downstream components (e.g. GridTradingStrategy) to use the
+        regime detector's already-calculated ADX instead of recalculating it from
+        the same raw data. Returns None if regime detection hasn't run for this
+        symbol yet or if the cache was served (no recalculation occurred).
+        """
+        return self._last_adx.get(symbol)
 
     def _detect_regime_with_confirmation(
         self, symbol: str, market_data: Dict[str, List[float]]

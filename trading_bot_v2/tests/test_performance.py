@@ -231,6 +231,7 @@ class TestPerformanceBenchmarks:
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
             patch("trading_bot_v2.trading_bot.MarketRegimeDetector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=mock_ws),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws

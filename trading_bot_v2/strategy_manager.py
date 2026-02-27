@@ -596,6 +596,11 @@ class StrategyManager:
                 # Default to INDECISIVE if regime detection fails
                 regime = MarketRegime.INDECISIVE
 
+            # Retrieve the ADX the detector just calculated so grid_trading can
+            # use it directly instead of recalculating from the same raw data.
+            # Will be None if the regime was served from cache (no recalculation).
+            regime_adx = self.regime_detector.get_last_adx(symbol)
+
             # Step 2: Get active strategies for current regime
             active_strategy_names = self.regime_detector.get_active_strategies(regime)
 
@@ -712,6 +717,23 @@ class StrategyManager:
                         else:
                             logger.debug(f"{symbol}: No orderbook data for OrderBookImbalance")
                             signals = []
+
+                    # Special handling for GridTrading - pass through the regime detector's
+                    # already-calculated ADX so the strategy doesn't recalculate it
+                    elif strategy_name == "GridTrading":
+                        try:
+                            signals = strategy.generate_signals(
+                                symbol,
+                                multi_tf_data,
+                                current_price,
+                                execution_tf_data=execution_tf_data,
+                                regime_adx=regime_adx,
+                            )
+                        except TypeError:
+                            signals = strategy.generate_signals(
+                                symbol, multi_tf_data, current_price
+                            )
+
                     else:
                         # Pass execution_tf_data if the strategy accepts it (Mean Reversion, Liquidation Capture)
                         # Other strategies will ignore it (backward compatibility)

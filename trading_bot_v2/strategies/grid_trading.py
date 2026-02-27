@@ -92,6 +92,8 @@ class GridTradingStrategy:
         symbol: str,
         multi_tf_data: Dict[str, Dict[str, List[float]]],
         current_price: float,
+        execution_tf_data: Optional[Dict] = None,
+        regime_adx: Optional[float] = None,
     ) -> List[Signal]:
         """
         Generate grid trading signals from multi-timeframe data.
@@ -100,6 +102,10 @@ class GridTradingStrategy:
             symbol: Trading symbol (e.g., "SUI-PERP")
             multi_tf_data: Dictionary mapping timeframe to OHLCV data
             current_price: Current market price
+            execution_tf_data: Optional 1m/5m data (unused by grid, accepted for interface compat)
+            regime_adx: ADX value already calculated by MarketRegimeDetector. When provided,
+                        the strategy uses it directly instead of recalculating from raw data,
+                        ensuring a single consistent ADX flows through the whole system.
 
         Returns:
             List of Signal objects (0-2 signals: one BUY, one SELL for grid setup)
@@ -118,52 +124,45 @@ class GridTradingStrategy:
 
             # CRITICAL SAFETY FILTER (Priority 1 - Upgrade Jan 2026):
             # Never open new grids when trend is developing, even if regime allows it.
-            # This is the last line of defense against false regime detection.
-            # Use 4h data (or 1h fallback) like regime detector does for consistency.
-            regime_tf = "4h" if "4h" in multi_tf_data else "1h"
-            regime_data = multi_tf_data.get(regime_tf, {})
+            # Use the ADX value already calculated by MarketRegimeDetector when available
+            # (single calculation, consistent across the whole system). Fall back to
+            # recalculating locally only if the regime detector value wasn't passed in.
+            adx_for_filter: Optional[float] = regime_adx  # from MarketRegimeDetector
 
-            if len(regime_data.get("close", [])) >= 50:
-                # Calculate ADX on regime timeframe (4h or 1h)
-                try:
-                    highs = regime_data["high"]
-                    lows = regime_data["low"]
-                    closes = regime_data["close"]
-
-                    # Debug: Check data quality
-                    high_range = max(highs) - min(highs) if highs else 0
-                    low_range = max(lows) - min(lows) if lows else 0
-                    close_range = max(closes) - min(closes) if closes else 0
-                    logger.debug(
-                        f"{symbol}: ADX input data ({regime_tf}): {len(closes)} candles, "
-                        f"high range={high_range:.2f}, low range={low_range:.2f}, close range={close_range:.2f}"
-                    )
-
-                    regime_adx = calculate_adx(highs, lows, closes, period=14)
-
-                    logger.debug(
-                        f"{symbol}: Calculated ADX on {regime_tf} = {regime_adx:.1f}"
-                    )
-
-                    # SANITY CHECK: ADX > 90 is extremely rare in real markets
-                    # If we get this, it's likely a data issue - skip filter
-                    if regime_adx > 90:
-                        logger.warning(
-                            f"{symbol}: ADX={regime_adx:.1f} is unrealistically high (>90), "
-                            f"possible data issue - skipping ADX filter"
+            if adx_for_filter is None:
+                # Fallback: regime detector value not available (e.g. served from cache).
+                # Calculate locally on the same timeframe the detector uses.
+                regime_tf = "4h" if "4h" in multi_tf_data else "1h"
+                regime_data = multi_tf_data.get(regime_tf, {})
+                if len(regime_data.get("close", [])) >= 50:
+                    try:
+                        adx_for_filter = calculate_adx(
+                            regime_data["high"],
+                            regime_data["low"],
+                            regime_data["close"],
+                            period=14,
                         )
-                        # Don't block, continue to other checks
-                    elif regime_adx > self.adx_threshold:
-                        logger.info(
-                            f"{symbol}: Grid blocked - ADX {regime_adx:.1f} > threshold {self.adx_threshold} "
-                            f"(trend developing on {regime_tf} timeframe, unsafe for grid)"
+                        logger.debug(
+                            f"{symbol}: ADX calculated locally (fallback) on {regime_tf} = {adx_for_filter:.1f}"
                         )
-                        return []
-                except Exception as e:
+                    except Exception as e:
+                        logger.warning(f"{symbol}: Could not calculate regime ADX filter: {e}")
+            else:
+                logger.debug(f"{symbol}: Using regime detector ADX = {adx_for_filter:.1f}")
+
+            if adx_for_filter is not None:
+                # SANITY CHECK: ADX > 90 is extremely rare — likely a data issue
+                if adx_for_filter > 90:
                     logger.warning(
-                        f"{symbol}: Could not calculate regime ADX filter: {e}"
+                        f"{symbol}: ADX={adx_for_filter:.1f} is unrealistically high (>90), "
+                        f"possible data issue - skipping ADX filter"
                     )
-                    # Continue to regular checks if regime ADX calculation fails
+                elif adx_for_filter > self.adx_threshold:
+                    logger.info(
+                        f"{symbol}: Grid blocked - ADX {adx_for_filter:.1f} > threshold "
+                        f"{self.adx_threshold} (trend developing, unsafe for grid)"
+                    )
+                    return []
 
             # Use 1h timeframe for grid trading
             if "1h" not in multi_tf_data:

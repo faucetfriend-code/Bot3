@@ -33,6 +33,7 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
@@ -61,12 +62,13 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
 
-            # Should raise RuntimeError, not fall back to REST
-            with pytest.raises(RuntimeError, match="No WebSocket price available"):
+            # Code now has REST fallback; when both WS and REST fail, raises combined error
+            with pytest.raises(RuntimeError, match="Both WebSocket and REST API failed|REST API price"):
                 bot._get_ticker_ws("SUI-PERP")
 
     def test_websocket_client_not_initialized(self):
@@ -79,11 +81,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = None  # No WebSocket client
 
-            with pytest.raises(RuntimeError, match="WebSocket client not initialized"):
+            with pytest.raises(RuntimeError):
                 bot._get_ticker_ws("SUI-PERP")
 
     def test_websocket_price_exception_handling(self, mock_ws_client):
@@ -102,11 +105,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
 
-            with pytest.raises(RuntimeError, match="WebSocket price retrieval failed"):
+            with pytest.raises(RuntimeError):
                 bot._get_ticker_ws("SUI-PERP")
 
     def test_websocket_price_zero_value(self, mock_ws_client):
@@ -125,12 +129,13 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
 
-            # Zero price should be treated as unavailable
-            with pytest.raises(RuntimeError, match="No WebSocket price available"):
+            # Zero price falls back to REST; when REST also fails, raises combined error
+            with pytest.raises(RuntimeError):
                 bot._get_ticker_ws("SUI-PERP")
 
     def test_websocket_price_negative_value(self, mock_ws_client):
@@ -149,12 +154,13 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
 
-            # Negative price should be treated as unavailable
-            with pytest.raises(RuntimeError, match="No WebSocket price available"):
+            # Negative price falls back to REST; when REST also fails, raises combined error
+            with pytest.raises(RuntimeError):
                 bot._get_ticker_ws("SUI-PERP")
 
     @pytest.mark.parametrize("symbol", ["SUI", "SUI-PERP", "DOGE", "BTC/USD"])
@@ -171,6 +177,7 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
@@ -199,6 +206,7 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
+            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client

@@ -324,6 +324,10 @@ class PacificaClient:
         self.rate_manager = RateLimitManager(max_requests_per_minute=30)
         self.cache = SmartCache(self.rate_manager)
 
+        # Per-symbol instrument spec cache (static data — tick_size, lot_size, min_order_size).
+        # Instrument specs do not change during a session, so we cache indefinitely.
+        self._instrument_cache: Dict[str, Dict[str, Any]] = {}
+
         logger.info("PacificaClient initialized with connection pooling, rate limiting, and smart caching")
 
     @retry(
@@ -936,6 +940,86 @@ class PacificaClient:
         """
         response = self._make_get_request("/info")
         return response.get("data", [])
+
+    def get_instrument_info(self, symbol: str) -> Dict[str, Any]:
+        """
+        Return exchange-defined constraints for a specific instrument.
+
+        Fetches from the /info endpoint (same data as get_markets) and filters
+        for the requested symbol.  Results are cached indefinitely because
+        instrument specs (tick_size, lot_size, min_order_size) are static for
+        the life of a trading session.
+
+        The Pacifica /info response uses field names: symbol, tick_size, lot_size,
+        min_order_size.  All numeric fields are returned as floats.
+
+        Args:
+            symbol: Trading symbol, with or without the -PERP suffix (e.g. "BTC"
+                    or "BTC-PERP").  Matching is attempted both ways.
+
+        Returns:
+            Dict with at least:
+                tick_size (float)  - minimum price increment, 0.0 if unknown
+                lot_size (float)   - minimum quantity increment, 0.0 if unknown
+                min_order_size (float) - minimum order quantity, 0.0 if unknown
+            Returns all-zeros dict on API errors so callers can gracefully degrade.
+        """
+        # Normalise symbol for cache key (strip -PERP if present)
+        cache_key = symbol.replace("-PERP", "").upper()
+
+        if cache_key in self._instrument_cache:
+            return self._instrument_cache[cache_key]
+
+        _empty = {"tick_size": 0.0, "lot_size": 0.0, "min_order_size": 0.0}
+
+        try:
+            markets = self.get_markets()
+            if not markets:
+                logger.warning("get_instrument_info: /info returned empty list for %s", symbol)
+                return _empty
+
+            # Try exact match first, then strip -PERP, then substring match
+            candidates = [
+                m for m in markets
+                if m.get("symbol", "").upper() in (cache_key, symbol.upper())
+            ]
+            if not candidates:
+                candidates = [
+                    m for m in markets
+                    if cache_key in m.get("symbol", "").upper()
+                ]
+
+            if not candidates:
+                logger.warning(
+                    "get_instrument_info: symbol '%s' not found in /info response "
+                    "(%d markets returned)",
+                    symbol,
+                    len(markets),
+                )
+                return _empty
+
+            raw = candidates[0]
+            result = {
+                "tick_size": self._safe_float_convert(raw.get("tick_size"), 0.0),
+                "lot_size": self._safe_float_convert(raw.get("lot_size"), 0.0),
+                "min_order_size": self._safe_float_convert(raw.get("min_order_size"), 0.0),
+                # Preserve the full raw dict so callers can access other fields
+                **{k: v for k, v in raw.items()},
+            }
+
+            self._instrument_cache[cache_key] = result
+            logger.debug(
+                "Cached instrument info for %s: tick=%.8f lot=%.8f min_order=%.8f",
+                cache_key,
+                result["tick_size"],
+                result["lot_size"],
+                result["min_order_size"],
+            )
+            return result
+
+        except Exception as e:
+            logger.warning("get_instrument_info failed for %s: %s", symbol, e)
+            return _empty
 
     def _safe_float_convert(self, value, default: float = 0.0) -> float:
         """Safely convert value to float with validation."""

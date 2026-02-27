@@ -24,95 +24,39 @@ class TestMarketRegimeDetector:
 
     @pytest.fixture
     def sample_market_data(self):
-        """Sample OHLCV market data for testing."""
+        """Sample OHLCV market data for testing (30 candles - meets min 29 requirement)."""
         return {
             "high": [
-                1.05,
-                1.08,
-                1.06,
-                1.09,
-                1.07,
-                1.10,
-                1.08,
-                1.11,
-                1.09,
-                1.12,
-                1.10,
-                1.13,
-                1.11,
-                1.14,
-                1.12,
-                1.15,
-                1.13,
-                1.16,
-                1.14,
-                1.17,
+                1.05, 1.08, 1.06, 1.09, 1.07,
+                1.10, 1.08, 1.11, 1.09, 1.12,
+                1.10, 1.13, 1.11, 1.14, 1.12,
+                1.15, 1.13, 1.16, 1.14, 1.17,
+                1.15, 1.18, 1.16, 1.19, 1.17,
+                1.20, 1.18, 1.21, 1.19, 1.22,
             ],
             "low": [
-                1.02,
-                1.05,
-                1.03,
-                1.06,
-                1.04,
-                1.07,
-                1.05,
-                1.08,
-                1.06,
-                1.09,
-                1.07,
-                1.10,
-                1.08,
-                1.11,
-                1.09,
-                1.12,
-                1.10,
-                1.13,
-                1.11,
-                1.14,
+                1.02, 1.05, 1.03, 1.06, 1.04,
+                1.07, 1.05, 1.08, 1.06, 1.09,
+                1.07, 1.10, 1.08, 1.11, 1.09,
+                1.12, 1.10, 1.13, 1.11, 1.14,
+                1.12, 1.15, 1.13, 1.16, 1.14,
+                1.17, 1.15, 1.18, 1.16, 1.19,
             ],
             "close": [
-                1.04,
-                1.07,
-                1.05,
-                1.08,
-                1.06,
-                1.09,
-                1.07,
-                1.10,
-                1.08,
-                1.11,
-                1.09,
-                1.12,
-                1.10,
-                1.13,
-                1.11,
-                1.14,
-                1.12,
-                1.15,
-                1.13,
-                1.16,
+                1.04, 1.07, 1.05, 1.08, 1.06,
+                1.09, 1.07, 1.10, 1.08, 1.11,
+                1.09, 1.12, 1.10, 1.13, 1.11,
+                1.14, 1.12, 1.15, 1.13, 1.16,
+                1.14, 1.17, 1.15, 1.18, 1.16,
+                1.19, 1.17, 1.20, 1.18, 1.21,
             ],
             "volume": [
-                1000,
-                1100,
-                1050,
-                1150,
-                1080,
-                1180,
-                1120,
-                1200,
-                1140,
-                1220,
-                1160,
-                1240,
-                1180,
-                1260,
-                1200,
-                1280,
-                1220,
-                1300,
-                1240,
-                1320,
+                1000, 1100, 1050, 1150, 1080,
+                1180, 1120, 1200, 1140, 1220,
+                1160, 1240, 1180, 1260, 1200,
+                1280, 1220, 1300, 1240, 1320,
+                1260, 1340, 1280, 1360, 1300,
+                1380, 1320, 1400, 1340, 1420,
             ],
         }
 
@@ -125,39 +69,39 @@ class TestMarketRegimeDetector:
         assert regime_detector._regime_cache == {}
         assert regime_detector._cache_ttl_hours == 4
 
-    def test_detect_regime_trending_strong(self, regime_detector):
+    def test_detect_regime_trending_strong(self, regime_detector, sample_market_data):
         """Test detection of strong trending market (ADX > 28)."""
         # Mock ADX calculation to return high value
         with patch("trading_bot_v2.market_regime.calculate_adx", return_value=35.0):
             with patch("trading_bot_v2.market_regime.calculate_atr"):
                 with patch("trading_bot_v2.market_regime.calculate_bollinger_bands"):
-                    regime = regime_detector.detect_regime(self.sample_market_data())
+                    regime = regime_detector.detect_regime(sample_market_data)
                     assert regime == MarketRegime.TRENDING_STRONG
 
-    def test_detect_regime_trending_moderate(self, regime_detector):
+    def test_detect_regime_trending_moderate(self, regime_detector, sample_market_data):
         """Test detection of moderate trending market (22 < ADX ≤ 28)."""
         with patch("trading_bot_v2.market_regime.calculate_adx", return_value=25.0):
             with patch("trading_bot_v2.market_regime.calculate_atr"):
                 with patch("trading_bot_v2.market_regime.calculate_bollinger_bands"):
-                    regime = regime_detector.detect_regime(self.sample_market_data())
+                    regime = regime_detector.detect_regime(sample_market_data)
                     assert regime == MarketRegime.TRENDING_MODERATE
 
-    def test_detect_regime_ranging_volatile(self, regime_detector):
+    def test_detect_regime_ranging_volatile(self, regime_detector, sample_market_data):
         """Test detection of ranging volatile market."""
         with patch("trading_bot_v2.market_regime.calculate_adx", return_value=18.0):
             with patch.object(
                 regime_detector, "_calculate_volatility_score", return_value=80.0
             ):
-                regime = regime_detector.detect_regime(self.sample_market_data())
+                regime = regime_detector.detect_regime(sample_market_data)
                 assert regime == MarketRegime.RANGING_VOLATILE
 
-    def test_detect_regime_ranging_calm(self, regime_detector):
+    def test_detect_regime_ranging_calm(self, regime_detector, sample_market_data):
         """Test detection of ranging calm market."""
         with patch("trading_bot_v2.market_regime.calculate_adx", return_value=18.0):
             with patch.object(
                 regime_detector, "_calculate_volatility_score", return_value=60.0
             ):
-                regime = regime_detector.detect_regime(self.sample_market_data())
+                regime = regime_detector.detect_regime(sample_market_data)
                 assert regime == MarketRegime.RANGING_CALM
 
     def test_detect_regime_insufficient_data(self, regime_detector):
@@ -300,7 +244,8 @@ class TestMarketRegimeDetector:
     def test_get_active_strategies_trending_strong(self, regime_detector):
         """Test strategy mapping for trending strong regime."""
         strategies = regime_detector.get_active_strategies(MarketRegime.TRENDING_STRONG)
-        assert strategies == ["MACrossover"]
+        # Updated Jan 2026: MomentumScalping added to TRENDING_STRONG
+        assert strategies == ["MACrossover", "MomentumScalping"]
 
     def test_get_active_strategies_ranging_volatile(self, regime_detector):
         """Test strategy mapping for ranging volatile regime."""
@@ -331,19 +276,19 @@ class TestMarketRegimeDetector:
         assert not regime_detector.is_grid_allowed(MarketRegime.TRENDING_MODERATE)
 
     def test_get_strategy_weights(self, regime_detector):
-        """Test strategy weight allocation by regime."""
+        """Test strategy weight allocation by regime (Jan 2026 weights with OrderBookImbalance overlay)."""
         weights_volatile = regime_detector.get_strategy_weights(
             MarketRegime.RANGING_VOLATILE
         )
-        assert weights_volatile == {"GridTrading": 1.0}
+        assert weights_volatile == {"GridTrading": 0.8, "OrderBookImbalance": 0.2}
 
         weights_calm = regime_detector.get_strategy_weights(MarketRegime.RANGING_CALM)
-        assert weights_calm == {"MeanReversion": 0.7, "GridTrading": 0.3}
+        assert weights_calm == {"MeanReversion": 0.6, "GridTrading": 0.2, "OrderBookImbalance": 0.2}
 
         weights_trending = regime_detector.get_strategy_weights(
             MarketRegime.TRENDING_STRONG
         )
-        assert weights_trending == {"MACrossover": 1.0}
+        assert weights_trending == {"MACrossover": 0.5, "MomentumScalping": 0.3, "OrderBookImbalance": 0.2}
 
     def test_hash_market_data(self, regime_detector, sample_market_data):
         """Test market data hashing for cache invalidation."""

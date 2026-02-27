@@ -2031,6 +2031,22 @@ class TradingBot:
                 logging.error(f"Failed to calculate grid levels for {symbol}")
                 return None
 
+            # Run pre-trade assertions before committing any orders.
+            # Uses live exchange instrument info for the minimum order size check.
+            try:
+                self._assert_grid_pre_trade(
+                    symbol=symbol,
+                    grid_spacing=grid_levels["grid_spacing"],
+                    num_levels=(
+                        len(grid_levels["buy_levels"]) + len(grid_levels["sell_levels"])
+                    ),
+                    quantity_per_level=grid_levels["quantity_per_level"],
+                    signal=signal,
+                )
+            except AssertionError as ae:
+                logging.error(f"Grid pre-trade check FAILED for {symbol}: {ae}")
+                return None
+
             # Place grid orders
             buy_orders = []
             sell_orders = []
@@ -2293,6 +2309,102 @@ class TradingBot:
         except Exception as e:
             logging.error(f"Error monitoring risk: {e}")
 
+    # Mapping from the display names returned by get_active_strategies() to the
+    # strategy string stored in the trades/positions DB tables.
+    # Only strategies that leave open exchange orders (limit orders that outlive
+    # the signal) need to be listed here; market-execution strategies clean up
+    # automatically when they close.
+    _STRATEGY_NAME_TO_DB: Dict[str, str] = {
+        "GridTrading": "GRID_TRADING",
+        "MACrossover": "MA_CROSSOVER",
+        "MeanReversion": "MEAN_REVERSION",
+        "MomentumScalping": "MOMENTUM_SCALPING",
+        "VWAPScalping": "VWAP_SCALPING",
+        "FundingArb": "FUNDING_ARB",
+        "LiquidationCapture": "LIQUIDATION_CAPTURE",
+        "OrderBookImbalance": "ORDERBOOK_IMBALANCE",
+    }
+
+    def _close_positions_for_strategy(self, strategy_name: str) -> None:
+        """
+        Cancel open exchange orders and mark DB trades closed for a strategy
+        that has become inactive due to a regime change.
+
+        For grid strategies this is critical: the bot places limit orders that
+        remain open on the exchange until explicitly cancelled.  For other
+        strategies it is a belt-and-suspenders safety measure.
+
+        Args:
+            strategy_name: Display name as returned by get_active_strategies()
+                           (e.g. "GridTrading", "MACrossover").
+        """
+        db_strategy = self._STRATEGY_NAME_TO_DB.get(strategy_name)
+
+        try:
+            # 1. Find open DB trades for this strategy so we know which symbols
+            #    need order cancellation.
+            open_trades = self.db.get_trades(status="open")
+            strategy_trades = [
+                t for t in open_trades
+                if t.get("strategy") == db_strategy
+            ]
+
+            if not strategy_trades:
+                logging.info(
+                    f"  No open DB trades for {strategy_name} "
+                    f"(db_key='{db_strategy}') — nothing to close"
+                )
+                return
+
+            symbols_affected = {t.get("symbol") for t in strategy_trades if t.get("symbol")}
+            logging.info(
+                f"  {strategy_name}: closing {len(strategy_trades)} open trade(s) "
+                f"across symbols: {symbols_affected}"
+            )
+
+            # 2. For each affected symbol, cancel all open exchange orders.
+            #    cancel_all_orders() is safe to call even if there are no orders.
+            for symbol in symbols_affected:
+                try:
+                    result = self.client.cancel_all_orders(symbol=symbol)
+                    logging.info(
+                        f"  ✅ Cancelled orders for {symbol} ({strategy_name}): {result}"
+                    )
+                except Exception as cancel_err:
+                    logging.error(
+                        f"  ❌ Failed to cancel orders for {symbol}: {cancel_err}"
+                    )
+
+            # 3. For grid strategy specifically, also clear the in-memory grid
+            #    state so GridLifecycleManager doesn't try to manage stale grids.
+            if strategy_name == "GridTrading":
+                try:
+                    grid_mgr = self.component_registry.get(
+                        type(None)  # use duck-typing below
+                    )
+                except Exception:
+                    grid_mgr = None
+
+                # Try direct attribute access (GridLifecycleManager stored on bot)
+                grid_lifecycle = getattr(self, "grid_lifecycle_manager", None)
+                if grid_lifecycle is not None:
+                    for symbol in symbols_affected:
+                        try:
+                            grid_lifecycle.clear_grid(symbol, reason="REGIME_CHANGE")
+                            logging.info(
+                                f"  🗑️ Cleared in-memory grid state for {symbol}"
+                            )
+                        except Exception as gc_err:
+                            logging.warning(
+                                f"  Could not clear grid state for {symbol}: {gc_err}"
+                            )
+
+        except Exception as e:
+            logging.error(
+                f"Error closing positions for strategy {strategy_name}: {e}",
+                exc_info=True,
+            )
+
     def _handle_regime_transition(self) -> None:
         """
         Handle market regime transitions.
@@ -2316,24 +2428,29 @@ class TradingBot:
                     f"🔄 Regime transition: {self._previous_regime.name} → {current_regime.name}"
                 )
 
-                # Get strategies that are no longer active
-                old_strategies = self.strategy_manager.get_active_strategies(
+                # get_active_strategies() lives on MarketRegimeDetector and returns
+                # List[str].  Previously this incorrectly called strategy_manager and
+                # used .keys() on the result — both fixed here.
+                old_strategies: List[str] = self.market_regime.get_active_strategies(
                     self._previous_regime
                 )
-                new_strategies = self.strategy_manager.get_active_strategies(
+                new_strategies: List[str] = self.market_regime.get_active_strategies(
                     current_regime
                 )
 
-                inactive_strategies = set(old_strategies.keys()) - set(
-                    new_strategies.keys()
-                )
+                inactive_strategies = set(old_strategies) - set(new_strategies)
+
+                if inactive_strategies:
+                    logging.info(
+                        f"  Strategies going inactive: {inactive_strategies}"
+                    )
 
                 # Close positions from inactive strategies
                 for strategy_name in inactive_strategies:
                     logging.info(
-                        f"Closing positions from inactive strategy: {strategy_name}"
+                        f"  Closing positions from inactive strategy: {strategy_name}"
                     )
-                    # TODO: Implement position closure by strategy
+                    self._close_positions_for_strategy(strategy_name)
 
                 # Update previous regime
                 self._previous_regime = current_regime
@@ -2348,23 +2465,86 @@ class TradingBot:
         Emergency stop is triggered when:
         1. Price breaks below emergency stop level
         2. Grid P&L exceeds max drawdown threshold
-        3. ADX rises above 20 (trend forming - not suitable for grid)
+        3. ADX rises above the grid ADX threshold (trend forming — not suitable for grid)
+
+        For each open grid DB trade, we check these conditions and trigger
+        _close_orphaned_grid() which cancels all orders for the symbol.
         """
         try:
-            # Get all grid positions
-            # TODO: Query database for active grid positions
+            # --- Fix 4: Query database for active grid positions ---
+            # Grid positions are stored in the trades table with
+            # strategy='GRID_TRADING' and side='GRID' and status='open'.
+            open_trades = self.db.get_trades(status="open")
+            grid_trades = [
+                t for t in open_trades
+                if t.get("strategy") == "GRID_TRADING"
+            ]
 
-            # For each grid position:
-            # 1. Check current price vs emergency stop
-            # 2. Check unrealized P&L vs max drawdown
-            # 3. Check ADX (via market_regime)
+            if not grid_trades:
+                return  # Nothing to monitor
 
-            # If emergency stop triggered:
-            # 1. Cancel all grid orders
-            # 2. Close position at market
-            # 3. Log emergency stop details
+            logging.debug(f"Emergency stop monitor: {len(grid_trades)} active grid trade(s)")
 
-            pass  # Implementation deferred to Phase 3
+            for trade in grid_trades:
+                symbol = trade.get("symbol")
+                if not symbol:
+                    continue
+
+                try:
+                    # 1. Check current price vs emergency stop level
+                    ticker = self._get_ticker_ws(symbol)
+                    if isinstance(ticker, dict):
+                        current_price = float(ticker.get("last", ticker.get("price", 0)))
+                    else:
+                        current_price = float(ticker) if ticker else 0
+
+                    if current_price <= 0:
+                        logging.debug(f"  {symbol}: price unavailable, skipping emergency check")
+                        continue
+
+                    # Emergency stop is stored in trade metadata (stop_loss field)
+                    emergency_stop = trade.get("stop_loss") or trade.get("stop_price")
+                    if emergency_stop and current_price <= float(emergency_stop):
+                        logging.warning(
+                            f"🚨 GRID EMERGENCY STOP triggered for {symbol}: "
+                            f"price {current_price:.4f} <= stop {emergency_stop:.4f}"
+                        )
+                        self._close_orphaned_grid(symbol, reason="EMERGENCY_STOP_PRICE")
+                        continue
+
+                    # 2. Check ADX (trend forming — grid becomes unsuitable)
+                    adx_threshold = getattr(self.market_regime, "adx_threshold", 25.0)
+                    last_adx = self.market_regime.get_last_adx(symbol)
+                    if last_adx is not None and last_adx > adx_threshold:
+                        logging.warning(
+                            f"🚨 GRID ADX STOP for {symbol}: "
+                            f"ADX {last_adx:.1f} > threshold {adx_threshold:.1f} — "
+                            f"trend forming, grid is unsuitable"
+                        )
+                        self._close_orphaned_grid(symbol, reason="ADX_THRESHOLD_EXCEEDED")
+                        continue
+
+                    # 3. Check unrealized P&L vs max drawdown (if available)
+                    unrealized_pnl = trade.get("pnl", 0) or 0
+                    entry_price = trade.get("entry_price", 0) or 0
+                    quantity = trade.get("quantity", 0) or 0
+                    if entry_price > 0 and quantity > 0:
+                        position_value = entry_price * quantity
+                        max_drawdown_pct = 0.15  # 15% drawdown triggers emergency stop
+                        if position_value > 0 and unrealized_pnl < -(position_value * max_drawdown_pct):
+                            logging.warning(
+                                f"🚨 GRID P&L STOP for {symbol}: "
+                                f"unrealized P&L {unrealized_pnl:.2f} exceeds "
+                                f"{max_drawdown_pct*100:.0f}% drawdown on "
+                                f"position value {position_value:.2f}"
+                            )
+                            self._close_orphaned_grid(symbol, reason="MAX_DRAWDOWN_EXCEEDED")
+                            continue
+
+                except Exception as per_trade_err:
+                    logging.error(
+                        f"Error monitoring emergency stop for grid {symbol}: {per_trade_err}"
+                    )
 
         except Exception as e:
             logging.error(f"Error monitoring emergency stops: {e}")
@@ -2375,6 +2555,7 @@ class TradingBot:
         grid_spacing: float,
         num_levels: int,
         quantity_per_level: float,
+        signal: Optional[Signal] = None,
     ) -> None:
         """
         Assert pre-trade conditions for grid trading (per Grid Trading Brief).
@@ -2382,8 +2563,8 @@ class TradingBot:
         Validates:
         1. Grid spacing > 0
         2. Number of levels between 5-20
-        3. Quantity per level > minimum order size
-        4. Emergency stop price > 0 and < current price
+        3. Quantity per level > minimum order size (fetched live from exchange)
+        4. Emergency stop price > 0 and < current price (when signal is provided)
         5. Total capital allocation within risk limits
 
         Args:
@@ -2391,6 +2572,7 @@ class TradingBot:
             grid_spacing: Grid spacing in price units
             num_levels: Number of grid levels
             quantity_per_level: Quantity at each grid level
+            signal: Optional originating Signal for emergency-stop validation
 
         Raises:
             AssertionError: If any pre-trade condition fails
@@ -2405,14 +2587,23 @@ class TradingBot:
             5 <= num_levels <= 20
         ), f"Number of levels must be 5-20, got {num_levels}"
 
-        # Validate quantity per level
-        min_order_size = 1.0  # TODO: Get from exchange info
-        assert (
-            quantity_per_level >= min_order_size
-        ), f"Quantity per level {quantity_per_level} below minimum {min_order_size}"
+        # Validate quantity per level against exchange minimum
+        # Fetch live instrument info so we respect per-token minimums.
+        # Falls back to 0.0 (no constraint) if the API call fails.
+        instrument_info = self.client.get_instrument_info(symbol)
+        min_order_size = instrument_info.get("min_order_size", 0.0)
+        if min_order_size > 0:
+            assert quantity_per_level >= min_order_size, (
+                f"Quantity per level {quantity_per_level} below exchange minimum "
+                f"{min_order_size} for {symbol}"
+            )
+        else:
+            logging.debug(
+                f"{symbol}: min_order_size not available from exchange info — "
+                "skipping minimum quantity check"
+            )
 
-        # Validate emergency stop price
-        signal = None  # TODO: Pass signal to this method
+        # Validate emergency stop price (only when a signal is provided)
         if signal:
             emergency_stop_price = self._calculate_emergency_stop(signal)
             assert emergency_stop_price > 0, "Emergency stop price must be positive"
