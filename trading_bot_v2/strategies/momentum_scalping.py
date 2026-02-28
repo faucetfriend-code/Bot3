@@ -187,16 +187,23 @@ class MomentumScalpingStrategy:
         # Cooldown tracking
         self.last_trade_time: Dict[str, datetime] = {}
 
+        # Simulated time injected by backtest engine (None = use wall-clock)
+        self._sim_time: Optional[datetime] = None
+
         logger.info(
             f"MomentumScalpingStrategy initialized: EMA {ema_fast}/{ema_slow}, "
             f"RSI {rsi_lower}-{rsi_upper}, ATR stop={atr_stop_mult}x target={atr_target_mult}x"
         )
 
+    def _now(self) -> datetime:
+        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+
     def _check_cooldown(self, symbol: str) -> bool:
         """Check if cooldown period has passed since last trade."""
         if symbol not in self.last_trade_time:
             return True
-        elapsed = datetime.utcnow() - self.last_trade_time[symbol]
+        elapsed = self._now() - self.last_trade_time[symbol]
         if elapsed <= timedelta(minutes=self.cooldown_minutes):
             remaining = self.cooldown_minutes - (elapsed.total_seconds() / 60)
             logger.debug(f"{symbol}: Momentum scalping cooldown {remaining:.1f}min remaining")
@@ -392,7 +399,7 @@ class MomentumScalpingStrategy:
             # Update crossover tracking
             self.last_crossover[symbol] = {
                 "direction": crossover,
-                "time": datetime.utcnow(),
+                "time": self._now(),
                 "price": current_price,
             }
             logger.debug(f"{symbol}: EMA {self.ema_fast}/{self.ema_slow} crossover detected - {crossover}")
@@ -402,7 +409,7 @@ class MomentumScalpingStrategy:
             return signals
 
         crossover_info = self.last_crossover[symbol]
-        crossover_age = datetime.utcnow() - crossover_info["time"]
+        crossover_age = self._now() - crossover_info["time"]
 
         # Only act on crossovers within last 5 candles (25 minutes on 5m)
         if crossover_age > timedelta(minutes=25):
@@ -517,7 +524,7 @@ class MomentumScalpingStrategy:
         signals.append(signal)
 
         # Update last trade time
-        self.last_trade_time[symbol] = datetime.utcnow()
+        self.last_trade_time[symbol] = self._now()
 
         # Clear crossover after generating signal
         del self.last_crossover[symbol]

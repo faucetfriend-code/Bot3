@@ -356,10 +356,24 @@ class StrategyManager:
                 f"ATR stop={ob_atr_stop}x, target={ob_atr_target}x"
             )
 
+        # Simulated time (set by backtest engine for accurate cooldown tracking)
+        self._sim_time: Optional[datetime] = None
+
         logger.info(
             f"StrategyManager initialized with {len(self.strategies)} strategies: "
             f"{list(self.strategies.keys())}"
         )
+
+    def set_sim_time(self, dt: datetime) -> None:
+        """
+        Set simulated current time for backtesting.
+
+        Propagates to all strategy instances so internal cooldowns use candle
+        timestamps instead of wall-clock time. No-op in live trading (dt=None).
+        """
+        self._sim_time = dt
+        for strategy in self.strategies.values():
+            strategy._sim_time = dt
 
     def should_skip_signal(self, signal: Signal) -> bool:
         """
@@ -373,11 +387,13 @@ class StrategyManager:
         """
         key = (signal.asset, signal.strategy.value)
 
+        now = self._sim_time or datetime.now()
+
         # Check cooldown
         if key in self._trade_cooldowns:
             cooldown_until = self._trade_cooldowns[key]
-            if datetime.now() < cooldown_until:
-                remaining = (cooldown_until - datetime.now()).total_seconds() / 60
+            if now < cooldown_until:
+                remaining = (cooldown_until - now).total_seconds() / 60
                 logger.debug(
                     f"Signal skipped for {key}: cooldown {remaining:.1f}min remaining"
                 )
@@ -389,7 +405,7 @@ class StrategyManager:
             for t in self._executed_trades
             if t["symbol"] == signal.asset
             and t["strategy"] == signal.strategy.value
-            and (datetime.now() - t["timestamp"]).total_seconds() < 300
+            and (now - t["timestamp"]).total_seconds() < 300
         ]  # Last 5 min
 
         if (
@@ -412,11 +428,11 @@ class StrategyManager:
         """
         key = (signal.asset, signal.strategy.value)
 
+        now = self._sim_time or datetime.now()
+
         # Set cooldown (strategy-specific)
         cooldown_minutes = self._get_strategy_cooldown(signal.strategy.value)
-        self._trade_cooldowns[key] = datetime.now() + timedelta(
-            minutes=cooldown_minutes
-        )
+        self._trade_cooldowns[key] = now + timedelta(minutes=cooldown_minutes)
 
         # Record trade
         trade_record = {
@@ -425,7 +441,7 @@ class StrategyManager:
             "side": signal.side.value,
             "quantity": order_result.get("quantity", 0),
             "price": order_result.get("price", 0),
-            "timestamp": datetime.now(),
+            "timestamp": now,
             "order_id": order_result.get("id"),
             "signal_confidence": signal.confidence,
         }
@@ -433,7 +449,7 @@ class StrategyManager:
         self._executed_trades.append(trade_record)
 
         # Keep only recent trades (last 24 hours)
-        cutoff = datetime.now() - timedelta(hours=24)
+        cutoff = now - timedelta(hours=24)
         self._executed_trades = [
             t for t in self._executed_trades if t["timestamp"] > cutoff
         ]

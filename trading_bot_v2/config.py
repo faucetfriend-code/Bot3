@@ -185,6 +185,19 @@ class Config:
 
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+        # Backtesting
+        self.backtest_start_date: str = os.getenv("BACKTEST_START_DATE", "2024-01-01")
+        self.backtest_end_date: str = os.getenv("BACKTEST_END_DATE", "2024-12-31")
+        self.backtest_symbol: str = os.getenv("BACKTEST_SYMBOL", "SUI-USDC")
+        self.backtest_initial_capital: float = float(os.getenv("BACKTEST_INITIAL_CAPITAL", "10000.0"))
+        self.backtest_slippage_pct: float = float(os.getenv("BACKTEST_SLIPPAGE_PCT", "0.002"))
+        self.backtest_taker_fee_pct: float = float(os.getenv("BACKTEST_TAKER_FEE_PCT", "0.0006"))
+        self.backtest_maker_fee_pct: float = float(os.getenv("BACKTEST_MAKER_FEE_PCT", "0.0002"))
+        self.backtest_funding_hourly_pct: float = float(os.getenv("BACKTEST_FUNDING_HOURLY_PCT", "0.0001"))
+        self.backtest_data_dir: str = os.getenv("BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data")
+        self.backtest_walk_forward_train_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TRAIN_MONTHS", "6"))
+        self.backtest_walk_forward_test_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TEST_MONTHS", "1"))
+
     @property
     def pacifica_base_url(self) -> str:
         """Return the base URL for Pacifica API based on testnet/mainnet setting."""

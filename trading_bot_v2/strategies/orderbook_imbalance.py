@@ -93,6 +93,9 @@ class OrderBookImbalanceStrategy:
         self.last_trade_time: Dict[str, datetime] = {}
         self.imbalance_history: Dict[str, List[float]] = {}  # Rolling history
 
+        # Simulated time injected by backtest engine (None = use wall-clock)
+        self._sim_time: Optional[datetime] = None
+
         # Orderbook level key mappings (handles different exchange formats)
         # Pacifica uses: "a" for amount, "p" for price
         # Some exchanges use: "amount"/"size" for amount, "price" for price, "n"/"count" for order count
@@ -116,11 +119,15 @@ class OrderBookImbalanceStrategy:
                     continue
         return default
 
+    def _now(self) -> datetime:
+        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+
     def _check_cooldown(self, symbol: str) -> bool:
         """Check if cooldown period has passed."""
         if symbol not in self.last_trade_time:
             return True
-        elapsed = datetime.utcnow() - self.last_trade_time[symbol]
+        elapsed = self._now() - self.last_trade_time[symbol]
         if elapsed <= timedelta(seconds=self.cooldown_seconds):
             remaining = self.cooldown_seconds - elapsed.total_seconds()
             logger.debug(f"{symbol}: OB imbalance cooldown {remaining:.0f}s remaining")
@@ -131,7 +138,7 @@ class OrderBookImbalanceStrategy:
         """Check if enough time passed since last analysis."""
         if symbol not in self.last_analysis:
             return True
-        elapsed = datetime.utcnow() - self.last_analysis[symbol]
+        elapsed = self._now() - self.last_analysis[symbol]
         return elapsed > timedelta(milliseconds=self.update_interval_ms)
 
     def _detect_spoof(self, levels: List[Dict], side: str) -> bool:
@@ -300,7 +307,7 @@ class OrderBookImbalanceStrategy:
         if not self._check_update_interval(symbol):
             return signals
 
-        self.last_analysis[symbol] = datetime.utcnow()
+        self.last_analysis[symbol] = self._now()
 
         # Extract orderbook data
         bids = orderbook.get("bids", [])
@@ -463,7 +470,7 @@ class OrderBookImbalanceStrategy:
         )
 
         signals.append(signal)
-        self.last_trade_time[symbol] = datetime.utcnow()
+        self.last_trade_time[symbol] = self._now()
 
         logger.info(
             f"{symbol}: OB imbalance signal - {direction.upper() if direction else 'UNKNOWN'} @ ${current_price:.2f}, "

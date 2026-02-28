@@ -42,9 +42,9 @@ class MarketRegimeDetector:
 
     def __init__(
         self,
-        adx_trending_threshold: float = 30.0,  # Was 28.0 - require stronger trend
-        adx_ranging_threshold: float = 25.0,  # Was 22.0 - more ranging markets
-        adx_moderate_threshold: float = 25.0,  # Was 22.0 - aligned with ranging
+        adx_trending_threshold: float = 25.0,  # Was 30.0 - catch trends earlier
+        adx_ranging_threshold: float = 20.0,  # Was 25.0 - tighter ranging band
+        adx_moderate_threshold: float = 20.0,  # Was 25.0 - aligned with ranging
         volatility_high_percentile: float = 65.0,  # Was 75.0 - easier volatile classification
         adx_period: int = 14,
         atr_period: int = 14,

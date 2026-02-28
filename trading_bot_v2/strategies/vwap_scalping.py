@@ -134,6 +134,9 @@ class VWAPScalpingStrategy:
         # Track cooldowns per symbol
         self._last_trade_time: Dict[str, datetime] = {}
 
+        # Simulated time injected by backtest engine (None = use wall-clock)
+        self._sim_time: Optional[datetime] = None
+
         logger.info(
             f"VWAPScalpingStrategy initialized: "
             f"SD threshold={self.sd_entry_threshold}, "
@@ -226,6 +229,10 @@ class VWAPScalpingStrategy:
 
         return result
 
+    def _now(self) -> datetime:
+        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+
     def _check_cooldown(self, symbol: str) -> bool:
         """
         Check if symbol is in cooldown period.
@@ -239,7 +246,7 @@ class VWAPScalpingStrategy:
         if symbol not in self._last_trade_time:
             return False
 
-        elapsed = datetime.utcnow() - self._last_trade_time[symbol]
+        elapsed = self._now() - self._last_trade_time[symbol]
         cooldown_delta = timedelta(minutes=self.cooldown_minutes)
 
         if elapsed < cooldown_delta:
@@ -251,7 +258,7 @@ class VWAPScalpingStrategy:
 
     def _set_cooldown(self, symbol: str):
         """Set cooldown for symbol after trade signal."""
-        self._last_trade_time[symbol] = datetime.utcnow()
+        self._last_trade_time[symbol] = self._now()
 
     def generate_signals(
         self,

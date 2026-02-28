@@ -98,6 +98,9 @@ class LiquidationCaptureStrategy:
         self.session_trades = 0
         self.last_trade_time: Optional[datetime] = None
 
+        # Simulated time injected by backtest engine (None = use wall-clock)
+        self._sim_time: Optional[datetime] = None
+
         logger.info(
             f"LiquidationCaptureStrategy initialized: "
             f"price threshold={price_move_threshold:.1%}, "
@@ -253,6 +256,10 @@ class LiquidationCaptureStrategy:
 
         return True
 
+    def _now(self) -> datetime:
+        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+
     def _can_trade(self) -> bool:
         """Check if we can trade based on session limits."""
         # Check trade count limit
@@ -261,7 +268,7 @@ class LiquidationCaptureStrategy:
 
         # Check time between trades
         if self.last_trade_time:
-            hours_since = (datetime.utcnow() - self.last_trade_time).total_seconds() / 3600
+            hours_since = (self._now() - self.last_trade_time).total_seconds() / 3600
             if hours_since < self.min_hours_between:
                 return False
 
@@ -520,7 +527,7 @@ class LiquidationCaptureStrategy:
         Call this externally when a liquidation signal is executed.
         """
         self.session_trades += 1
-        self.last_trade_time = datetime.utcnow()
+        self.last_trade_time = self._now()
 
         logger.info(
             f"Liquidation trade recorded. "
