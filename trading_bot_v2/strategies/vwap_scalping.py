@@ -10,8 +10,8 @@ TIMEFRAME HIERARCHY (Multi-TF Execution Model):
 Strategy Logic:
 - VWAP calculated as cumulative (price * volume) / cumulative volume
 - Standard deviation bands at 1SD, 2SD, 3SD levels
-- BUY Signal: Price deviates >1.8 SD below VWAP + MACD bullish
-- SELL Signal: Price deviates >1.8 SD above VWAP + MACD bearish
+- BUY Signal: Price deviates >1.8 SD below VWAP + MACD histogram < 0 (sellers exhausted, enter at extreme)
+- SELL Signal: Price deviates >1.8 SD above VWAP + MACD histogram > 0 (buyers exhausted, enter at extreme)
 - Stop Loss: Beyond nearest SD band or 1.5x ATR
 - Take Profit: Return to VWAP (mean reversion target)
 
@@ -34,6 +34,7 @@ from ..models import Signal, OrderSide
 from ..indicators import (
     calculate_atr,
     calculate_macd,
+    calculate_rsi,
 )
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
 
@@ -52,6 +53,9 @@ class VWAPScalpingStrategy:
     - VWAP_MACD_FAST (default: 12)
     - VWAP_MACD_SLOW (default: 26)
     - VWAP_MACD_SIGNAL (default: 9)
+    - VWAP_RSI_PERIOD (default: 14)
+    - VWAP_RSI_OVERSOLD (default: 35.0)
+    - VWAP_RSI_OVERBOUGHT (default: 65.0)
     - VWAP_MIN_CONFIDENCE (default: 0.62)
     - VWAP_COOLDOWN_MINUTES (default: 8)
     """
@@ -64,6 +68,9 @@ class VWAPScalpingStrategy:
         macd_fast: Optional[int] = None,
         macd_slow: Optional[int] = None,
         macd_signal: Optional[int] = None,
+        rsi_period: Optional[int] = None,
+        rsi_oversold: Optional[float] = None,
+        rsi_overbought: Optional[float] = None,
         min_confidence: Optional[float] = None,
         cooldown_minutes: Optional[int] = None,
         sd_multipliers: Optional[List[float]] = None,
@@ -80,6 +87,9 @@ class VWAPScalpingStrategy:
             macd_fast: MACD fast period (default: 12)
             macd_slow: MACD slow period (default: 26)
             macd_signal: MACD signal period (default: 9)
+            rsi_period: RSI calculation period (default: 14)
+            rsi_oversold: RSI threshold for BUY gate (default: 35.0)
+            rsi_overbought: RSI threshold for SELL gate (default: 65.0)
             min_confidence: Minimum confidence threshold (default: 0.62)
             cooldown_minutes: Cooldown between trades per symbol (default: 8)
             sd_multipliers: SD band multipliers to compute (default: [1.0, 2.0, 3.0])
@@ -116,6 +126,21 @@ class VWAPScalpingStrategy:
             macd_signal
             if macd_signal is not None
             else int(os.getenv("VWAP_MACD_SIGNAL", "9"))
+        )
+        self.rsi_period = (
+            rsi_period
+            if rsi_period is not None
+            else int(os.getenv("VWAP_RSI_PERIOD", "14"))
+        )
+        self.rsi_oversold = (
+            rsi_oversold
+            if rsi_oversold is not None
+            else float(os.getenv("VWAP_RSI_OVERSOLD", "35.0"))
+        )
+        self.rsi_overbought = (
+            rsi_overbought
+            if rsi_overbought is not None
+            else float(os.getenv("VWAP_RSI_OVERBOUGHT", "65.0"))
         )
         self.min_confidence = (
             min_confidence
@@ -348,43 +373,64 @@ class VWAPScalpingStrategy:
                 logger.debug(f"{symbol}: MACD calculation failed: {e}")
                 return []
 
+            # Calculate RSI for second confirmation gate
+            try:
+                rsi = calculate_rsi(macd_data["close"], period=self.rsi_period)
+            except (ValueError, Exception):
+                rsi = 50.0  # Neutral fallback — does not block entries
+
             # Determine signal direction based on deviation
             side = None
             notes = []
 
             # Below VWAP -> potential LONG (price expected to revert up)
             if deviation < 0 and deviation_sd >= self.sd_entry_threshold:
-                # Require bullish MACD confirmation (histogram > 0 or improving)
-                if histogram > 0:
+                # Require exhausted sellers: histogram < 0 means downward momentum
+                # still present but price at extreme — enter before reversal, not after
+                if histogram < 0:
                     side = OrderSide.BUY
                     notes.append(f"Below VWAP by {deviation_sd:.2f} SD")
-                    notes.append(f"MACD histogram positive ({histogram:.4f})")
+                    notes.append(f"MACD hist={histogram:.4f} (neg), RSI={rsi:.1f}")
                 else:
                     logger.debug(
-                        f"{symbol}: Below VWAP but MACD not confirming (hist={histogram:.4f})"
+                        f"{symbol}: Below VWAP SD{deviation_sd:.2f} - "
+                        f"MACD hist={histogram:.4f} already positive — late entry, skip"
                     )
 
             # Above VWAP -> potential SHORT (price expected to revert down)
             elif deviation > 0 and deviation_sd >= self.sd_entry_threshold:
-                # Require bearish MACD confirmation (histogram < 0 or declining)
-                if histogram < 0:
+                # Require exhausted buyers: histogram > 0 means upward momentum
+                # still present but price at extreme — enter before reversal, not after
+                if histogram > 0:
                     side = OrderSide.SELL
                     notes.append(f"Above VWAP by {deviation_sd:.2f} SD")
-                    notes.append(f"MACD histogram negative ({histogram:.4f})")
+                    notes.append(f"MACD hist={histogram:.4f} (pos), RSI={rsi:.1f}")
                 else:
                     logger.debug(
-                        f"{symbol}: Above VWAP but MACD not confirming (hist={histogram:.4f})"
+                        f"{symbol}: Above VWAP SD{deviation_sd:.2f} - "
+                        f"MACD hist={histogram:.4f} already negative — late entry, skip"
                     )
 
             if not side:
                 return []
 
-            # Calculate ATR for stop loss
+            # Calculate ATR for stop loss.
+            # Use 1m data when available (better precision for SL/TP placement),
+            # fall back to 15m when 1m is not provided.
+            atr_src = data_15m
+            if execution_tf_data and "1m" in execution_tf_data:
+                d1m = execution_tf_data["1m"]
+                if (
+                    all(k in d1m for k in ["high", "low", "close"])
+                    and len(d1m["close"]) >= self.atr_period + 1
+                ):
+                    atr_src = d1m
+                    logger.debug(f"{symbol}: VWAP using 1m ATR for SL/TP placement")
             try:
                 atr = calculate_atr(
-                    data_15m["high"],
-                    data_15m["low"],
-                    data_15m["close"],
+                    atr_src["high"],
+                    atr_src["low"],
+                    atr_src["close"],
                     self.atr_period,
                 )
             except ValueError:

@@ -31,11 +31,15 @@ class MACrossoverStrategy:
     Uses 50/200 MA crossovers with pullback entry logic.
 
     Parameters can be configured via environment variables:
-    - MA_CROSSOVER_FAST_PERIOD (default: 50)
-    - MA_CROSSOVER_SLOW_PERIOD (default: 200)
+    - MA_CROSSOVER_FAST_PERIOD (default: 20)
+    - MA_CROSSOVER_SLOW_PERIOD (default: 50)
     - MA_CROSSOVER_PULLBACK_MIN (default: 0.02)
     - MA_CROSSOVER_PULLBACK_MAX (default: 0.04)
     - MA_CROSSOVER_VOLUME_THRESHOLD (default: 1.2)
+    - MA_CROSSOVER_MACD_FAST (default: 12)
+    - MA_CROSSOVER_MACD_SLOW (default: 26)
+    - MA_CROSSOVER_MACD_SIGNAL (default: 9)
+    - MA_CROSSOVER_ATR_PERIOD (default: 14)
     - MA_CROSSOVER_ATR_STOP_MULTIPLIER (default: 2.5)
     - MA_CROSSOVER_MIN_CONFIDENCE (default: 0.50)
     """
@@ -46,10 +50,10 @@ class MACrossoverStrategy:
         slow_ma_period: Optional[int] = None,
         pullback_range: Optional[Tuple[float, float]] = None,
         volume_confirmation_threshold: Optional[float] = None,
-        macd_fast: int = 12,
-        macd_slow: int = 26,
-        macd_signal: int = 9,
-        atr_period: int = 14,
+        macd_fast: Optional[int] = None,
+        macd_slow: Optional[int] = None,
+        macd_signal: Optional[int] = None,
+        atr_period: Optional[int] = None,
         atr_stop_multiplier: Optional[float] = None,
         min_confidence: Optional[float] = None,
     ):
@@ -74,12 +78,12 @@ class MACrossoverStrategy:
         self.fast_ma_period = (
             fast_ma_period
             if fast_ma_period is not None
-            else int(os.getenv("MA_CROSSOVER_FAST_PERIOD", "50"))
+            else int(os.getenv("MA_CROSSOVER_FAST_PERIOD", "20"))
         )
         self.slow_ma_period = (
             slow_ma_period
             if slow_ma_period is not None
-            else int(os.getenv("MA_CROSSOVER_SLOW_PERIOD", "200"))
+            else int(os.getenv("MA_CROSSOVER_SLOW_PERIOD", "50"))
         )
 
         if pullback_range is not None:
@@ -94,10 +98,10 @@ class MACrossoverStrategy:
             if volume_confirmation_threshold is not None
             else float(os.getenv("MA_CROSSOVER_VOLUME_THRESHOLD", "1.2"))
         )
-        self.macd_fast = macd_fast
-        self.macd_slow = macd_slow
-        self.macd_signal = macd_signal
-        self.atr_period = atr_period
+        self.macd_fast = macd_fast if macd_fast is not None else int(os.getenv("MA_CROSSOVER_MACD_FAST", "12"))
+        self.macd_slow = macd_slow if macd_slow is not None else int(os.getenv("MA_CROSSOVER_MACD_SLOW", "26"))
+        self.macd_signal = macd_signal if macd_signal is not None else int(os.getenv("MA_CROSSOVER_MACD_SIGNAL", "9"))
+        self.atr_period = atr_period if atr_period is not None else int(os.getenv("MA_CROSSOVER_ATR_PERIOD", "14"))
         self.atr_stop_multiplier = (
             atr_stop_multiplier
             if atr_stop_multiplier is not None

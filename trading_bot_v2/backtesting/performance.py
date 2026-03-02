@@ -43,7 +43,8 @@ class BacktestResult:
     avg_drawdown_duration_days: float = 0.0
 
     # Execution
-    total_trades: int = 0
+    total_trades: int = 0       # total fills (opens + closes)
+    closed_trades: int = 0      # completed round-trips with realised PnL
     avg_fee_per_trade: float = 0.0
     total_fees: float = 0.0
     total_funding_paid: float = 0.0
@@ -69,7 +70,8 @@ class BacktestResult:
         print(f"  Max Drawdown    : {self.max_drawdown_pct:.1f}%")
         print(f"  Win Rate        : {self.win_rate_pct:.1f}%")
         print(f"  Profit Factor   : {self.profit_factor:.2f}")
-        print(f"  Total Trades    : {self.total_trades}")
+        print(f"  Total Fills     : {self.total_trades}")
+        print(f"  Closed Trades   : {self.closed_trades}")
         print(f"  Total Fees      : ${self.total_fees:,.2f}")
         print(f"{'='*60}\n")
 
@@ -156,12 +158,14 @@ class PerformanceTracker:
         result.calmar_ratio = (result.cagr_pct / result.max_drawdown_pct
                                 if result.max_drawdown_pct > 0 else 0.0)
 
-        # Win/loss stats from trade log
-        wins = [t for t in trade_log if t.get("pnl", 0) > 0]
-        losses = [t for t in trade_log if t.get("pnl", 0) <= 0]
+        # Win/loss stats — only count closing fills (pnl != 0); opening fills have pnl=0
+        closed_trades = [t for t in trade_log if t.get("pnl", 0) != 0]
+        wins = [t for t in closed_trades if t.get("pnl", 0) > 0]
+        losses = [t for t in closed_trades if t.get("pnl", 0) < 0]
         gross_profit = sum(t.get("pnl", 0) for t in wins)
         gross_loss = abs(sum(t.get("pnl", 0) for t in losses))
-        result.win_rate_pct = len(wins) / max(1, len(trade_log)) * 100
+        result.closed_trades = len(closed_trades)
+        result.win_rate_pct = len(wins) / max(1, len(closed_trades)) * 100
         result.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
         return result

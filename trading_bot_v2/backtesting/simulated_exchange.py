@@ -11,8 +11,11 @@ The SimulatedExchange:
   - Simulates hourly funding charges/credits on open positions
   - Enforces balance checks before every order (no negative balance)
   - Records realised PnL per trade for accurate win/loss metrics
+  - Tags each trade with the strategy that generated it
+  - Randomises SL/TP fill priority when both trigger in the same candle
 """
 
+import random
 from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
@@ -59,6 +62,16 @@ class SimulatedExchange:
         Realised PnL is calculated when a position is fully or partially
         closed and written into the trade_log entry as "pnl". This gives
         accurate win_rate and profit_factor in PerformanceTracker.
+
+    Fix 3 — Strategy attribution:
+        The engine sets _current_strategy before placing each order.
+        Every trade_log entry carries a "strategy" field for per-strategy
+        PnL breakdown.
+
+    Fix 4 — SL/TP randomisation:
+        When both a stop and a take-profit order trigger within the same
+        candle's high/low range, the processing order is randomised so
+        neither is systematically favoured (removes pessimistic SL bias).
     """
 
     def __init__(
@@ -81,6 +94,7 @@ class SimulatedExchange:
         self._current_price: float = 0.0
         self._current_timestamp: str = ""
         self._order_counter: int = 0
+        self._current_strategy: str = ""  # Set by engine before each order for attribution
 
         self.trade_log: List[Dict] = []
 
@@ -201,8 +215,6 @@ class SimulatedExchange:
             fill_price = order.price * (1 + self.slippage_pct * direction)
         else:
             # Limit orders fill at the limit price — no adverse slippage.
-            # The strategy specified this price; the exchange guarantees it
-            # or better. Maker fee applies.
             fill_price = order.price
         fee_pct = self.taker_fee_pct if is_taker else self.maker_fee_pct
         fee = fill_price * order.quantity * fee_pct
@@ -304,24 +316,41 @@ class SimulatedExchange:
             return (pos.entry_price - exit_price) * qty
 
     def _check_pending_orders(self, candle: Dict) -> None:
+        """
+        Check and fill pending orders for this candle.
+
+        Fix 4 — SL/TP randomisation:
+            Collects all orders that trigger within this candle's high/low range,
+            then shuffles them before processing. This prevents the systematic
+            pessimistic bias where SL (placed first in _orders) always fires
+            before TP when both levels are touched in the same candle.
+        """
         high = float(candle["high"])
         low = float(candle["low"])
+
+        # Collect all orders that would trigger this candle
+        triggered = []
         for order in list(self._orders.values()):
             if order.status != "open":
                 continue
             if order.order_type == "stop":
-                # Stop-sell (ask): triggers when price drops to/below stop level
-                # Stop-buy  (bid): triggers when price rises to/above stop level
                 if order.side == "ask" and low <= order.price:
-                    self._fill_order(order, is_taker=True)
+                    triggered.append((order, True))
                 elif order.side == "bid" and high >= order.price:
-                    self._fill_order(order, is_taker=True)
+                    triggered.append((order, True))
             else:
                 # Limit orders: bid fills on low, ask fills on high
                 if order.side == "bid" and low <= order.price:
-                    self._fill_order(order, is_taker=False)
+                    triggered.append((order, False))
                 elif order.side == "ask" and high >= order.price:
-                    self._fill_order(order, is_taker=False)
+                    triggered.append((order, False))
+
+        # Randomise processing order to remove systematic SL-before-TP bias
+        random.shuffle(triggered)
+
+        for order, is_taker in triggered:
+            if order.status == "open":  # May have been cancelled by OCO
+                self._fill_order(order, is_taker=is_taker)
 
     def _update_unrealised_pnl(self) -> None:
         for pos in self._positions.values():
@@ -359,6 +388,10 @@ class SimulatedExchange:
             Records realised_pnl per fill. For opening trades pnl=0;
             for closing trades pnl reflects the actual profit/loss.
             PerformanceTracker uses this field for win_rate and profit_factor.
+
+        Fix 3 — Strategy attribution:
+            Records _current_strategy (set by engine before place_order) so
+            per-strategy PnL breakdown is possible in reports.
         """
         self.trade_log.append({
             "order_id": order.order_id,
@@ -370,4 +403,5 @@ class SimulatedExchange:
             "fee": fee,
             "pnl": round(realised_pnl, 6),
             "balance_after": round(self.balance, 4),
+            "strategy": self._current_strategy,
         })

@@ -79,6 +79,11 @@ class GridTradingStrategy:
         self.active_grids: Dict[str, List[Dict[str, Any]]] = {}
         self.emergency_stop_triggered: Dict[str, bool] = {}
 
+        # Cooldown: only re-evaluate grid levels every N hours (prevents firing every 5m candle)
+        self._last_signal_time: Dict[str, Optional[datetime]] = {}
+        self._sim_time: Optional[datetime] = None
+        self._signal_cooldown_hours: float = 4.0
+
         logger.info(
             f"GridTradingStrategy initialized: "
             f"{grid_levels} levels, spacing={grid_spacing_atr_multiplier}x ATR, "
@@ -86,6 +91,10 @@ class GridTradingStrategy:
             f"emergency stop={emergency_stop_loss_pct:.1%}, "
             f"dynamic spacing bounds={self.min_spacing_pct:.1%}-{self.max_spacing_pct:.1%}"
         )
+
+    def _now(self) -> datetime:
+        """Return simulated time during backtesting, wall-clock time in live trading."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
 
     def generate_signals(
         self,
@@ -112,13 +121,25 @@ class GridTradingStrategy:
         """
         try:
             # SYMBOL WHITELIST (Expanded Jan 2026):
-            # Allow grid trading on all 8 tracked tokens with regime detection
+            # Allow grid trading on all 8 tracked tokens with regime detection.
+            # Strip the quote asset (e.g. "SUI-USDC" → "SUI") before checking.
             allowed_symbols = ["BTC", "ETH", "LTC", "SOL", "SUI", "AVAX", "XRP", "DOGE"]
-            if symbol not in allowed_symbols:
+            base_asset = symbol.split("-")[0] if "-" in symbol else symbol
+            if base_asset not in allowed_symbols:
                 logger.debug(
                     f"{symbol}: Grid trading restricted to tracked symbols only"
                 )
                 return []
+
+            # Cooldown: only re-evaluate grid every 4h (not every 5m candle)
+            last_signal = self._last_signal_time.get(symbol)
+            if last_signal is not None:
+                elapsed_hours = (self._now() - last_signal).total_seconds() / 3600
+                if elapsed_hours < self._signal_cooldown_hours:
+                    logger.debug(
+                        f"{symbol}: Grid cooldown {elapsed_hours:.1f}/{self._signal_cooldown_hours}h"
+                    )
+                    return []
 
             logger.info(f"{symbol}: Starting grid signal generation...")
 
@@ -271,67 +292,27 @@ class GridTradingStrategy:
                 f"ADX={adx:.2f}"
             )
 
-            # Generate SINGLE GRID SIGNAL with RiskManager parameters
-            # Per Grid Trading Brief: Grid is neutral, capital allocated by RiskManager
-            # Calculate emergency stop price (e.g., 5% below entry for buy grid)
-            stop_loss_price = current_price * (1 - self.emergency_stop_pct)
+            # Generate BUY (below price) + SELL (above price) pair.
+            # _handle_grid_signals in StrategyManager requires exactly 1 BUY + 1 SELL
+            # with BUY entry < SELL entry to confirm it's a bilateral grid setup.
+            buy_signal = self._create_grid_buy_signal(symbol, current_price, grid_spacing, atr, adx)
+            sell_signal = self._create_grid_sell_signal(symbol, current_price, grid_spacing, atr, adx)
 
-            # Calculate take profit - grid aims to capture oscillations
-            # Target: capture 2 grid levels worth of profit (conservative)
-            take_profit_price = current_price + (grid_spacing * 2)
+            signals = []
+            if buy_signal:
+                signals.append(buy_signal)
+            if sell_signal:
+                signals.append(sell_signal)
 
-            # Calculate confidence based on regime suitability
-            # Lower ADX = better for grid trading (more ranging)
-            # ADX < 15 = high confidence, ADX 15-25 = medium, ADX > 25 = low
-            if adx < 15:
-                adx_confidence = 0.9
-            elif adx < 20:
-                adx_confidence = 0.7
-            elif adx < 25:
-                adx_confidence = 0.5
-            else:
-                adx_confidence = 0.3
+            if signals:
+                self._last_signal_time[symbol] = self._now()
+                logger.info(
+                    f"{symbol}: Grid BUY+SELL pair created - "
+                    f"BUY@${buy_signal.entry_price:.4f} / SELL@${sell_signal.entry_price:.4f}, "
+                    f"Capital: ${grid_capital:.2f}, Spacing: ${grid_spacing:.4f}"
+                )
 
-            # Final confidence = ADX confidence (grids are regime-dependent)
-            confidence = adx_confidence
-
-            signal = Signal(
-                strategy=StrategyType.GRID_TRADING,
-                asset=symbol,
-                asset_class=AssetClass.CRYPTO,
-                side=OrderSide.BUY,  # Grid is neutral but we use BUY for convention
-                entry_price=current_price,
-                stop_loss=stop_loss_price,
-                take_profit=take_profit_price,
-                quantity=grid_capital / current_price,  # Total grid quantity
-                confidence=confidence,
-                # Set validation flags for grid trading
-                volume_confirmation=True,
-                multi_timeframe_alignment=True,
-                support_resistance_valid=True,
-                rrr_meets_minimum=True,
-                liquidation_buffer_safe=True,
-                account_risk_ok=True,
-                margin_drawdown_ok=True,
-                forbidden_conditions_clear=True,
-                # Grid-specific params stored in indicators dict
-                indicators={
-                    "atr": atr,
-                    "adx": adx,
-                    "emergency_stop_pct": self.emergency_stop_pct,
-                    "grid_levels": self.grid_levels,
-                    "grid_capital": grid_capital,
-                    "spacing": grid_spacing,
-                    "risk_profile": "low",
-                },
-            )
-
-            logger.info(
-                f"{symbol}: Grid signal created - Capital: ${grid_capital:.2f}, "
-                f"Levels: {self.grid_levels}, Spacing: ${grid_spacing:.4f}"
-            )
-
-            return [signal]
+            return signals
 
         except Exception as e:
             logger.error(f"Error generating grid signals for {symbol}: {e}")

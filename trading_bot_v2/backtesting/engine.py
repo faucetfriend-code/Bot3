@@ -52,6 +52,10 @@ class BacktestEngine:
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
         self.cfg = override_config or live_config
+        # Per-run state (reset in run())
+        self._hedge_mode: bool = False
+        self._min_hold_candles: int = 6
+        self._position_open_candle: Dict[str, int] = {}
 
     def run(
         self,
@@ -59,11 +63,22 @@ class BacktestEngine:
         end: str,
         symbol: Optional[str] = None,
         initial_capital: Optional[float] = None,
+        strategy_filter: Optional[str] = None,
     ) -> BacktestResult:
         symbol = symbol or self.cfg.backtest_symbol
         initial_capital = initial_capital or self.cfg.backtest_initial_capital
+        strategy_filter = strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
 
-        logger.info(f"Starting backtest: {symbol} | {start} -> {end} | capital={initial_capital}")
+        # Initialise per-run state
+        self._hedge_mode = getattr(self.cfg, "backtest_hedge_mode", False)
+        self._min_hold_candles = getattr(self.cfg, "backtest_min_hold_candles", 6)
+        self._position_open_candle = {}
+
+        logger.info(
+            f"Starting backtest: {symbol} | {start} -> {end} | capital={initial_capital} | "
+            f"hedge_mode={self._hedge_mode} | min_hold_candles={self._min_hold_candles}"
+            + (f" | strategy_filter={strategy_filter}" if strategy_filter else "")
+        )
 
         # --- Build components ---
         exchange = SimulatedExchange(
@@ -75,9 +90,28 @@ class BacktestEngine:
         )
         loader = BacktestDataLoader(symbol=symbol, data_dir=self.cfg.backtest_data_dir)
         risk_manager = RiskManager(client=exchange)
+
+        # Build strategy enable kwargs for single-strategy mode
+        strategy_kwargs: Dict = {}
+        if strategy_filter:
+            _all_strategy_flags = {
+                "MeanReversion": "enable_mean_reversion",
+                "MACrossover": "enable_ma_crossover",
+                "GridTrading": "enable_grid_trading",
+                "LiquidationCapture": "enable_liquidation_capture",
+                "VWAPScalping": "enable_vwap_scalping",
+                "MomentumScalping": "enable_momentum_scalping",
+                "FundingArb": "enable_funding_arb",
+                "OrderBookImbalance": "enable_orderbook_imbalance",
+            }
+            for name, flag in _all_strategy_flags.items():
+                strategy_kwargs[flag] = (name == strategy_filter)
+            logger.info(f"Single-strategy mode: only {strategy_filter} enabled")
+
         strategy_manager = StrategyManager(
             risk_manager=risk_manager,
             client=exchange,
+            **strategy_kwargs,
         )
         performance = PerformanceTracker(initial_capital=initial_capital)
         cost_model = CostModel(
@@ -119,7 +153,7 @@ class BacktestEngine:
             multi_tf_data = {
                 "15m": self._history(candles["15m"], i_15m, 60),
                 "1h":  self._history(candles["1h"],  i_1h,  60),
-                "4h":  self._history(candles["4h"],  i_4h,  50),
+                "4h":  self._history(candles["4h"],  i_4h,  60),
             }
 
             # Execution timeframes (optional, for precise entry)
@@ -155,7 +189,17 @@ class BacktestEngine:
             for signal in signals:
                 try:
                     cost_model.apply(signal, exchange._current_price)
-                    self._execute_signal(signal, exchange)
+                    exchange._current_strategy = signal.strategy.value
+                    executed = self._execute_signal(signal, exchange, i)
+                    if executed:
+                        strategy_manager.register_trade_execution(
+                            signal, {"quantity": 0, "price": exchange._current_price}
+                        )
+                        # Wire LiquidationCapture session tracking
+                        if signal.strategy == StrategyType.LIQUIDATION_CAPTURE:
+                            lc = strategy_manager.strategies.get("LiquidationCapture")
+                            if lc:
+                                lc.record_trade()
                 except Exception as e:
                     logger.debug(f"Signal execution skipped: {e}")
 
@@ -186,22 +230,79 @@ class BacktestEngine:
     # Signal execution
     # ------------------------------------------------------------------
 
-    def _execute_signal(self, signal, exchange: SimulatedExchange) -> None:
-        """Translate a Signal object into a SimulatedExchange order."""
+    def _execute_signal(self, signal, exchange: SimulatedExchange, candle_idx: int) -> bool:
+        """
+        Translate a Signal object into a SimulatedExchange order.
+
+        Returns True if an order was placed, False if the signal was skipped.
+
+        Hedge-mode enforcement (Fix 2D):
+            When hedge_mode=False (Pacifica default), any signal that opposes an
+            open position is dropped. Positions are closed only when their SL or
+            TP order fills — never by a competing strategy signal.
+
+        Min-hold enforcement (Fix Layer 1):
+            When hedge_mode=True, opposing signals are additionally blocked until
+            the position has been open for at least min_hold_candles candles,
+            preventing premature cross-strategy exits that crush R/R.
+        """
         price = exchange._current_price
         if price <= 0:
-            return
+            return False
 
-        # Fix 3 — position deduplication: skip new entries in the same direction
-        # as an existing open position, but allow opposite-direction signals
-        # (closes/reversals) through.
+        side = "bid" if signal.side == OrderSide.BUY else "ask"
+        exit_side = "ask" if signal.side == OrderSide.BUY else "bid"
+
+        # --- Existing position check ---
         existing_pos = exchange._positions.get(signal.asset)
         if existing_pos:
             signal_side_str = "long" if signal.side == OrderSide.BUY else "short"
             if existing_pos.side == signal_side_str:
-                return  # already long/short in this direction, skip duplicate entry
+                return False  # Same direction — skip duplicate entry
 
-        # Determine position size
+            # Opposing direction — apply hedge_mode and hold_time guards
+            if not self._hedge_mode:
+                # Hedge mode disabled (Pacifica): skip opposing signals entirely.
+                # Positions are only closed by their SL/TP orders.
+                logger.debug(
+                    f"Hedge mode off: blocking opposing {signal.side.value} signal "
+                    f"for {signal.asset}"
+                )
+                return False
+
+            # Hedge mode enabled: enforce minimum hold time
+            open_candle = self._position_open_candle.get(signal.asset, candle_idx)
+            candles_held = candle_idx - open_candle
+            if candles_held < self._min_hold_candles:
+                logger.debug(
+                    f"Min hold not met for {signal.asset}: "
+                    f"{candles_held}/{self._min_hold_candles} candles — skipping close"
+                )
+                return False
+
+            # Allow close: size to exactly the existing position quantity
+            close_qty = existing_pos.quantity
+            price_diff_pct = abs(signal.entry_price - price) / price
+            if price_diff_pct > 0.001:
+                exchange.place_order(
+                    symbol=signal.asset,
+                    side=side,
+                    quantity=str(close_qty),
+                    order_type="limit",
+                    price=signal.entry_price,
+                )
+            else:
+                exchange.place_order(
+                    symbol=signal.asset,
+                    side=side,
+                    quantity=str(close_qty),
+                    order_type="market",
+                )
+            # Closing trades need no SL/TP — the position is being exited
+            self._position_open_candle.pop(signal.asset, None)
+            return True
+
+        # --- Opening a new position ---
         qty = signal.quantity
         if qty <= 0:
             # Fixed fractional sizing: 2% of available balance per trade
@@ -210,10 +311,7 @@ class BacktestEngine:
             qty = round((available * risk_pct) / price, 6)
 
         if qty <= 0:
-            return
-
-        side = "bid" if signal.side == OrderSide.BUY else "ask"
-        exit_side = "ask" if signal.side == OrderSide.BUY else "bid"
+            return False
 
         # Use limit order at entry_price if it differs from current price
         # by more than 0.1%, otherwise use market order for immediate fill
@@ -234,13 +332,23 @@ class BacktestEngine:
                 order_type="market",
             )
 
-        # Place stop-loss and take-profit exit orders for single-entry strategies.
-        # Grid trading manages its own exit levels via its grid nodes — adding
-        # engine-level SL/TP on top creates destructive order churn.
+        # Track when this position was opened (for min_hold_candles)
+        self._position_open_candle[signal.asset] = candle_idx
+
+        # Place exit orders. Grid signals use stop-only (the opposing grid limit
+        # order acts as TP when price reaches it). All other strategies get both.
         is_grid = signal.strategy == StrategyType.GRID_TRADING
-        if not is_grid:
+        if is_grid:
             if signal.stop_loss and signal.stop_loss > 0:
-                # Stop orders: fill when price moves adversely through the stop level
+                exchange.place_order(
+                    symbol=signal.asset,
+                    side=exit_side,
+                    quantity=str(qty),
+                    order_type="stop",
+                    price=signal.stop_loss,
+                )
+        else:
+            if signal.stop_loss and signal.stop_loss > 0:
                 exchange.place_order(
                     symbol=signal.asset,
                     side=exit_side,
@@ -249,7 +357,6 @@ class BacktestEngine:
                     price=signal.stop_loss,
                 )
             if signal.take_profit and signal.take_profit > 0:
-                # Take-profit: limit order that fills when price reaches the target
                 exchange.place_order(
                     symbol=signal.asset,
                     side=exit_side,
@@ -257,6 +364,8 @@ class BacktestEngine:
                     order_type="limit",
                     price=signal.take_profit,
                 )
+
+        return True
 
     # ------------------------------------------------------------------
     # Data helpers

@@ -194,6 +194,8 @@ class StrategyManager:
             grid_min_confidence = float(
                 os.getenv("GRID_MIN_CONFIDENCE", "0.45")
             )  # Was 0.6 - more signals
+            grid_atr_period = int(os.getenv("GRID_ATR_PERIOD", "14"))
+            grid_adx_period = int(os.getenv("GRID_ADX_PERIOD", "14"))
 
             self.strategies["GridTrading"] = GridTradingStrategy(
                 grid_levels=grid_levels,
@@ -201,6 +203,8 @@ class StrategyManager:
                 max_positions_per_symbol=grid_max_positions,
                 emergency_stop_loss_pct=grid_emergency_stop,
                 adx_regime_threshold=grid_adx_threshold,
+                atr_period=grid_atr_period,
+                adx_period=grid_adx_period,
                 min_confidence=grid_min_confidence,
                 risk_manager=self.risk_manager,
             )
@@ -226,6 +230,7 @@ class StrategyManager:
             liq_rrr_target = float(os.getenv("LIQUIDATION_RRR_TARGET", "3.0"))
             liq_max_per_session = int(os.getenv("LIQUIDATION_MAX_PER_SESSION", "1"))
             liq_min_hours_between = int(os.getenv("LIQUIDATION_MIN_HOURS_BETWEEN", "4"))
+            liq_rsi_period = int(os.getenv("LIQUIDATION_RSI_PERIOD", "14"))
 
             self.strategies["LiquidationCapture"] = LiquidationCaptureStrategy(
                 price_move_threshold=liq_price_threshold,
@@ -237,6 +242,7 @@ class StrategyManager:
                 rrr_target=liq_rrr_target,
                 max_per_session=liq_max_per_session,
                 min_hours_between_trades=liq_min_hours_between,
+                rsi_period=liq_rsi_period,
             )
             logger.info(
                 f"Liquidation Capture strategy enabled: price threshold={liq_price_threshold:.1%}, "
@@ -248,15 +254,25 @@ class StrategyManager:
             vwap_atr_period = int(os.getenv("VWAP_ATR_PERIOD", "14"))
             vwap_sd_threshold = float(os.getenv("VWAP_SD_ENTRY_THRESHOLD", "1.8"))
             vwap_atr_stop_mult = float(os.getenv("VWAP_ATR_STOP_MULTIPLIER", "1.5"))
+            vwap_macd_fast = int(os.getenv("VWAP_MACD_FAST", "12"))
+            vwap_macd_slow = int(os.getenv("VWAP_MACD_SLOW", "26"))
+            vwap_macd_signal = int(os.getenv("VWAP_MACD_SIGNAL", "9"))
             vwap_min_confidence = float(os.getenv("VWAP_MIN_CONFIDENCE", "0.62"))
             vwap_cooldown = int(os.getenv("VWAP_COOLDOWN_MINUTES", "8"))
+            vwap_sd_multipliers = [
+                float(x) for x in os.getenv("VWAP_SD_MULTIPLIERS", "1.0,2.0,3.0").split(",")
+            ]
 
             self.strategies["VWAPScalping"] = VWAPScalpingStrategy(
                 atr_period=vwap_atr_period,
                 sd_entry_threshold=vwap_sd_threshold,
                 atr_stop_multiplier=vwap_atr_stop_mult,
+                macd_fast=vwap_macd_fast,
+                macd_slow=vwap_macd_slow,
+                macd_signal=vwap_macd_signal,
                 min_confidence=vwap_min_confidence,
                 cooldown_minutes=vwap_cooldown,
+                sd_multipliers=vwap_sd_multipliers,
             )
             logger.info(
                 f"VWAP Scalping strategy enabled: SD threshold={vwap_sd_threshold}, "
@@ -331,6 +347,8 @@ class StrategyManager:
             ob_strong_imb = float(os.getenv("ORDERBOOK_STRONG_IMBALANCE", "0.72"))
             ob_min_density = int(os.getenv("ORDERBOOK_MIN_ORDER_DENSITY", "5"))
             ob_spoof_detect = os.getenv("ORDERBOOK_SPOOF_DETECTION", "true").lower() == "true"
+            ob_spoof_size_ratio = float(os.getenv("ORDERBOOK_SPOOF_SIZE_RATIO", "5.0"))
+            ob_atr_period = int(os.getenv("ORDERBOOK_ATR_PERIOD", "14"))
             ob_atr_stop = float(os.getenv("ORDERBOOK_ATR_STOP_MULTIPLIER", "0.75"))
             ob_atr_target = float(os.getenv("ORDERBOOK_ATR_TARGET_MULTIPLIER", "1.5"))
             ob_min_confidence = float(os.getenv("ORDERBOOK_MIN_CONFIDENCE", "0.55"))
@@ -344,6 +362,8 @@ class StrategyManager:
                 strong_imbalance_threshold=ob_strong_imb,
                 min_order_density=ob_min_density,
                 spoof_detection=ob_spoof_detect,
+                spoof_size_ratio=ob_spoof_size_ratio,
+                atr_period=ob_atr_period,
                 atr_stop_mult=ob_atr_stop,
                 atr_target_mult=ob_atr_target,
                 min_confidence=ob_min_confidence,
@@ -644,16 +664,24 @@ class StrategyManager:
                     f"{symbol}: Added LiquidationCapture (runs in all regimes)"
                 )
 
-            # Step 2.6: Always add VWAPScalping if enabled (overlay strategy, runs in ALL regimes)
+            # Step 2.6: Add VWAPScalping only in RANGING / INDECISIVE regimes.
+            # VWAP is a mean-reversion strategy — SELL signals fight the trend in
+            # TRENDING_STRONG / TRENDING_MODERATE and consistently hit SL, dragging PF below 1.
+            _vwap_regimes = [
+                MarketRegime.RANGING_VOLATILE,
+                MarketRegime.RANGING_CALM,
+                MarketRegime.INDECISIVE,
+            ]
             if (
                 "VWAPScalping" in self.strategies
                 and "VWAPScalping" not in active_strategy_names
+                and regime in _vwap_regimes
             ):
                 active_strategy_names = list(active_strategy_names) + [
                     "VWAPScalping"
                 ]
                 logger.debug(
-                    f"{symbol}: Added VWAPScalping (overlay strategy, runs in all regimes)"
+                    f"{symbol}: Added VWAPScalping (ranging/indecisive regime)"
                 )
 
             # Step 2.7: Always add FundingArb if enabled (passive strategy, runs in ALL regimes)
@@ -932,24 +960,20 @@ class StrategyManager:
         Returns:
             List of [BUY, SELL] signals if valid grid, None otherwise
         """
-        # Check if ALL signals are from Grid Trading
+        # Extract grid signals from all signals (may include non-grid signals)
         all_signals = buy_signals + sell_signals
-        grid_signals = [
-            s for s in all_signals if s.strategy == StrategyType.GRID_TRADING
+        grid_buy = [
+            s for s in all_signals
+            if s.strategy == StrategyType.GRID_TRADING and s.side == OrderSide.BUY
+        ]
+        grid_sell = [
+            s for s in all_signals
+            if s.strategy == StrategyType.GRID_TRADING and s.side == OrderSide.SELL
         ]
 
-        if len(grid_signals) != len(all_signals):
-            # Mixed strategies - not a pure grid setup, use normal conflict resolution
-            logger.debug(
-                f"Grid handler: Mixed strategies detected "
-                f"({len(grid_signals)} grid, {len(all_signals) - len(grid_signals)} other) - "
-                f"using normal conflict resolution"
-            )
+        # If no grid signals at all, fall through to normal conflict resolution
+        if not grid_buy and not grid_sell:
             return None
-
-        # Must have exactly 1 BUY and 1 SELL for a basic grid level
-        grid_buy = [s for s in grid_signals if s.side == OrderSide.BUY]
-        grid_sell = [s for s in grid_signals if s.side == OrderSide.SELL]
 
         if len(grid_buy) != 1 or len(grid_sell) != 1:
             logger.warning(
@@ -960,6 +984,15 @@ class StrategyManager:
 
         buy_signal = grid_buy[0]
         sell_signal = grid_sell[0]
+
+        # Non-grid signals are present but grid takes priority in ranging regime.
+        # Log the override and proceed with the grid pair.
+        non_grid = [s for s in all_signals if s.strategy != StrategyType.GRID_TRADING]
+        if non_grid:
+            logger.debug(
+                f"Grid handler: Grid pair takes priority over "
+                f"{len(non_grid)} non-grid signal(s) ({[s.strategy.value for s in non_grid]})"
+            )
 
         # Validate same symbol
         if buy_signal.asset != sell_signal.asset:

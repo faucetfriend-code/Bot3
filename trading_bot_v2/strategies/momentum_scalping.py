@@ -345,6 +345,29 @@ class MomentumScalpingStrategy:
         else:
             return ema_fast_15m[-1] < ema_slow_15m[-1]
 
+    def _check_4h_trend_alignment(
+        self, closes_4h: List[float], direction: str
+    ) -> bool:
+        """
+        4h HTF trend filter — highest-priority trend gate.
+
+        Only take BUY signals when 4h EMA-fast > EMA-slow (uptrend).
+        Only take SELL signals when 4h EMA-fast < EMA-slow (downtrend).
+        Returns True (allow) when insufficient 4h data exists.
+        """
+        min_len = self.ema_slow + 5
+        if len(closes_4h) < min_len:
+            return True
+
+        ema_fast_4h = calculate_ema(closes_4h, self.ema_fast)
+        ema_slow_4h = calculate_ema(closes_4h, self.ema_slow)
+
+        if not ema_fast_4h or not ema_slow_4h:
+            return True
+
+        bullish_4h = ema_fast_4h[-1] > ema_slow_4h[-1]
+        return bullish_4h if direction == "bullish" else not bullish_4h
+
     def generate_signals(
         self,
         symbol: str,
@@ -438,6 +461,15 @@ class MomentumScalpingStrategy:
 
             if closes_15m and not self._check_higher_tf_alignment(closes_15m, direction):
                 logger.debug(f"{symbol}: 15m trend not aligned with {direction} signal")
+                return signals
+
+        # 4h HTF trend gate (highest-priority filter — must be aligned with trade direction)
+        df_4h = multi_tf_data.get("4h", {})
+        if df_4h:
+            closes_4h = df_4h.get("close", [])
+            closes_4h = list(closes_4h) if hasattr(closes_4h, '__iter__') else closes_4h
+            if closes_4h and not self._check_4h_trend_alignment(closes_4h, direction):
+                logger.debug(f"{symbol}: 4h trend not aligned with {direction} signal — blocked")
                 return signals
 
         # Calculate ATR for stops/targets

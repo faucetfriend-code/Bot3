@@ -21,7 +21,7 @@ The 1h regime permission is handled by StrategyManager, not within this strategy
 
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
@@ -47,6 +47,8 @@ class MeanReversionStrategy:
     - MEAN_REVERSION_RSI_PERIOD (default: 14)
     - MEAN_REVERSION_BB_PERIOD (default: 20)
     - MEAN_REVERSION_BB_STD_DEV (default: 2.0)
+    - MEAN_REVERSION_SMA_PERIOD (default: 20)
+    - MEAN_REVERSION_ATR_PERIOD (default: 14)
     - MEAN_REVERSION_ATR_STOP_MULTIPLIER (default: 2.0)
     - MEAN_REVERSION_MIN_CONFIDENCE (default: 0.45)
     """
@@ -58,10 +60,12 @@ class MeanReversionStrategy:
         rsi_period: Optional[int] = None,
         bb_period: Optional[int] = None,
         bb_std_dev: Optional[float] = None,
+        bb_proximity: Optional[float] = None,
         sma_period: Optional[int] = None,
         atr_period: Optional[int] = None,
         atr_stop_multiplier: Optional[float] = None,
         min_confidence: Optional[float] = None,
+        cooldown_minutes: Optional[int] = None,
     ):
         """
         Initialize Mean Reversion Strategy.
@@ -75,6 +79,7 @@ class MeanReversionStrategy:
             rsi_period: RSI calculation period (env: MEAN_REVERSION_RSI_PERIOD, default: 14)
             bb_period: Bollinger Bands period (env: MEAN_REVERSION_BB_PERIOD, default: 20)
             bb_std_dev: Bollinger Bands standard deviation (env: MEAN_REVERSION_BB_STD_DEV, default: 2.0)
+            bb_proximity: Max fractional distance from BB edge to qualify entry (env: MEAN_REVERSION_BB_PROXIMITY, default: 0.20)
             sma_period: SMA period for take profit target (default: 20)
             atr_period: ATR period for stop loss (default: 14)
             atr_stop_multiplier: ATR multiplier for stop loss (env: MEAN_REVERSION_ATR_STOP_MULTIPLIER, default: 2.0)
@@ -106,8 +111,13 @@ class MeanReversionStrategy:
             if bb_std_dev is not None
             else float(os.getenv("MEAN_REVERSION_BB_STD_DEV", "2.0"))
         )
-        self.sma_period = sma_period if sma_period is not None else 20
-        self.atr_period = atr_period if atr_period is not None else 14
+        self.bb_proximity = (
+            bb_proximity
+            if bb_proximity is not None
+            else float(os.getenv("MEAN_REVERSION_BB_PROXIMITY", "0.20"))
+        )
+        self.sma_period = sma_period if sma_period is not None else int(os.getenv("MEAN_REVERSION_SMA_PERIOD", "20"))
+        self.atr_period = atr_period if atr_period is not None else int(os.getenv("MEAN_REVERSION_ATR_PERIOD", "14"))
         self.atr_stop_multiplier = (
             atr_stop_multiplier
             if atr_stop_multiplier is not None
@@ -118,6 +128,17 @@ class MeanReversionStrategy:
             if min_confidence is not None
             else float(os.getenv("MEAN_REVERSION_MIN_CONFIDENCE", "0.45"))
         )
+        self.min_rrr = float(os.getenv("MEAN_REVERSION_MIN_RRR", "0.5"))
+        self.cooldown_minutes = (
+            cooldown_minutes
+            if cooldown_minutes is not None
+            else int(os.getenv("MEAN_REVERSION_COOLDOWN_MINUTES", "0"))
+        )
+
+        # Cooldown tracking per symbol (prevents clustered losses at same level)
+        self._last_trade_time: Dict[str, datetime] = {}
+        # Simulated time injected by backtest engine
+        self._sim_time: Optional[datetime] = None
 
         logger.info(
             f"MeanReversionStrategy initialized: "
@@ -126,6 +147,27 @@ class MeanReversionStrategy:
             f"ATR stop={self.atr_stop_multiplier}x, "
             f"min_confidence={self.min_confidence}"
         )
+
+    def _now(self) -> datetime:
+        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+
+    def _check_cooldown(self, symbol: str) -> bool:
+        """Return True if symbol is in cooldown (skip signal generation)."""
+        if self.cooldown_minutes <= 0:
+            return False
+        if symbol not in self._last_trade_time:
+            return False
+        elapsed = self._now() - self._last_trade_time[symbol]
+        if elapsed < timedelta(minutes=self.cooldown_minutes):
+            remaining = (timedelta(minutes=self.cooldown_minutes) - elapsed).total_seconds() / 60
+            logger.debug(f"{symbol}: MeanReversion cooldown {remaining:.0f}min remaining")
+            return True
+        return False
+
+    def _set_cooldown(self, symbol: str) -> None:
+        """Record trade time for cooldown enforcement."""
+        self._last_trade_time[symbol] = self._now()
 
     def generate_signals(
         self,
@@ -155,6 +197,10 @@ class MeanReversionStrategy:
             List of Signal objects (0-1 signals)
         """
         try:
+            # Check cooldown (prevents clustered stop-outs at same price level)
+            if self._check_cooldown(symbol):
+                return []
+
             # Require 15m for structure validation
             if "15m" not in multi_tf_data:
                 logger.warning(f"Missing 15m structure data for {symbol}")
@@ -223,6 +269,7 @@ class MeanReversionStrategy:
                     logger.info(
                         f"LONG signal for {symbol}: RSI_{trigger_tf}={trigger_rsi:.2f} (no MTF alignment required)"
                     )
+                    self._set_cooldown(symbol)
                     return [signal]
 
             # Check for SHORT signal (RSI overbought + price near upper BB)
@@ -246,6 +293,7 @@ class MeanReversionStrategy:
                     logger.info(
                         f"SHORT signal for {symbol}: RSI_{trigger_tf}={trigger_rsi:.2f} (no MTF alignment required)"
                     )
+                    self._set_cooldown(symbol)
                     return [signal]
 
             # No signal - log summary of why
@@ -303,12 +351,10 @@ class MeanReversionStrategy:
         distance_from_lower_bb = current_price - lower_bb
         distance_pct = (distance_from_lower_bb / bb_range) if bb_range > 0 else 1.0
 
-        if (
-            distance_pct > 0.3
-        ):  # Prompt 058: Loosened from 20% to 30% away from lower BB
+        if distance_pct > self.bb_proximity:
             logger.debug(
                 f"[{symbol}] LONG conditions FAILED: Price too far from lower BB "
-                f"(distance_pct={distance_pct:.2f} > 0.30, price={current_price:.2f}, lower_bb={lower_bb:.2f})"
+                f"(distance_pct={distance_pct:.2f} > {self.bb_proximity}, price={current_price:.2f}, lower_bb={lower_bb:.2f})"
             )
             return False
 
@@ -348,12 +394,10 @@ class MeanReversionStrategy:
         distance_from_upper_bb = upper_bb - current_price
         distance_pct = (distance_from_upper_bb / bb_range) if bb_range > 0 else 1.0
 
-        if (
-            distance_pct > 0.3
-        ):  # Prompt 058: Loosened from 20% to 30% away from upper BB
+        if distance_pct > self.bb_proximity:
             logger.debug(
                 f"[{symbol}] SHORT conditions FAILED: Price too far from upper BB "
-                f"(distance_pct={distance_pct:.2f} > 0.30, price={current_price:.2f}, upper_bb={upper_bb:.2f})"
+                f"(distance_pct={distance_pct:.2f} > {self.bb_proximity}, price={current_price:.2f}, upper_bb={upper_bb:.2f})"
             )
             return False
 
@@ -417,8 +461,20 @@ class MeanReversionStrategy:
         # Stop Loss: 2x ATR below entry
         stop_loss = current_price - (atr * self.atr_stop_multiplier)
 
-        # Take Profit: Mean reversion to SMA
-        take_profit = sma_target
+        # Take Profit: Full range reversion to upper Bollinger Band
+        # Using upper BB instead of SMA gives a 2:1+ RRR vs the 1:1 from SMA
+        take_profit = upper_bb
+
+        # RRR filter: skip entries where reward < min_rrr × risk
+        risk = current_price - stop_loss
+        reward = take_profit - current_price
+        rrr = reward / risk if risk > 0 else 0
+        if rrr < self.min_rrr:
+            logger.debug(
+                f"[{symbol}] LONG skipped: RRR {rrr:.2f} < min_rrr {self.min_rrr} "
+                f"(TP={take_profit:.4f}, SL={stop_loss:.4f}, entry={current_price:.4f})"
+            )
+            return None
 
         # Calculate confidence (0-1 scale)
         # Higher confidence when:
@@ -507,8 +563,20 @@ class MeanReversionStrategy:
         # Stop Loss: 2x ATR above entry
         stop_loss = current_price + (atr * self.atr_stop_multiplier)
 
-        # Take Profit: Mean reversion to SMA
-        take_profit = sma_target
+        # Take Profit: Full range reversion to lower Bollinger Band
+        # Using lower BB instead of SMA gives a 2:1+ RRR vs the 1:1 from SMA
+        take_profit = lower_bb
+
+        # RRR filter: skip entries where reward < min_rrr × risk
+        risk = stop_loss - current_price
+        reward = current_price - take_profit
+        rrr = reward / risk if risk > 0 else 0
+        if rrr < self.min_rrr:
+            logger.debug(
+                f"[{symbol}] SHORT skipped: RRR {rrr:.2f} < min_rrr {self.min_rrr} "
+                f"(TP={take_profit:.4f}, SL={stop_loss:.4f}, entry={current_price:.4f})"
+            )
+            return None
 
         # Calculate confidence (0-1 scale)
         rsi_strength = (rsi_15m - self.rsi_overbought) / (

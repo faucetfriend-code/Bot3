@@ -197,6 +197,12 @@ class Config:
         self.backtest_data_dir: str = os.getenv("BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data")
         self.backtest_walk_forward_train_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TRAIN_MONTHS", "6"))
         self.backtest_walk_forward_test_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TEST_MONTHS", "1"))
+        # Hedge mode: False = Pacifica (no opposing positions, only SL/TP closes)
+        self.backtest_hedge_mode: bool = os.getenv("BACKTEST_HEDGE_MODE", "false").lower() in ("true", "1", "yes")
+        # Min candles a position must be held before an opposing signal can close it (hedge_mode=True only)
+        self.backtest_min_hold_candles: int = int(os.getenv("BACKTEST_MIN_HOLD_CANDLES", "6"))
+        # Single-strategy filter: empty = all strategies, "MomentumScalping" = only that one
+        self.backtest_strategy: str = os.getenv("BACKTEST_STRATEGY", "")
 
     @property
     def pacifica_base_url(self) -> str:

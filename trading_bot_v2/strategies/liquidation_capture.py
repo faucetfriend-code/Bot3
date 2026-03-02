@@ -261,14 +261,31 @@ class LiquidationCaptureStrategy:
         return self._sim_time if self._sim_time is not None else datetime.utcnow()
 
     def _can_trade(self) -> bool:
-        """Check if we can trade based on session limits."""
+        """
+        Check if we can trade based on session limits.
+
+        Session auto-reset: the 4h session counter resets when the current
+        candle crosses into a new 4h window (00:00, 04:00, 08:00, …, 20:00 UTC).
+        This ensures max_per_session is enforced per 4h window without relying
+        on the engine calling reset_session() explicitly.
+        """
+        now = self._now()
+
+        # Auto-reset at 4h session boundaries
+        if self.last_trade_time is not None:
+            current_session = now.hour // 4
+            last_session = self.last_trade_time.hour // 4
+            if now.date() != self.last_trade_time.date() or current_session != last_session:
+                self.session_trades = 0
+                logger.debug("LiquidationCapture: 4h session reset")
+
         # Check trade count limit
         if self.session_trades >= self.max_per_session:
             return False
 
         # Check time between trades
         if self.last_trade_time:
-            hours_since = (self._now() - self.last_trade_time).total_seconds() / 3600
+            hours_since = (now - self.last_trade_time).total_seconds() / 3600
             if hours_since < self.min_hours_between:
                 return False
 
