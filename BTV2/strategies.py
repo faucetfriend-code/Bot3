@@ -1110,24 +1110,31 @@ MR_DEFAULTS = {"rsi_oversold": 30.0, "rsi_overbought": 70.0,
                "bb_proximity": 0.10, "atr_stop": 3.0}
 
 VS_GRID     = {                                           # v6 — 72 combos
-    "sd_threshold":  [2.5, 3.0, 3.5, 4.0],            # VWAP deviation threshold
-    "atr_stop":      [0.5, 0.7, 1.0, 1.5],            # SL distance
-    "adx_max":       [20.0, 25.0, 30.0],               # 5m ranging gate
-    "trailing_atr":  [0.8, 1.2, 1.8],                  # trailing stop ratchet
+    # Variable importance ranking (350+ tests, VWAP_Complete_Results_Summary.md):
+    # #1 entry_mode  #2 volume_mult  #3 sd_threshold  #4 adx_max
+    "entry_mode":    ["mean_reversion", "bull_pullback"],  # bull_pullback +118% vs MR
+    "sd_threshold":  [1.5, 2.0, 2.5, 3.0],               # sweet spot at SD=2.0
+    "volume_mult":   [1.5, 2.0, 2.5],                     # 2.0 = best quality filter
+    "adx_max":       [20.0, 25.0, 30.0],                  # 30 optimal (Phase 5)
 }
-VS_DEFAULTS = {                                          # v6 defaults — mean_reversion mode
-    "entry_mode":    "mean_reversion",
-    "sd_threshold":  3.0,
-    "atr_stop":      1.0,
-    "atr_target":    2.0,
+VS_DEFAULTS = {                                          # v6 defaults (empirically derived, 350+ tests)
+    # Key findings:
+    #   use_htf_ema=True BLOCKS ALL TRADES (Phase 7) -- keep False
+    #   entry_mode="bull_pullback" is +118% vs mean_reversion (Phase 3)
+    #   sd_threshold=2.0 is the sweet spot (Phase 10)
+    #   volume_mult=2.0 improves quality (Phase 6)
+    "entry_mode":    "bull_pullback",
+    "sd_threshold":  2.0,
+    "atr_stop":      0.7,
+    "atr_target":    3.0,
     "trailing_atr":  1.2,
     "tp_mode":       "atr",
-    "adx_max":       25.0,
+    "adx_max":       30.0,
     "rsi_max":       50.0,
-    "volume_mult":   1.2,
-    "use_htf_ema":   True,
-    "htf_adx_max":   30.0,
-    "use_htf_vwap":  False,
+    "volume_mult":   2.0,
+    "use_htf_ema":   False,   # True blocks ALL trades -- empirically confirmed OFF
+    "htf_adx_max":   25.0,
+    "use_htf_vwap":  True,    # recommended in final config (Phase 10)
     "use_stoch_filter": False,
     "require_reversal_candle": False,
 }
