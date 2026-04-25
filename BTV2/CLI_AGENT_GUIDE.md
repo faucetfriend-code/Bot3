@@ -1,6 +1,12 @@
-# BTV2 — CLI Agent Integration Guide  (v5)
+# BTV2 — CLI Agent Integration Guide  (v7)
 
-How to programmatically drive the walk-forward backtesting system, interpret its outputs, and wire it into an automated improvement loop with a CLI coding agent (Gemini, Claude Code, etc.).
+How to programmatically drive the walk-forward backtesting system, interpret its outputs, and wire it into an automated improvement loop with a CLI coding agent (Gemini, Claude Code, glitch, etc.).
+
+> **v5 additions:** `optimizer_agent.py` (Optuna TPE autonomous optimizer), `optimize.md` (program file), `STRICT_VALIDATION` mode in `strategies.py`, Grid Trading `.env` parameter fix, Dark Factory RAG experiment logging.
+>
+> **v6 additions (2026-04-12):** VWAP strategy root-cause fix — 5 structural issues patched in `strategies.py`. Butterworth no longer distorts VWAP bands; SD threshold raised to 3.0+; entry mode changed to `mean_reversion`; filter stack reduced; exit logic redesigned. Optimizer `SEARCH_SPACES` expanded with categorical params (`entry_mode`, `tp_mode`, filter toggles). `build_objective` updated to handle `"cat"` type specs. Truncated `compute_metrics` repaired. See [VWAP v6 Fix](#vwap-v6-fix) for full details.
+>
+> **v7 additions (2026-04-24):** Three validation layers added to `strategies.py`: Monte Carlo simulation (`monte_carlo_validate`), parameter robustness/fragility score (`compute_robustness_score`), and GMM regime detection (`fit_gmm_regime` / `predict_gmm_regime` / `gmm_regime_summary`). New `btv2_validate.py` runner combines all layers into a single PASS/CAUTION/FAIL verdict. `compute_metrics` now accepts `bars_per_year` param (default 365); `INTERVAL_BARS_PER_YEAR` constant added. `scikit-learn>=1.3.0` added to requirements. See [Validation Layers (v7)](#validation-layers-v7) for full details.
 
 ---
 
@@ -8,16 +14,24 @@ How to programmatically drive the walk-forward backtesting system, interpret its
 
 ```
 Bot3/
-  .env                    ← live trading bot config (100+ vars, strategy params)
+  .env                      ← live trading bot config (100+ vars, strategy params)
+  research/
+    OPTIMIZATION_PIPELINE_DESIGN.md  ← gap analysis + design doc (2026-04-11)
   BTV2/
-    app.py                ← Streamlit dashboard (human UI layer)
-    strategies.py         ← pure-Python backtest engine (no UI imports)
-    agent.py              ← .env reader/optimizer (coordinate descent)
-    data_manager.py       ← Binance downloader + local Parquet cache
+    app.py                  ← Streamlit dashboard (human UI layer)
+    strategies.py           ← pure-Python backtest engine (no UI imports)
+    agent.py                ← .env reader/optimizer (coordinate descent, v3)
+    optimizer_agent.py      ← Optuna TPE autonomous optimizer (v5)
+    optimize.md             ← program file: what to optimize + constraints
+    btv2_validate.py        ← 3-layer validation runner (v7)  ← NEW
+    data_manager.py         ← Binance downloader + local Parquet cache
     requirements.txt
-    CLI_AGENT_GUIDE.md    ← this file
+    CLI_AGENT_GUIDE.md      ← this file
+    results/
+      optimizer_trials.jsonl    ← trial log (one JSON line per Optuna trial)
+    optimization_studies.db     ← Optuna SQLite (persistent across restarts)
 
-G:\Candle Data\           ← local Parquet cache (auto-created on first run)
+G:\Candle Data\             ← local Parquet cache (auto-created on first run)
   BTCUSDT_1m.parquet
   BTCUSDT_5m.parquet
   BTCUSDT_15m.parquet
@@ -26,7 +40,20 @@ G:\Candle Data\           ← local Parquet cache (auto-created on first run)
   BTCUSDT_1d.parquet
 ```
 
-The key architectural decision: **`strategies.py`, `agent.py`, and `data_manager.py` are pure compute modules** — no Streamlit, no UI, no side effects. A CLI agent can import and call them directly as Python functions without ever touching the browser.
+The key architectural decision: **`strategies.py`, `agent.py`, `optimizer_agent.py`, and `data_manager.py` are pure compute modules** — no Streamlit, no UI, no side effects. A CLI agent can import and call them directly as Python functions without ever touching the browser.
+
+### Two optimization paths (v3 vs v5)
+
+| | `agent.py` (v3) | `optimizer_agent.py` (v5) |
+|---|---|---|
+| Search method | Coordinate descent × multipliers | Optuna TPE (Bayesian) |
+| Parameter proposals | 5 × N evaluations | 50–100 trials total |
+| Speed | Fast (< 2 min/strategy) | Slower but smarter (20–90 min) |
+| Persistent study | No | Yes (SQLite, resumable) |
+| .env update | Manual `--apply` flag | Auto if Sharpe Δ ≥ 0.05 |
+| RAG logging | No | Yes (Dark Factory Hub) |
+| Strict-validation mode | No | Yes (`--strict` flag) |
+| Best for | Quick daily checks | Deep overnight optimization |
 
 ---
 
@@ -130,7 +157,7 @@ print(STRATEGY_TIMEFRAME_CONFIG["MA Crossover"])
 | Strategy | Interval | Train | Test | Rationale |
 |----------|----------|-------|------|-----------|
 | Mean Reversion | 1d | 12m | 3m | Daily regime detection |
-| VWAP Scalping | 5m | 3m | 1m | LTF bars for high signal frequency; 15m VWAP + 1h EMA/ADX MTF filters; use 1m exit-res |
+| VWAP Scalping | 5m | 3m | 1m | LTF bars for high signal frequency; 1h EMA/ADX MTF filters; use 1m exit-res |
 | Momentum Scalping | 15m | 3m | 1m | 15m gives faster EMA crosses than 1h with less noise than 5m |
 | Liquidation Capture | 1d | 12m | 3m | Rare event, needs long history |
 | Grid Trading | 4h | 6m | 2m | Range detection at 4h resolution |
@@ -157,7 +184,7 @@ from datetime import datetime, timezone
 # Load data at the strategy's native interval
 strategy_name = "VWAP Scalping"
 tf_cfg   = STRATEGY_TIMEFRAME_CONFIG[strategy_name]
-interval = tf_cfg["interval"]   # "5m"  (VWAP Scalping native interval)
+interval = tf_cfg["interval"]   # "5m"
 
 df = get_candles("BTCUSDT", interval,
                  datetime(2022, 1, 1, tzinfo=timezone.utc),
@@ -165,46 +192,48 @@ df = get_candles("BTCUSDT", interval,
 
 func, grid, defaults = STRATEGY_REGISTRY[strategy_name]
 
-# Basic backtest — defaults are now entry_mode="mean_reversion", use_htf_vwap=True,
-# use_htf_ema=True.  The function resamples df internally to 15m and 1h for the
-# MTF filters; NO separate data files are needed.
+# Basic backtest — v6 defaults: entry_mode="mean_reversion", sd_threshold=3.0,
+# use_stoch_filter=False, use_htf_vwap=False, require_reversal_candle=False, tp_mode="atr"
 equity, trades = func(df, cutoff=0.10, **defaults)
 
 # With 1m sub-bar exit simulation — RECOMMENDED for VWAP Scalping on 5m bars.
-# Resolves SL-vs-TP ordering ambiguity within each 5m candle (only 5 sub-bars
-# per native bar → very fast, ~60 MB extra Parquet for 7yr BTC history).
 df_1m = get_candles("BTCUSDT", "1m",
                     datetime(2022, 1, 1, tzinfo=timezone.utc),
                     datetime(2024, 1, 1, tzinfo=timezone.utc))
 equity, trades = func(df, cutoff=0.10, **defaults, df_exit=df_1m)
 
-# Tuning all filters explicitly (bull_pullback mode shown):
+# Tuning key parameters explicitly (mean_reversion mode shown — v6 default):
 equity, trades = func(df, cutoff=0.10,
-    entry_mode       = "bull_pullback",  # dips in confirmed 1h uptrends
-    sd_threshold     = 2.0,    # VWAP band depth — price must be this far below VWAP
-    adx_max          = 25.0,   # used only by mean_reversion/cross modes (not bull_pullback)
-    rsi_max          = 45.0,   # 5m RSI < 45 for longs (not overbought)
-    stoch_oversold   = 40,     # %K < 40 AND %K > %D → long momentum exhaustion gate
-    stoch_overbought = 60,     # %K > 60 AND %K < %D → short momentum exhaustion gate
-    volume_mult      = 1.5,    # require 1.5× avg volume
-    atr_stop         = 0.7,    # tight stop anchored to signal candle close
-    atr_target       = 3.0,    # R:R anchored to signal candle close
-    use_htf_vwap     = True,   # 15m VWAP alignment (mean_reversion/cross modes)
-    use_htf_ema      = True,   # 1h EMA direction + 1h VWAP (required for pullback modes)
-    htf_adx_max      = 25.0,   # 1h ADX threshold for mean_reversion mode
+    entry_mode       = "mean_reversion",  # fade VWAP extremes (v6 default)
+    sd_threshold     = 3.0,    # 3.0σ entry threshold (v6 raised from 2.0)
+    atr_stop         = 1.0,    # wider stop — 5m noise needs room (v6 raised from 0.7)
+    atr_target       = 2.0,    # ATR TP as backstop; trailing stop is primary exit
+    trailing_atr     = 1.2,    # trailing stop ratchet distance (key exit param)
+    tp_mode          = "atr",  # "atr" = ATR backstop (v6 default, was "vwap")
+    adx_max          = 25.0,   # 5m ADX < 25 (ranging gate)
+    rsi_max          = 50.0,   # 5m RSI < 50 for longs (v6 raised from 45)
+    volume_mult      = 1.2,    # require 1.2× avg volume (v6 lowered from 1.5)
+    use_stoch_filter = False,  # stochastic gate disabled by default (v6 — reduces filter stack)
+    use_htf_vwap     = False,  # 15m VWAP alignment disabled (v6 — was blocking too many entries)
+    use_htf_ema      = True,   # 1h EMA direction + ADX gate
+    htf_adx_max      = 30.0,   # 1h ADX threshold (v6 raised from 25 — more permissive)
+    require_reversal_candle = False,  # SFP disabled (v6 — too restrictive with SD>3)
     df_exit          = df_1m,
 )
-# Dynamic mode — auto-selects entry_mode per bar based on 1h ADX + trend direction:
-equity, trades = func(df, cutoff=0.10, use_dynamic_mode=True, **{
-    k: v for k, v in defaults.items() if k != "entry_mode"
-}, df_exit=df_1m)
-# For mean_reversion mode (ranging markets without clear trend):
-equity, trades = func(df, cutoff=0.10, entry_mode="mean_reversion", **{
-    k: v for k, v in defaults.items() if k != "entry_mode"
-}, df_exit=df_1m)
+
+# To re-enable the stricter bull_pullback mode (original v5 behavior):
+equity, trades = func(df, cutoff=0.10,
+    entry_mode       = "bull_pullback",
+    sd_threshold     = 2.5,
+    use_htf_vwap     = True,
+    use_stoch_filter = True,
+    stoch_oversold   = 45,
+    require_reversal_candle = True,
+    df_exit=df_1m,
+)
 
 # ⚠️ MTF IMPORTANT: 15m and 1h data are derived by RESAMPLING the 5m df passed in.
-# Do NOT load separate BTCUSDT_15m or BTCUSDT_1h files for this — it's automatic.
+# Do NOT load separate BTCUSDT_15m or BTCUSDT_1h files — it's automatic.
 # The only extra file you need is df_1m for exit resolution.
 
 # equity : pd.Series — portfolio value (starts at 1.0, bar-by-bar mark-to-market)
@@ -225,6 +254,8 @@ metrics = compute_metrics(equity, trades, bars_per_year=INTERVAL_BARS_PER_YEAR["
 #   "win_rate_pct":      54.0,  # % of closed trades that were profitable
 #   "profit_factor":      1.8,  # gross_profit / gross_loss
 #   "n_trades":          26,    # total closed trades
+#   "avg_win_pct":        2.1,  # average winning trade return %  ← v6 added
+#   "avg_loss_pct":      -1.0,  # average losing trade return %   ← v6 added
 # }
 
 # ⚠️  Always pass bars_per_year matching the candle interval:
@@ -258,14 +289,13 @@ windows = build_windows(
 from strategies import optimize_strategy
 
 best_params = optimize_strategy(df_train, cutoff=0.10, strategy_name="VWAP Scalping")
-# Exhaustive Sharpe-maximizing grid search over VS_GRID (324 combos) on the training window
-# Returns keys matching VS_GRID axes: sd_threshold, atr_stop, adx_max, stoch_oversold, stoch_overbought
-# e.g. {"sd_threshold": 3.0, "atr_stop": 0.7, "adx_max": 20.0, "stoch_oversold": 20, "stoch_overbought": 80}
-# atr_target, pullback_bars, MTF flags are NOT in the grid — they use VS_DEFAULTS / agent coordinate descent
+# Grid search over VS_GRID on training window (Sharpe-maximizing)
+# v6 VS_GRID axes: sd_threshold [2.5,3.0,3.5,4.0], atr_stop [0.5,0.7,1.0,1.5],
+#   adx_max [20,25,30], stoch_oversold [30,40,50], stoch_overbought [50,60,70],
+#   trailing_atr [0.8,1.2,1.8]
+# Returns keys matching VS_GRID axes
 #
-# v4 performance optimisation: for strategies that accept a `levels` parameter (VWAP Scalping),
-# compute_reference_levels() is called ONCE per fold here and injected as levels=...
-# into every grid combo.  This avoids 324× redundant recomputation (~127s saved per fold).
+# Note: atr_target, MTF flags, tp_mode are NOT in grid — use VS_DEFAULTS or agent sweep
 ```
 
 #### `_resample_ohlcv(df, rule) → pd.DataFrame`
@@ -287,8 +317,9 @@ df_4h  = _resample_ohlcv(df_5m, "240min")
 5m df (input)
     │
     ├─── resample("15min") → rolling VWAP(20) → forward-fill to 5m index
-    │       htf_long_ok  &= (price < 15m_VWAP)   # still below 15m mean
-    │       htf_short_ok &= (price > 15m_VWAP)   # still above 15m mean
+    │       [use_htf_vwap=True only — disabled by default in v6]
+    │       htf_long_ok  &= (price < 15m_VWAP)
+    │       htf_short_ok &= (price > 15m_VWAP)
     │
     └─── resample("60min") → EMA(9), EMA(21), ADX(14) → forward-fill to 5m index
             h_ranging = (1h_ADX < htf_adx_max)
@@ -296,36 +327,40 @@ df_4h  = _resample_ohlcv(df_5m, "240min")
             htf_short_ok &= (1h_EMA9 < 1h_EMA21  OR  h_ranging)
 ```
 
-**Key architectural point:** no extra `get_candles()` calls are needed. The 15m and 1h
-are derived on-the-fly from the same 5m Parquet file you already loaded.
+**Key architectural point:** no extra `get_candles()` calls are needed. The 15m and 1h are derived on-the-fly from the same 5m Parquet file you already loaded.
 
-**Logic for a LONG entry — `bull_pullback` mode (all 7 must pass):**
+**Logic for a LONG entry — `mean_reversion` mode (v6 default — ranging markets):**
+```
+1. 5m:  price < VWAP − sd_threshold × σ_VWAP   (pulled back to lower VWAP band; SD≥3.0)
+2. 5m:  ADX < adx_max                            (not strongly trending on 5m)
+3. 5m:  RSI < rsi_max                            (not overbought on 5m; default 50)
+4. 5m:  volume ≥ volume_mult × 20-bar avg        (real participation; default 1.2×)
+5. 1h:  EMA(9) > EMA(21) OR ADX < htf_adx_max   (bullish OR ranging on 1h; default 30)
+   [6. Stochastic gate: %K < stoch_oversold AND %K > %D  — optional, use_stoch_filter=False]
+   [7. SFP reversal candle: wick below band + close above — optional, require_reversal_candle=False]
+⟹ Entry at bar i+1 open (N+1), SL/TP anchored to bar i close
+Exit: trailing stop is PRIMARY exit; ATR TP (2.0×) is backstop
+```
+
+**Logic for a LONG entry — `bull_pullback` mode (higher-quality, fewer trades):**
 ```
 1. 5m:  price < VWAP − sd_threshold × σ_VWAP         (pulled back to lower VWAP band)
 2. 5m:  RSI < rsi_max                                  (not overbought on 5m)
 3. 5m:  volume ≥ volume_mult × 20-bar avg              (real participation)
 4. 1h:  EMA(9) > EMA(21)                               (confirmed 1h uptrend — strict)
 5. 1h:  price < 1h VWAP                                (dip not yet recovered to 1h mean)
-6. 5m:  Stoch(14,3,3) %K < stoch_oversold AND %K > %D  (exhaustion + K crossing up from oversold)
-7. 5m:  RSI divergence: price lower low but RSI higher low (selling pressure exhausting)
+[6. 5m:  Stoch(14,3,3) %K < stoch_oversold AND %K > %D (optional)]
+[7. 5m:  RSI divergence: price lower low but RSI higher low (optional)]
 ⟹ Entry at bar i+1 open (N+1), SL/TP anchored to bar i close
 ```
 
-> **v5 note:** The 5m ADX ranging gate (`ADX < adx_max`) and `recent_hh` higher-high check were
-> removed from `bull_pullback`. On actual pullback candles the current bar naturally has a lower
-> high than 1-3 hours prior, so `recent_hh` passed only ~6% of the time and blocked all trades
-> in trending periods. The ADX gate was similarly counterproductive — pullback bars in a strong
-> trend often show localised 5m momentum that pushes ADX above the threshold.
+**`bear_pullback` is the exact mirror** (1h EMA bearish, price above upper band, above 1h VWAP).
 
-**`bear_pullback` is the exact mirror** (1h EMA bearish, price above upper band, above 1h VWAP, Stochastic overbought cross down, RSI bearish divergence). The `recent_ll` check was also removed.
-
-**Logic for a LONG entry — `mean_reversion` mode (fallback for ranging markets):**
+**VWAP band computation (v6 fix — RAW close only):**
 ```
-1–4. Same 5m filters as above
-5. 15m: price < 15m VWAP              (15m alignment via use_htf_vwap)
-6. 1h:  EMA(9) > EMA(21) OR ADX < htf_adx_max  (bullish OR ranging on 1h)
-7. 5m:  Stoch(14,3,3) %K < stoch_oversold AND %K > %D  (momentum exhaustion gate)
-⟹ Entry at bar i+1 open (N+1), SL/TP anchored to bar i close
+VWAP uses raw df["Close"] — NOT Butterworth-filtered close.
+Butterworth compresses price deviation, making SD thresholds unreachable on real data.
+EMA and RSI still use Butterworth-filtered close (trend smoothing is appropriate there).
 ```
 
 #### `stitch_oos_equity(segments) → pd.Series`
@@ -362,16 +397,12 @@ best_params, best_cutoff, best_sharpe, trial_log = run_parameter_sweep(
     strategy_name="VWAP Scalping",
     current_params=params,
     windows=windows,
-    bars_per_year=bars_py,          # ← new in v3
+    bars_per_year=bars_py,
 )
 # best_params  : dict — parameter set with highest OOS Sharpe found
 # best_cutoff  : float — optimal Butterworth cutoff found by sweep
 # best_sharpe  : float — OOS Sharpe of (best_cutoff, best_params)
 # trial_log    : list[dict] — one row per (parameter × multiplier) trial
-#   First rows: butterworth_cutoff sweep (7 candidates)
-#   Later rows: strategy param sweep (5 candidates each)
-#   Each row: {"Parameter": "sd_threshold", "Candidate": 3.5,
-#              "OOS Sharpe": 1.12, "OOS Return %": 28.4, "OOS Max DD %": -14.2}
 ```
 
 **v3 sweep order:**
@@ -380,39 +411,39 @@ best_params, best_cutoff, best_sharpe, trial_log = run_parameter_sweep(
 
 **VWAP Scalping .env keys swept (v3):**
 
-| ENV Variable | Internal kwarg | Default | Sweep range | Notes |
+| ENV Variable | Internal kwarg | v6 Default | Sweep range | Notes |
 |---|---|---|---|---|
-| `VWAP_SD_ENTRY_THRESHOLD` | `sd_threshold` | 2.0 | ×[0.70–1.30] | VWAP band depth for pullback/reversion entry |
-| `VWAP_ATR_STOP_MULTIPLIER` | `atr_stop` | 0.7 | ×[0.70–1.30] | tight stop on 5m LTF |
-| `VWAP_ATR_TARGET_MULTIPLIER` | `atr_target` | 3.0 | ×[0.70–1.30] | R:R target multiplier |
-| `VWAP_VOLUME_MULTIPLIER` | `volume_mult` | 1.5 | ×[0.70–1.30] | |
-| `VWAP_ADX_MAX` | `adx_max` | 25.0 | ×[0.70–1.30] (range 17–33) | used by mean_reversion/cross modes |
-| `VWAP_RSI_MAX` | `rsi_max` | 45.0 | ×[0.70–1.30] (range 31–58) | 5m strength gate |
-| `VWAP_STOCH_OVERSOLD` | `stoch_oversold` | 40 | ×[0.70–1.30] (range 28–52) | Stochastic %K oversold threshold for longs |
-| `VWAP_STOCH_OVERBOUGHT` | `stoch_overbought` | 60 | ×[0.70–1.30] (range 42–78) | Stochastic %K overbought threshold for shorts |
-| `VWAP_PULLBACK_BARS` | `pullback_bars` | 3 | ×[0.70–1.30] (range 2–4) | 1h lookback for Stoch/RSI state window |
+| `VWAP_SD_ENTRY_THRESHOLD` | `sd_threshold` | 3.0 | ×[0.70–1.30] | Raised from 2.0 — below 2.5 loses after costs |
+| `VWAP_ATR_STOP_MULTIPLIER` | `atr_stop` | 1.0 | ×[0.70–1.30] | Raised from 0.7 — 5m noise needs room |
+| `VWAP_ATR_TARGET_MULTIPLIER` | `atr_target` | 2.0 | ×[0.70–1.30] | Lowered from 3.8 — trailing stop is primary exit |
+| `VWAP_TRAILING_ATR` | `trailing_atr` | 1.2 | ×[0.70–1.30] | NEW — key exit param |
+| `VWAP_VOLUME_MULTIPLIER` | `volume_mult` | 1.2 | ×[0.70–1.30] | Lowered from 2.0 |
+| `ADX_TRENDING_THRESHOLD` | `adx_max` | 25.0 | ×[0.70–1.30] | 5m ranging gate |
+| `VWAP_RSI_MAX` | `rsi_max` | 50.0 | ×[0.70–1.30] | Raised from 40 — more permissive |
 
-**VS_GRID exhaustive axes (216 combos — 4×3×3×3×3):**
+**VS_GRID exhaustive axes (v6 updated):**
 
-| Grid param | Values | Default | Notes |
+| Grid param | Values | v6 Default | Notes |
 |---|---|---|---|
-| `sd_threshold` | [1.5, 2.0, 2.5, 3.0] | 2.0 | VWAP band depth for pullback entry |
-| `atr_stop` | [0.5, 0.7, 1.0] | 0.7 | Stop multiplier (tight on 5m LTF) |
-| `adx_max` | [20.0, 25.0, 30.0] | 25.0 | ADX threshold (mean_reversion/cross modes) |
-| `stoch_oversold` | [30, 40, 50] | 40 | Stochastic %K oversold threshold for longs |
-| `stoch_overbought` | [50, 60, 70] | 60 | Stochastic %K overbought threshold for shorts |
+| `sd_threshold` | [2.5, 3.0, 3.5, 4.0] | 3.0 | Raised — below 2.5 loses after 0.30% round-trip cost |
+| `atr_stop` | [0.5, 0.7, 1.0, 1.5] | 1.0 | Widened range for optimizer |
+| `adx_max` | [20.0, 25.0, 30.0] | 25.0 | 5m ADX ranging gate |
+| `stoch_oversold` | [30, 40, 50] | 45 | Stochastic %K threshold (only active if use_stoch_filter=True) |
+| `stoch_overbought` | [50, 60, 70] | 55 | Stochastic %K threshold (only active if use_stoch_filter=True) |
+| `trailing_atr` | [0.8, 1.2, 1.8] | 1.2 | NEW — trailing stop ratchet distance |
 
-*`atr_target` and `pullback_bars` are swept by the agent's coordinate descent (not in exhaustive grid) — this keeps the training sweep tractable.*
+*`atr_target`, `tp_mode`, `entry_mode`, and filter toggles are explored by the Optuna optimizer (not exhaustive grid) — this keeps the training sweep tractable.*
 
-**Multi-timeframe filter parameters (always-on, not in sweep — tune manually):**
+**Multi-timeframe filter parameters (v6 defaults):**
 
-| Python kwarg | Default | Effect |
+| Python kwarg | v6 Default | Effect |
 |---|---|---|
-| `use_htf_vwap` | `True` | Enable 15m VWAP alignment gate |
-| `use_htf_ema` | `True` | Enable 1h EMA(9/21) + 1h VWAP gate (required for pullback modes) |
-| `htf_adx_max` | `25.0` | 1h ADX < this = ranging context (mean_reversion / cross); ≥ this = trending (dynamic mode) |
-| `use_dynamic_mode` | `False` | Auto-select `entry_mode` per bar using 1h ADX — see Dynamic Regime Mode section |
-| `fvg_proximity_atr` | `0.5` | FVG/OB zone tolerance: entries within N×ATR of zone edge are accepted |
+| `use_htf_vwap` | `False` | 15m VWAP alignment gate — disabled (was blocking too many entries) |
+| `use_htf_ema` | `True` | 1h EMA(9/21) + ADX ranging gate — kept |
+| `htf_adx_max` | `30.0` | 1h ADX < this = acceptable ranging context (raised from 25) |
+| `use_stoch_filter` | `False` | Stochastic momentum exhaustion gate — toggle (NEW in v6) |
+| `require_reversal_candle` | `False` | SFP: wick into band + close outside — disabled (too restrictive with SD≥3) |
+| `tp_mode` | `"atr"` | Exit target mode — changed from "vwap" (trailing stop is primary, ATR is backstop) |
 
 #### `build_proposal(strategy_name, current_params, best_params) → list[dict]`
 ```python
@@ -433,6 +464,238 @@ updated_keys = apply_to_env(proposal)
 # Does NOT disturb comments or unrelated variables
 # Returns: ["VWAP_SD_ENTRY_THRESHOLD"]
 ```
+
+---
+
+### `optimizer_agent.py`  (v5 — Optuna TPE autonomous optimizer)
+
+The v5 optimizer implements the **autoresearch pattern** adapted for trading:
+
+```
+read optimize.md → propose params via Optuna TPE → run walk-forward
+→ evaluate OOS Sharpe → log trial to RAG + JSONL → update .env if improved → repeat
+```
+
+#### Quick Start
+```bash
+cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3
+
+# Run from optimize.md (recommended — reads strategy/period/trials from file)
+python BTV2/optimizer_agent.py --from-program
+
+# Or specify directly
+python BTV2/optimizer_agent.py --strategy "VWAP Scalping" --n-trials 80
+
+# Dry run — find best params but don't touch .env
+python BTV2/optimizer_agent.py -s "VWAP Scalping" -n 50 --dry-run
+
+# Enable STRICT_VALIDATION (mirrors live bot signal gates — volume + RRR filters)
+python BTV2/optimizer_agent.py --from-program --strict
+
+# Resume an interrupted overnight run
+python BTV2/optimizer_agent.py --from-program --resume
+
+# List available strategies + their search-space sizes
+python BTV2/optimizer_agent.py --list-strategies
+```
+
+#### `SEARCH_SPACES` — strategy search space registry (v6 updated)
+```python
+from optimizer_agent import SEARCH_SPACES
+
+# Keys: strategy names
+# Each entry has: run_fn, defaults, params (Optuna spec), fixed, strict_params, env_map
+print(list(SEARCH_SPACES.keys()))
+# ['Mean Reversion', 'VWAP Scalping', 'Momentum Scalping', 'MA Crossover', 'Liquidation Capture']
+
+# VWAP Scalping search space (v6 — expanded with categoricals):
+for spec in SEARCH_SPACES["VWAP Scalping"]["params"]:
+    name, kind = spec[0], spec[1]
+    rest = spec[2]
+    print(f"  {name}: {kind} → {rest}")
+# sd_threshold:    float → (2.5, 4.5)           # raised floor
+# atr_stop:        float → (0.5, 2.0)            # widened
+# trailing_atr:    float → (0.6, 2.0)            # NEW — key exit param
+# adx_max:         float → (15.0, 40.0)
+# volume_mult:     float → (0.8, 2.0)            # lowered floor
+# rsi_max:         float → (40.0, 60.0)          # NEW
+# entry_mode:      cat   → ["mean_reversion", "bull_pullback", "cross", "deviation"]
+# tp_mode:         cat   → ["atr", "vwap", "pdh"]
+# use_stoch_filter:cat   → [True, False]
+# use_htf_vwap:    cat   → [True, False]
+# require_reversal_candle: cat → [True, False]
+
+# ⚠️ "cat" type uses suggest_categorical(name, choices) — choices at spec[2]
+# Optuna samples from the full space; VS_GRID is used for the exhaustive training sweep only.
+```
+
+#### `evaluate_params(strategy_name, params, df, start, end) → dict`
+```python
+from optimizer_agent import evaluate_params, load_data, SEARCH_SPACES
+
+df = load_data("BTC-USD", "1d")
+params = {**SEARCH_SPACES["Mean Reversion"]["defaults"], "rsi_overbought": 75.0}
+
+result = evaluate_params("Mean Reversion", params, df)
+# {
+#   "status":           "ok",
+#   "mean_oos_sharpe":  0.724,
+#   "total_return_pct": 41.2,
+#   "cagr_pct":         7.1,
+#   "max_dd_pct":       -28.4,
+#   "win_rate_pct":     54.3,
+#   "profit_factor":    1.38,
+#   "n_trades":         87,
+#   "n_windows":        20,
+#   "consistency_pct":  65.0,    # % of windows with Sharpe > 0
+#   "params":           {...},
+#   "windows":          [{"fold": 1, "sharpe": 0.8, "n_trades": 4, ...}, ...]
+# }
+```
+
+#### `run_optimization(strategy_name, ticker, n_trials, strict, dry_run) → dict`
+```python
+from optimizer_agent import run_optimization
+
+result = run_optimization(
+    strategy_name = "VWAP Scalping",
+    ticker        = "BTC-USD",
+    n_trials      = 80,
+    timeout_minutes = 90,
+    strict        = False,
+    dry_run       = True,        # set False to auto-update .env on improvement
+    resume        = False,
+)
+# Best params written to .env if OOS Sharpe improves by ≥ 0.05 (and dry_run=False)
+```
+
+#### `optimize.md` — the program file
+Edit `BTV2/optimize.md` to control what the optimizer works on.
+```markdown
+## Strategy: VWAP Scalping
+## Ticker: BTC-USD
+## Period: 2022-01-01 to 2025-12-31
+## Trials: 80
+## Timeout: 90
+## Strict: false
+```
+Run with `python BTV2/optimizer_agent.py --from-program` to consume it.
+Switch the strategy line to advance the rotation (see **Research Plan** below).
+
+#### Reading results
+```bash
+# Quick best-params lookup from the trial log
+python -c "
+import json
+from pathlib import Path
+log = Path('BTV2/results/optimizer_trials.jsonl')
+trials = [json.loads(l) for l in log.read_text().splitlines() if l]
+best = max([t for t in trials if t.get('status')=='ok' and t.get('strategy')=='VWAP Scalping'],
+           key=lambda t: t['mean_oos_sharpe'], default=None)
+if best:
+    print(f'OOS Sharpe: {best[\"mean_oos_sharpe\"]:.4f}')
+    print(f'Params: {best[\"params\"]}')
+"
+
+# Visual search-space exploration (requires optuna-dashboard)
+optuna-dashboard sqlite:///BTV2/optimization_studies.db
+```
+
+#### `STRICT_VALIDATION` mode — bridging backtest and live bot
+The live bot requires all 8 flags to be True before placing any order.
+BTV2 doesn't model that — so raw backtest results are optimistic.
+
+Run with `--strict` to enable two flags in `run_mean_reversion`:
+- **`strict_volume_mult`**: bar volume must exceed N× rolling 20-bar average
+- **`strict_min_rrr`**: reward/risk at signal time must be ≥ threshold
+
+```python
+# Normal vs strict mode comparison (useful for calibration)
+eq1, t1 = run_mean_reversion(df, 0.10, use_regime_filter=True)
+eq2, t2 = run_mean_reversion(df, 0.10, use_regime_filter=True,
+                              strict_validation=True,
+                              strict_volume_mult=1.2,
+                              strict_min_rrr=1.0)
+# strict mode will produce <= trades
+# Calibration target: strict-mode OOS Sharpe ≥ 70% of normal-mode
+```
+
+---
+
+## VWAP v6 Fix
+
+_Added 2026-04-12 · Agent: glitch_
+
+Root-cause analysis revealed 5 structural issues that caused VWAP Scalping to lose money even with apparently good parameters.
+
+### Issue 1 — Butterworth Was Distorting VWAP Bands (CRITICAL)
+
+**Root cause:** `compute_vwap_anchored()` was receiving `fc` (Butterworth low-pass filtered close) instead of raw close prices. The filter compresses price deviation around the mean — so VWAP bands became narrower than they should be, making `sd_threshold=2.0` effectively trigger on much smaller deviations than intended on real data.
+
+**Fix:** VWAP and its standard deviation now use `raw_close = df["Close"]`. EMA and RSI still use the Butterworth-filtered `fc` (trend smoothing is appropriate there).
+
+```python
+# v5 (broken):
+fc = apply_butterworth(df["Close"], cutoff)
+vwap, vs = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])  # ← wrong
+
+# v6 (fixed):
+fc = apply_butterworth(df["Close"], cutoff)
+raw_close = df["Close"]
+vwap, vs = compute_vwap_anchored(df["High"], df["Low"], raw_close, df["Volume"])  # ← raw
+```
+
+### Issue 2 — SD Threshold Too Low (CRITICAL)
+
+**Root cause:** Default `sd_threshold=2.0`. With correct raw VWAP bands, 2σ entries occur too frequently and don't have enough edge to overcome the 0.30% round-trip cost. Historical best-found was `sd_threshold=3.45` with 73.3% WR.
+
+**Fix:**
+- `VS_DEFAULTS["sd_threshold"]` raised from 2.0 → **3.0**
+- `VS_GRID["sd_threshold"]` range raised from [1.5, 2.0, 2.5, 3.0] → **[2.5, 3.0, 3.5, 4.0]**
+- Optimizer search range widened to **[2.5, 4.5]**
+
+### Issue 3 — Exit Logic Mismatch (HIGH)
+
+**Root cause:** `tp_mode="vwap"` set TP at the session VWAP mean. For a 3σ entry, the VWAP mean is already very close to entry — resulting in tiny gains on winning trades. Meanwhile, the trailing stop was responsible for 56.3% of all exits (capturing larger moves). The strategy was profiting from trend-following behavior but fighting its own fixed TP.
+
+**Fix:**
+- `tp_mode` changed from `"vwap"` → **`"atr"`** (ATR backstop, not VWAP mean)
+- `atr_target` lowered from 3.8 → **2.0** (realistic backstop; trailing stop does heavy lifting)
+- `trailing_atr` added to VS_GRID and optimizer search space as a first-class param
+
+### Issue 4 — Filter Stack Too Restrictive (HIGH)
+
+**Root cause:** 6+ sequential filters were required simultaneously. With real BTC data this produced as few as 3 trades in 2024. Stochastic crossout + SFP reversal candle + 15m VWAP alignment together filtered >95% of valid setups.
+
+**Fix (all togglable by optimizer):**
+- `use_stoch_filter` new param, **default False** — reduces filter count by 1
+- `use_htf_vwap` changed from True → **False** — removes 15m VWAP alignment
+- `require_reversal_candle` changed from True → **False** — removes SFP requirement
+- `rsi_max` raised from 45 → **50** — more permissive oversold gate
+- `volume_mult` lowered from 1.5 → **1.2** — less aggressive volume gate
+- `htf_adx_max` raised from 25 → **30** — wider 1h ranging tolerance
+
+### Issue 5 — Cost Model vs Win Rate (CONTEXT)
+
+**Root cause:** 0.30% round-trip cost on 5m bars is lethal for low-WR configs. A 40% WR needs ≥2.5:1 R:R to break even, plus margin for slippage variance. The prior `sd_threshold=2.0` + `atr_stop=0.7` combination produced configs that mathematically couldn't survive costs.
+
+**Fix:** The combination of SD≥3.0 (higher-quality entries), `atr_stop=1.0` (stops that survive 5m noise), and trailing stop as primary exit creates a cost-viable structure. The optimizer is now free to find the exact params that achieve this.
+
+### Summary of v6 Default Changes
+
+| Parameter | v5 Default | v6 Default | Rationale |
+|-----------|-----------|-----------|-----------|
+| `sd_threshold` | 2.0 | **3.0** | <2.5 loses after costs; best-found 3.45 |
+| `atr_stop` | 0.7 | **1.0** | 5m noise needs wider stop |
+| `atr_target` | 3.0 | **2.0** | Trailing stop is primary exit |
+| `tp_mode` | "vwap" | **"atr"** | VWAP mean too close to entry for 3σ entries |
+| `entry_mode` | "bull_pullback" | **"mean_reversion"** | Core edge: fade extremes |
+| `volume_mult` | 1.5 | **1.2** | Less aggressive filtering |
+| `rsi_max` | 45.0 | **50.0** | More permissive |
+| `htf_adx_max` | 25.0 | **30.0** | Wider ranging tolerance |
+| `use_htf_vwap` | True | **False** | Was blocking too many entries |
+| `require_reversal_candle` | True | **False** | Too restrictive with SD≥3 |
+| `use_stoch_filter` | N/A | **False** (new) | Reduce filter stack |
 
 ---
 
@@ -482,7 +745,6 @@ def main():
     parser.add_argument("--json-out",  help="Write results to JSON file")
     args = parser.parse_args()
 
-    # Resolve interval and window sizes
     tf_cfg       = STRATEGY_TIMEFRAME_CONFIG[args.strategy]
     interval     = args.interval or tf_cfg["interval"]
     train_months = tf_cfg["train_months"]
@@ -491,7 +753,6 @@ def main():
 
     symbol = TICKER_MAP.get(args.ticker)
 
-    # ── 1. Load main candle data ───────────────────────────────────────────────
     print(f"[1/5] Loading {args.ticker} {interval} candles…")
     start_dt = datetime.fromisoformat(args.start).replace(tzinfo=timezone.utc)
     end_dt   = datetime.fromisoformat(args.end).replace(tzinfo=timezone.utc)
@@ -504,14 +765,12 @@ def main():
 
     print(f"      {len(df):,} bars loaded  ({df.index[0].date()} → {df.index[-1].date()})")
 
-    # ── 1b. Optional sub-bar exit data ───────────────────────────────────────
     df_exit = None
     if args.exit_res != "Off" and symbol:
         print(f"[1b]  Loading {args.exit_res} exit-resolution data…")
         df_exit = get_candles(symbol, args.exit_res, start_dt, end_dt)
         print(f"      {len(df_exit):,} {args.exit_res} bars loaded")
 
-    # ── 2. Walk-forward baseline ───────────────────────────────────────────────
     print(f"[2/5] Running walk-forward baseline ({args.strategy}, {interval})…")
     windows = build_windows(
         date.fromisoformat(args.start),
@@ -543,14 +802,12 @@ def main():
     print(f"      ({len(windows)} folds · {train_months}m train → {test_months}m test"
           f" · Sharpe √{bars_py})")
 
-    # ── 3. Read current .env params ────────────────────────────────────────────
     print(f"[3/5] Reading current .env parameters…")
     current_params  = read_env_params(args.strategy)
     baseline_sharpe = _eval_config(df, args.cutoff, args.strategy,
                                    current_params, windows, bars_py)
     print(f"      Current .env OOS Sharpe: {baseline_sharpe:.3f}")
 
-    # ── 4. Coordinate-descent sweep (cutoff + params) ─────────────────────────
     print(f"[4/5] Running parameter sweep (Butterworth cutoff + strategy params)…")
     best_params, best_cutoff, best_sharpe, trial_log = run_parameter_sweep(
         df, args.cutoff, args.strategy, current_params, windows,
@@ -560,10 +817,6 @@ def main():
 
     print(f"      Best OOS Sharpe: {best_sharpe:.3f}  "
           f"(Δ{best_sharpe - baseline_sharpe:+.3f} vs current .env)")
-    if abs(best_cutoff - args.cutoff) > 1e-4:
-        print(f"      Optimal Butterworth cutoff: {best_cutoff:.3f}  "
-              f"(was {args.cutoff:.3f})")
-
     if proposal:
         print(f"      {len(proposal)} .env parameter change(s) proposed:")
         for p in proposal:
@@ -572,7 +825,6 @@ def main():
     else:
         print("      No .env parameter improvements found — current values near-optimal.")
 
-    # ── 5. Optionally apply ────────────────────────────────────────────────────
     if args.apply and proposal:
         print(f"[5/5] Writing {len(proposal)} change(s) to .env…")
         updated = apply_to_env(proposal)
@@ -581,7 +833,6 @@ def main():
     else:
         print("[5/5] Dry run — no .env changes written.")
 
-    # ── JSON output for downstream agents ─────────────────────────────────────
     result = {
         "strategy":         args.strategy,
         "ticker":           args.ticker,
@@ -617,9 +868,9 @@ if __name__ == "__main__":
 **Example CLI calls:**
 ```bash
 # Dry run — report what would change
-python btv2_agent_run.py --strategy "Mean Reversion" --json-out results.json
+python btv2_agent_run.py --strategy "VWAP Scalping" --json-out vwap_results.json
 
-# 5m scalping with 1m exit resolution (VWAP native interval is 5m)
+# 5m scalping with 1m exit resolution (v6 default entry_mode=mean_reversion)
 python btv2_agent_run.py --strategy "VWAP Scalping" --exit-res 1m --json-out vwap_results.json
 
 # Apply changes to .env after sweep
@@ -643,11 +894,13 @@ done
 | `total_return_pct` | Raw % gain over the period | Context-dependent |
 | `cagr_pct` | Annualised compound return | > 15% on BTC |
 | `max_dd_pct` | Worst peak-to-trough drawdown (negative) | Better than −30% |
-| `win_rate_pct` | % of trades closed at profit | > 45% overall; 52–65% target for VWAP Scalping on 5m with ADX+RSI filters |
-| `profit_factor` | Gross wins ÷ gross losses | > 1.3; target 1.4–1.8 for VWAP Scalping |
-| `n_trades` | Total closed trades in period | ≥ 10 for statistical significance; 1000–3000/yr healthy for VWAP Scalping on 5m bars |
+| `win_rate_pct` | % of trades closed at profit | > 45%; target 55–70% for VWAP at SD≥3.0 |
+| `profit_factor` | Gross wins ÷ gross losses | > 1.3; target 1.4–1.8 for VWAP |
+| `n_trades` | Total closed trades in period | ≥ 10 for statistical significance |
+| `avg_win_pct` | Average winning trade size | Should be ≥ 2× avg_loss_pct |
+| `avg_loss_pct` | Average losing trade size | Negative; ATR stop controls this |
 
-> **Sharpe scaling note (v3):** Sharpe is now scaled by `√bars_per_year` instead of `√252`. A Sharpe of 1.5 on 1h data is directly comparable to a Sharpe of 1.5 on daily data — they both represent the same risk-adjusted return. The old `√252` convention was wrong for 24/7 crypto and undervalued intraday strategies.
+> **Sharpe scaling note (v3):** Sharpe is now scaled by `√bars_per_year` instead of `√252`. A Sharpe of 1.5 on 1h data is directly comparable to a Sharpe of 1.5 on daily data. The old `√252` convention was wrong for 24/7 crypto and undervalued intraday strategies.
 
 ### Reading the IS vs OOS gap
 
@@ -676,17 +929,13 @@ butterworth  = starting cutoff (passed to sweep)
 best_cutoff  = optimal cutoff found by sweep
 cutoff_delta = best_cutoff - butterworth
 
+⚠️  VWAP NOTE (v6): The Butterworth cutoff no longer affects VWAP band computation.
+It only affects EMA/RSI smoothing. Sweeping it for VWAP Scalping now primarily tunes
+the trend filter, NOT the VWAP entry threshold.
+
 If |cutoff_delta| > 0.02:
-    The Butterworth filter tuning is materially affecting results.
+    The filter tuning is materially affecting EMA/RSI signals.
     Update the slider in the app sidebar to best_cutoff and re-run analysis.
-
-If cutoff_delta > 0 (higher cutoff):
-    Less smoothing — strategy benefits from faster price response.
-    Common for scalping strategies on intraday data.
-
-If cutoff_delta < 0 (lower cutoff):
-    More smoothing — strategy benefits from reduced noise.
-    Common for trend-following strategies on coarse bars.
 ```
 
 ### Reading the trial_log
@@ -704,25 +953,38 @@ The v3 trial_log starts with Butterworth cutoff trials, then moves to strategy p
 - **Multiple multipliers improving Sharpe** → strong signal the parameter needs adjustment
 - **All multipliers near baseline Sharpe** → parameter is already well-tuned
 
-### Reading the proposal
-
-```json
-[{
-  "Parameter": "sd_threshold",
-  "ENV Variable": "VWAP_SD_ENTRY_THRESHOLD",
-  "Current Value": 3.0,
-  "Proposed Value": 3.5,
-  "Change": "+16.7%"
-}]
-```
-- Only parameters that **materially improve OOS Sharpe** appear here
-- Empty proposal = current .env is already near-optimal for this dataset
-- `ENV Variable` is the exact key `apply_to_env()` writes to `.env`
-- The Butterworth cutoff does **not** appear here (it's a UI slider, not a `.env` variable) — check `best_cutoff` and `cutoff_delta` fields instead
-
 ---
 
 ## Automation Loop Pattern (for a CLI coding agent)
+
+### v5 Loop — Overnight Autonomous (optimizer_agent.py)
+
+```
+┌──────────────────────────────────────────────────────┐
+│  Edit optimize.md                                    │
+│  (set Strategy, Trials, Period, Strict mode)         │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│  python BTV2/optimizer_agent.py --from-program       │
+│                                                      │
+│  Optuna TPE loop (runs overnight):                   │
+│    propose params → walk-forward → evaluate          │
+│    → log to JSONL + RAG → update .env if better      │
+│    → repeat N trials                                 │
+└──────────────────────────┬───────────────────────────┘
+                           │
+                           ▼
+┌──────────────────────────────────────────────────────┐
+│  Morning review                                      │
+│  mcp__rag__rag_search("vwap scalping best params")   │
+│  → see best trial + accepted/rejected decision       │
+│  Update optimize.md → next strategy in rotation     │
+└──────────────────────────────────────────────────────┘
+```
+
+### v3 Loop — Quick Daily Check (agent.py / btv2_agent_run.py)
 
 ```
 ┌──────────────────────────────────────────────────┐
@@ -772,18 +1034,15 @@ if sharpe_delta > 0.10 and n_trades >= 10:
                     "--strategy", strategy, "--apply"])
 
 elif abs(cutoff_delta) > 0.02:
-    # Butterworth filter needs tuning → note best_cutoff for sidebar
     print(f"Update Butterworth slider to {result['best_cutoff']:.3f}")
 
 elif oos_sharpe < 0.30 and n_trades >= 5:
     # Strategy is underperforming → flag for logic review
-    # CLI agent should edit strategies.py entry conditions, not just params
 
 elif n_trades < 5:
     # Too few trades to evaluate → widen entry conditions:
-    # - Raise sd_threshold (lower entry bar → more signals before MTF filter)
-    # - Lower htf_adx_max (allow wider ranging context on 1h)
-    # - Set use_htf_vwap=False temporarily to confirm MTF is the bottleneck
+    # VWAP: lower sd_threshold toward 2.5, set use_htf_vwap=False,
+    #       set use_stoch_filter=False to reduce filter stack
     pass
 ```
 
@@ -811,46 +1070,30 @@ The coordinate-descent sweep in `agent.py` runs in two stages:
 
 **Total evaluations:** `7 + (5 × n_params)` per run (tractable in 30–120 seconds)
 
-**Why coordinate descent vs exhaustive grid?**
-- Exhaustive grid over 5 multipliers per param = `5^N` evaluations (intractable for N > 3)
-- Coordinate descent = `5 × N` evaluations (tractable)
-- Tradeoff: may miss interactions between parameters — acceptable for minor tuning
-
-**Why not re-optimize each fold?**
-- The sweep evaluates **all folds with fixed params** (no per-fold optimization)
-- This gives a true OOS estimate of how the new params perform
-- It avoids "double-dipping" bias from optimizing within the test window
-
 ---
 
 ## Exit Resolution: How It Works
 
 The `df_exit` parameter on all 6 strategy functions enables sub-bar SL/TP detection.
 
-**Problem it solves:** On a 1h bar with both a `low` that breaches SL and a `high` that hits TP, the coarse bar can't tell you which happened first — so SL is assumed (conservative). On the actual 5m sub-bars within that hour, you can see the real sequence.
+**Problem it solves:** On a 5m bar with both a `low` that breaches SL and a `high` that hits TP, the coarse bar can't tell you which happened first — so SL is assumed (conservative). On the actual 1m sub-bars within that 5m candle, you can see the real sequence.
 
 ```
-Native bar (1h):     Low = 41,200  High = 43,800   Entry = 42,000
+Native bar (5m):     Low = 41,200  High = 43,800   Entry = 42,000
                      SL  = 41,500  TP   = 43,500
 
 Without df_exit:   Low (41,200) <= SL (41,500) → SL hit, trade is a loss
 
-With df_exit (5m):  5m bars 00:00–01:00:
-   00:05  H=42,100  L=41,900  — no hit
-   00:10  H=43,600  L=42,800  — TP (43,500) hit FIRST → trade is a winner!
-   00:15  H=42,400  L=41,100  — would have been SL, but we already closed
+With df_exit (1m):  1m bars 00:00–00:05:
+   00:01  H=42,100  L=41,900  — no hit
+   00:02  H=43,600  L=42,800  — TP (43,500) hit FIRST → trade is a winner!
+   00:03  H=42,400  L=41,100  — would have been SL, but we already closed
 ```
 
 **When to use it:**
 - `"Off"` — default, uses native bar H/L (fast, conservative, existing behaviour)
-- `"5m"` — recommended for Momentum Scalping on 15m bars (3 sub-bars per native bar)
-- `"1m"` — recommended for VWAP Scalping on 5m bars (5 sub-bars per native bar); ~60 MB extra Parquet per 7yr BTC
-
-**Performance impact:** Sub-bar exit simulation is `O(sub_bars_per_native_bar)` per bar with an open position:
-- 5m native + 1m exit: **5 iterations** max per position check (very fast)
-- 15m native + 5m exit: **3 iterations** max (trivial)
-- 1h native + 5m exit: 12 iterations max
-- 1d native + 5m/1m exit: 288–1440 sub-bars (negligible improvement, not recommended)
+- `"5m"` — recommended for Momentum Scalping on 15m bars
+- `"1m"` — recommended for VWAP Scalping on 5m bars (~60 MB extra Parquet per 7yr BTC)
 
 ---
 
@@ -880,14 +1123,14 @@ Three phases of new infrastructure were added to `strategies.py` to improve sign
 
 **New function: `compute_reference_levels(df) → pd.DataFrame`**
 
-Pre-computes 14 market-structure price columns aligned to `df.index` with **zero lookahead** (all values derived from completed prior periods):
+Pre-computes 14 market-structure price columns aligned to `df.index` with **zero lookahead**:
 
 | Column | Description |
 |--------|-------------|
 | `session_vwap` | Daily-reset VWAP (developing, current session) |
 | `session_vwap_std` | VWAP σ — NOT a price level, used only for band width |
 | `pdh` / `pdl` | Prior-day high / low |
-| `prev_day_poc` / `prev_day_vah` / `prev_day_val` | Prior day's volume profile (POC, Value Area High/Low) |
+| `prev_day_poc` / `prev_day_vah` / `prev_day_val` | Prior day's volume profile |
 | `pwh` / `pwl` | Prior-week high / low |
 | `prev_week_poc` / `prev_week_vah` / `prev_week_val` | Prior week's volume profile |
 | `asian_high` / `asian_low` | Today's 00:00–07:59 UTC accumulation range |
@@ -896,88 +1139,50 @@ Pre-computes 14 market-structure price columns aligned to `df.index` with **zero
 from strategies import compute_reference_levels
 
 levels = compute_reference_levels(df)   # ~78ms on full 5m BTC history
-# Pass to run_vwap_scalping to enable PDH/PDL and "nearest" TP mode:
 equity, trades = run_vwap_scalping(df, cutoff=0.10, levels=levels, tp_mode="nearest", **params)
 ```
 
 **`tp_mode` options (VWAP Scalping):**
 
-| Mode | Long TP | Short TP |
-|------|---------|----------|
-| `"vwap"` | Session VWAP (default) | Session VWAP |
-| `"pdh"` | Prior-day high | Prior-day low |
-| `"atr"` | entry + atr_target×ATR | entry − atr_target×ATR |
-| `"nearest"` | Closest reference level above entry | Closest reference level below entry |
-
-`"nearest"` requires `levels` to be passed. It scans all 13 price-level columns (excludes `session_vwap_std`) and picks the nearest valid target. Falls back to ATR target if no level found.
-
-**Performance note:** `compute_reference_levels` takes ~78ms. It is pre-computed once per fold inside `optimize_strategy()` and injected via `levels=` kwarg — saves ~127s per walk-forward run vs calling it inside every grid combo.
+| Mode | Long TP | Short TP | v6 Notes |
+|------|---------|----------|----------|
+| `"atr"` | entry + atr_target×ATR | entry − atr_target×ATR | **v6 default** — trailing stop is primary |
+| `"vwap"` | Session VWAP | Session VWAP | Was v5 default; too close for 3σ entries |
+| `"pdh"` | Prior-day high | Prior-day low | |
+| `"nearest"` | Closest reference level above entry | Closest reference level below entry | Requires `levels=` |
 
 **UTM (Unified Trade Model) parameters — VWAP Scalping:**
 
-| Parameter | Default | Description |
+| Parameter | v6 Default | Description |
 |-----------|---------|-------------|
 | `use_anchored_vwap` | `True` | Daily-reset session VWAP instead of rolling 20-bar window |
 | `use_session_filter` | `True` | Only trade London + NY sessions (08:00–22:00 UTC) |
-| `require_reversal_candle` | `True` | SFP confirmation: wick past band + close back inside = liquidity grab |
+| `require_reversal_candle` | `False` | SFP: wick past band + close back — **disabled in v6** |
 | `require_mss` | `False` | UTM Step 3: wait for BOS above SFP candle high before entry |
 | `mss_timeout_bars` | `6` | Cancel pending SFP if BOS not confirmed within N bars |
-
-**SFP + MSS state machine (when `require_reversal_candle=True, require_mss=True`):**
-```
-Bar i:   Low wicks below lower VWAP band AND Close back above band → SFP detected
-         → set mss_long_pending=True, record bos_level=High[i], sl=Low[i]
-Bar i+1: Close > bos_level → MSS/BOS confirmed → LONG entry at Open[i+2]
-         (if not confirmed within mss_timeout_bars → reset pending state)
-```
-
-**All 6 VWAP entry modes support SFP + MSS:**
-- `mean_reversion`, `cross`, `bull_pullback`, `bear_pullback` — full SFP detection (wick past band + close back)
-- `deviation` — SFP via wick past %-threshold + close back
-- `momentum` — MSS only (breakout mode, no wick reversal applicable)
 
 ---
 
 ### Phase 2 — Signal Quality Filters
 
-Three optional pre-entry filters that can block low-probability setups.  All default to `False`.
+Three optional pre-entry filters.  All default to `False`.
 
 #### Fair Value Gaps (`use_fvg_filter=True`)
 ```python
 from strategies import compute_fair_value_gaps
 
 fvg = compute_fair_value_gaps(df, min_gap_pct=0.1)
-# Columns: bull_fvg_top, bull_fvg_bot, bear_fvg_top, bear_fvg_bot
-# Active = gap not yet filled.
-# Mitigation: zone removed only when price CLOSES through its bottom/top
-#   (NOT when price merely overlaps — overlap-based removal caused all zones
-#   to disappear at the entry bar, blocking every trade)
-
 equity, trades = run_vwap_scalping(df, cutoff, **params,
-    use_fvg_filter=True, fvg_data=fvg,
-    fvg_proximity_atr=0.5)   # accept entries within 0.5×ATR of zone edge
-# Semantics (v5): OPTIONAL confirmation, not a hard requirement.
-#   No active FVG at this bar → trade passes through (FVGs are not always open).
-#   Active FVG exists AND price is outside zone+tolerance → trade blocked.
-#   Active FVG exists AND price is inside zone+tolerance → trade allowed.
+    use_fvg_filter=True, fvg_data=fvg)
 ```
 
 #### Order Blocks (`use_ob_filter=True`)
 ```python
 from strategies import compute_order_blocks
 
-ob = compute_order_blocks(df, atr_mult=1.5, min_move_atr=1.0)
-# Columns: bull_ob_high, bull_ob_low, bear_ob_high, bear_ob_low
-# Bullish OB  = last bearish candle before a ≥1×ATR impulse move up (demand zone)
-# Bearish OB  = last bullish candle before a ≥1×ATR impulse move down (supply zone)
-# Mitigation: zone removed when price CLOSES through its low/high (not on overlap)
-#   min_move_atr default changed from 2.0 → 1.0 (2.0 was only qualifying rare ≥2×ATR bars)
-
+ob = compute_order_blocks(df, atr_mult=1.5)
 equity, trades = run_vwap_scalping(df, cutoff, **params,
-    use_ob_filter=True, ob_data=ob,
-    fvg_proximity_atr=0.5)
-# Semantics (v5): same optional-confirmation semantics as FVG filter above.
-#   No active OB → trade passes through.
+    use_ob_filter=True, ob_data=ob)
 ```
 
 #### Equal Highs/Lows (`use_eqhl_filter=True`)
@@ -985,14 +1190,8 @@ equity, trades = run_vwap_scalping(df, cutoff, **params,
 from strategies import compute_equal_highs_lows
 
 eqhl = compute_equal_highs_lows(df, tolerance_pct=0.05, lookback=20)
-# Columns: eqh_level, eql_level (NaN if no cluster at this bar)
-# Equal Highs (EQH) = two+ swing highs within tolerance_pct% → resting sell-side liquidity
-# Equal Lows  (EQL) = two+ swing lows  within tolerance_pct% → resting buy-side liquidity
-
 equity, trades = run_vwap_scalping(df, cutoff, **params,
     use_eqhl_filter=True, eqhl_data=eqhl)
-# Effect: LONG entries require price near an EQL cluster (buy-side liquidity sweep)
-#         SHORT entries require price near an EQH cluster (sell-side liquidity sweep)
 ```
 
 ---
@@ -1001,66 +1200,17 @@ equity, trades = run_vwap_scalping(df, cutoff, **params,
 
 #### CVD (Cumulative Volume Delta) Confirmation
 ```python
-from strategies import compute_cvd
-
-# CVD is computed internally by run_vwap_scalping when use_cvd_filter=True
 equity, trades = run_vwap_scalping(df, cutoff, **params,
     use_cvd_filter=True, cvd_window=20)
-# Effect: LONG entries blocked if CVD slope is negative (selling pressure not exhausted)
-#         SHORT entries blocked if CVD slope is positive (buying pressure not exhausted)
-# cvd_window: bars for rolling CVD sum (default 20)
-```
-
-CVD is also available for Momentum Scalping:
-```python
-equity, trades = run_momentum_scalping(df, cutoff,
-    use_cvd_confirm=True, cvd_window=20, **params)
+# LONG entries blocked if CVD slope is negative (selling pressure not exhausted)
 ```
 
 #### OTE (Optimal Trade Entry) Zone
 ```python
 equity, trades = run_vwap_scalping(df, cutoff, **params,
     require_mss=True, use_ote=True)
-# OTE requires require_mss=True (needs the dealing range: SFP low → BOS level)
-# Fib levels: 0.618–0.786 of the SFP dealing range
-# Effect: after BOS confirmed, wait for price to retrace into the OTE zone before entry
-# Gives tighter entries (better R:R) but reduces trade frequency
+# Fib 0.618–0.786 of SFP dealing range — tighter entries, fewer trades
 ```
-
----
-
-### Dynamic Regime Mode (v5)
-
-**`use_dynamic_mode=True`** — auto-selects `entry_mode` per bar from 1h ADX instead of using a single fixed mode.
-
-```python
-equity, trades = run_vwap_scalping(df, cutoff=0.10, **VS_DEFAULTS,
-    use_dynamic_mode=True,   # overrides entry_mode on a per-bar basis
-    htf_adx_max=25.0)        # 1h ADX threshold — above = trending, below = ranging
-```
-
-**Per-bar mode selection logic:**
-```
-1h ADX ≥ htf_adx_max AND 1h EMA(9) > EMA(21)  →  bull_pullback
-1h ADX ≥ htf_adx_max AND 1h EMA(9) < EMA(21)  →  bear_pullback
-1h ADX  < htf_adx_max (ranging 1h)             →  mean_reversion
-No 1h data available                            →  cross  (fallback)
-```
-
-> **Why 1h ADX, not 5m ADX:** Individual 5m pullback candles often have localised momentum
-> that pushes 5m ADX above the threshold even during a clear macro trend. Using 1h ADX gives
-> a stable regime classification that doesn't flip bar-by-bar within a trending move.
-
-**Verified behaviour (BTC, default params):**
-
-| Period | Mode | Trades | Win Rate | Profit Factor |
-|--------|------|--------|----------|---------------|
-| 2021 Q1–Q3 bull run | `dynamic` | 20 | 30% | 0.40 |
-| 2021 Q1–Q3 bull run | `bull_pullback` fixed | 12 | 50% | 1.63 |
-| 2022 Q1–Q3 bear run | `dynamic` | 18 | 11% | 0.19 |
-| 2022 Q1–Q3 bear run | `bear_pullback` fixed | 8 | 25% | 0.16 |
-
-Dynamic mode produces more trades (mixes all modes) but lower per-trade quality in single-direction markets. It is most valuable in markets that alternate between trending and ranging phases within the test window.
 
 ---
 
@@ -1072,21 +1222,19 @@ Dynamic mode produces more trades (mixes all modes) but lower per-trade quality 
 | Mean Reversion | `use_poc_tp` | `False` | Use prev_day_poc as TP instead of fixed ATR target |
 | Grid Trading | `use_poc_center` | `False` | Center grid around prev_day_poc instead of current price |
 | Grid Trading | `use_va_bounds` | `False` | Set grid outer bounds to prev_day_vah / prev_day_val |
-| MA Crossover | `use_va_chop_filter` | `False` | Block entries when price is inside prior-day Value Area (choppy) |
+| MA Crossover | `use_va_chop_filter` | `False` | Block entries when price is inside prior-day Value Area |
 | Momentum Scalping | `use_cvd_confirm` | `False` | CVD slope must agree with entry direction |
-| Momentum Scalping | `cvd_window` | `20` | Bars for CVD rolling window |
 | Liquidation Capture | `use_nearest_tp` | `False` | Use _nearest_tp to target the closest reference level |
 
-All require `levels=compute_reference_levels(df)` to be passed when the feature is active.
+All require `levels=compute_reference_levels(df)` to be passed when active.
 
 ---
 
-### Recommended Phase 1–3 test sequence
-
-Start conservative — enable one feature at a time, compare OOS Sharpe before/after:
+### Recommended Phase 1–3 test sequence (v6 baseline)
 
 ```python
-# Step 1: Baseline (UTM already on by default via VS_DEFAULTS)
+# Step 1: v6 Baseline (mean_reversion, SD=3.0, trailing stop primary)
+from strategies import VS_DEFAULTS
 equity, trades = run_vwap_scalping(df, 0.10, **VS_DEFAULTS)
 
 # Step 2: Add reference levels + nearest TP
@@ -1094,33 +1242,254 @@ levels = compute_reference_levels(df)
 equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
     "levels": levels, "tp_mode": "nearest"})
 
-# Step 3: Add MSS confirmation
+# Step 3: Add stochastic filter (now optional toggle)
 equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
-    "levels": levels, "tp_mode": "nearest",
-    "require_mss": True, "mss_timeout_bars": 6})
+    "use_stoch_filter": True, "stoch_oversold": 45, "stoch_overbought": 55})
 
-# Step 4: Add FVG filter (optional confirmation — no FVG = trade passes through)
-fvg = compute_fair_value_gaps(df)
+# Step 4: Re-enable 15m VWAP alignment
 equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
-    "levels": levels, "tp_mode": "nearest",
-    "require_mss": True,
-    "use_fvg_filter": True, "fvg_data": fvg,
-    "fvg_proximity_atr": 0.5})
+    "use_htf_vwap": True})
 
-# Step 5: Try dynamic mode (auto-selects bull/bear/reversion per bar)
+# Step 5: Full UTM chain (strictest — highest quality, fewest trades)
 equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
-    "levels": levels, "tp_mode": "nearest",
-    "use_dynamic_mode": True, "htf_adx_max": 25.0})
-
-# Step 6: Add OTE zone (tightest — lowest trade count, highest quality)
-equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
-    "levels": levels, "tp_mode": "nearest",
-    "require_mss": True, "use_ote": True,
-    "use_fvg_filter": True, "fvg_data": fvg,
-    "fvg_proximity_atr": 0.5})
+    "require_reversal_candle": True, "require_mss": True,
+    "use_stoch_filter": True, "use_htf_vwap": True})
 ```
 
-Keep a feature if it improves OOS Sharpe by >0.1 and maintains ≥10 trades/year.  Drop it if trade count falls below 5/year — signal quality is meaningless without statistical volume.
+Keep a feature if it improves OOS Sharpe by >0.1 and maintains ≥10 trades/year.
+
+---
+
+## Validation Layers (v7)
+
+Three stacked validation functions added to `strategies.py` to answer the key question — *"is this edge real?"* — before committing parameters to `.env` or going live.  All are pure Python functions that operate on trade lists and DataFrames — no extra data needed beyond what the backtest already produces.
+
+```
+Walk-forward OOS  ─► trade list
+                         │
+                         ├─► monte_carlo_validate()   → ROBUST / MARGINAL / FRAGILE
+                         │     "Is the edge real or lucky sequencing?"
+                         │
+                         └─► compute_robustness_score() → score 0–1 + fragile param list
+                               "Will the params survive real markets?"
+
+df (OHLCV)  ────────────────► fit_gmm_regime() + predict_gmm_regime()
+                               "What regime is the market in?"
+```
+
+---
+
+### `monte_carlo_validate(trades, n_sims=1000) → dict`
+
+Shuffles the trade list N times to test whether the strategy's edge survives path-ordering uncertainty.  If profits vanish when trades arrive in a different order, the win was sequential luck, not structural edge.
+
+```python
+from strategies import monte_carlo_validate
+
+# trades = list returned by any run_* function
+mc = monte_carlo_validate(trades, n_sims=1_000, seed=42)
+# {
+#   "n_trades"         : 12,
+#   "n_sims"           : 1000,
+#   "prob_of_loss_pct" : 3.2,      # % of sims ending below starting equity
+#   "p5_return_pct"    : 2.1,      # 5th-percentile final return
+#   "p50_return_pct"   : 18.4,     # median final return
+#   "p95_return_pct"   : 51.7,     # 95th-percentile final return
+#   "worst5_maxdd_pct" : -14.2,    # avg max-drawdown of worst-5% sims (negative)
+#   "median_maxdd_pct" : -8.1,
+#   "spread_ratio"     : 24.6,     # p95/|p5| — > 4 = wide outcome spread
+#   "overfitting_flag" : False,    # True when p5 < -5% AND spread_ratio > 4
+#   "verdict"          : "ROBUST", # ROBUST / MARGINAL / FRAGILE
+# }
+```
+
+**Verdict rules:**
+
+| Verdict | Condition |
+|---------|-----------|
+| `ROBUST` | `prob_of_loss < 10%` AND `p5 > 0%` |
+| `MARGINAL` | `prob_of_loss < 25%` AND no overfitting flag |
+| `FRAGILE` | Otherwise |
+
+**Interpretation:**
+- `prob_of_loss_pct < 10%` — strong signal: the strategy is net positive in 90%+ of orderings
+- `p5_return_pct > 0%` — even the unlucky 5th percentile ordering is profitable
+- `worst5_maxdd_pct` — tail-risk check: worst-case drawdown under adversarial ordering
+- `spread_ratio > 4` with negative `p5` — wide outcome range; edge is fragile to sequencing
+
+---
+
+### `compute_robustness_score(df_train, cutoff, strategy_name, best_params, perturbation=0.15) → dict`
+
+Perturbs each numeric parameter ±15% individually on the training window.  Flags parameters where a small change causes Sharpe to drop > 0.30 — the classic overfitting signature.
+
+```python
+from strategies import compute_robustness_score, INTERVAL_BARS_PER_YEAR
+
+rob = compute_robustness_score(
+    df_train      = df_train,
+    cutoff        = 0.10,
+    strategy_name = "VWAP Scalping",
+    best_params   = best_params,       # from optimize_strategy()
+    perturbation  = 0.15,              # ±15%
+    bars_per_year = INTERVAL_BARS_PER_YEAR["5m"],
+)
+# {
+#   "score"         : 0.82,       # 0–1 (1 = rock-solid, 0 = fragile)
+#   "base_sharpe"   : 1.34,
+#   "param_results" : {
+#     "sd_threshold": {
+#       "base"  : 3.0,
+#       "minus" : {"value": 2.55, "sharpe": 1.19, "delta": -0.15},
+#       "plus"  : {"value": 3.45, "sharpe": 1.28, "delta": -0.06},
+#       "stable": True,
+#     },
+#     "atr_stop": { ... },
+#     ...
+#   },
+#   "fragile_params": ["trailing_atr"],   # params where |worst delta| > 0.30
+#   "verdict"       : "MARGINAL",         # ROBUST / MARGINAL / FRAGILE
+# }
+```
+
+**Verdict rules:**
+
+| Verdict | Condition |
+|---------|-----------|
+| `ROBUST` | `score ≥ 0.80` AND zero fragile params |
+| `MARGINAL` | `score ≥ 0.50` AND ≤ ⌊N/3⌋ fragile params |
+| `FRAGILE` | Otherwise |
+
+**What to do with fragile params:**
+- Remove them from the grid (fix at VS_DEFAULTS value) and re-run
+- Widen the training window (more data = more stable param estimates)
+- If the param is always fragile: it's probably noise — remove from model
+
+---
+
+### GMM Regime Detection
+
+Fits a Gaussian Mixture Model on rolling `[vol, mom, vol_ratio, volume_z]` features to learn 4 data-driven market states.  More expressive than ADX-based thresholds — distinguishes quiet trending from volatile trending, and calm ranging from compressed pre-breakout.
+
+**Requires:** `pip install scikit-learn>=1.3.0` (already in `requirements.txt`).
+
+```python
+from strategies import (
+    fit_gmm_regime, predict_gmm_regime,
+    gmm_regime_summary, compute_gmm_features,
+    _SKLEARN_AVAILABLE,
+)
+
+# Step 1 — Fit (train-window data)
+gmm_model, label_map, scaler = fit_gmm_regime(
+    df,
+    n_regimes       = 4,    # learns: calm / trending / volatile / crash
+    lookback        = 60,   # rolling feature window in bars
+    stability_window= 5,    # mode-filter: prevents rapid regime flipping
+    random_state    = 42,
+)
+# label_map: {component_idx: "calm" | "trending" | "volatile" | "crash"}
+
+# Step 2 — Predict (any window, same interval)
+regime_df = predict_gmm_regime(df, gmm_model, label_map, scaler,
+                                lookback=60, stability_window=5)
+# regime_df columns:
+#   regime_raw  — raw per-bar GMM label
+#   regime      — stability-filtered label (str)
+#   confidence  — posterior probability of predicted regime (0–1)
+#   is_calm / is_trending / is_volatile / is_crash  — bool shortcuts
+
+# Step 3 — Summarise
+summary = gmm_regime_summary(regime_df)
+# {
+#   "regime_counts"     : {"calm": 412, "trending": 318, ...},
+#   "regime_pct"        : {"calm": 30.3, "trending": 23.4, ...},
+#   "dominant_regime"   : "calm",
+#   "avg_confidence"    : 0.83,
+#   "current_regime"    : "trending",
+#   "current_confidence": 0.91,
+# }
+```
+
+**Regime labelling heuristic (4 components):**
+
+| Regime | Volatility | Momentum | Typical market condition |
+|--------|-----------|----------|--------------------------|
+| `calm` | Low | Low | Sideways consolidation, tight range |
+| `trending` | Low | High | Clean directional move, low noise |
+| `volatile` | High | Mixed | Choppy swings, wide spreads |
+| `crash` | Highest | Strong negative | Capitulation, liquidation cascades |
+
+**Using GMM as a strategy filter (example):**
+```python
+# Only take mean_reversion trades in calm or volatile regimes
+# Avoid trending (use bull/bear_pullback instead) and crash
+
+regime_today = summary["current_regime"]
+if regime_today in ("calm", "volatile"):
+    equity, trades = run_vwap_scalping(df, cutoff, entry_mode="mean_reversion", **params)
+elif regime_today == "trending":
+    equity, trades = run_vwap_scalping(df, cutoff, entry_mode="bull_pullback", **params)
+# else: regime == "crash" → flat, no trades
+```
+
+> **Note:** GMM is disabled if scikit-learn is not installed — all other functions work normally.
+> Check `from strategies import _SKLEARN_AVAILABLE` to verify before calling GMM functions.
+
+---
+
+### `btv2_validate.py` — One-Shot Validation Runner
+
+Combines all 4 layers (walk-forward OOS + Monte Carlo + Robustness + GMM) into a single CLI call with a unified PASS / CAUTION / FAIL verdict.
+
+```bash
+# Full validation — VWAP Scalping, 2021-2023, bull_pullback mode
+python BTV2/btv2_validate.py \
+    --strategy "VWAP Scalping" \
+    --start 2021-01-01 --end 2023-12-31 \
+    --entry-mode bull_pullback \
+    --exit-res 1m \
+    --json-out report.json
+
+# Quick check — no GMM (faster, no scikit-learn needed)
+python BTV2/btv2_validate.py --strategy "Mean Reversion" --no-gmm
+
+# Dynamic mode test
+python BTV2/btv2_validate.py --strategy "VWAP Scalping" \
+    --start 2021-01-01 --end 2023-12-31 --no-gmm --json-out dynamic_report.json
+```
+
+**Output format:**
+```
+────────────────────────────────────────────────────────────
+  VALIDATION VERDICT
+────────────────────────────────────────────────────────────
+  ✅ PASS
+    ✓ OOS: PASS     (Sharpe=1.21, 18 trades, WR=55%)
+    ✓ MC: PASS      (P(loss)=2.1%, p5=+3.4%, p50=+22.1%)
+    ⚠ ROB: MARGINAL (score=0.71, fragile: trailing_atr)
+```
+
+**JSON output keys:**
+```python
+{
+    "oos_metrics"  : {...},          # same as compute_metrics() output
+    "monte_carlo"  : {...},          # same as monte_carlo_validate() output
+    "robustness"   : {...},          # same as compute_robustness_score() output
+    "gmm_summary"  : {...},          # same as gmm_regime_summary() output
+    "verdicts"     : ["OOS: PASS", "MC: PASS", "ROB: MARGINAL"],
+    "overall"      : "PASS",         # PASS / CAUTION / FAIL
+    "fold_metrics" : [{...}, ...],   # per-fold breakdown
+}
+```
+
+**Overall verdict rules:**
+
+| Verdict | Condition |
+|---------|-----------|
+| `PASS` | 0 FAILs AND ≤ 1 CAUTIONs |
+| `CAUTION` | 0 FAILs but ≥ 2 CAUTIONs |
+| `FAIL` | Any layer returns FAIL |
 
 ---
 
@@ -1138,7 +1507,17 @@ from scipy.signal import butter, filtfilt
 filtered = filtfilt(b, a, close.values)   # ← DO NOT USE in backtests
 ```
 
-### 2. Cost deducted at every entry AND exit
+### 2. VWAP must use RAW close (v6 rule)
+```python
+# CORRECT — raw close for volume-weighted price
+vwap, vs = compute_vwap_anchored(df["High"], df["Low"], df["Close"], df["Volume"])
+
+# WRONG — Butterworth compresses deviation, making SD thresholds unreachable
+fc = apply_butterworth(df["Close"], cutoff)
+vwap, vs = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])  # ← DO NOT
+```
+
+### 3. Cost deducted at every entry AND exit
 ```python
 COST_PER_SIDE = 0.0015   # 0.10% fee + 0.05% slippage
 
@@ -1150,30 +1529,25 @@ curr_equity *= (1.0 - COST_PER_SIDE)
 ```
 Total round-trip cost: **0.30%**. Realistic for major exchanges.
 
-### 3. SL checked before TP on the same bar (coarse mode)
+### 4. SL checked before TP on the same bar (coarse mode)
 ```python
 if side == "long":
     if low <= sl_price:    hit = True   # SL first (conservative)
     elif high >= tp_price: hit = True   # TP only if SL not triggered
 ```
-Sub-bar mode (`df_exit`) eliminates this ambiguity by iterating actual 5m/1m candles.
+Sub-bar mode (`df_exit`) eliminates this ambiguity.
 
-### 4. Sharpe scaling must match candle interval
+### 5. Sharpe scaling must match candle interval
 ```python
-# WRONG — equity-market convention, understates crypto Sharpe
-sharpe = daily_rets.mean() / daily_rets.std() * math.sqrt(252)
-
-# CORRECT — 24/7 crypto, 5m bars (VWAP Scalping native interval)
+# CORRECT — 24/7 crypto, 5m bars
 sharpe = bar_rets.mean() / bar_rets.std() * math.sqrt(105120)
 
 # Other intervals:
-#   15m (Momentum Scalping)  → math.sqrt(35040)
-#   1h                       → math.sqrt(8760)
-#   4h (Grid Trading)        → math.sqrt(2190)
-#   1d (Mean Reversion, etc) → math.sqrt(365)
+#   15m → math.sqrt(35040), 1h → math.sqrt(8760)
+#   4h  → math.sqrt(2190),  1d → math.sqrt(365)
 ```
 
-### 5. Never apply proposals without OOS confidence
+### 6. Never apply proposals without OOS confidence
 Only apply agent proposals when:
 - `n_trades >= 10` (statistical floor)
 - `sharpe_delta > 0.10` (meaningful improvement)
@@ -1187,98 +1561,138 @@ Only apply agent proposals when:
 ```bash
 cd Bot3/BTV2
 python your_script.py   # must run from BTV2/ directory
-# OR
-sys.path.insert(0, "/path/to/Bot3/BTV2")
 ```
 
 **`G:\Candle Data\ does not exist`**
 `data_manager.py` auto-creates the directory on first call to `get_candles()`. Ensure `G:` drive is mounted before running.
 
-**`.env` not found / wrong path**
-`agent.py` walks up 8 directory levels looking for a `.env` containing `AGENT_WALLET_PRIVATE_KEY`. If your `.env` uses a different key, edit `_find_env_path()` in `agent.py`.
+**VWAP Scalping returns 0 trades (v6)**
 
-**VWAP Scalping win rate stuck at 33–41% (or below)**
+With `sd_threshold=3.0` + `require_reversal_candle=False` + `use_htf_vwap=False`, you should see trades on real BTC data. If you get 0:
+1. Verify data has genuine VWAP deviations: `df.describe()` — check High−Low range
+2. Confirm `use_session_filter=True` isn't filtering everything if data is UTC-offset
+3. Try `sd_threshold=2.5` temporarily to confirm the pipeline works
+4. Check `use_stoch_filter=False` (default) — stochastic was filtering all trades in v5
 
-Root cause: entries firing during impulse legs, not genuine pullbacks. Even with HTF filters, if the entry mode is too permissive the bot enters while the market is still accelerating.
+**VWAP Scalping still losing money after v6 fix**
 
-Systematic fix in order:
+Run the optimizer first — the structural fixes make profitable configs _findable_, but the exact parameters still need tuning on your data:
+```bash
+python BTV2/optimizer_agent.py --strategy "VWAP Scalping" --n-trials 80 --dry-run
+```
+Key levers if optimizer doesn't find profit after 80 trials:
+- Raise `sd_threshold` range cap toward 5.0
+- Try `entry_mode="cross"` (VWAP cross mode — different market structure)
+- Reduce date range to 2022–2024 (post-FTX BTC only — cleaner ranging regime)
+- Enable `use_htf_vwap=True` as a fixed constraint and re-run
 
-1. **Sidebar setup**: Strategy = VWAP Scalping, Interval = 5m, Exit Resolution = 1m
-2. **Confirm entry mode**: `entry_mode = "bull_pullback"` in VS_DEFAULTS. Requires strict 1h uptrend + price below 1h VWAP + Stochastic oversold cross + RSI divergence.
-3. **Confirm N+1 is active**: entries use `opens[i+1]` (next bar open) and SL/TP anchored to signal candle close — prevents entering mid-spike.
-4. **Confirm MTF**: `use_htf_ema=True` in VS_DEFAULTS (required for pullback modes to compute 1h VWAP and EMA direction).
-5. **Run Agent Sweep** — tunes 8 .env keys (`sd_threshold`, `atr_stop`, `atr_target`, `volume_mult`, `adx_max`, `rsi_max`, `stoch_oversold`, `stoch_overbought`) + Butterworth cutoff
-6. **Expected**: WR 33–41% → 50–65%, fewer but higher-probability trades
+**VWAP Scalping win rate stuck at 33–41% (pre-v6 behavior)**
 
-If WR remains below 46% after sweep:
-- Raise `sd_threshold` to 2.5–3.0 (require deeper pullback before entry)
-- Lower `rsi_max` to 35–40 (require more extreme oversold)
-- Lower `stoch_oversold` to 25–30 (stricter exhaustion gate)
-- Try `entry_mode = "bear_pullback"` for shorts only (if long setups underperform)
-- Check OOS Sharpe: if < 0.3 after all tuning, VWAP scalping has structural edge issues this period; switch primary to Grid Trading
+This indicated entries firing during impulse legs on smoothed VWAP bands. The v6 fix resolves the root cause (Butterworth distortion). If you see this post-v6, the `sd_threshold` is likely still too low:
+1. Confirm VS_DEFAULTS `sd_threshold` is 3.0 (not 2.0 from an old cache)
+2. Delete `__pycache__/` in `BTV2/` and re-import strategies
+3. Run `python -c "from BTV2.strategies import VS_DEFAULTS; print(VS_DEFAULTS['sd_threshold'])"` — should print 3.0
 
 **`Liquidation Capture` returns 0 trades**
-Expected on daily BTC bars — this strategy fires ~0–5 times per year. Use a shorter `--start` / `--end` range around known crash events (Mar 2020, May 2021, Nov 2022) to see it activate.
+Expected on daily BTC bars — fires ~0–5 times per year. Use a shorter range around known crash events (Mar 2020, May 2021, Nov 2022) to see it activate.
 
-**`MA Crossover` / `Momentum Scalping` return very few trades**
-Both strategies have tight entry filters (volume gate, MACD confirmation, pullback window). On calm data this is correct. OOS metrics with < 5 trades should be treated as inconclusive.
+**`require_mss=True` gives 0 trades**
+MSS requires a BOS candle within `mss_timeout_bars` bars after the SFP. Defaults: `mss_timeout_bars=6` (6 × 5m = 30 minutes). Verify SFP signals are firing by temporarily setting `require_mss=False`.
 
-**Sweep takes > 5 minutes**
-Reduce the date range (shorter period = fewer folds = faster sweep). Number of OOS evaluations = `7 + 5 × n_params × n_folds`. For VWAP Scalping (6 .env params, 5m data, 2yr ≈ 21 folds): `7 + (5 × 6 × 21) = 637` evaluations. ⚠️ 5m data is 12× denser than 1h AND the MTF pre-computation (15m VWAP + 1h EMA/ADX resample) adds ~10ms per fold. For faster iteration reduce to 1yr (≈ 9 folds → `7 + (5 × 6 × 9) = 277` evaluations). The walk-forward train sweep (`optimize_strategy`) over VS_GRID = 324 combos runs once per fold — this is the bottleneck on 5m data with large date ranges.
+**Phase 2 filters drastically reduce trade count**
+These filters are intentionally strict. Expected trade reduction: 30–70% per filter. Enable one at a time. If trade count drops below 5/year, the filter is too restrictive.
 
 **Sharpe looks unexpectedly low/high after changing interval**
 Verify you're passing the correct `bars_per_year` to `compute_metrics`. Common mistakes:
 - Using default `365` for VWAP Scalping on 5m data (should be `105120`)
-- Using `8760` (old 1h convention) for VWAP Scalping after the LTF migration
-- Using `8760` for Momentum Scalping on 15m data (should be `35040`)
+- Using `8760` (1h convention) for VWAP Scalping after the LTF migration
 
-**`compute_reference_levels` AttributeError on daily-resolution data**
-`df.loc["2020-01-01"]` returns a Series (not DataFrame) when `df` has daily bars. The code guards this:
-```python
-if isinstance(day_data, pd.Series):
-    day_data = day_data.to_frame().T
+---
+
+## Research Plan & Optimization Roadmap (v6)
+
+_Updated 2026-04-12 · Agent: glitch_
+
+### Key Findings from Backtesting Audit
+
+| Strategy | OOS Sharpe (BTC 2018–2024) | Live .env Status | Action |
+|----------|--------------------------|------------------|--------|
+| Mean Reversion | Variable (best: ~0.78 per fold) | rsi_overbought=70 ← should be 75 | **Optimize first** |
+| VWAP Scalping | Unknown post-v6 fix | 5 structural issues patched (2026-04-12) | **Optimize second — run now** |
+| Momentum Scalping | Consistently negative | EMA 9/21 — BTV2 best found 20/50 | **Disable or redesign** |
+| MA Crossover | Sporadic (depends on regime) | fast=20/slow=50 — aligned | **Low priority** |
+| Liquidation Capture | Rare signals, very profitable when hits | No direct env vars yet | **Add env vars** |
+| Grid Trading | **Negative in 5/7 years (2018–2024)** | ENABLE_GRID_TRADING=true | **⚠️ DISABLE** |
+
+> **Grid Trading recommendation:** Set `ENABLE_GRID_TRADING=false` in `.env`. OOS Sharpe on BTC is -0.19. It only performs in sustained sideways markets (2019/2021 bull plateaus).
+
+> **VWAP v6 status:** Structural fixes applied 2026-04-12. The 5 root causes (Butterworth distortion, SD too low, exit mismatch, filter stack, cost model) are patched. OOS results pre-v6 are invalidated — re-run the optimizer from scratch.
+
+### Optimizer Rotation Order
+
+Edit `BTV2/optimize.md` and advance through this sequence.
+
 ```
-If you see `AttributeError: 'Series' object has no attribute 'High'`, you are running reference-level computation on a non-intraday `df` — this is supported but the guard must be present (check your `strategies.py` version).
+Round 1 — Mean Reversion (daily bars, BTC)
+  → fastest backtest, most historical data
+  → key params: rsi_overbought (target 75), bb_proximity, adx_max
+  → run once normal, once --strict to see live-bot gap
 
-**`require_mss=True` gives 0 trades**
-MSS requires a BOS candle within `mss_timeout_bars` bars after the SFP.  If the timeout is too short for the interval, nearly all pending signals expire. Defaults: `mss_timeout_bars=6` (6 × 5m = 30 minutes). For 1h data try `mss_timeout_bars=3`. Verify SFP signals are firing by temporarily setting `require_mss=False` and confirming trade count is > 0.
+Round 2 — VWAP Scalping (5m bars, BTC, 2022–2025)  ← PRIORITY AFTER v6 FIX
+  → v6 fix invalidates all prior sweep results — run fresh
+  → Optuna will explore: sd_threshold [2.5–4.5], entry_mode, tp_mode, filter toggles
+  → key question: does SD=3.0+ mean_reversion generate positive OOS Sharpe?
+  → success = OOS Sharpe > 0.5 with n_trades ≥ 20 per year
+  → reduce period to 2022–2025 (5m data volume)
 
-**`tp_mode="nearest"` picks very distant levels**
-`_nearest_tp_long` selects the minimum price above entry × 1.001. On low-volatility sessions, all reference levels may be far away — the fallback ATR target is used instead. This is correct behaviour. If you want tighter TP, switch to `tp_mode="vwap"` or `"pdh"`.
+Round 3 — Momentum Scalping (15m bars, BTC)
+  → consistently negative OOS — find out if any config is viable
+  → if best Sharpe < 0.3 after 100 trials → recommend disable
 
-**Phase 2 filters (`use_fvg_filter`, `use_ob_filter`, `use_eqhl_filter`) give 0 trades**
-Root cause is usually stale `.pyc` cache serving old code. Delete `__pycache__/` and retry:
+Round 4 — MA Crossover (daily, BTC)
+  → already aligned between BTV2 and live; quick validation run
+  → 30 trials is sufficient
+
+Round 5 — Liquidation Capture (daily, BTC)
+  → rare signals (< 10/year) — use Monte Carlo not walk-forward
+  → add env var mapping before optimizing
+```
+
+### Backtest vs Live Bot Gap (STRICT_VALIDATION calibration)
+
 ```bash
-Get-ChildItem -Recurse -Filter "*.pyc" | Remove-Item -Force
+# Step 1: Find optimal params (normal mode)
+python BTV2/optimizer_agent.py -s "VWAP Scalping" -n 80 --dry-run
+
+# Step 2: Run same strategy in strict mode
+python BTV2/optimizer_agent.py -s "VWAP Scalping" -n 80 --strict --dry-run
+
+# Expected: 20–40% fewer signals in strict mode
+# Calibration target: strict-mode OOS Sharpe ≥ 70% of normal-mode
 ```
-If still zero after cache clear: the filter is using overlap-based mitigation (old code) that removes zones at the exact entry bar. Verify `strategies.py` uses close-based mitigation:
-```python
-# CORRECT (v5) — zone survives while price is inside:
-active_bull = [(b, t) for (b, t) in active_bull if not (closes[i] < b)]
-# WRONG (pre-v5) — zone removed on first overlap:
-# active_bull = [(b, t) for (b, t) in active_bull if not (lows[i] <= t and highs[i] >= b)]
-```
-Also verify filter semantics: `if not math.isnan(bft) and not (...)` (v5 — optional)
-vs `if math.isnan(bft)` (pre-v5 — required, always blocks when no zone).
 
-**Phase 2 filters drastically reduce but don't zero trade count**
-Expected behaviour. Each filter reduces count 30–70%. Enable one at a time and validate OOS Sharpe improvement before stacking. Tune `fvg_proximity_atr` (default 0.5) upward to relax the zone proximity requirement if count is too low.
+### .env Parameter Discrepancies (as of 2026-04-12)
 
-**`use_ote=True` gives 0 trades**
-OTE requires `require_mss=True` (to establish the dealing range for Fib calculation). Without MSS, no dealing range exists and OTE is never triggered. Always set `require_mss=True, use_ote=True` together.
+| Parameter | BTV2 Best Found | Live .env | Priority |
+|-----------|-----------------|-----------|----------|
+| `MEAN_REVERSION_RSI_OVERBOUGHT` | 75.0 | 70.0 | High — update after optimizer confirms |
+| `VWAP_SD_ENTRY_THRESHOLD` | TBD (v6 optimizer needed) | 3.0 | High — run optimizer Round 2 |
+| `VWAP_ATR_STOP_MULTIPLIER` | TBD | 7.0 (live) vs 1.0 (BTV2 v6) | **Critical mismatch — live uses 7.0** |
+| `VWAP_TRAILING_ATR` | TBD | Not in .env yet | Add after optimizer finds best value |
+| `MOMENTUM_EMA_FAST/SLOW` | 20/50 | 9/21 | Medium — after Round 3 sweep |
+| `GRID_ADX_THRESHOLD` | 15–17 | 20.0 | Moot — recommend disabling grid |
 
-**`bull_pullback` or `bear_pullback` gives 0 trades on trending data**
-Pre-v5 code had two gates that collectively blocked all pullback trades:
-1. `ranging` gate: required 5m ADX < adx_max — pullback candles inside a trend often have localised 5m momentum above the threshold.
-2. `recent_hh` / `recent_ll`: required current bar's high > highs 1–3 hours ago — pullback bars by definition have lower highs.
-Both were removed in v5. Verify your `strategies.py` does NOT contain `recent_hh` or `ranging` in the `bull_pullback` condition block.
+> ⚠️ **ATR Stop mismatch:** Live bot has `VWAP_ATR_STOP_MULTIPLIER=7.0` (very wide). BTV2 v6 default is 1.0. This divergence means live bot rarely stops out but also rarely hits TP. Confirm live bot intent before syncing this parameter.
 
-**`use_dynamic_mode=True` always routes to `mean_reversion` (no pullback trades)**
-Dynamic mode uses 1h ADX vs `htf_adx_max` (default 25.0) to classify trending vs ranging. If your data period has consistently low 1h ADX (e.g. 2019 or late 2022 sideways), the mode will classify all bars as ranging and route to `mean_reversion`. To confirm: print `htf_adx_1h_ff.describe()` — if mean ADX < 20 for your period, lower `htf_adx_max` to 18–20.
+### Quality Gates (accept/reject thresholds)
 
-**`_nearest_tp` selects an unreasonably high/low price (e.g. 250 or 0)**
-`session_vwap_std` is a standard deviation value (~250), not a price level. In v5 it is excluded from TP candidate selection via `_NEAREST_TP_EXCLUDE`. If you see nonsensical TP values, verify your `strategies.py` defines:
-```python
-_NEAREST_TP_EXCLUDE = {"session_vwap_std"}
-```
-and that `_nearest_tp_long/short` iterate `levels_row.items()` (not `.values()`) to check keys against the exclusion set.
+| Metric | Accept | Reject |
+|--------|--------|--------|
+| OOS Sharpe improvement | Δ ≥ 0.05 | Δ < 0.05 |
+| Minimum OOS trades | ≥ 10 | < 10 |
+| Max drawdown | ≥ −30% | < −30% |
+| Consistency | ≥ 50% windows Sharpe > 0 | < 50% |
+| Strict-mode Sharpe ratio | ≥ 70% of normal-mode | < 70% |
+
+When all gates pass: accept and apply to `.env`.
+When any gate fails: reject, log reason, try wider search space or different strategy.
