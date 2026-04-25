@@ -15,6 +15,7 @@ lfilter is causal — no lookahead bias.
 from __future__ import annotations
 
 import math
+import random
 from datetime import date
 from itertools import product
 from typing import Any
@@ -23,12 +24,31 @@ import numpy as np
 import pandas as pd
 from scipy.signal import butter, lfilter
 
+# scikit-learn is optional — required only for GMM regime detection
+try:
+    from sklearn.mixture import GaussianMixture as _GMM
+    from sklearn.preprocessing import StandardScaler as _Scaler
+    _SKLEARN_AVAILABLE = True
+except ImportError:
+    _SKLEARN_AVAILABLE = False
+
 # ─────────────────────────────────────────────────────────────────────────────
 # CONSTANTS
 # ─────────────────────────────────────────────────────────────────────────────
 COST_PER_SIDE = 0.0015       # 0.10% fee + 0.05% slippage
 TRAIN_MONTHS  = 12
 TEST_MONTHS   = 3
+
+# Bars per calendar year for each supported interval (24/7 crypto — NOT 252).
+# Pass the matching value to compute_metrics(bars_per_year=...) for correct Sharpe.
+INTERVAL_BARS_PER_YEAR: dict[str, int] = {
+    "1m" : 525_600,
+    "5m" : 105_120,
+    "15m":  35_040,
+    "1h" :   8_760,
+    "4h" :   2_190,
+    "1d" :     365,
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -917,8 +937,19 @@ def stitch_oos_equity(segments: list[pd.Series]) -> pd.Series:
 # METRICS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def compute_metrics(equity: pd.Series, trades: list[float]) -> dict:
-    """Return dict of 7 performance statistics."""
+def compute_metrics(equity: pd.Series, trades: list[float],
+                    bars_per_year: int = 365) -> dict:
+    """
+    Return dict of 7 performance statistics.
+
+    Parameters
+    ----------
+    equity        : portfolio value series (starts at 1.0, bar-by-bar)
+    trades        : list of per-trade returns (e.g. [0.023, -0.011, ...])
+    bars_per_year : scaling factor for annualised Sharpe.  Use
+                    INTERVAL_BARS_PER_YEAR[interval] for correct crypto scaling.
+                    Default 365 (daily bars).  Do NOT use 252 (equity convention).
+    """
     if len(equity) < 2:
         return dict(total_return_pct=0.0, cagr_pct=0.0, sharpe=0.0,
                     max_dd_pct=0.0, win_rate_pct=0.0, profit_factor=0.0, n_trades=0)
@@ -930,10 +961,10 @@ def compute_metrics(equity: pd.Series, trades: list[float]) -> dict:
     total_ret = (final_val / start_val - 1.0) * 100.0
     cagr      = ((final_val / start_val) ** (1.0 / years) - 1.0) * 100.0
 
-    daily_rets = equity.pct_change().dropna()
+    bar_rets = equity.pct_change().dropna()
     sharpe = (
-        daily_rets.mean() / (daily_rets.std() + 1e-10) * math.sqrt(252)
-        if len(daily_rets) > 1 else 0.0
+        bar_rets.mean() / (bar_rets.std() + 1e-10) * math.sqrt(bars_per_year)
+        if len(bar_rets) > 1 else 0.0
     )
 
     running_max = equity.cummax()
@@ -956,3 +987,465 @@ def compute_metrics(equity: pd.Series, trades: list[float]) -> dict:
         profit_factor   =pf,
         n_trades        =len(trades),
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MONTE CARLO SIMULATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+def monte_carlo_validate(
+    trades: list[float],
+    n_sims: int = 1_000,
+    starting_equity: float = 1.0,
+    seed: int | None = 42,
+) -> dict:
+    """
+    Run n_sims randomised orderings of the trade sequence to estimate whether
+    a strategy's edge is real or an artefact of trade-order luck.
+
+    Parameters
+    ----------
+    trades          : list of per-trade returns (e.g. [0.023, -0.011, ...])
+                      — the `trades` list returned by any run_* function.
+    n_sims          : number of random permutations  (default 1 000)
+    starting_equity : starting portfolio value        (default 1.0)
+    seed            : random seed for reproducibility (default 42)
+
+    Returns
+    -------
+    {
+        "n_trades"         : int,
+        "n_sims"           : int,
+        "prob_of_loss_pct" : float,   # % of sims ending below starting_equity
+        "p5_return_pct"    : float,   # 5th-percentile final return
+        "p50_return_pct"   : float,   # median final return
+        "p95_return_pct"   : float,   # 95th-percentile final return
+        "worst5_maxdd_pct" : float,   # avg max-drawdown of worst-5% sims (negative)
+        "median_maxdd_pct" : float,   # median max-drawdown (negative)
+        "spread_ratio"     : float,   # p95/|p5| — > 4 suggests fragile edge
+        "overfitting_flag" : bool,    # True when p5 < -5% AND spread_ratio > 4
+        "verdict"          : str,     # "ROBUST" / "MARGINAL" / "FRAGILE"
+    }
+    """
+    if len(trades) < 3:
+        return {
+            "n_trades": len(trades), "n_sims": n_sims,
+            "prob_of_loss_pct": 100.0, "p5_return_pct": 0.0,
+            "p50_return_pct": 0.0, "p95_return_pct": 0.0,
+            "worst5_maxdd_pct": 0.0, "median_maxdd_pct": 0.0,
+            "spread_ratio": 0.0, "overfitting_flag": True, "verdict": "FRAGILE",
+        }
+
+    rng = random.Random(seed)
+    final_returns: list[float] = []
+    max_dds: list[float] = []
+
+    for _ in range(n_sims):
+        shuffled = list(trades)
+        rng.shuffle(shuffled)
+        eq   = starting_equity
+        peak = eq
+        mdd  = 0.0
+        for r in shuffled:
+            eq *= (1.0 + r)
+            if eq > peak:
+                peak = eq
+            dd = (eq - peak) / (peak + 1e-12)
+            if dd < mdd:
+                mdd = dd
+        final_returns.append((eq / starting_equity - 1.0) * 100.0)
+        max_dds.append(mdd * 100.0)
+
+    n = n_sims
+    final_sorted = sorted(final_returns)
+    dd_sorted    = sorted(max_dds)          # most negative first
+
+    p5  = final_sorted[max(0, int(n * 0.05))]
+    p50 = final_sorted[int(n * 0.50)]
+    p95 = final_sorted[min(n - 1, int(n * 0.95))]
+
+    prob_loss    = sum(1 for r in final_returns if r < 0) / n * 100.0
+    worst5_count = max(1, int(n * 0.05))
+    worst5_dd    = sum(dd_sorted[:worst5_count]) / worst5_count
+    median_dd    = dd_sorted[int(n * 0.50)]
+
+    spread_ratio   = p95 / (abs(p5) + 1e-9) if p5 < 0 else float("inf")
+    overfitting    = p5 < -5.0 and spread_ratio > 4.0
+
+    if prob_loss < 10.0 and p5 > 0.0:
+        verdict = "ROBUST"
+    elif prob_loss < 25.0 and not overfitting:
+        verdict = "MARGINAL"
+    else:
+        verdict = "FRAGILE"
+
+    return {
+        "n_trades"         : len(trades),
+        "n_sims"           : n_sims,
+        "prob_of_loss_pct" : round(prob_loss,  2),
+        "p5_return_pct"    : round(p5,         2),
+        "p50_return_pct"   : round(p50,        2),
+        "p95_return_pct"   : round(p95,        2),
+        "worst5_maxdd_pct" : round(worst5_dd,  2),
+        "median_maxdd_pct" : round(median_dd,  2),
+        "spread_ratio"     : round(spread_ratio if spread_ratio != float("inf") else 99.0, 2),
+        "overfitting_flag" : overfitting,
+        "verdict"          : verdict,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ROBUSTNESS / FRAGILITY SCORE
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_robustness_score(
+    df_train: pd.DataFrame,
+    cutoff: float,
+    strategy_name: str,
+    best_params: dict,
+    perturbation: float = 0.15,
+    bars_per_year: int = 365,
+) -> dict:
+    """
+    Measure how stable in-sample Sharpe is when each optimised parameter is
+    perturbed ±perturbation (default ±15%).  Flags parameters where a small
+    change causes a Sharpe drop > 0.30 — a sign of overfitting.
+
+    Parameters
+    ----------
+    df_train      : training-window DataFrame passed to the strategy
+    cutoff        : Butterworth cutoff used during optimisation
+    strategy_name : key in STRATEGY_REGISTRY
+    best_params   : parameter dict from optimize_strategy()
+    perturbation  : fractional perturbation, e.g. 0.15 = ±15 %
+    bars_per_year : passed to compute_metrics for correct Sharpe scaling
+
+    Returns
+    -------
+    {
+        "score"          : float,        # 0–1  (1 = rock-solid, 0 = fragile)
+        "base_sharpe"    : float,
+        "param_results"  : {             # per-parameter stability
+            "sd_threshold": {
+                "base"   : 2.0,
+                "minus"  : {"value": 1.70, "sharpe": 1.12, "delta": -0.15},
+                "plus"   : {"value": 2.30, "sharpe": 1.28, "delta": +0.03},
+                "stable" : True,
+            }, ...
+        },
+        "fragile_params" : list[str],    # params where |worst delta| > 0.30
+        "verdict"        : str,          # "ROBUST" / "MARGINAL" / "FRAGILE"
+    }
+    """
+    func, _, _ = STRATEGY_REGISTRY[strategy_name]
+
+    # ── Base Sharpe ──────────────────────────────────────────────────────────
+    try:
+        eq0, trd0 = func(df_train, cutoff, **best_params)
+        base_sharpe = (compute_metrics(eq0, trd0, bars_per_year)["sharpe"]
+                       if len(trd0) >= 2 else 0.0)
+    except Exception:
+        base_sharpe = 0.0
+
+    # ── Perturb each numeric parameter individually ───────────────────────
+    # Skip DataFrames, booleans, strings — only numeric scalars
+    numeric_params = {
+        k: v for k, v in best_params.items()
+        if isinstance(v, (int, float)) and not isinstance(v, bool)
+    }
+
+    param_results: dict[str, dict] = {}
+    all_drops: list[float] = []
+
+    for param, base_val in numeric_params.items():
+        entry: dict = {"base": base_val}
+
+        for sign, label in [(-1, "minus"), (+1, "plus")]:
+            p_val = base_val * (1.0 + sign * perturbation)
+            if isinstance(base_val, int):
+                p_val = max(1, round(p_val))
+
+            try_params = {**best_params, param: p_val}
+            try:
+                eq, trd = func(df_train, cutoff, **try_params)
+                sh = (compute_metrics(eq, trd, bars_per_year)["sharpe"]
+                      if len(trd) >= 2 else float("-inf"))
+            except Exception:
+                sh = float("-inf")
+
+            delta = sh - base_sharpe if sh != float("-inf") else -(abs(base_sharpe) + 1.0)
+            entry[label] = {
+                "value" : round(float(p_val), 6),
+                "sharpe": round(sh, 4) if sh != float("-inf") else None,
+                "delta" : round(delta, 4),
+            }
+            all_drops.append(min(0.0, delta))
+
+        worst_delta   = min(entry["minus"]["delta"], entry["plus"]["delta"])
+        entry["stable"] = worst_delta > -0.30
+        param_results[param] = entry
+
+    fragile = [p for p, r in param_results.items() if not r["stable"]]
+
+    # ── Aggregate score ───────────────────────────────────────────────────
+    if base_sharpe > 0 and all_drops:
+        avg_drop = sum(all_drops) / len(all_drops)
+        score = max(0.0, min(1.0, 1.0 + avg_drop / (abs(base_sharpe) + 1e-9)))
+    else:
+        score = 0.0
+
+    n_params = len(numeric_params)
+    n_fragile = len(fragile)
+    if n_fragile == 0 and score >= 0.80:
+        verdict = "ROBUST"
+    elif n_fragile <= max(1, n_params // 3) and score >= 0.50:
+        verdict = "MARGINAL"
+    else:
+        verdict = "FRAGILE"
+
+    return {
+        "score"         : round(score, 4),
+        "base_sharpe"   : round(base_sharpe, 4),
+        "param_results" : param_results,
+        "fragile_params": fragile,
+        "verdict"       : verdict,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GMM REGIME DETECTION  (requires scikit-learn — pip install scikit-learn)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def compute_gmm_features(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
+    """
+    Compute rolling market-structure features for GMM regime classification.
+
+    Features
+    --------
+    vol       — rolling std of log returns  (volatility level)
+    mom       — rolling mean of log returns (trend momentum)
+    vol_ratio — recent vol / long-run vol   (vol-expansion signal)
+    volume_z  — z-score of volume vs lookback mean (participation signal)
+
+    Parameters
+    ----------
+    df       : OHLCV DataFrame with columns Open/High/Low/Close/Volume
+    lookback : rolling window in bars (default 60)
+
+    Returns
+    -------
+    pd.DataFrame with 4 columns, NaN for the first ~4×lookback rows.
+    """
+    log_ret  = np.log(df["Close"] / df["Close"].shift(1))
+
+    vol      = log_ret.rolling(lookback).std()
+    mom      = log_ret.rolling(lookback).mean()
+    long_vol = log_ret.rolling(lookback * 4).std()
+    vol_ratio = vol / (long_vol + 1e-12)
+
+    vol_mean  = df["Volume"].rolling(lookback).mean()
+    vol_std   = df["Volume"].rolling(lookback).std()
+    volume_z  = (df["Volume"] - vol_mean) / (vol_std + 1e-12)
+
+    return pd.DataFrame(
+        {"vol": vol, "mom": mom, "vol_ratio": vol_ratio, "volume_z": volume_z},
+        index=df.index,
+    )
+
+
+def fit_gmm_regime(
+    df: pd.DataFrame,
+    n_regimes: int = 4,
+    lookback: int = 60,
+    stability_window: int = 5,
+    random_state: int = 42,
+) -> tuple:
+    """
+    Fit a Gaussian Mixture Model on rolling market features to learn
+    n_regimes distinct market states from data.
+
+    Requires scikit-learn (pip install scikit-learn>=1.3.0).
+
+    Parameters
+    ----------
+    df               : OHLCV DataFrame at any interval
+    n_regimes        : number of regime components  (default 4)
+    lookback         : feature rolling window in bars (default 60)
+    stability_window : mode-filter length to prevent rapid flipping
+    random_state     : sklearn random state
+
+    Returns
+    -------
+    (gmm_model, label_map, scaler) where:
+        gmm_model  — fitted GaussianMixture
+        label_map  — dict mapping component index → regime name str
+                     e.g. {0: "calm", 1: "trending", 2: "volatile", 3: "crash"}
+        scaler     — fitted StandardScaler (must be saved to transform new data)
+
+    Regime labelling heuristic (n_regimes == 4):
+        Sorted by mean volatility feature:
+            lowest  vol, low  |mom| → "calm"
+            lowest  vol, high |mom| → "trending"
+            high    vol             → "volatile"
+            highest vol             → "crash"
+    """
+    if not _SKLEARN_AVAILABLE:
+        raise ImportError(
+            "scikit-learn is required for GMM regime detection.\n"
+            "  pip install scikit-learn>=1.3.0"
+        )
+
+    features = compute_gmm_features(df, lookback=lookback).dropna()
+    X_raw    = features[["vol", "mom", "vol_ratio", "volume_z"]].values
+
+    scaler = _Scaler()
+    X      = scaler.fit_transform(X_raw)
+
+    gmm = _GMM(
+        n_components   = n_regimes,
+        covariance_type= "full",
+        max_iter       = 300,
+        random_state   = random_state,
+        n_init         = 10,        # multiple inits for global convergence
+    )
+    gmm.fit(X)
+
+    # ── Map components to economic regime names ───────────────────────────
+    # Use the UNSCALED means for interpretable sorting
+    unscaled_means = scaler.inverse_transform(gmm.means_)
+    means_vol = unscaled_means[:, 0]   # volatility feature
+    means_mom = unscaled_means[:, 1]   # momentum feature
+    order     = np.argsort(means_vol)  # ascending volatility
+
+    label_map: dict[int, str] = {}
+    if n_regimes == 4:
+        low_vol_idx  = list(order[:2])
+        high_vol_idx = list(order[2:])
+        # Among low-vol: higher abs(mom) → "trending"
+        lv_by_mom = sorted(low_vol_idx,  key=lambda i: abs(means_mom[i]))
+        hv_by_vol = sorted(high_vol_idx, key=lambda i: means_vol[i])
+        label_map[lv_by_mom[0]] = "calm"
+        label_map[lv_by_mom[1]] = "trending"
+        label_map[hv_by_vol[0]] = "volatile"
+        label_map[hv_by_vol[1]] = "crash"
+    else:
+        for rank, idx in enumerate(order):
+            label_map[idx] = f"regime_{rank}"
+
+    return gmm, label_map, scaler
+
+
+def predict_gmm_regime(
+    df: pd.DataFrame,
+    gmm_model,
+    label_map: dict[int, str],
+    scaler,
+    lookback: int = 60,
+    stability_window: int = 5,
+) -> pd.DataFrame:
+    """
+    Apply a fitted GMM model to a DataFrame to produce per-bar regime labels
+    and confidence scores.
+
+    Parameters
+    ----------
+    df               : OHLCV DataFrame (same interval as training data)
+    gmm_model        : fitted GaussianMixture from fit_gmm_regime()
+    label_map        : component index → regime name from fit_gmm_regime()
+    scaler           : fitted StandardScaler from fit_gmm_regime()
+    lookback         : must match the value used during fit_gmm_regime()
+    stability_window : rolling mode window — prevents rapid regime flipping
+
+    Returns
+    -------
+    pd.DataFrame with columns:
+        regime_raw  — raw GMM label (before stability filter)
+        regime      — stability-filtered label  ("calm"/"trending"/"volatile"/"crash")
+        confidence  — posterior probability of predicted regime  (0–1)
+        is_calm     — bool shortcut
+        is_trending — bool shortcut
+        is_volatile — bool shortcut
+        is_crash    — bool shortcut
+    """
+    if not _SKLEARN_AVAILABLE:
+        raise ImportError("scikit-learn required.  pip install scikit-learn>=1.3.0")
+
+    features   = compute_gmm_features(df, lookback=lookback)
+    feat_cols  = ["vol", "mom", "vol_ratio", "volume_z"]
+    valid_mask = features[feat_cols].notna().all(axis=1)
+    X_raw      = features.loc[valid_mask, feat_cols].values
+    X          = scaler.transform(X_raw)
+
+    raw_labels = gmm_model.predict(X)
+    proba      = gmm_model.predict_proba(X)
+    confidence = proba[np.arange(len(raw_labels)), raw_labels]
+    regime_names = [label_map.get(lbl, f"regime_{lbl}") for lbl in raw_labels]
+
+    # Align to full df index
+    regime_raw_s = pd.Series(index=df.index, dtype="object")
+    confidence_s = pd.Series(np.nan, index=df.index, dtype=float)
+    regime_raw_s[valid_mask] = regime_names
+    confidence_s[valid_mask] = confidence
+
+    # Stability filter: rolling mode over last stability_window bars.
+    # pandas rolling.apply cannot handle object dtype — encode to int first.
+    all_names  = sorted(set(label_map.values()))
+    name_to_int = {n: i for i, n in enumerate(all_names)}
+    int_to_name = {i: n for n, i in name_to_int.items()}
+
+    encoded = regime_raw_s.map(name_to_int)   # NaN stays NaN
+    mode_encoded = (
+        encoded
+        .rolling(stability_window, min_periods=1)
+        .apply(lambda x: float(pd.Series(x).dropna().mode().iloc[0])
+               if len(pd.Series(x).dropna()) > 0 else np.nan, raw=True)
+    )
+    regime_stable = mode_encoded.map(lambda v: int_to_name.get(int(v), np.nan)
+                                     if pd.notna(v) else np.nan)
+
+    out = pd.DataFrame(
+        {"regime_raw": regime_raw_s, "regime": regime_stable,
+         "confidence": confidence_s},
+        index=df.index,
+    )
+    for name in ["calm", "trending", "volatile", "crash"]:
+        out[f"is_{name}"] = out["regime"] == name
+
+    return out
+
+
+def gmm_regime_summary(regime_df: pd.DataFrame) -> dict:
+    """
+    Summarise a regime_df from predict_gmm_regime() into a compact dict
+    useful for logging and decision rules.
+
+    Returns
+    -------
+    {
+        "regime_counts"    : {"calm": N, "trending": N, ...},
+        "regime_pct"       : {"calm": 12.3, ...},
+        "dominant_regime"  : "trending",
+        "avg_confidence"   : 0.82,
+        "current_regime"   : "volatile",   # last non-NaN bar
+        "current_confidence": 0.74,
+    }
+    """
+    valid = regime_df["regime"].dropna()
+    counts = valid.value_counts().to_dict()
+    total  = max(len(valid), 1)
+    pcts   = {k: round(v / total * 100, 1) for k, v in counts.items()}
+    dominant = valid.mode().iloc[0] if len(valid) > 0 else "unknown"
+
+    last_valid = regime_df.dropna(subset=["regime"]).iloc[-1] if len(valid) > 0 else None
+    current_regime = str(last_valid["regime"]) if last_valid is not None else "unknown"
+    current_conf   = float(last_valid["confidence"]) if last_valid is not None else 0.0
+    avg_conf = float(regime_df["confidence"].mean()) if len(regime_df) > 0 else 0.0
+
+    return {
+        "regime_counts"     : counts,
+        "regime_pct"        : pcts,
+        "dominant_regime"   : dominant,
+        "avg_confidence"    : round(avg_conf, 4),
+        "current_regime"    : current_regime,
+        "current_confidence": round(current_conf, 4),
+    }
