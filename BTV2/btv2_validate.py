@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-btv2_validate.py — Strategy Validation Suite
+btv2_validate.py -- Strategy Validation Suite
 =============================================
 Runs three validation layers on top of the standard walk-forward backtest:
 
-    Layer 1 — Walk-forward OOS baseline  (existing)
-    Layer 2 — Monte Carlo simulation     (trade-order robustness)
-    Layer 3 — Robustness / fragility     (parameter-sensitivity score)
-    Layer 4 — GMM regime snapshot        (optional, requires scikit-learn)
+    Layer 1 -- Walk-forward OOS baseline  (existing)
+    Layer 2 -- Monte Carlo simulation     (trade-order robustness)
+    Layer 3 -- Robustness / fragility     (parameter-sensitivity score)
+    Layer 4 -- GMM regime snapshot        (optional, requires scikit-learn)
 
 Usage
 -----
-    # Full validation (all layers) — VWAP Scalping on 2021-2023 BTC
+    # Full validation (all layers) -- VWAP Scalping on 2021-2023 BTC
     python btv2_validate.py --strategy "VWAP Scalping" --start 2021-01-01 --end 2023-12-31
 
     # Skip GMM (no scikit-learn needed)
@@ -54,7 +54,7 @@ from strategies import (
     _SKLEARN_AVAILABLE,
 )
 
-# ── Try to import data_manager (may not exist in all environments) ──────────
+# -- Try to import data_manager (may not exist in all environments) ----------
 try:
     from data_manager import get_candles, TICKER_MAP
     _DATA_MANAGER = True
@@ -62,7 +62,7 @@ except ImportError:
     _DATA_MANAGER = False
 
 
-# ── Timeframe config (mirrors STRATEGY_TIMEFRAME_CONFIG from guide) ─────────
+# -- Timeframe config (mirrors STRATEGY_TIMEFRAME_CONFIG from guide) ---------
 _TF_CFG: dict[str, dict] = {
     "Mean Reversion":      {"interval": "1d",  "train_months": 12, "test_months": 3,
                             "bars_per_year": INTERVAL_BARS_PER_YEAR["1d"]},
@@ -80,21 +80,71 @@ _TF_CFG: dict[str, dict] = {
 
 
 def _load_data(symbol: str, interval: str, start: str, end: str) -> "pd.DataFrame":
-    """Load candle data — uses data_manager if available, yfinance otherwise."""
+    """
+    Load candle data.  Priority order:
+      1. data_manager (if installed)
+      2. Local CSV files in trading_bot_v2/backtesting/data/
+         Naming convention: {SYMBOL}_{INTERVAL}.csv  or  {SYMBOL}_{INTERVAL}_all.csv
+         e.g.  BTC-USDC_5m.csv,  BTC-USDC_5m_all.csv
+      3. yfinance (daily/recent intraday only)
+    """
     import pandas as pd
+    from pathlib import Path
+
     start_dt = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
     end_dt   = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
 
     if _DATA_MANAGER and symbol in (TICKER_MAP or {}):
         return get_candles(symbol, interval, start_dt, end_dt)
 
-    # Fallback: yfinance (daily only; intraday limited to recent history)
+    # -- Local CSV lookup -------------------------------------------------------
+    # Resolve repo root (two levels up from BTV2/btv2_validate.py)
+    _here   = Path(__file__).resolve().parent
+    _data   = _here.parent / "trading_bot_v2" / "backtesting" / "data"
+
+    # Build candidate filenames: prefer specific symbol match, then *_all variant
+    _interval_str = interval.replace("m", "m").replace("h", "h").replace("d", "d")
+    _candidates = [
+        _data / f"{symbol}_{_interval_str}_all.csv",
+        _data / f"{symbol}_{_interval_str}.csv",
+        # Also try USDT variant: BTC-USDC -> BTCUSDT
+        _data / f"{symbol.replace('-USDC','USDT').replace('-USD','USDT')}_{_interval_str}_all.csv",
+        _data / f"{symbol.replace('-USDC','USDT').replace('-USD','USDT')}_{_interval_str}.csv",
+    ]
+
+    for csv_path in _candidates:
+        if csv_path.exists():
+            raw = pd.read_csv(csv_path)
+            # Normalise columns -> Open/High/Low/Close/Volume with DatetimeIndex
+            raw.columns = [c.capitalize() if c.lower() not in ("timestamp",)
+                           else c for c in raw.columns]
+            ts_col = next((c for c in raw.columns if c.lower() == "timestamp"), raw.columns[0])
+            raw[ts_col] = pd.to_datetime(raw[ts_col], utc=True)
+            raw = raw.set_index(ts_col).sort_index()
+            # Ensure expected column names
+            col_map = {c: c.capitalize() for c in raw.columns}
+            raw = raw.rename(columns=col_map)
+            # Slice to requested range
+            raw = raw.loc[start_dt:end_dt]
+            if not raw.empty:
+                print(f"  [local CSV] {csv_path.name}  ({len(raw):,} bars)")
+                return raw
+
+    # -- yfinance fallback (daily or recent intraday) --------------------------
     import yfinance as yf
-    ticker_sym = symbol if not symbol.endswith("USDT") else symbol[:-4] + "-USD"
+    ticker_sym = symbol if "-" in symbol else symbol[:-4] + "-USD"
+    if ticker_sym.endswith("USDT"):
+        ticker_sym = ticker_sym[:-4] + "-USD"
     raw = yf.download(ticker_sym, start=start, end=end, interval=interval,
                       auto_adjust=True, progress=False)
     if raw.empty:
-        raise ValueError(f"yfinance returned no data for {ticker_sym} {interval}")
+        raise ValueError(
+            f"No data found for {symbol} {interval} {start}->{end}.\n"
+            f"  - yfinance only provides intraday data for the last 60 days.\n"
+            f"  - For historical intraday runs, place CSV files in:\n"
+            f"    trading_bot_v2/backtesting/data/{symbol}_{interval}.csv\n"
+            f"    Columns required: timestamp,open,high,low,close,volume"
+        )
     raw.columns = [c[0] if isinstance(c, tuple) else c for c in raw.columns]
     raw.index = pd.to_datetime(raw.index, utc=True)
     return raw
@@ -142,7 +192,7 @@ def _run_walk_forward(
         m = compute_metrics(eq, trd, bars_per_year)
         fold_metrics.append({
             "fold": w["fold"],
-            "test_period": f"{w['test_start']} → {w['test_end']}",
+            "test_period": f"{w['test_start']} -> {w['test_end']}",
             **m,
             "params": best,
         })
@@ -152,9 +202,9 @@ def _run_walk_forward(
 
 
 def _banner(title: str) -> None:
-    print(f"\n{'─' * 60}")
+    print(f"\n{'-' * 60}")
     print(f"  {title}")
-    print(f"{'─' * 60}")
+    print(f"{'-' * 60}")
 
 
 def run_validation(
@@ -190,9 +240,9 @@ def run_validation(
     bpy   = tf["bars_per_year"]
     intv  = tf["interval"]
 
-    # ── [1] Load data ────────────────────────────────────────────────────────
+    # -- [1] Load data --------------------------------------------------------
     if verbose:
-        print(f"\n[1/4] Loading {symbol} {intv} candles  ({start} → {end})…")
+        print(f"\n[1/4] Loading {symbol} {intv} candles  ({start} -> {end})...")
     df = _load_data(symbol, intv, start, end)
     if verbose:
         print(f"      {len(df):,} bars loaded")
@@ -200,22 +250,22 @@ def run_validation(
     df_exit = None
     if exit_res != "Off":
         if verbose:
-            print(f"      Loading {exit_res} exit-resolution data…")
+            print(f"      Loading {exit_res} exit-resolution data...")
         try:
             df_exit = _load_data(symbol, exit_res, start, end)
             if verbose:
                 print(f"      {len(df_exit):,} {exit_res} bars loaded")
         except Exception as e:
             if verbose:
-                print(f"      ⚠  Exit-res load failed: {e} — continuing without")
+                print(f"      [!]  Exit-res load failed: {e} -- continuing without")
 
     extra_kw: dict = {}
     if entry_mode:
         extra_kw["entry_mode"] = entry_mode
 
-    # ── [2] Walk-forward OOS baseline ────────────────────────────────────────
+    # -- [2] Walk-forward OOS baseline ----------------------------------------
     if verbose:
-        print(f"\n[2/4] Walk-forward OOS  ({tf['train_months']}m train → {tf['test_months']}m test)…")
+        print(f"\n[2/4] Walk-forward OOS  ({tf['train_months']}m train -> {tf['test_months']}m test)...")
     oos_eq, all_trades, fold_metrics = _run_walk_forward(
         df, cutoff, strategy_name,
         tf["train_months"], tf["test_months"], bpy,
@@ -231,9 +281,9 @@ def run_validation(
               f"WR={oos_m['win_rate_pct']:.0f}%  "
               f"PF={oos_m['profit_factor']:.2f}")
 
-    # ── [3a] Monte Carlo ──────────────────────────────────────────────────────
+    # -- [3a] Monte Carlo ------------------------------------------------------
     if verbose:
-        print(f"\n[3/4] Monte Carlo ({n_mc_sims:,} sims)…")
+        print(f"\n[3/4] Monte Carlo ({n_mc_sims:,} sims)...")
     mc = monte_carlo_validate(all_trades, n_sims=n_mc_sims)
     if verbose:
         print(f"      Verdict={mc['verdict']}  "
@@ -243,13 +293,13 @@ def run_validation(
               f"p95={mc['p95_return_pct']:+.1f}%  "
               f"Worst5%DD={mc['worst5_maxdd_pct']:.1f}%")
 
-    # ── [3b] Robustness score ─────────────────────────────────────────────────
+    # -- [3b] Robustness score -------------------------------------------------
     if verbose:
-        print(f"\n      Robustness score (±15% parameter perturbation on last fold train)…")
+        print(f"\n      Robustness score (+/-15% parameter perturbation on last fold train)...")
     rob_result: dict = {}
     if fold_metrics:
         last_fold = fold_metrics[-1]
-        last_train_end   = last_fold["test_period"].split(" → ")[0]
+        last_train_end   = last_fold["test_period"].split(" -> ")[0]
         # Use the second-to-last fold's train window as proxy for a clean IS sample
         df_last_train = df.loc[:last_train_end] if last_train_end else df
 
@@ -265,16 +315,16 @@ def run_validation(
                 if rob_result["fragile_params"]:
                     print(f"      Fragile params: {', '.join(rob_result['fragile_params'])}")
                 else:
-                    print("      All params stable under ±15% perturbation ✓")
+                    print("      All params stable under +/-15% perturbation [OK]")
         except Exception as e:
             if verbose:
-                print(f"      ⚠  Robustness check failed: {e}")
+                print(f"      [!]  Robustness check failed: {e}")
 
-    # ── [4] GMM regime snapshot ────────────────────────────────────────────
+    # -- [4] GMM regime snapshot --------------------------------------------
     gmm_summary: dict = {}
     if run_gmm and _SKLEARN_AVAILABLE:
         if verbose:
-            print(f"\n[4/4] GMM regime detection snapshot…")
+            print(f"\n[4/4] GMM regime detection snapshot...")
         try:
             from strategies import fit_gmm_regime, predict_gmm_regime, gmm_regime_summary
             lookback = min(60, len(df) // 10)
@@ -289,13 +339,13 @@ def run_validation(
                 print(f"      Distribution: {dist}")
         except Exception as e:
             if verbose:
-                print(f"      ⚠  GMM failed: {e}")
+                print(f"      [!]  GMM failed: {e}")
     elif run_gmm and not _SKLEARN_AVAILABLE:
         if verbose:
-            print("\n[4/4] GMM skipped — scikit-learn not installed.")
+            print("\n[4/4] GMM skipped -- scikit-learn not installed.")
             print("       pip install scikit-learn>=1.3.0")
 
-    # ── Final verdict ────────────────────────────────────────────────────────
+    # -- Final verdict --------------------------------------------------------
     _banner("VALIDATION VERDICT")
     verdicts = []
     if oos_m["n_trades"] >= 10 and oos_m["sharpe"] > 0.8:
@@ -322,26 +372,26 @@ def run_validation(
 
     fails    = sum(1 for v in verdicts if "FAIL"    in v)
     cautions = sum(1 for v in verdicts if "CAUTION" in v)
-    overall  = "✅ PASS" if fails == 0 and cautions <= 1 else \
-               "⚠  CAUTION" if fails == 0 else "❌ FAIL"
+    overall  = "[OK] PASS" if fails == 0 and cautions <= 1 else \
+               "[!]  CAUTION" if fails == 0 else "[FAIL] FAIL"
 
     print(f"  {overall}")
     for v in verdicts:
-        marker = "✓" if "PASS" in v else ("⚠" if "CAUTION" in v else "✗")
+        marker = "[OK]" if "PASS" in v else ("[!]" if "CAUTION" in v else "[X]")
         print(f"    {marker} {v}")
 
     if oos_m["n_trades"] < 10:
-        print(f"\n  ⚠  Only {oos_m['n_trades']} trades — below statistical floor (≥10).")
+        print(f"\n  [!]  Only {oos_m['n_trades']} trades -- below statistical floor (>=10).")
         print("     Widen entry conditions or test over a longer date range.")
     if rob_result.get("fragile_params"):
-        print(f"\n  ⚠  Fragile params: {', '.join(rob_result['fragile_params'])}")
+        print(f"\n  [!]  Fragile params: {', '.join(rob_result['fragile_params'])}")
         print("     These parameters are over-tuned. Consider removing from grid or widening.")
 
-    # ── Build output dict ────────────────────────────────────────────────────
+    # -- Build output dict ----------------------------------------------------
     return {
         "strategy":      strategy_name,
         "symbol":        symbol,
-        "period":        f"{start} → {end}",
+        "period":        f"{start} -> {end}",
         "interval":      intv,
         "bars_per_year": bpy,
         "cutoff":        cutoff,
@@ -353,17 +403,17 @@ def run_validation(
         "robustness":    rob_result,
         "gmm_summary":   gmm_summary,
         "verdicts":      verdicts,
-        "overall":       overall.replace("✅ ", "").replace("⚠  ", "").replace("❌ ", ""),
+        "overall":       overall.replace("[OK] ", "").replace("[!]  ", "").replace("[FAIL] ", ""),
     }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 # CLI ENTRY POINT
-# ─────────────────────────────────────────────────────────────────────────────
+# -----------------------------------------------------------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="BTV2 Strategy Validation Suite — 3-layer robustness check",
+        description="BTV2 Strategy Validation Suite -- 3-layer robustness check",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -404,7 +454,7 @@ def main() -> None:
 
     if args.json_out:
         Path(args.json_out).write_text(json.dumps(result, indent=2, default=str))
-        print(f"\n  Report saved → {args.json_out}")
+        print(f"\n  Report saved -> {args.json_out}")
     else:
         print("\n--- JSON RESULT ---")
         print(json.dumps(result, indent=2, default=str))
