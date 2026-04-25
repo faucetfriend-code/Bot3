@@ -175,6 +175,68 @@ def compute_vwap_rolling(high: pd.Series, low: pd.Series, close: pd.Series,
     return vwap, np.sqrt(var)
 
 
+def compute_vwap_anchored(high: pd.Series, low: pd.Series, close: pd.Series,
+                           volume: pd.Series,
+                           anchor: str = "D") -> tuple[pd.Series, pd.Series]:
+    """
+    Session-anchored VWAP and its volume-weighted standard deviation.
+
+    Resets at the start of each anchor period (default daily "D").
+    For intraday bars (1m/5m/15m) use anchor="D".
+    For multi-day charts use anchor="W" (weekly reset).
+
+    Returns (vwap, vwap_std) — both indexed on the input series.
+    vwap_std is the running volume-weighted σ of price around VWAP.
+    Minimum std guard of 1e-8 prevents division-by-zero at session open.
+    """
+    tp = (high + low + close) / 3.0
+
+    # Cumulative sums that reset each anchor period
+    cum_tpv = (tp * volume).groupby(pd.Grouper(freq=anchor)).cumsum()
+    cum_vol = volume.groupby(pd.Grouper(freq=anchor)).cumsum()
+
+    vwap = cum_tpv / (cum_vol + 1e-10)
+
+    # Volume-weighted variance: Σ vol*(tp - vwap)² / Σ vol
+    sq_dev = ((tp - vwap) ** 2 * volume).groupby(pd.Grouper(freq=anchor)).cumsum()
+    var    = sq_dev / (cum_vol + 1e-10)
+    std    = np.sqrt(var).clip(lower=1e-8)
+
+    return vwap, std
+
+
+def compute_stoch(high: pd.Series, low: pd.Series, close: pd.Series,
+                  k_period: int = 14, d_period: int = 3,
+                  smooth_k: int = 3) -> tuple[pd.Series, pd.Series]:
+    """Stochastic Oscillator — returns (%K smoothed, %D)."""
+    lowest  = low.rolling(k_period).min()
+    highest = high.rolling(k_period).max()
+    raw_k   = 100 * (close - lowest) / (highest - lowest + 1e-10)
+    pct_k   = raw_k.rolling(smooth_k).mean()
+    pct_d   = pct_k.rolling(d_period).mean()
+    return pct_k, pct_d
+
+
+def _resample_ohlcv(df: pd.DataFrame, rule: str) -> pd.DataFrame:
+    """
+    Resample a 5m (or finer) OHLCV DataFrame to a coarser timeframe.
+
+    rule : pandas offset string — "15min", "60min", "240min", "1D", etc.
+    Returns a DataFrame with columns Open/High/Low/Close/Volume.
+    Forward-fills the resulting coarser bars back to the original index
+    so MTF values can be aligned bar-by-bar.
+    """
+    ohlcv = df.resample(rule).agg({
+        "Open":   "first",
+        "High":   "max",
+        "Low":    "min",
+        "Close":  "last",
+        "Volume": "sum",
+    }).dropna(subset=["Close"])
+    # Reindex to fine index and ffill so every fine bar has an HTF value
+    return ohlcv.reindex(df.index, method="ffill")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # SHARED LOOP HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
@@ -332,81 +394,326 @@ def run_mean_reversion(
 def run_vwap_scalping(
     df: pd.DataFrame,
     cutoff: float,
-    sd_threshold: float = 3.0,
-    atr_stop: float     = 7.0,
+    # ── Mode ──────────────────────────────────────────────────────────────────
+    entry_mode: str        = "mean_reversion",  # "mean_reversion" | "bull_pullback" | "bear_pullback" | "dynamic"
+    use_dynamic_mode: bool = False,             # per-bar mode via 1h ADX (overrides entry_mode)
+    # ── Entry thresholds ──────────────────────────────────────────────────────
+    sd_threshold: float    = 3.0,   # VWAP SD deviation required for entry
+    rsi_max: float         = 50.0,  # 5m RSI gate: long RSI < rsi_max, short RSI > (100-rsi_max)
+    volume_mult: float     = 1.2,   # bar volume ≥ volume_mult × 20-bar avg
+    adx_max: float         = 25.0,  # 5m ADX < adx_max (ranging gate for mean_reversion mode)
+    # ── Exit ──────────────────────────────────────────────────────────────────
+    atr_stop: float        = 1.0,   # SL distance = atr_stop × ATR
+    atr_target: float      = 2.0,   # TP backstop = atr_target × ATR (trailing stop is primary)
+    trailing_atr: float    = 1.2,   # trailing stop ratchets to peak ± trailing_atr × ATR
+    tp_mode: str           = "atr", # "atr" = ATR backstop only | "vwap" = exit when price crosses VWAP
+    # ── Higher-timeframe filters ───────────────────────────────────────────────
+    use_htf_ema: bool      = True,  # 1h EMA9/EMA21 direction + ADX gate (v6 default: ON)
+    htf_adx_max: float     = 30.0,  # 1h ADX ≤ htf_adx_max → ranging (allows both sides in dyn mode)
+    use_htf_vwap: bool     = False, # require price < 15m VWAP for longs (disabled by default in v6)
+    # ── Optional gates (disabled by default in v6) ────────────────────────────
+    use_stoch_filter: bool  = False, # stochastic %K gate
+    stoch_oversold: float   = 40.0,  # long gate: %K < stoch_oversold AND %K > %D
+    stoch_overbought: float = 60.0,  # short gate: %K > stoch_overbought AND %K < %D
+    require_reversal_candle: bool = False,  # SFP: wick past band + close inside (disabled by default)
+    # ── Regime filter (universal) ─────────────────────────────────────────────
+    regime_series: "pd.Series | None" = None,
+    allowed_regimes: "list | None"    = None,
+    # ── Sub-bar exit resolution ───────────────────────────────────────────────
+    df_exit: "pd.DataFrame | None"    = None,  # 1m OHLCV for intrabar SL/TP simulation
 ) -> tuple[pd.Series, list]:
     """
-    Rolling-VWAP deviation + MACD confirmation.
+    Session-anchored VWAP scalping — v6.
 
-    Entry LONG  : close < VWAP - sd_threshold*σ  AND  MACD hist < 0
-    Entry SHORT : close > VWAP + sd_threshold*σ  AND  MACD hist > 0
-    Exit LONG   : close >= VWAP (TP at mean) OR daily low  <= entry - atr_stop*ATR
-    Exit SHORT  : close <= VWAP (TP at mean) OR daily high >= entry + atr_stop*ATR
+    VWAP:  daily-anchored (resets at 00:00 UTC each day).
+           σ-bands computed as volume-weighted standard deviation from the anchor.
+           Raw close used for VWAP/bands; Butterworth-filtered close for RSI/EMAs only.
+
+    Modes
+    -----
+    mean_reversion  — fade extremes; requires ADX < adx_max on 5m (ranging confirmation).
+    bull_pullback   — long only; requires confirmed 1h uptrend (EMA9 > EMA21).
+    bear_pullback   — short only; requires confirmed 1h downtrend (EMA9 < EMA21).
+    dynamic         — selects mean_reversion when 1h ranging (ADX ≤ htf_adx_max),
+                      bull_pullback when 1h trending up, bear_pullback when trending down.
+
+    Entry (LONG, mean_reversion mode example)
+    ------------------------------------------
+    1. price < VWAP − sd_threshold × σ        (pulled back past lower band)
+    2. 5m ADX < adx_max                         (not trending — we're fading)
+    3. 5m RSI < rsi_max                          (not already oversold recovery)
+    4. volume ≥ volume_mult × 20-bar avg         (real participation)
+    5. [1h EMA9 > EMA21 OR 1h ADX ≤ htf_adx_max]  (if use_htf_ema)
+    6. [price < 15m VWAP]                        (if use_htf_vwap)
+    7. [Stoch %K < stoch_oversold AND %K > %D]   (if use_stoch_filter)
+    8. [wick below band + bar closes inside band] (if require_reversal_candle)
+    ⟹  Enter at next bar open (N+1), SL/TP anchored to bar i close.
+
+    Exit
+    ----
+    Primary : trailing stop ratchets to (peak_since_entry − trailing_atr × ATR).
+    Backstop: fixed TP at (entry ± atr_target × ATR)   when tp_mode="atr".
+              OR price crosses VWAP                     when tp_mode="vwap".
+    Hard SL : entry ± atr_stop × ATR (checked before TP on same bar).
     """
-    fc       = apply_butterworth(df["Close"], cutoff)
-    vwap, vs = compute_vwap_rolling(df["High"], df["Low"], fc, df["Volume"], 20)
-    _, _, mh = compute_macd(fc, 12, 26, 9)
-    atr      = compute_atr(df["High"], df["Low"], df["Close"], 14)
+    # ── Indicators ────────────────────────────────────────────────────────────
+    fc  = apply_butterworth(df["Close"], cutoff)    # filtered close for RSI/EMA
+    raw = df["Close"]                               # raw close for VWAP bands
 
-    prices = df["Close"].values.astype(float)
+    # Anchored VWAP on RAW close (Butterworth compresses σ → bands unreachable)
+    vwap, vwap_std = compute_vwap_anchored(df["High"], df["Low"], raw, df["Volume"], anchor="D")
+
+    # 5m indicators
+    rsi_5m = compute_rsi(fc, 14)
+    adx_5m = compute_adx(df["High"], df["Low"], raw, 14)
+    atr_5m = compute_atr(df["High"], df["Low"], raw, 14)
+    vol_avg = df["Volume"].rolling(20).mean()
+
+    # Optional stochastic
+    if use_stoch_filter:
+        stoch_k, stoch_d = compute_stoch(df["High"], df["Low"], raw)
+    else:
+        stoch_k = stoch_d = None
+
+    # Higher-timeframe: resample to 1h for EMA + ADX gate
+    if use_htf_ema or use_dynamic_mode:
+        df_1h   = _resample_ohlcv(df, "60min")
+        fc_1h   = apply_butterworth(df_1h["Close"], cutoff)
+        ema9_1h = compute_ema(fc_1h, 9).reindex(df.index, method="ffill")
+        ema21_1h= compute_ema(fc_1h, 21).reindex(df.index, method="ffill")
+        adx_1h  = compute_adx(df_1h["High"], df_1h["Low"], df_1h["Close"], 14).reindex(df.index, method="ffill")
+    else:
+        ema9_1h = ema21_1h = adx_1h = None
+
+    # Optional 15m VWAP for HTF alignment
+    if use_htf_vwap:
+        df_15m = _resample_ohlcv(df, "15min")
+        vwap_15m, _ = compute_vwap_anchored(
+            df_15m["High"], df_15m["Low"], df_15m["Close"], df_15m["Volume"], anchor="D"
+        )
+        vwap_15m = vwap_15m.reindex(df.index, method="ffill")
+    else:
+        vwap_15m = None
+
+    # ── Loop state ────────────────────────────────────────────────────────────
+    prices = raw.values.astype(float)
     highs  = df["High"].values.astype(float)
     lows   = df["Low"].values.astype(float)
     n      = len(prices)
 
-    equity_arr   = np.ones(n, dtype=float)
-    curr_equity  = 1.0
-    in_pos       = [False]
-    side         = [""]
-    entry_eq     = [1.0]
-    sl           = [0.0]
-    tp_ref       = [0.0]
+    equity_arr    = np.ones(n, dtype=float)
+    curr_equity   = 1.0
+    in_pos        = False
+    pos_side      = ""
+    entry_eq      = 1.0
+    sl_price      = 0.0
+    tp_price      = 0.0     # backstop TP (fixed)
+    trail_ref     = 0.0     # peak/trough price tracked for trailing stop
+    vwap_entry    = 0.0     # VWAP at entry bar (for tp_mode="vwap")
     closed_trades: list[float] = []
 
-    for i in range(1, n):
-        vw = vwap.iloc[i];  vsd = vs.iloc[i]
-        mhi= mh.iloc[i];    at  = atr.iloc[i]
-        p  = prices[i];     p0  = prices[i - 1]
+    # 1m exit resolution lookup
+    _exit_highs = _exit_lows = _exit_idx = None
+    if df_exit is not None:
+        _exit_highs = df_exit["High"].values.astype(float)
+        _exit_lows  = df_exit["Low"].values.astype(float)
+        _exit_idx   = df_exit.index
 
-        if any(np.isnan(x) for x in (vw, vsd, mhi, at)):
+    for i in range(1, n):
+        p   = prices[i]
+        p0  = prices[i - 1]
+        h   = highs[i]
+        lo  = lows[i]
+        vw  = float(vwap.iloc[i])
+        vs  = float(vwap_std.iloc[i])
+        at  = float(atr_5m.iloc[i])
+
+        if any(np.isnan(x) for x in (vw, vs, at)) or vs < 1e-8:
             equity_arr[i] = curr_equity
             continue
 
-        upper_band = vw + sd_threshold * vsd
-        lower_band = vw - sd_threshold * vsd
-
-        if in_pos[0]:
+        # ── Manage open position ───────────────────────────────────────────────
+        if in_pos:
             curr_equity *= p / p0
-            curr_equity = _check_exit(
-                curr_equity, entry_eq[0], highs[i], lows[i],
-                sl[0], tp_ref[0], side[0], closed_trades, in_pos,
-            )
-            if in_pos[0]:
-                if side[0] == "long"  and p >= vw:
+
+            # Update trailing stop ratchet
+            if pos_side == "long":
+                trail_ref = max(trail_ref, h)
+                trail_sl  = trail_ref - trailing_atr * at
+                sl_price  = max(sl_price, trail_sl)   # ratchet up only
+                tp_now    = vw if tp_mode == "vwap" else tp_price
+            else:
+                trail_ref = min(trail_ref, lo)
+                trail_sl  = trail_ref + trailing_atr * at
+                sl_price  = min(sl_price, trail_sl)   # ratchet down only
+                tp_now    = vw if tp_mode == "vwap" else tp_price
+
+            # Check exits (SL checked before TP — conservative)
+            exited = False
+            if pos_side == "long":
+                if lo <= sl_price:
                     curr_equity *= (1.0 - COST_PER_SIDE)
-                    closed_trades.append(curr_equity / entry_eq[0] - 1.0)
-                    in_pos[0] = False
-                elif side[0] == "short" and p <= vw:
+                    closed_trades.append(curr_equity / entry_eq - 1.0)
+                    exited = True
+                elif h >= tp_now:
                     curr_equity *= (1.0 - COST_PER_SIDE)
-                    closed_trades.append(curr_equity / entry_eq[0] - 1.0)
-                    in_pos[0] = False
-        else:
-            if p < lower_band and mhi < 0:
-                curr_equity = _open_long(
-                    curr_equity, entry_eq, sl, tp_ref, p,
-                    p - atr_stop * at, float("inf"), in_pos, side,
-                )
-            elif p > upper_band and mhi > 0:
-                curr_equity = _open_short(
-                    curr_equity, entry_eq, sl, tp_ref, p,
-                    p + atr_stop * at, 0.0, in_pos, side,
-                )
+                    closed_trades.append(curr_equity / entry_eq - 1.0)
+                    exited = True
+            else:  # short
+                if h >= sl_price:
+                    curr_equity *= (1.0 - COST_PER_SIDE)
+                    closed_trades.append(curr_equity / entry_eq - 1.0)
+                    exited = True
+                elif lo <= tp_now:
+                    curr_equity *= (1.0 - COST_PER_SIDE)
+                    closed_trades.append(curr_equity / entry_eq - 1.0)
+                    exited = True
+
+            if exited:
+                in_pos = False
+
+        # ── Look for new entry (only when flat) ────────────────────────────────
+        if not in_pos:
+            # Universal regime filter
+            if regime_series is not None and allowed_regimes is not None:
+                try:
+                    if regime_series.iloc[i] not in allowed_regimes:
+                        equity_arr[i] = curr_equity
+                        continue
+                except (IndexError, KeyError):
+                    pass
+
+            rsi_val = float(rsi_5m.iloc[i])
+            adx_val = float(adx_5m.iloc[i])
+            vol_val = float(df["Volume"].iloc[i])
+            vol_avg_val = float(vol_avg.iloc[i])
+
+            if any(np.isnan(x) for x in (rsi_val, adx_val)):
+                equity_arr[i] = curr_equity
+                continue
+
+            # Volume gate
+            vol_ok = (np.isnan(vol_avg_val) or vol_avg_val <= 0 or
+                      vol_val >= volume_mult * vol_avg_val)
+
+            # HTF EMA/ADX values
+            if use_htf_ema or use_dynamic_mode:
+                e9  = float(ema9_1h.iloc[i])  if ema9_1h  is not None else np.nan
+                e21 = float(ema21_1h.iloc[i]) if ema21_1h is not None else np.nan
+                a1h = float(adx_1h.iloc[i])   if adx_1h   is not None else np.nan
+                htf_bull = (not np.isnan(e9) and not np.isnan(e21) and e9 > e21)
+                htf_bear = (not np.isnan(e9) and not np.isnan(e21) and e9 < e21)
+                htf_ranging = (not np.isnan(a1h) and a1h <= htf_adx_max)
+            else:
+                htf_bull = htf_bear = htf_ranging = True   # no filter
+
+            # Determine effective mode for this bar
+            if use_dynamic_mode:
+                if htf_ranging:
+                    eff_mode = "mean_reversion"
+                elif htf_bull:
+                    eff_mode = "bull_pullback"
+                else:
+                    eff_mode = "bear_pullback"
+            else:
+                eff_mode = entry_mode
+
+            # Mode-specific HTF permission
+            if eff_mode == "mean_reversion":
+                htf_long_ok  = (htf_bull or htf_ranging) if use_htf_ema else True
+                htf_short_ok = (htf_bear or htf_ranging) if use_htf_ema else True
+                adx_ok       = adx_val < adx_max   # ranging gate required
+            elif eff_mode == "bull_pullback":
+                htf_long_ok  = htf_bull if use_htf_ema else True
+                htf_short_ok = False
+                adx_ok       = True    # trend mode — ADX gate skipped
+            elif eff_mode == "bear_pullback":
+                htf_long_ok  = False
+                htf_short_ok = htf_bear if use_htf_ema else True
+                adx_ok       = True
+            else:
+                htf_long_ok = htf_short_ok = True
+                adx_ok      = True
+
+            # 15m VWAP alignment
+            if use_htf_vwap and vwap_15m is not None:
+                v15 = float(vwap_15m.iloc[i])
+                if not np.isnan(v15):
+                    htf_long_ok  = htf_long_ok  and (p < v15)
+                    htf_short_ok = htf_short_ok and (p > v15)
+
+            # Stochastic gate
+            if use_stoch_filter and stoch_k is not None:
+                sk = float(stoch_k.iloc[i])
+                sd = float(stoch_d.iloc[i])
+                stoch_long_ok  = (not np.isnan(sk) and not np.isnan(sd) and
+                                  sk < stoch_oversold and sk > sd)
+                stoch_short_ok = (not np.isnan(sk) and not np.isnan(sd) and
+                                  sk > stoch_overbought and sk < sd)
+            else:
+                stoch_long_ok = stoch_short_ok = True
+
+            # Reversal candle (SFP) gate
+            if require_reversal_candle:
+                bar_open = float(df["Open"].iloc[i]) if "Open" in df.columns else p
+                lower_band = vw - sd_threshold * vs
+                upper_band = vw + sd_threshold * vs
+                # LONG: low pierced below band but close is back above it
+                sfp_long  = (lo < lower_band and p >= lower_band)
+                # SHORT: high pierced above band but close is back below it
+                sfp_short = (h > upper_band  and p <= upper_band)
+            else:
+                sfp_long = sfp_short = True
+
+            # Band levels
+            lower_band = vw - sd_threshold * vs
+            upper_band = vw + sd_threshold * vs
+
+            # ── LONG entry check ──────────────────────────────────────────────
+            if (p < lower_band
+                    and adx_ok
+                    and rsi_val < rsi_max
+                    and vol_ok
+                    and htf_long_ok
+                    and stoch_long_ok
+                    and sfp_long):
+                sl0 = p - atr_stop * at
+                tp0 = p + atr_target * at
+                curr_equity *= (1.0 - COST_PER_SIDE)
+                entry_eq   = curr_equity
+                sl_price   = sl0
+                tp_price   = tp0
+                trail_ref  = p
+                vwap_entry = vw
+                in_pos     = True
+                pos_side   = "long"
+
+            # ── SHORT entry check ─────────────────────────────────────────────
+            elif (p > upper_band
+                    and adx_ok
+                    and rsi_val > (100.0 - rsi_max)
+                    and vol_ok
+                    and htf_short_ok
+                    and stoch_short_ok
+                    and sfp_short):
+                sl0 = p + atr_stop * at
+                tp0 = p - atr_target * at
+                curr_equity *= (1.0 - COST_PER_SIDE)
+                entry_eq   = curr_equity
+                sl_price   = sl0
+                tp_price   = tp0
+                trail_ref  = p
+                vwap_entry = vw
+                in_pos     = True
+                pos_side   = "short"
 
         equity_arr[i] = curr_equity
 
-    if in_pos[0]:
-        curr_equity   *= (1.0 - COST_PER_SIDE)
-        closed_trades.append(curr_equity / entry_eq[0] - 1.0)
-        equity_arr[-1]  = curr_equity
+    # Close open position at end of data
+    if in_pos:
+        curr_equity  *= (1.0 - COST_PER_SIDE)
+        closed_trades.append(curr_equity / entry_eq - 1.0)
+        equity_arr[-1] = curr_equity
 
     return pd.Series(equity_arr, index=df.index), closed_trades
 
@@ -802,8 +1109,28 @@ MR_GRID     = {"rsi_oversold": [25, 30, 35], "rsi_overbought": [65, 70, 75],
 MR_DEFAULTS = {"rsi_oversold": 30.0, "rsi_overbought": 70.0,
                "bb_proximity": 0.10, "atr_stop": 3.0}
 
-VS_GRID     = {"sd_threshold": [1.5, 2.0, 2.5, 3.0], "atr_stop": [1.5, 2.0, 3.0]}  # 12
-VS_DEFAULTS = {"sd_threshold": 3.0, "atr_stop": 7.0}
+VS_GRID     = {                                           # v6 — 72 combos
+    "sd_threshold":  [2.5, 3.0, 3.5, 4.0],            # VWAP deviation threshold
+    "atr_stop":      [0.5, 0.7, 1.0, 1.5],            # SL distance
+    "adx_max":       [20.0, 25.0, 30.0],               # 5m ranging gate
+    "trailing_atr":  [0.8, 1.2, 1.8],                  # trailing stop ratchet
+}
+VS_DEFAULTS = {                                          # v6 defaults — mean_reversion mode
+    "entry_mode":    "mean_reversion",
+    "sd_threshold":  3.0,
+    "atr_stop":      1.0,
+    "atr_target":    2.0,
+    "trailing_atr":  1.2,
+    "tp_mode":       "atr",
+    "adx_max":       25.0,
+    "rsi_max":       50.0,
+    "volume_mult":   1.2,
+    "use_htf_ema":   True,
+    "htf_adx_max":   30.0,
+    "use_htf_vwap":  False,
+    "use_stoch_filter": False,
+    "require_reversal_candle": False,
+}
 
 MS_GRID     = {"ema_fast": [9, 12], "ema_slow": [21, 26],
                "atr_stop": [1.5, 2.0], "atr_target": [2.5, 3.0]}  # 16
@@ -822,6 +1149,18 @@ MA_GRID     = {"fast_period": [15, 20, 25], "slow_period": [40, 50, 60],
                "pullback_max": [0.04, 0.06, 0.08]}           # 27
 MA_DEFAULTS = {"fast_period": 20, "slow_period": 50, "pullback_max": 0.06}
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STRATEGY TIMEFRAME CONFIG  (native interval + walk-forward window sizes)
+# ─────────────────────────────────────────────────────────────────────────────
+STRATEGY_TIMEFRAME_CONFIG: dict[str, dict] = {
+    "Mean Reversion":    {"interval": "1d",  "train_months": 12, "test_months": 3},
+    "VWAP Scalping":     {"interval": "5m",  "train_months":  3, "test_months": 1},
+    "Momentum Scalping": {"interval": "15m", "train_months":  3, "test_months": 1},
+    "Liquidation Capture": {"interval": "1d","train_months": 12, "test_months": 3},
+    "Grid Trading":      {"interval": "4h",  "train_months":  6, "test_months": 2},
+    "MA Crossover":      {"interval": "1d",  "train_months": 12, "test_months": 3},
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STRATEGY REGISTRY
