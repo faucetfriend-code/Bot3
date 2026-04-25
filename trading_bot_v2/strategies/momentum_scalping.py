@@ -165,6 +165,7 @@ class MomentumScalpingStrategy:
         volume_threshold: float = 1.2,    # Min 1.2x average volume
         min_confidence: float = 0.55,
         cooldown_minutes: int = 5,  # Match strategy_manager default
+        min_atr_pct: float = 0.0,   # Min ATR as % of price (0 = disabled); filters low-vol candles
     ):
         self.strategy_type = StrategyType.MOMENTUM_SCALPING
         self.ema_fast = ema_fast
@@ -179,6 +180,7 @@ class MomentumScalpingStrategy:
         self.volume_threshold = volume_threshold
         self.min_confidence = min_confidence
         self.cooldown_minutes = cooldown_minutes
+        self.min_atr_pct = min_atr_pct
 
         # Track last crossover per symbol for entry timing
         self.last_crossover: Dict[str, Dict] = {}
@@ -193,6 +195,7 @@ class MomentumScalpingStrategy:
         logger.info(
             f"MomentumScalpingStrategy initialized: EMA {ema_fast}/{ema_slow}, "
             f"RSI {rsi_lower}-{rsi_upper}, ATR stop={atr_stop_mult}x target={atr_target_mult}x"
+            + (f", min_atr={min_atr_pct:.3%}" if min_atr_pct > 0 else "")
         )
 
     def _now(self) -> datetime:
@@ -477,6 +480,17 @@ class MomentumScalpingStrategy:
         if len(atr) == 0:
             return signals
         atr_value = atr[-1]
+
+        # Minimum ATR gate: skip if current volatility is too low for costs to be worthwhile.
+        # Slippage + cost-model drag ≈ 0.52% × price per round-trip; require ATR to be at least
+        # min_atr_pct of price so the stop/target have room to breathe.
+        if self.min_atr_pct > 0 and current_price > 0:
+            atr_pct = atr_value / current_price
+            if atr_pct < self.min_atr_pct:
+                logger.debug(
+                    f"{symbol}: ATR={atr_pct:.4%} below min_atr_pct={self.min_atr_pct:.4%} — skipping"
+                )
+                return signals
 
         # Determine side
         side = OrderSide.BUY if direction == "bullish" else OrderSide.SELL

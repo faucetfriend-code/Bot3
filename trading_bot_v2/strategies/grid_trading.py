@@ -20,7 +20,7 @@ Always use with regime detection and emergency stops.
 """
 
 import os
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 from loguru import logger
 
@@ -38,37 +38,74 @@ class GridTradingStrategy:
 
     def __init__(
         self,
-        grid_levels: int = 5,  # Reduced from 10 per Grid Trading Brief
-        grid_spacing_atr_multiplier: float = 0.5,
-        max_positions_per_symbol: int = 10,
-        emergency_stop_loss_pct: float = 0.05,
-        adx_regime_threshold: float = 25.0,  # Prompt 057: Lowered from 50 to 25 (was 20 originally)
-        atr_period: int = 14,
-        adx_period: int = 14,
-        min_confidence: float = 0.45,  # Prompt 057: Lowered from 0.6 to 0.45
+        grid_levels: Optional[int] = None,
+        grid_spacing_atr_multiplier: Optional[float] = None,
+        max_positions_per_symbol: Optional[int] = None,
+        emergency_stop_loss_pct: Optional[float] = None,
+        adx_regime_threshold: Optional[float] = None,
+        atr_period: Optional[int] = None,
+        adx_period: Optional[int] = None,
+        min_confidence: Optional[float] = None,
         risk_manager=None,
-    ):  # Added per Grid Trading Brief
+    ):
         """
         Initialize Grid Trading Strategy.
 
+        All parameters are read from environment variables if not explicitly passed,
+        ensuring .env configuration is always respected.
+
+        Environment variables:
+        - GRID_TRADING_LEVELS (default: 10)
+        - GRID_SPACING_ATR_MULTIPLIER (default: 0.65)
+        - GRID_MAX_POSITIONS (default: 10)
+        - GRID_EMERGENCY_STOP_PCT (default: 0.05)
+        - GRID_ADX_THRESHOLD (default: 20.0)
+        - GRID_ATR_PERIOD (default: 14)
+        - GRID_ADX_PERIOD (default: 14)
+        - GRID_MIN_CONFIDENCE (default: 0.45)
+
         Args:
-            grid_levels: Number of grid levels above and below price (default: 10)
-            grid_spacing_atr_multiplier: ATR multiplier for grid spacing (default: 0.5)
-            max_positions_per_symbol: Maximum grid positions per symbol (default: 10)
-            emergency_stop_loss_pct: Portfolio loss % to trigger emergency stop (default: 5%)
-            adx_regime_threshold: ADX threshold for regime change detection (default: 20)
-            atr_period: ATR calculation period (default: 14)
-            adx_period: ADX calculation period (default: 14)
-            min_confidence: Minimum confidence for signal (default: 0.6)
+            grid_levels: Number of grid levels above and below price
+            grid_spacing_atr_multiplier: ATR multiplier for grid spacing
+            max_positions_per_symbol: Maximum grid positions per symbol
+            emergency_stop_loss_pct: Portfolio loss % to trigger emergency stop
+            adx_regime_threshold: ADX threshold for regime change detection
+            atr_period: ATR calculation period
+            adx_period: ADX calculation period
+            min_confidence: Minimum confidence for signal
         """
-        self.grid_levels = grid_levels
-        self.grid_spacing_multiplier = grid_spacing_atr_multiplier
-        self.max_positions = max_positions_per_symbol
-        self.emergency_stop_pct = emergency_stop_loss_pct
-        self.adx_threshold = adx_regime_threshold
-        self.atr_period = atr_period
-        self.adx_period = adx_period
-        self.min_confidence = min_confidence
+        self.grid_levels = (
+            grid_levels if grid_levels is not None
+            else int(os.getenv("GRID_TRADING_LEVELS", "10"))
+        )
+        self.grid_spacing_multiplier = (
+            grid_spacing_atr_multiplier if grid_spacing_atr_multiplier is not None
+            else float(os.getenv("GRID_SPACING_ATR_MULTIPLIER", "0.65"))
+        )
+        self.max_positions = (
+            max_positions_per_symbol if max_positions_per_symbol is not None
+            else int(os.getenv("GRID_MAX_POSITIONS", "10"))
+        )
+        self.emergency_stop_pct = (
+            emergency_stop_loss_pct if emergency_stop_loss_pct is not None
+            else float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+        )
+        self.adx_threshold = (
+            adx_regime_threshold if adx_regime_threshold is not None
+            else float(os.getenv("GRID_ADX_THRESHOLD", "20.0"))
+        )
+        self.atr_period = (
+            atr_period if atr_period is not None
+            else int(os.getenv("GRID_ATR_PERIOD", "14"))
+        )
+        self.adx_period = (
+            adx_period if adx_period is not None
+            else int(os.getenv("GRID_ADX_PERIOD", "14"))
+        )
+        self.min_confidence = (
+            min_confidence if min_confidence is not None
+            else float(os.getenv("GRID_MIN_CONFIDENCE", "0.45"))
+        )
         self.risk_manager = risk_manager  # Store RiskManager reference
 
         # Dynamic spacing bounds (as percentage of price)
@@ -86,9 +123,9 @@ class GridTradingStrategy:
 
         logger.info(
             f"GridTradingStrategy initialized: "
-            f"{grid_levels} levels, spacing={grid_spacing_atr_multiplier}x ATR, "
-            f"max positions={max_positions_per_symbol}, "
-            f"emergency stop={emergency_stop_loss_pct:.1%}, "
+            f"{self.grid_levels} levels, spacing={self.grid_spacing_multiplier}x ATR, "
+            f"max positions={self.max_positions}, "
+            f"emergency stop={self.emergency_stop_pct:.1%}, "
             f"dynamic spacing bounds={self.min_spacing_pct:.1%}-{self.max_spacing_pct:.1%}"
         )
 

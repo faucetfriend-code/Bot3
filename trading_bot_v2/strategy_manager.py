@@ -316,6 +316,7 @@ class StrategyManager:
             momentum_macd_fast = int(os.getenv("MOMENTUM_MACD_FAST", "12"))
             momentum_macd_slow = int(os.getenv("MOMENTUM_MACD_SLOW", "26"))
             momentum_macd_signal = int(os.getenv("MOMENTUM_MACD_SIGNAL", "9"))
+            momentum_min_atr_pct = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.0"))
 
             self.strategies["MomentumScalping"] = MomentumScalpingStrategy(
                 ema_fast=momentum_ema_fast,
@@ -332,11 +333,13 @@ class StrategyManager:
                 macd_fast=momentum_macd_fast,
                 macd_slow=momentum_macd_slow,
                 macd_signal=momentum_macd_signal,
+                min_atr_pct=momentum_min_atr_pct,
             )
             logger.info(
                 f"Momentum Scalping strategy enabled: EMA {momentum_ema_fast}/{momentum_ema_slow}, "
                 f"ATR stop={momentum_atr_stop}x, target={momentum_atr_target}x, "
                 f"min_confidence={momentum_min_confidence:.0%}"
+                + (f", min_atr={momentum_min_atr_pct:.3%}" if momentum_min_atr_pct > 0 else "")
             )
 
         if self.enable_orderbook_imbalance:
