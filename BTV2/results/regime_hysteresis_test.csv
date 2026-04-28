@@ -1,0 +1,6 @@
+config,hysteresis,htf,total_flips,flips_per_month,months,bull_strong_pct,bull_weak_pct,ranging_pct,bear_weak_pct,bear_strong_pct
+5m_no_hysteresis,0,,15383,640.96,24,0.8,28.7,40.0,29.7,0.8
+5m_hysteresis_30min,6,,13076,544.83,24,1.0,28.4,40.3,29.4,1.0
+5m_hysteresis_60min,12,,10503,437.62,24,1.1,27.6,41.7,28.5,1.1
+1h_hysteresis_3h,3,1h,2267,94.46,24,9.8,29.2,20.3,30.5,10.2
+4h_hysteresis_12h,3,4h,610,25.42,24,12.5,27.0,18.4,31.5,10.6

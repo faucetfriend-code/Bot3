@@ -1,0 +1,434 @@
+[
+  {
+    "sd": 0.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 0.5,
+    "entry": "bull_pullback",
+    "trades": 1,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -0.522335991629119,
+    "total_return": -0.222335991629119
+  },
+  {
+    "sd": 0.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 0.5,
+    "entry": "mean_reversion",
+    "trades": 168,
+    "win_rate": 29.761904761904763,
+    "profit_factor": 0.3639980972828312,
+    "net_return": -86.29324176865143,
+    "total_return": -35.89324176865142
+  },
+  {
+    "sd": 1.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 1.0,
+    "entry": "bull_pullback",
+    "trades": 1,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -0.522335991629119,
+    "total_return": -0.222335991629119
+  },
+  {
+    "sd": 1.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 1.0,
+    "entry": "mean_reversion",
+    "trades": 157,
+    "win_rate": 31.210191082802545,
+    "profit_factor": 0.3915957811202661,
+    "net_return": -80.52568836604038,
+    "total_return": -33.42568836604038
+  },
+  {
+    "sd": 1.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 1.5,
+    "entry": "bull_pullback",
+    "trades": 1,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -0.522335991629119,
+    "total_return": -0.222335991629119
+  },
+  {
+    "sd": 1.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 1.5,
+    "entry": "mean_reversion",
+    "trades": 118,
+    "win_rate": 31.35593220338983,
+    "profit_factor": 0.4412428269464086,
+    "net_return": -61.12796837077467,
+    "total_return": -25.72796837077467
+  },
+  {
+    "sd": 2.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 2.0,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 2.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 2.0,
+    "entry": "mean_reversion",
+    "trades": 82,
+    "win_rate": 30.48780487804878,
+    "profit_factor": 0.3733698001883998,
+    "net_return": -44.8890390701187,
+    "total_return": -20.289039070118697
+  },
+  {
+    "sd": 2.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 2.5,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 2.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 2.5,
+    "entry": "mean_reversion",
+    "trades": 40,
+    "win_rate": 22.5,
+    "profit_factor": 0.40724153257043283,
+    "net_return": -23.35355982220625,
+    "total_return": -11.35355982220625
+  },
+  {
+    "sd": 3.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 3.0,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 3.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 3.0,
+    "entry": "mean_reversion",
+    "trades": 19,
+    "win_rate": 36.84210526315789,
+    "profit_factor": 0.2282378784618255,
+    "net_return": -11.453704787345604,
+    "total_return": -5.753704787345604
+  },
+  {
+    "sd": 3.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 3.5,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 3.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 3.5,
+    "entry": "mean_reversion",
+    "trades": 11,
+    "win_rate": 36.36363636363637,
+    "profit_factor": 0.39393442624323255,
+    "net_return": -6.274952122009255,
+    "total_return": -2.9749521220092556
+  },
+  {
+    "sd": 4.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 4.0,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 4.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 4.0,
+    "entry": "mean_reversion",
+    "trades": 3,
+    "win_rate": 33.33333333333333,
+    "profit_factor": 0.48195145779327286,
+    "net_return": -1.686319951879566,
+    "total_return": -0.786319951879566
+  },
+  {
+    "sd": 4.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 4.5,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 4.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 4.5,
+    "entry": "mean_reversion",
+    "trades": 2,
+    "win_rate": 50.0,
+    "profit_factor": 0.8548895594059123,
+    "net_return": -0.9461180961317089,
+    "total_return": -0.34611809613170896
+  },
+  {
+    "sd": 5.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 5.0,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 5.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 5.0,
+    "entry": "mean_reversion",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 5.5,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 5.5,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 5.5,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 5.5,
+    "entry": "mean_reversion",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 6.0,
+    "entry": "momentum",
+    "trades": 2,
+    "win_rate": 0.0,
+    "profit_factor": 0.0,
+    "net_return": -1.1535248487353096,
+    "total_return": -0.5535248487353095
+  },
+  {
+    "sd": 6.0,
+    "entry": "bull_pullback",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 6.0,
+    "entry": "cross",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  },
+  {
+    "sd": 6.0,
+    "entry": "mean_reversion",
+    "trades": 0,
+    "win_rate": 0,
+    "profit_factor": 0,
+    "net_return": 0,
+    "total_return": 0.0
+  }
+]

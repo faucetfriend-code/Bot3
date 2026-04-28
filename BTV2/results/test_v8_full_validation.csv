@@ -1,0 +1,5 @@
+config,trades,wr_pct,return_pct,sharpe,maxdd_pct,pf,mc_prob_loss_pct,mc_p50_pct,mc_p95_pct,oov_return_pct,oov_sharpe,oov_wr_pct,rb_score,fragile_params,gmm_dominant,verdict
+bp_sd2.0_atr0.7_rr_sfp,49,4.1,-16.87,-8.467,-16.87,0.02,100.0,-10.52,-10.52,-1.4,-8.279,6.7,1.0,sd_threshold; atr_multiplier,calm,FAIL
+bp_sd2.0_atr0.7_atr_sfp,49,4.1,-16.87,-8.467,-16.87,0.02,100.0,-10.52,-10.52,-1.4,-8.279,6.7,1.0,sd_threshold; atr_multiplier,calm,FAIL
+bp_sd1.5_atr0.5_rr_sfp,146,2.7,-45.01,-15.482,-45.01,0.01,100.0,-31.54,-31.54,-6.07,-17.037,3.3,1.0,sd_threshold; atr_multiplier,calm,FAIL
+mr_sd2.0_atr0.7_rr_sfp,49,4.1,-16.87,-8.467,-16.87,0.02,100.0,-10.52,-10.52,-1.4,-8.279,6.7,1.0,sd_threshold; atr_multiplier,calm,FAIL

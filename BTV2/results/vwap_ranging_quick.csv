@@ -1,0 +1,4 @@
+Config,Trades,WR%,Net%,PF,Sharpe,MaxDD%
+RANGING+sd0.5+cross,365,29.3,-66.30,0.36,-6.61,-65.75
+RANGING+sd3.5+mean_rev,150,34.0,-35.45,0.40,-3.91,-36.00
+BEAR_WEAK+bull_pullback,355,39.2,-57.12,0.65,-4.14,-58.33

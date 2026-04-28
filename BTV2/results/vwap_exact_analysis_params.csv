@@ -1,0 +1,6 @@
+config,period,symbol,trades,win_rate_pct,gross_profit,gross_loss,net_return_pct,profit_factor,sharpe,max_dd_pct
+CURRENT_ENV,2024,SUI,19,31.6,0.04,0.09,-13.46,0.42,-2.12,-9.55
+BULL_PULLBACK,2024,SUI,19,21.1,0.05,0.06,-9.29,0.87,-1.03,-6.01
+BEAR_PULLBACK,2024,SUI,18,38.9,0.02,0.08,-13.83,0.25,-3.12,-8.81
+ANALYSIS_EXACT_CROSS,2024,SUI,22,40.9,0.04,0.13,-17.93,0.32,-2.7,-13.06
+MEAN_REVERSION,2024,SUI,51,31.4,0.06,0.21,-35.47,0.28,-5.23,-20.26

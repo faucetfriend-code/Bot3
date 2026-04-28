@@ -1,0 +1,12 @@
+metric,value,status
+Average Accuracy (all years),34.7%,FAIL - Too low
+2018 Accuracy (should be BEAR),38.7% (detected BULL),FAIL - Wrong direction
+2019 Accuracy (should be RANGING),22.9% (detected BULL),FAIL - Wrong direction
+2020 Accuracy (should be BULL),42.2% (detected BULL),PASS
+2021 Accuracy (should be BULL),41.7% (detected BULL),PASS
+2022 Accuracy (should be BEAR),39.1% (detected BEAR),PASS
+2023 Accuracy (should be RANGING),23.8% (detected BULL),FAIL - Wrong direction
+Average Flips per Month,1005.6,FAIL - Extreme oscillation
+Max Flips (worst month),1515 (Jan 2018),FAIL
+Min Flips (best month),690 (Feb 2023),FAIL
+Months with >5 flips,72/72 (100%),FAIL

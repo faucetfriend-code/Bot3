@@ -1,0 +1,100 @@
+{
+  "strategy": "VWAP Scalping",
+  "ticker": "ETH-USD",
+  "period": "2020-01-01 -> 2025-01-01",
+  "cutoff": 0.1,
+  "oos_metrics": {
+    "total_return_pct": -4.4380094306884725,
+    "cagr_pct": -1.1292289432140112,
+    "sharpe": 0.08349757891131647,
+    "max_dd_pct": -43.82691861465948,
+    "win_rate_pct": 47.82608695652174,
+    "profit_factor": 1.1041200897464836,
+    "n_trades": 23
+  },
+  "baseline_sharpe": 0.09649388095555438,
+  "best_sharpe": 0.9379787581817061,
+  "sharpe_delta": 0.8414848772261517,
+  "proposal": [
+    {
+      "Parameter": "sd_threshold",
+      "ENV Variable": "VWAP_SD_ENTRY_THRESHOLD",
+      "Current Value": 3.0,
+      "Proposed Value": 3.45,
+      "Change": "+15.0%"
+    }
+  ],
+  "trial_log": [
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 2.1,
+      "OOS Sharpe": 0.094,
+      "OOS Return %": -5.71,
+      "OOS Max DD %": -52.31
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 2.55,
+      "OOS Sharpe": 0.234,
+      "OOS Return %": 16.94,
+      "OOS Max DD %": -51.53
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.0,
+      "OOS Sharpe": 0.096,
+      "OOS Return %": 0.35,
+      "OOS Max DD %": -48.75
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.45,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.9,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 25.89,
+      "OOS Max DD %": -0.81
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 4.9,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 5.95,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 7.0,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 8.05,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 9.1,
+      "OOS Sharpe": 0.938,
+      "OOS Return %": 51.17,
+      "OOS Max DD %": -8.87
+    }
+  ],
+  "applied": false
+}

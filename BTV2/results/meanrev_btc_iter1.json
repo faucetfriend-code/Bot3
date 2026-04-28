@@ -1,0 +1,191 @@
+{
+  "strategy": "Mean Reversion",
+  "ticker": "BTC-USD",
+  "period": "2020-01-01 -> 2025-01-01",
+  "cutoff": 0.1,
+  "oos_metrics": {
+    "total_return_pct": -13.398404887123183,
+    "cagr_pct": -3.5347764197519393,
+    "sharpe": 0.029818965810143934,
+    "max_dd_pct": -47.15330217260669,
+    "win_rate_pct": 43.20987654320987,
+    "profit_factor": 1.0846270652848253,
+    "n_trades": 81
+  },
+  "baseline_sharpe": 0.11976163505590949,
+  "best_sharpe": 0.37816695878329465,
+  "sharpe_delta": 0.25840532372738517,
+  "proposal": [
+    {
+      "Parameter": "rsi_oversold",
+      "ENV Variable": "MEAN_REVERSION_RSI_OVERSOLD",
+      "Current Value": 30.0,
+      "Proposed Value": 39.0,
+      "Change": "+30.0%"
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "ENV Variable": "MEAN_REVERSION_RSI_OVERBOUGHT",
+      "Current Value": 70.0,
+      "Proposed Value": 91.0,
+      "Change": "+30.0%"
+    },
+    {
+      "Parameter": "bb_proximity",
+      "ENV Variable": "MEAN_REVERSION_BB_PROXIMITY",
+      "Current Value": 0.1,
+      "Proposed Value": 0.13,
+      "Change": "+30.0%"
+    },
+    {
+      "Parameter": "atr_stop",
+      "ENV Variable": "MEAN_REVERSION_ATR_STOP_MULTIPLIER",
+      "Current Value": 3.0,
+      "Proposed Value": 2.1,
+      "Change": "-30.0%"
+    }
+  ],
+  "trial_log": [
+    {
+      "Parameter": "rsi_oversold",
+      "Candidate": 21.0,
+      "OOS Sharpe": 0.041,
+      "OOS Return %": -11.17,
+      "OOS Max DD %": -49.46
+    },
+    {
+      "Parameter": "rsi_oversold",
+      "Candidate": 25.5,
+      "OOS Sharpe": 0.08,
+      "OOS Return %": -6.45,
+      "OOS Max DD %": -45.24
+    },
+    {
+      "Parameter": "rsi_oversold",
+      "Candidate": 30.0,
+      "OOS Sharpe": 0.12,
+      "OOS Return %": -0.95,
+      "OOS Max DD %": -45.14
+    },
+    {
+      "Parameter": "rsi_oversold",
+      "Candidate": 34.5,
+      "OOS Sharpe": 0.098,
+      "OOS Return %": -5.44,
+      "OOS Max DD %": -49.69
+    },
+    {
+      "Parameter": "rsi_oversold",
+      "Candidate": 39.0,
+      "OOS Sharpe": 0.123,
+      "OOS Return %": -1.79,
+      "OOS Max DD %": -47.25
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "Candidate": 49.0,
+      "OOS Sharpe": 0.103,
+      "OOS Return %": -6.86,
+      "OOS Max DD %": -58.11
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "Candidate": 59.5,
+      "OOS Sharpe": 0.11,
+      "OOS Return %": -4.77,
+      "OOS Max DD %": -55.64
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "Candidate": 70.0,
+      "OOS Sharpe": 0.123,
+      "OOS Return %": -1.79,
+      "OOS Max DD %": -47.25
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "Candidate": 80.5,
+      "OOS Sharpe": -0.026,
+      "OOS Return %": -18.2,
+      "OOS Max DD %": -45.16
+    },
+    {
+      "Parameter": "rsi_overbought",
+      "Candidate": 91.0,
+      "OOS Sharpe": 0.29,
+      "OOS Return %": 25.97,
+      "OOS Max DD %": -31.65
+    },
+    {
+      "Parameter": "bb_proximity",
+      "Candidate": 0.07,
+      "OOS Sharpe": 0.251,
+      "OOS Return %": 19.9,
+      "OOS Max DD %": -31.65
+    },
+    {
+      "Parameter": "bb_proximity",
+      "Candidate": 0.085,
+      "OOS Sharpe": 0.284,
+      "OOS Return %": 25.08,
+      "OOS Max DD %": -31.65
+    },
+    {
+      "Parameter": "bb_proximity",
+      "Candidate": 0.1,
+      "OOS Sharpe": 0.29,
+      "OOS Return %": 25.97,
+      "OOS Max DD %": -31.65
+    },
+    {
+      "Parameter": "bb_proximity",
+      "Candidate": 0.115,
+      "OOS Sharpe": 0.311,
+      "OOS Return %": 29.78,
+      "OOS Max DD %": -37.68
+    },
+    {
+      "Parameter": "bb_proximity",
+      "Candidate": 0.13,
+      "OOS Sharpe": 0.327,
+      "OOS Return %": 32.51,
+      "OOS Max DD %": -34.07
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 2.1,
+      "OOS Sharpe": 0.378,
+      "OOS Return %": 41.31,
+      "OOS Max DD %": -30.02
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 2.55,
+      "OOS Sharpe": 0.275,
+      "OOS Return %": 23.74,
+      "OOS Max DD %": -34.17
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 3.0,
+      "OOS Sharpe": 0.327,
+      "OOS Return %": 32.51,
+      "OOS Max DD %": -34.07
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 3.45,
+      "OOS Sharpe": 0.307,
+      "OOS Return %": 29.37,
+      "OOS Max DD %": -35.3
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 3.9,
+      "OOS Sharpe": 0.343,
+      "OOS Return %": 36.33,
+      "OOS Max DD %": -36.64
+    }
+  ],
+  "applied": false
+}

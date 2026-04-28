@@ -1,0 +1,7 @@
+sd_threshold,atr_multiplier,entry_mode,position_size,cooldown,win_rate,total_trades,return_pct,avg_pnl,max_dd
+1.5,1.0,mean_reversion,0.3,300,2.6%,39,-13.4%,-0.004,13.5%
+1.5,1.5,mean_reversion,0.3,300,10.0%,20,-9.7%,-0.005,10.1%
+2.0,1.0,mean_reversion,0.3,300,2.6%,39,-13.4%,-0.004,13.5%
+2.0,1.5,mean_reversion,0.3,300,10.0%,20,-9.7%,-0.005,10.1%
+2.5,1.0,mean_reversion,0.3,300,0.0%,0,0.0%,0.000,0.0%
+2.5,1.5,mean_reversion,0.3,300,0.0%,0,0.0%,0.000,0.0%

@@ -1,0 +1,433 @@
+{
+  "test_date": "2026-03-16T07:11:15.215076",
+  "test_period": "2024-01-01 to 2025-01-01",
+  "symbol": "BTCUSDT",
+  "timeframe": "5m with 1m exit",
+  "total_tests": 55,
+  "total_time_seconds": 385.99166464805603,
+  "variable_importance": {
+    "entry_mode": {
+      "range": 118.20942644673337,
+      "best": -2.1018391992058447,
+      "best_val": "bull_pullback"
+    },
+    "volume_mult": {
+      "range": 18.68322788292193,
+      "best": -2.1018391992058447,
+      "best_val": 2.0
+    },
+    "sd_threshold": {
+      "range": 11.043929164856497,
+      "best": 0,
+      "best_val": 2.5
+    },
+    "pullback_bars": {
+      "range": 7.763414903379791,
+      "best": -0.2905712547143999,
+      "best_val": 2
+    },
+    "stoch_oversold": {
+      "range": 5.731220156920311,
+      "best": -0.43454697395079955,
+      "best_val": 15
+    },
+    "rsi_max": {
+      "range": 3.6073197804400414,
+      "best": 0,
+      "best_val": 35
+    },
+    "use_htf_ema": {
+      "range": 2.1018391992058447,
+      "best": 0,
+      "best_val": true
+    },
+    "adx_max": {
+      "range": 1.3586525057163168,
+      "best": -0.7431866934895279,
+      "best_val": 16
+    },
+    "atr_stop": {
+      "range": 0.5310737800855225,
+      "best": -2.1018391992058447,
+      "best_val": 1.0
+    },
+    "atr_target": {
+      "range": 0.07464712176639132,
+      "best": -2.1018391992058447,
+      "best_val": 3.0
+    },
+    "stoch_overbought": {
+      "range": 0.0,
+      "best": -2.1018391992058447,
+      "best_val": 70
+    },
+    "use_htf_vwap": {
+      "range": 0.0,
+      "best": -2.1018391992058447,
+      "best_val": true
+    },
+    "htf_adx_max": {
+      "range": 0.0,
+      "best": -2.1018391992058447,
+      "best_val": 20
+    }
+  },
+  "impact_results": {
+    "sd_threshold": {
+      "1.0": {
+        "net_return": -11.043929164856497,
+        "trades": 20,
+        "win_rate": 40.0,
+        "profit_factor": 0.34526929678933754
+      },
+      "1.5": {
+        "net_return": -6.775717482390294,
+        "trades": 13,
+        "win_rate": 46.15384615384615,
+        "profit_factor": 0.5402936839151383
+      },
+      "2.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "2.5": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "3.0": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "3.5": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "4.0": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "4.5": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "5.0": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      }
+    },
+    "entry_mode": {
+      "bull_pullback": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "bear_pullback": {
+        "net_return": -3.574796166339099,
+        "trades": 5,
+        "win_rate": 20.0,
+        "profit_factor": 0.060300809320524486
+      },
+      "mean_reversion": {
+        "net_return": -120.31126564593922,
+        "trades": 239,
+        "win_rate": 29.707112970711297,
+        "profit_factor": 0.3459751369290697
+      },
+      "cross": {
+        "net_return": -29.380395388592383,
+        "trades": 47,
+        "win_rate": 23.404255319148938,
+        "profit_factor": 0.14833602916068117
+      },
+      "momentum": {
+        "net_return": -16.8487584985235,
+        "trades": 32,
+        "win_rate": 25.0,
+        "profit_factor": 0.3845723751923297
+      },
+      "deviation": {
+        "net_return": -54.42153302462448,
+        "trades": 109,
+        "win_rate": 43.11926605504588,
+        "profit_factor": 0.6617990607426517
+      }
+    },
+    "stoch_oversold": {
+      "15": {
+        "net_return": -0.43454697395079955,
+        "trades": 2,
+        "win_rate": 100.0,
+        "profit_factor": 0
+      },
+      "20": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "25": {
+        "net_return": -5.444157886918507,
+        "trades": 9,
+        "win_rate": 44.44444444444444,
+        "profit_factor": 0.36962967377892375
+      },
+      "30": {
+        "net_return": -6.16576713087111,
+        "trades": 11,
+        "win_rate": 54.54545454545454,
+        "profit_factor": 0.4472759276228863
+      }
+    },
+    "stoch_overbought": {
+      "70": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "75": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "80": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "85": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "adx_max": {
+      "16": {
+        "net_return": -0.7431866934895279,
+        "trades": 1,
+        "win_rate": 0.0,
+        "profit_factor": 0.0
+      },
+      "20": {
+        "net_return": -1.0337997351484103,
+        "trades": 2,
+        "win_rate": 50.0,
+        "profit_factor": 0.5437789259397514
+      },
+      "25": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "30": {
+        "net_return": -1.2721855245495388,
+        "trades": 7,
+        "win_rate": 57.14285714285714,
+        "profit_factor": 3.436527236929501
+      },
+      "35": {
+        "net_return": -1.2721855245495388,
+        "trades": 7,
+        "win_rate": 57.14285714285714,
+        "profit_factor": 3.436527236929501
+      }
+    },
+    "rsi_max": {
+      "35": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "40": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "50": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "55": {
+        "net_return": -3.6073197804400414,
+        "trades": 8,
+        "win_rate": 50.0,
+        "profit_factor": 0.984429399292531
+      },
+      "60": {
+        "net_return": -3.6073197804400414,
+        "trades": 8,
+        "win_rate": 50.0,
+        "profit_factor": 0.984429399292531
+      }
+    },
+    "volume_mult": {
+      "1.0": {
+        "net_return": -20.785067082127775,
+        "trades": 35,
+        "win_rate": 37.142857142857146,
+        "profit_factor": 0.32361494916825423
+      },
+      "1.5": {
+        "net_return": -8.570393326572187,
+        "trades": 13,
+        "win_rate": 46.15384615384615,
+        "profit_factor": 0.21981497818947474
+      },
+      "2.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "atr_stop": {
+      "0.5": {
+        "net_return": -2.6329129792913673,
+        "trades": 5,
+        "win_rate": 40.0,
+        "profit_factor": 0.44158871163573743
+      },
+      "0.7": {
+        "net_return": -2.6329129792913673,
+        "trades": 5,
+        "win_rate": 40.0,
+        "profit_factor": 0.44158871163573743
+      },
+      "1.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "1.5": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "atr_target": {
+      "2.0": {
+        "net_return": -2.176486320972236,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.1569557051635642
+      },
+      "3.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "4.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "5.0": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "pullback_bars": {
+      "2": {
+        "net_return": -0.2905712547143999,
+        "trades": 1,
+        "win_rate": 100.0,
+        "profit_factor": 0
+      },
+      "3": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "4": {
+        "net_return": -8.05398615809419,
+        "trades": 15,
+        "win_rate": 46.666666666666664,
+        "profit_factor": 0.36024356987285017
+      }
+    },
+    "use_htf_vwap": {
+      "True": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "False": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "use_htf_ema": {
+      "True": {
+        "net_return": 0,
+        "trades": 0,
+        "win_rate": 0,
+        "profit_factor": 0
+      },
+      "False": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    },
+    "htf_adx_max": {
+      "20": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "25": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "30": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      },
+      "35": {
+        "net_return": -2.1018391992058447,
+        "trades": 5,
+        "win_rate": 60.0,
+        "profit_factor": 1.3187508349695658
+      }
+    }
+  }
+}

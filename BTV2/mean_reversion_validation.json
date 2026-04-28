@@ -1,0 +1,326 @@
+{
+  "strategy": "Mean Reversion",
+  "symbol": "BTCUSDT",
+  "period": "2022-01-01 -> 2025-12-31",
+  "interval": "1d",
+  "bars_per_year": 365,
+  "cutoff": 0.1,
+  "exit_res": "Off",
+  "entry_mode": null,
+  "oos_metrics": {
+    "total_return_pct": -13.620881402185237,
+    "cagr_pct": -4.77104575157743,
+    "sharpe": -0.09431138818416614,
+    "max_dd_pct": -39.72436388792094,
+    "win_rate_pct": 37.142857142857146,
+    "profit_factor": 1.0283891022284195,
+    "n_trades": 70
+  },
+  "fold_metrics": [
+    {
+      "fold": 1,
+      "test_period": "2023-01-01 -> 2023-03-31",
+      "total_return_pct": -1.8907538240217292,
+      "cagr_pct": -7.534835254358086,
+      "sharpe": -0.08195658298740494,
+      "max_dd_pct": -13.493885855791804,
+      "win_rate_pct": 42.857142857142854,
+      "profit_factor": 0.9971727677765473,
+      "n_trades": 7,
+      "params": {
+        "rsi_oversold": 30,
+        "rsi_overbought": 65,
+        "bb_proximity": 0.1,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 2,
+      "test_period": "2023-04-01 -> 2023-06-30",
+      "total_return_pct": 1.3781136394289906,
+      "cagr_pct": 5.71182468488054,
+      "sharpe": 1.3493795207982768,
+      "max_dd_pct": -0.6580854145875503,
+      "win_rate_pct": 50.0,
+      "profit_factor": 12.237914563777741,
+      "n_trades": 2,
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.05,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 3,
+      "test_period": "2023-07-01 -> 2023-09-30",
+      "total_return_pct": -9.91059531354046,
+      "cagr_pct": -34.223273743507434,
+      "sharpe": -1.6101524025496758,
+      "max_dd_pct": -14.130631531891508,
+      "win_rate_pct": 50.0,
+      "profit_factor": 0.2533104107517106,
+      "n_trades": 14,
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.2,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 4,
+      "test_period": "2023-10-01 -> 2023-12-31",
+      "total_return_pct": 24.13447972716498,
+      "cagr_pct": 138.15485783863787,
+      "sharpe": 2.897493613975476,
+      "max_dd_pct": -6.03421184825036,
+      "win_rate_pct": 50.0,
+      "profit_factor": 11.89478506672919,
+      "n_trades": 6,
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.2,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 5,
+      "test_period": "2024-01-01 -> 2024-03-31",
+      "total_return_pct": 1.6358814603061766,
+      "cagr_pct": 6.806900098457813,
+      "sharpe": 0.36625725842553586,
+      "max_dd_pct": -17.001525017292625,
+      "win_rate_pct": 62.5,
+      "profit_factor": 1.264732434081515,
+      "n_trades": 8,
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 70,
+        "bb_proximity": 0.2,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 6,
+      "test_period": "2024-04-01 -> 2024-06-30",
+      "total_return_pct": -10.649351950848962,
+      "cagr_pct": -36.680395555641496,
+      "sharpe": -2.922650751008132,
+      "max_dd_pct": -10.649351950848962,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "n_trades": 5,
+      "params": {
+        "rsi_oversold": 30,
+        "rsi_overbought": 65,
+        "bb_proximity": 0.05,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 7,
+      "test_period": "2024-07-01 -> 2024-09-30",
+      "total_return_pct": -9.97728774369585,
+      "cagr_pct": -34.41850053553887,
+      "sharpe": -2.8924275739576464,
+      "max_dd_pct": -10.426582400756654,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "n_trades": 2,
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.05,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 8,
+      "test_period": "2024-10-01 -> 2024-12-31",
+      "total_return_pct": 11.727121648541994,
+      "cagr_pct": 56.06156626112517,
+      "sharpe": 1.5434780607274385,
+      "max_dd_pct": -7.03002161944071,
+      "win_rate_pct": 33.33333333333333,
+      "profit_factor": 3.956981681699566,
+      "n_trades": 6,
+      "params": {
+        "rsi_oversold": 35,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.1,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 9,
+      "test_period": "2025-01-01 -> 2025-03-31",
+      "total_return_pct": -9.299845082762504,
+      "cagr_pct": -33.00749640140705,
+      "sharpe": -1.3363998060451348,
+      "max_dd_pct": -20.101163233063048,
+      "win_rate_pct": 25.0,
+      "profit_factor": 0.1896067132651952,
+      "n_trades": 4,
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.05,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 10,
+      "test_period": "2025-04-01 -> 2025-06-30",
+      "total_return_pct": 7.812796550687695,
+      "cagr_pct": 35.70223905498817,
+      "sharpe": 1.560411146809489,
+      "max_dd_pct": -10.202789677495721,
+      "win_rate_pct": 37.5,
+      "profit_factor": 2.096889512591826,
+      "n_trades": 8,
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bb_proximity": 0.1,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 11,
+      "test_period": "2025-07-01 -> 2025-09-30",
+      "total_return_pct": -8.201698778940958,
+      "cagr_pct": -29.07030954780465,
+      "sharpe": -2.446462995124162,
+      "max_dd_pct": -10.461607089266492,
+      "win_rate_pct": 16.666666666666664,
+      "profit_factor": 0.16059204780223538,
+      "n_trades": 6,
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 75,
+        "bb_proximity": 0.05,
+        "atr_stop": 3.0
+      }
+    },
+    {
+      "fold": 12,
+      "test_period": "2025-10-01 -> 2025-12-30",
+      "total_return_pct": -5.284724967360932,
+      "cagr_pct": -19.775946807198896,
+      "sharpe": -2.681295900644979,
+      "max_dd_pct": -5.284724967360932,
+      "win_rate_pct": 0.0,
+      "profit_factor": 0.0,
+      "n_trades": 2,
+      "params": {
+        "rsi_oversold": 25,
+        "rsi_overbought": 70,
+        "bb_proximity": 0.1,
+        "atr_stop": 3.0
+      }
+    }
+  ],
+  "monte_carlo": {
+    "n_trades": 70,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 100.0,
+    "p5_return_pct": -4.05,
+    "p50_return_pct": -4.05,
+    "p95_return_pct": -4.05,
+    "worst5_maxdd_pct": -45.57,
+    "median_maxdd_pct": -31.42,
+    "spread_ratio": -1.0,
+    "overfitting_flag": "False",
+    "verdict": "FRAGILE"
+  },
+  "robustness": {
+    "score": 0.8087,
+    "base_sharpe": 0.219,
+    "param_results": {
+      "rsi_oversold": {
+        "base": 25,
+        "minus": {
+          "value": 21.0,
+          "sharpe": 0.0728,
+          "delta": -0.1461
+        },
+        "plus": {
+          "value": 29.0,
+          "sharpe": 0.2068,
+          "delta": -0.0122
+        },
+        "stable": "True"
+      },
+      "rsi_overbought": {
+        "base": 70,
+        "minus": {
+          "value": 60.0,
+          "sharpe": 0.2119,
+          "delta": -0.0071
+        },
+        "plus": {
+          "value": 80.0,
+          "sharpe": 0.3197,
+          "delta": 0.1008
+        },
+        "stable": "True"
+      },
+      "bb_proximity": {
+        "base": 0.1,
+        "minus": {
+          "value": 0.085,
+          "sharpe": 0.2543,
+          "delta": 0.0353
+        },
+        "plus": {
+          "value": 0.115,
+          "sharpe": 0.2326,
+          "delta": 0.0137
+        },
+        "stable": "True"
+      },
+      "atr_stop": {
+        "base": 3.0,
+        "minus": {
+          "value": 2.55,
+          "sharpe": 0.2392,
+          "delta": 0.0203
+        },
+        "plus": {
+          "value": 3.45,
+          "sharpe": 0.0492,
+          "delta": -0.1698
+        },
+        "stable": "True"
+      }
+    },
+    "fragile_params": [],
+    "verdict": "ROBUST"
+  },
+  "gmm_summary": {
+    "regime_counts": {
+      "volatile": 427,
+      "calm": 422,
+      "crash": 194,
+      "trending": 177
+    },
+    "regime_pct": {
+      "volatile": 35.0,
+      "calm": 34.6,
+      "crash": 15.9,
+      "trending": 14.5
+    },
+    "dominant_regime": "volatile",
+    "avg_confidence": 0.8766,
+    "current_regime": "crash",
+    "current_confidence": 0.996
+  },
+  "verdicts": [
+    "OOS: FAIL",
+    "MC: FAIL",
+    "ROB: PASS"
+  ],
+  "overall": "FAIL"
+}

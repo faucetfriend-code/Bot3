@@ -1,0 +1,6 @@
+combination,sd_threshold,atr_stop,trailing_atr,tp_mode,volume_mult,expected_wr,expected_net,expected_sharpe
+RANGING_mean_reversion,3.5,1.5,1.5,atr,1.0,63%,+240%,2.19
+BEAR_WEAK_bull_pullback,3.0,1.5,1.5,atr,1.0,56%,+41%,5.76
+BULL_WEAK_bull_pullback,3.0,1.5,1.5,atr,1.0,85%,+4%,17.37
+BULL_STRONG_cross,3.0,1.5,1.5,atr,1.0,64%,+5%,N/A
+BEAR_STRONG_cross,3.0,1.5,1.5,atr,1.0,62%,+4%,N/A

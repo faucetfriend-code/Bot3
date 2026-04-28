@@ -1,0 +1,177 @@
+{
+  "strategy": "Momentum Scalping",
+  "ticker": "BTC-USD",
+  "period": "2020-01-01 -> 2025-01-01",
+  "cutoff": 0.1,
+  "oos_metrics": {
+    "total_return_pct": 20.37395034378133,
+    "cagr_pct": 4.748284256965207,
+    "sharpe": 0.8127193567293653,
+    "max_dd_pct": -1.0119235503387944,
+    "win_rate_pct": 100.0,
+    "profit_factor": Infinity,
+    "n_trades": 2
+  },
+  "baseline_sharpe": -Infinity,
+  "best_sharpe": 0.40402850547119973,
+  "sharpe_delta": Infinity,
+  "proposal": [
+    {
+      "Parameter": "ema_fast",
+      "ENV Variable": "MOMENTUM_EMA_FAST",
+      "Current Value": 9,
+      "Proposed Value": 10,
+      "Change": "+11.1%"
+    },
+    {
+      "Parameter": "ema_slow",
+      "ENV Variable": "MOMENTUM_EMA_SLOW",
+      "Current Value": 21,
+      "Proposed Value": 24,
+      "Change": "+14.3%"
+    }
+  ],
+  "trial_log": [
+    {
+      "Parameter": "ema_fast",
+      "Candidate": 6,
+      "OOS Sharpe": -0.353,
+      "OOS Return %": -15.38,
+      "OOS Max DD %": -27.36
+    },
+    {
+      "Parameter": "ema_fast",
+      "Candidate": 8,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 20.07,
+      "OOS Max DD %": -7.08
+    },
+    {
+      "Parameter": "ema_fast",
+      "Candidate": 9,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 20.37,
+      "OOS Max DD %": -1.01
+    },
+    {
+      "Parameter": "ema_fast",
+      "Candidate": 10,
+      "OOS Sharpe": 0.095,
+      "OOS Return %": 2.28,
+      "OOS Max DD %": -34.43
+    },
+    {
+      "Parameter": "ema_fast",
+      "Candidate": 12,
+      "OOS Sharpe": -0.023,
+      "OOS Return %": -11.52,
+      "OOS Max DD %": -29.48
+    },
+    {
+      "Parameter": "ema_slow",
+      "Candidate": 15,
+      "OOS Sharpe": -0.1,
+      "OOS Return %": -6.14,
+      "OOS Max DD %": -19.42
+    },
+    {
+      "Parameter": "ema_slow",
+      "Candidate": 18,
+      "OOS Sharpe": 0.079,
+      "OOS Return %": 1.74,
+      "OOS Max DD %": -15.39
+    },
+    {
+      "Parameter": "ema_slow",
+      "Candidate": 21,
+      "OOS Sharpe": 0.095,
+      "OOS Return %": 2.28,
+      "OOS Max DD %": -34.43
+    },
+    {
+      "Parameter": "ema_slow",
+      "Candidate": 24,
+      "OOS Sharpe": 0.404,
+      "OOS Return %": 34.21,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "ema_slow",
+      "Candidate": 27,
+      "OOS Sharpe": 0.146,
+      "OOS Return %": 6.37,
+      "OOS Max DD %": -22.54
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 1.4,
+      "OOS Sharpe": 0.338,
+      "OOS Return %": 26.34,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 1.7,
+      "OOS Sharpe": 0.359,
+      "OOS Return %": 28.8,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 2.0,
+      "OOS Sharpe": 0.404,
+      "OOS Return %": 34.21,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 2.3,
+      "OOS Sharpe": 0.404,
+      "OOS Return %": 34.21,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 2.6,
+      "OOS Sharpe": 0.362,
+      "OOS Return %": 29.97,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_target",
+      "Candidate": 2.1,
+      "OOS Sharpe": 0.397,
+      "OOS Return %": 33.34,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_target",
+      "Candidate": 2.55,
+      "OOS Sharpe": 0.404,
+      "OOS Return %": 34.21,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_target",
+      "Candidate": 3.0,
+      "OOS Sharpe": 0.404,
+      "OOS Return %": 34.21,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_target",
+      "Candidate": 3.45,
+      "OOS Sharpe": 0.365,
+      "OOS Return %": 29.69,
+      "OOS Max DD %": -22.42
+    },
+    {
+      "Parameter": "atr_target",
+      "Candidate": 3.9,
+      "OOS Sharpe": 0.365,
+      "OOS Return %": 29.69,
+      "OOS Max DD %": -22.42
+    }
+  ],
+  "applied": false
+}

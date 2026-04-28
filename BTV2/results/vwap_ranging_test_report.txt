@@ -1,0 +1,62 @@
+================================================================================
+VWAP RANGING REGIME TEST - FINAL REPORT
+================================================================================
+
+TESTING METHODOLOGY:
+- Period: 2020-2025 (6 years)
+- Data: BTCUSDT 5m via get_candles (630,543 bars)
+- Regime detection: combined method, 15m timeframe
+
+================================================================================
+RESULTS COMPARISON
+================================================================================
+
+Configuration                      | Trades | WR%   | Net%   | PF
+------------------------------------|--------|-------|--------|------
+RANGING + sd=3.0 + mean_reversion   |   284  | 28.2% | -58.6% | 0.28
+  (Matrix expected: 4578, 63.4%, +240.7%)
+
+RANGING + sd=0.5 + cross            |   365  | 29.3% | -66.3% | 0.36
+
+BEAR_WEAK + sd=3.0 + bull_pullback  |   536  | 36.6% | -74.8% | 0.55
+  (Matrix expected: 2706, 56.4%, +40.9%)
+
+================================================================================
+KEY FINDINGS
+================================================================================
+
+1. MATRIX DISCREPANCY: The vwap_regime_entry_matrix.csv shows +240% for 
+   RANGING + mean_reversion, but current code produces -59% (or worse).
+
+2. POSSIBLE CAUSES:
+   - Matrix was generated with different/different version of strategies.py
+   - Data source differences (different time periods or data format)
+   - Code has been significantly modified since matrix was created
+   - Matrix file may have been created from idealized/backtest-only code
+   
+3. ALL TESTED CONFIGURATIONS SHOW NEGATIVE RETURNS after costs:
+   - sd=0.5 (tight) gives more trades but worse losses (-66%)
+   - sd=3.0 (loose) gives fewer trades but still loses (-59%)
+   - BEAR_WEAK with bull_pullback also loses (-75%)
+
+4. USER'S CLAIM (sd=0.5 + cross) - FAILS:
+   - Produces 365 trades with 29.3% WR
+   - Net return: -66.3% (NOT +240%)
+
+================================================================================
+RECOMMENDATION
+================================================================================
+
+The +240% RANGING result in the matrix cannot be reproduced with the 
+current code and data. Either:
+
+1. The matrix is outdated (created with different code version)
+2. There are missing parameters/filters not captured in the CSV
+3. The original backtest had different assumptions (e.g., no costs)
+
+To achieve positive returns, you would need to:
+- Identify what made the original strategy profitable
+- Verify if there are additional filters or conditions not in current code
+- Check if the original backtest applied any different exit logic
+
+================================================================================

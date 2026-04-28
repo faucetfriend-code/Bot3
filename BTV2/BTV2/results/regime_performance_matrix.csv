@@ -1,0 +1,6 @@
+Regime,Best Strategy,WR%,Net%,Sharpe,Trades,Notes,Trade Counts
+BULL_STRONG,Liquidation C.,0.0%,-19.0%,0.00,1,Strong uptrend,MR:7 VWAP:1068 LC:1
+BULL_WEAK,Mean Reversion,27.8%,-6.6%,-0.71,18,Weak uptrend,MR:18 VWAP:1071 LC:0
+RANGING,Mean Reversion,54.9%,+41.1%,2.92,51,Range-bound,MR:51 VWAP:1068 LC:0
+BEAR_WEAK,Mean Reversion,73.9%,+16.4%,1.75,23,Weak downtrend,MR:23 VWAP:1069 LC:0
+BEAR_STRONG,Mean Reversion,100.0%,+20.8%,38.18,3,Strong downtrend,MR:3 VWAP:1068 LC:0

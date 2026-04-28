@@ -1,0 +1,2 @@
+session,session_start,session_end,entry_mode,stop_pct,target_pct,r_ratio,trades,win_rate,return_pct,sharpe,max_dd,profit_factor,avg_win,avg_loss
+NY,13,20,bull_pullback,0.005,0.01,2.0,20,40.0,-11.2,0,11.88,0.35,0.38,-0.74

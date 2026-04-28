@@ -1,0 +1,74 @@
+Can we break the sweep into several sweeps, each covering a single SD point?
+
+Instead of one monster run, we split it into 12 independent per-SD sweeps. Each runs in 20–60 minutes (with your 300-combo cap). You can run them one-by-one.
+New per-SD wrapper script (create this file: backtesting/vwap_sd_single.py):
+Python#!/usr/bin/env python3
+"""
+VWAP Scalping - Single-SD Sweep (run one SD at a time)
+Usage: python vwap_sd_single.py --sd 2.5
+"""
+import argparse
+from pathlib import Path
+import pandas as pd
+import time
+from itertools import product
+from collections import defaultdict
+
+from strategies import run_vwap_scalping, compute_metrics, INTERVAL_BARS_PER_YEAR
+
+parser = argparse.ArgumentParser()
+parser.add_argument("--sd", type=float, required=True)
+args = parser.parse_args()
+
+# Load data once
+df_5m = load_parquet("BTCUSDT", "5m")  # your existing function
+df_5m = df_5m[(df_5m.index >= '2018-01-01') & (df_5m.index < '2025-01-01')]
+df_1m = load_parquet("BTCUSDT", "1m") or df_5m
+
+print(f"Running full grid for SD = {args.sd} (capped at 300 Stage-1 combos)")
+
+# Your existing parameter ranges (copy from your main script)
+ENTRY_MODES = ['bull_pullback', 'bear_pullback', 'mean_reversion', 'cross', 'momentum', 'deviation']
+STOCH_OVERSOLD = [10, 15, 20, 25, 30]
+STOCH_OVERBOUGHT = [70, 75, 80, 85, 90]
+ADX_MAX = [16, 18, 20, 25, 30, 35, 40]
+RSI_MAX = [35, 40, 45, 50, 55, 60]
+VOLUME_MULT = [1.0, 1.5, 2.0, 2.5]
+ATR_STOP = [0.5, 0.7, 1.0, 1.5]
+ATR_TARGET = [2.0, 3.0, 4.0, 5.0]
+PULLBACK_BARS = [2, 3, 4, 5]
+USE_HTF_VWAP = [True, False]
+USE_HTF_EMA = [True, False]
+HTF_ADX_MAX = [20, 25, 30, 35]
+
+# Stage 1 (capped)
+stage1_results = []
+core_keys = ["entry_mode", "stoch_oversold", "stoch_overbought", "adx_max", "rsi_max"]
+core_vals = [ENTRY_MODES, STOCH_OVERSOLD, STOCH_OVERBOUGHT, ADX_MAX, RSI_MAX]
+core_combos = list(product(*core_vals))
+core_combos = core_combos[:300]  # your new cap
+
+for combo in core_combos:
+    params = dict(zip(core_keys, combo))
+    params["sd_threshold"] = args.sd
+    params["volume_mult"] = 2.0
+    params["atr_stop"] = 0.7
+    params["atr_target"] = 3.8
+    params["pullback_bars"] = 3
+    params["use_htf_vwap"] = True
+    params["use_htf_ema"] = False   # from your impact report — this blocks trades when on
+    params["htf_adx_max"] = 25
+    params["df_exit"] = df_1m
+
+    result = run_test(params, df_5m, df_1m)  # your existing run_test function
+    stage1_results.append(result)
+
+# Save this SD's results immediately (so you can run multiple SDs in parallel)
+pd.DataFrame([r for r in stage1_results]).to_csv(f"results/vwap_sd_{args.sd}_stage1.csv", index=False)
+print(f"SD {args.sd} Stage 1 complete — saved to results/vwap_sd_{args.sd}_stage1.csv")
+How to use it
+Run one SD at a time
+Bashpython backtesting/vwap_sd_single.py --sd 2.0
+python backtesting/vwap_sd_single.py --sd 2.5
+python backtesting/vwap_sd_single.py --sd 3.0
+python backtesting/vwap_sd_single.py --sd 3.5

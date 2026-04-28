@@ -1,0 +1,127 @@
+{
+  "strategy": "MA Crossover",
+  "ticker": "BTC-USD",
+  "period": "2021-01-01 -> 2025-01-01",
+  "cutoff": 0.1,
+  "oos_metrics": {
+    "total_return_pct": 13.455706374169907,
+    "cagr_pct": 4.3008782737904205,
+    "sharpe": 0.8381996588851384,
+    "max_dd_pct": -2.637210349189651,
+    "win_rate_pct": 100.0,
+    "profit_factor": Infinity,
+    "n_trades": 1
+  },
+  "baseline_sharpe": -Infinity,
+  "best_sharpe": -Infinity,
+  "sharpe_delta": NaN,
+  "proposal": [],
+  "trial_log": [
+    {
+      "Parameter": "fast_period",
+      "Candidate": 14,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 0.0,
+      "OOS Max DD %": 0.0
+    },
+    {
+      "Parameter": "fast_period",
+      "Candidate": 17,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 11.92,
+      "OOS Max DD %": -9.98
+    },
+    {
+      "Parameter": "fast_period",
+      "Candidate": 20,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "fast_period",
+      "Candidate": 23,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "fast_period",
+      "Candidate": 26,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 0.0,
+      "OOS Max DD %": 0.0
+    },
+    {
+      "Parameter": "slow_period",
+      "Candidate": 35,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": -5.7,
+      "OOS Max DD %": -15.63
+    },
+    {
+      "Parameter": "slow_period",
+      "Candidate": 42,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "slow_period",
+      "Candidate": 50,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "slow_period",
+      "Candidate": 57,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 11.92,
+      "OOS Max DD %": -9.98
+    },
+    {
+      "Parameter": "slow_period",
+      "Candidate": 65,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 2.8,
+      "OOS Max DD %": -17.09
+    },
+    {
+      "Parameter": "pullback_max",
+      "Candidate": 0.042,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "pullback_max",
+      "Candidate": 0.051,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "pullback_max",
+      "Candidate": 0.06,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "pullback_max",
+      "Candidate": 0.069,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    },
+    {
+      "Parameter": "pullback_max",
+      "Candidate": 0.078,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 13.46,
+      "OOS Max DD %": -2.64
+    }
+  ],
+  "applied": false
+}

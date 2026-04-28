@@ -1,0 +1,100 @@
+{
+  "strategy": "Grid Trading",
+  "ticker": "BTC-USD",
+  "period": "2019-01-01 -> 2025-01-01",
+  "cutoff": 0.1,
+  "oos_metrics": {
+    "total_return_pct": -36.37051172920051,
+    "cagr_pct": -8.646264656367219,
+    "sharpe": -0.19056757823761472,
+    "max_dd_pct": -51.62719193075249,
+    "win_rate_pct": 61.53846153846154,
+    "profit_factor": 0.8016946747627443,
+    "n_trades": 26
+  },
+  "baseline_sharpe": 0.575040101768039,
+  "best_sharpe": 0.736863426723281,
+  "sharpe_delta": 0.161823324955242,
+  "proposal": [
+    {
+      "Parameter": "adx_threshold",
+      "ENV Variable": "GRID_ADX_THRESHOLD",
+      "Current Value": 20.0,
+      "Proposed Value": 17.0,
+      "Change": "-15.0%"
+    }
+  ],
+  "trial_log": [
+    {
+      "Parameter": "adx_threshold",
+      "Candidate": 14.0,
+      "OOS Sharpe": -Infinity,
+      "OOS Return %": 8.83,
+      "OOS Max DD %": -0.15
+    },
+    {
+      "Parameter": "adx_threshold",
+      "Candidate": 17.0,
+      "OOS Sharpe": 0.737,
+      "OOS Return %": 54.19,
+      "OOS Max DD %": -8.39
+    },
+    {
+      "Parameter": "adx_threshold",
+      "Candidate": 20.0,
+      "OOS Sharpe": 0.575,
+      "OOS Return %": 52.1,
+      "OOS Max DD %": -20.26
+    },
+    {
+      "Parameter": "adx_threshold",
+      "Candidate": 23.0,
+      "OOS Sharpe": -0.101,
+      "OOS Return %": -20.47,
+      "OOS Max DD %": -62.99
+    },
+    {
+      "Parameter": "adx_threshold",
+      "Candidate": 26.0,
+      "OOS Sharpe": -0.275,
+      "OOS Return %": -53.68,
+      "OOS Max DD %": -65.26
+    },
+    {
+      "Parameter": "spacing_mult",
+      "Candidate": 0.455,
+      "OOS Sharpe": 0.647,
+      "OOS Return %": 44.8,
+      "OOS Max DD %": -7.52
+    },
+    {
+      "Parameter": "spacing_mult",
+      "Candidate": 0.5525,
+      "OOS Sharpe": 0.647,
+      "OOS Return %": 44.8,
+      "OOS Max DD %": -7.52
+    },
+    {
+      "Parameter": "spacing_mult",
+      "Candidate": 0.65,
+      "OOS Sharpe": 0.737,
+      "OOS Return %": 54.19,
+      "OOS Max DD %": -8.39
+    },
+    {
+      "Parameter": "spacing_mult",
+      "Candidate": 0.7475,
+      "OOS Sharpe": 0.712,
+      "OOS Return %": 51.95,
+      "OOS Max DD %": -8.39
+    },
+    {
+      "Parameter": "spacing_mult",
+      "Candidate": 0.845,
+      "OOS Sharpe": 0.704,
+      "OOS Return %": 51.19,
+      "OOS Max DD %": -8.85
+    }
+  ],
+  "applied": false
+}

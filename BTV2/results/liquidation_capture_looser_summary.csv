@@ -1,0 +1,4 @@
+Config,Timeframe,Total Trades,Win Rate%,Net%,Avg Sharpe,Avg MaxDD%
+A_4h_standard,4h,10,70.0,-2.19,0.193,-12.54
+B_daily_loose,daily,6,83.3,11.84,0.573,-7.39
+C_4h_loose,4h,44,63.6,7.61,0.232,-14.1

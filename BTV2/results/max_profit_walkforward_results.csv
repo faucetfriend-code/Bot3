@@ -1,0 +1,4 @@
+rank,sd_threshold,atr_multiplier,RR,require_sfp,require_volume,long_only,oos_return,oos_sharpe,oos_max_dd,oos_win_rate,oos_trades,p_loss,consistency,passed
+1,2.5,1.0,3.0,False,True,False,-24.42067719770089,-2.882892824931861,-24.80951022002717,31.428571428571427,70,68.57142857142857,10.0,False
+2,2.5,1.0,2.0,False,True,False,-25.644785310476582,-4.0586804222495605,-26.027320662494414,30.0,70,70.0,10.0,False
+3,2.5,1.0,2.5,False,True,False,-26.031227166930027,-3.4085004519492186,-26.411774391118353,30.0,70,70.0,10.0,False

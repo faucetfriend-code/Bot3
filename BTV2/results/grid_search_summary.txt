@@ -1,0 +1,11 @@
+GRID SEARCH RESULTS - TWO-SIDED ENTRY MODES
+================================================================================
+
+Test Period: 2023-2025
+Total Combinations: 72
+Time Elapsed: 413.7s
+
+
+[MEAN_REVERSION]
+
+[CROSS]

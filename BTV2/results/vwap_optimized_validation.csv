@@ -1,0 +1,5 @@
+config,total_trades,avg_win_rate,total_pnl,avg_sharpe,avg_maxdd
+Baseline,68,29.3,-20.85,-2.44,-4.4
+Optimized,54,25.4,-17.7,-2.13,-3.8
+Bear_Pullback,197,34.7,-59.13,-3.73,-12.5
+Bull_Pullback,181,32.6,-47.41,-3.06,-10.3

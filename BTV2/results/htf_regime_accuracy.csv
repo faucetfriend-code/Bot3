@@ -1,0 +1,8 @@
+year,expected,5m_actual,5m_correct,1h_actual,1h_correct,4h_actual,4h_correct
+2018,bear_strong,ranging,False,bull_weak,False,bear_weak,False
+2019,ranging,ranging,True,bull_weak,False,bear_weak,False
+2020,bull_strong,ranging,False,bull_weak,False,bull_weak,False
+2021,"BULL(Jan-Apr), BEAR(May-Dec)",ranging,False,bull_weak,False,bull_weak,False
+2022,bear_strong,ranging,False,bear_weak,False,bear_weak,False
+2023,ranging,ranging,True,ranging,True,ranging,True
+2024,bull_strong,ranging,False,bull_weak,False,bull_weak,False

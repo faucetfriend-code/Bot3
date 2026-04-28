@@ -1,0 +1,149 @@
+{
+  "strategy": "VWAP Scalping",
+  "ticker": "BTC-USD",
+  "period": "2015-01-01 -> 2025-01-01",
+  "cutoff": 0.05,
+  "oos_metrics": {
+    "total_return_pct": -28.070521224729294,
+    "cagr_pct": -3.5950000168314067,
+    "sharpe": 0.006552197677501559,
+    "max_dd_pct": -79.63156865458139,
+    "win_rate_pct": 54.054054054054056,
+    "profit_factor": 1.058994324070305,
+    "n_trades": 37
+  },
+  "baseline_sharpe": 0.3968142504174592,
+  "best_sharpe": 0.5024794056003642,
+  "sharpe_delta": 0.10566515518290498,
+  "proposal": [
+    {
+      "Parameter": "atr_stop",
+      "ENV Variable": "VWAP_ATR_STOP_MULTIPLIER",
+      "Current Value": 7.0,
+      "Proposed Value": 5.95,
+      "Change": "-15.0%"
+    }
+  ],
+  "trial_log": [
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.05,
+      "OOS Sharpe": 0.397,
+      "OOS Return %": 91.35,
+      "OOS Max DD %": -47.59
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.05,
+      "OOS Sharpe": 0.397,
+      "OOS Return %": 91.35,
+      "OOS Max DD %": -47.59
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.05,
+      "OOS Sharpe": 0.397,
+      "OOS Return %": 91.35,
+      "OOS Max DD %": -47.59
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.05,
+      "OOS Sharpe": 0.397,
+      "OOS Return %": 91.35,
+      "OOS Max DD %": -47.59
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.057,
+      "OOS Sharpe": 0.317,
+      "OOS Return %": 56.51,
+      "OOS Max DD %": -54.37
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.065,
+      "OOS Sharpe": 0.359,
+      "OOS Return %": 72.57,
+      "OOS Max DD %": -54.64
+    },
+    {
+      "Parameter": "butterworth_cutoff",
+      "Candidate": 0.075,
+      "OOS Sharpe": 0.465,
+      "OOS Return %": 123.22,
+      "OOS Max DD %": -49.85
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 2.1,
+      "OOS Sharpe": 0.055,
+      "OOS Return %": -33.94,
+      "OOS Max DD %": -85.01
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 2.55,
+      "OOS Sharpe": 0.413,
+      "OOS Return %": 102.94,
+      "OOS Max DD %": -62.66
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.0,
+      "OOS Sharpe": 0.465,
+      "OOS Return %": 123.22,
+      "OOS Max DD %": -49.85
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.45,
+      "OOS Sharpe": 0.197,
+      "OOS Return %": 19.07,
+      "OOS Max DD %": -47.76
+    },
+    {
+      "Parameter": "sd_threshold",
+      "Candidate": 3.9,
+      "OOS Sharpe": 0.174,
+      "OOS Return %": 13.33,
+      "OOS Max DD %": -26.25
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 4.9,
+      "OOS Sharpe": 0.468,
+      "OOS Return %": 125.11,
+      "OOS Max DD %": -54.15
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 5.95,
+      "OOS Sharpe": 0.502,
+      "OOS Return %": 146.56,
+      "OOS Max DD %": -56.48
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 7.0,
+      "OOS Sharpe": 0.465,
+      "OOS Return %": 123.22,
+      "OOS Max DD %": -49.85
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 8.05,
+      "OOS Sharpe": 0.465,
+      "OOS Return %": 123.22,
+      "OOS Max DD %": -49.85
+    },
+    {
+      "Parameter": "atr_stop",
+      "Candidate": 9.1,
+      "OOS Sharpe": 0.465,
+      "OOS Return %": 123.22,
+      "OOS Max DD %": -49.85
+    }
+  ],
+  "applied": false
+}
