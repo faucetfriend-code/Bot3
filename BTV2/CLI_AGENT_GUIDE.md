@@ -9,6 +9,8 @@ How to programmatically drive the walk-forward backtesting system, interpret its
 > **v7 additions (2026-04-24):** Three validation layers added to `strategies.py`: Monte Carlo simulation (`monte_carlo_validate`), parameter robustness/fragility score (`compute_robustness_score`), and GMM regime detection (`fit_gmm_regime` / `predict_gmm_regime` / `gmm_regime_summary`). New `btv2_validate.py` runner combines all layers into a single PASS/CAUTION/FAIL verdict. `compute_metrics` now accepts `bars_per_year` param (default 365); `INTERVAL_BARS_PER_YEAR` constant added. `scikit-learn>=1.3.0` added to requirements. See [Validation Layers (v7)](#validation-layers-v7) for full details.
 >
 > **v8 additions (2026-04-25):** VS_GRID and VS_DEFAULTS corrected based on 350+ empirical test findings (`VWAP_Complete_Results_Summary.md`). `use_htf_ema` default changed True → **False** (True blocks ALL trades — empirically confirmed). `entry_mode` default changed `mean_reversion` → **`bull_pullback`** (#1 variable by importance, +118%). `sd_threshold` grid floor lowered 2.5 → **1.5**. `volume_mult` raised 1.2 → **2.0**. Full v6 walk-forward validation run: **FAIL** (OOS Sharpe -3.84, 64 trades, WR 27%, MC 100% loss prob). Live bot `vwap_scalping.py` NOT updated — validation prerequisite not met. See [v8 Validation Findings](#v8-validation-findings) for full details.
+>
+> **v8 additions (2026-04-28):** Major new section [Multi-Strategy & Regime Testing — Correct Workflow](#multi-strategy--regime-testing--correct-workflow) added. Prohibits creating custom test files with own EMA/RSI implementations. Documents correct workflow using `STRATEGY_REGISTRY` + `data_manager.py` + `btv2_validate.py` per year. Raises `n_trades` floors: 30 (daily strategies) / 50 (intraday). ADX/GMM-based regime detection required — hardcoded year labels are prohibited (lookahead bias). Documents `regime_strategy_settings.py` 2026-hardcoded-BEARISH lookahead bias. Clarifies grid regime transition test is a logic unit test, not P&L validation. Updated Quality Gates table and Critical Rule #6 to new trade-count thresholds.
 
 ---
 
@@ -897,7 +899,7 @@ done
 | `max_dd_pct` | Worst peak-to-trough drawdown (negative) | Better than −30% |
 | `win_rate_pct` | % of trades closed at profit | > 45%; target 55–70% for VWAP at SD≥3.0 |
 | `profit_factor` | Gross wins ÷ gross losses | > 1.3; target 1.4–1.8 for VWAP |
-| `n_trades` | Total closed trades in period | ≥ 10 for statistical significance |
+| `n_trades` | Total closed trades in period | ≥ 30 daily / ≥ 50 intraday for validation; ≥ 10 for `.env` updates only |
 | `avg_win_pct` | Average winning trade size | Should be ≥ 2× avg_loss_pct |
 | `avg_loss_pct` | Average losing trade size | Negative; ATR stop controls this |
 
@@ -999,8 +1001,8 @@ The v3 trial_log starts with Butterworth cutoff trials, then moves to strategy p
 │  Phase 2: DECIDE                                 │
 │  CLI agent reads results.json                    │
 │                                                  │
-│  if sharpe_delta > 0.10 and n_trades >= 10:      │
-│      apply = True   (parameter improvement)      │
+│  if sharpe_delta > 0.10 and n_trades >= 30:      │
+│      apply = True   (≥30 daily / ≥50 intraday)  │
 │  elif |cutoff_delta| > 0.02:                     │
 │      update slider  (Butterworth tuning)         │
 │  elif oos_sharpe < 0.3:                          │
@@ -1028,7 +1030,16 @@ oos_sharpe    = result["oos_metrics"]["sharpe"]
 n_trades      = result["oos_metrics"]["n_trades"]
 cutoff_delta  = result["cutoff_delta"]
 
-if sharpe_delta > 0.10 and n_trades >= 10:
+## Trade count floors — per-strategy minimum for statistical confidence:
+# daily strategies (Mean Reversion, MA Crossover): n_trades >= 30
+# intraday strategies (Momentum 15m, VWAP 5m):    n_trades >= 50
+# See "Multi-Strategy & Regime Testing" section for per-strategy floors
+MIN_TRADES_DAILY    = 30
+MIN_TRADES_INTRADAY = 50
+# For .env updates (not strategy validation), the floor is lower:
+min_trades_for_apply = MIN_TRADES_DAILY if tf_cfg["interval"] == "1d" else MIN_TRADES_INTRADAY
+
+if sharpe_delta > 0.10 and n_trades >= min_trades_for_apply:
     # Meaningful improvement with statistical confidence → apply
     import subprocess
     subprocess.run(["python", "btv2_agent_run.py",
@@ -1037,13 +1048,15 @@ if sharpe_delta > 0.10 and n_trades >= 10:
 elif abs(cutoff_delta) > 0.02:
     print(f"Update Butterworth slider to {result['best_cutoff']:.3f}")
 
-elif oos_sharpe < 0.30 and n_trades >= 5:
+elif oos_sharpe < 0.30 and n_trades >= 10:
     # Strategy is underperforming → flag for logic review
+    # (use 10 as floor here — a low-trade strategy with negative Sharpe still needs review)
 
-elif n_trades < 5:
+elif n_trades < 10:
     # Too few trades to evaluate → widen entry conditions:
-    # VWAP: lower sd_threshold toward 2.5, set use_htf_vwap=False,
+    # VWAP: lower sd_threshold toward 2.0, set use_htf_vwap=False,
     #       set use_stoch_filter=False to reduce filter stack
+    # Note: < 10 trades means the filter stack is too tight — loosen before optimizing
     pass
 ```
 
@@ -1234,8 +1247,8 @@ All require `levels=compute_reference_levels(df)` to be passed when active.
 ### Recommended Phase 1–3 test sequence (v6 baseline)
 
 ```python
-# Step 1: v6 Baseline (mean_reversion, SD=3.0, trailing stop primary)
-from strategies import VS_DEFAULTS
+# Step 1: v8 Baseline (bull_pullback, SD=2.0, use_htf_ema=False, volume_mult=2.0)
+from strategies import VS_DEFAULTS   # v8 empirical defaults — not v6
 equity, trades = run_vwap_scalping(df, 0.10, **VS_DEFAULTS)
 
 # Step 2: Add reference levels + nearest TP
@@ -1257,7 +1270,7 @@ equity, trades = run_vwap_scalping(df, 0.10, **{**VS_DEFAULTS,
     "use_stoch_filter": True, "use_htf_vwap": True})
 ```
 
-Keep a feature if it improves OOS Sharpe by >0.1 and maintains ≥10 trades/year.
+Keep a feature if it improves OOS Sharpe by >0.1 and maintains ≥15 trades/year (daily) or ≥40 trades/year (intraday). Fewer trades is acceptable if Monte Carlo verdict remains ROBUST.
 
 ---
 
@@ -1545,6 +1558,239 @@ The strategy has not shown edge on BTC 5m data in any tested configuration (350+
 
 ---
 
+## Multi-Strategy & Regime Testing — Correct Workflow
+
+_Added 2026-04-28 · Context: `BTV2/tests/` meta-regime test files reviewed — methodology issues found and documented here._
+
+### ⛔ DO NOT: Write Custom Test Files
+
+**Never** create a new Python file that implements its own EMA, RSI, ATR, or crossover logic to validate a strategy. The existing testing infrastructure in `strategies.py` has been validated over 350+ tests. Custom implementations introduce:
+
+- **Different indicator math** than the live bot uses — EMA from scratch ≠ `STRATEGY_REGISTRY` implementation
+- **Daily-bar shortcuts** — testing a 15m strategy on 1d bars gives a completely different (and misleading) signal profile
+- **Hardcoded year labels** (lookahead bias) — declaring 2018 "BEARISH" and 2019 "BULLISH" uses future knowledge at test time
+- **Statistically meaningless trade counts** — 9 trades over 7 years (1.3/year) cannot confirm or deny an edge
+
+> **The files `BTV2/tests/momentum_scalping_2018_2025.py`, `BTV2/tests/ma_crossover_2018_2025.py`, and `BTV2/tests/mean_reversion_2018_2025.py` are examples of this anti-pattern.** Their results are NOT comparable to live bot performance and should not be used to validate strategy decisions. Do not replicate this pattern.
+
+---
+
+### ✅ DO: Use `btv2_validate.py` Per Strategy Per Year
+
+The correct approach for multi-year regime analysis is to run `btv2_validate.py` once per strategy per year. This uses each strategy's native interval, production signal logic from `strategies.py`, and all 4 validation layers.
+
+```bash
+# Run per year — uses strategy's native interval from STRATEGY_TIMEFRAME_CONFIG automatically
+for year in 2018 2019 2020 2021 2022 2023 2024; do
+    python BTV2/btv2_validate.py \
+        --strategy "Momentum Scalping" \
+        --start ${year}-01-01 --end $((year+1))-01-01 \
+        --no-gmm \
+        --json-out BTV2/results/momentum_${year}.json
+    echo "--- ${year} done ---"
+done
+
+# Then compare the JSON results:
+python -c "
+import json, glob
+for f in sorted(glob.glob('BTV2/results/momentum_*.json')):
+    year = f.split('_')[-1].replace('.json','')
+    r = json.load(open(f))
+    m = r['oos_metrics']
+    mc = r['monte_carlo']['verdict']
+    print(f'{year}:  Sharpe={m[\"sharpe\"]:+.2f}  Return={m[\"total_return_pct\"]:+.1f}%  Trades={m[\"n_trades\"]}  MC={mc}')
+"
+```
+
+This runs on **15m bars** for Momentum Scalping (not 1d), uses actual production `run_momentum_scalping()`, and properly applies walk-forward within each year.
+
+---
+
+### Correct Multi-Strategy Yearly Comparison
+
+If you need a single script to compare multiple strategies across multiple years, use `STRATEGY_REGISTRY` and `data_manager.py` — do not re-implement any indicators:
+
+```python
+#!/usr/bin/env python3
+"""
+Multi-strategy yearly regime comparison — CORRECT APPROACH.
+Uses STRATEGY_REGISTRY + data_manager.py — no custom EMA/RSI implementations.
+"""
+import json
+from datetime import date, datetime, timezone
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from strategies import (
+    STRATEGY_REGISTRY, STRATEGY_TIMEFRAME_CONFIG, INTERVAL_BARS_PER_YEAR,
+    build_windows, compute_metrics, optimize_strategy, stitch_oos_equity,
+)
+from data_manager import get_candles
+
+STRATEGIES_TO_TEST = ["Momentum Scalping", "MA Crossover", "Mean Reversion"]
+YEARS = range(2018, 2025)
+
+results = {}
+
+for strategy_name in STRATEGIES_TO_TEST:
+    tf_cfg   = STRATEGY_TIMEFRAME_CONFIG[strategy_name]
+    interval = tf_cfg["interval"]   # Momentum=15m, MA Crossover=1d, Mean Reversion=1d
+    bars_py  = INTERVAL_BARS_PER_YEAR[interval]
+    func, _, defaults = STRATEGY_REGISTRY[strategy_name]
+    results[strategy_name] = {}
+
+    for year in YEARS:
+        start = datetime(year,   1, 1, tzinfo=timezone.utc)
+        end   = datetime(year+1, 1, 1, tzinfo=timezone.utc)
+
+        df = get_candles("BTCUSDT", interval, start, end)
+        if len(df) < 100:
+            continue
+
+        # Walk-forward within the year using strategy's own window sizes
+        windows = build_windows(
+            date(year, 1, 1), date(year+1, 1, 1),
+            train_months=tf_cfg["train_months"],
+            test_months=tf_cfg["test_months"],
+        )
+
+        segments, all_trades = [], []
+        for w in windows:
+            df_train = df.loc[str(w["train_start"]):str(w["train_end"])]
+            df_test  = df.loc[str(w["test_start"]):str(w["test_end"])]
+            if len(df_train) < 50 or len(df_test) < 10:
+                continue
+
+            # optimize_strategy() grids over VS_GRID (strategies.py), not a custom loop
+            best = optimize_strategy(df_train, 0.10, strategy_name)
+            eq, trd = func(df_test, 0.10, **best)
+            segments.append(eq)
+            all_trades.extend(trd)
+
+        if not segments:
+            results[strategy_name][year] = {"n_trades": 0, "sharpe": None, "skip": "no_folds"}
+            continue
+
+        oos_equity = stitch_oos_equity(segments)
+        metrics    = compute_metrics(oos_equity, all_trades, bars_per_year=bars_py)
+        results[strategy_name][year] = metrics
+
+        print(f"{strategy_name:25s} {year}: interval={interval}  "
+              f"Sharpe={metrics['sharpe']:+.2f}  "
+              f"Return={metrics['total_return_pct']:+.1f}%  "
+              f"Trades={metrics['n_trades']}")
+
+Path("BTV2/results/multi_strategy_yearly.json").write_text(
+    json.dumps(results, indent=2, default=str)
+)
+print("\nSaved: BTV2/results/multi_strategy_yearly.json")
+```
+
+**What this gets right vs. custom test files:**
+
+| Issue | Custom test files | This approach |
+|-------|-------------------|---------------|
+| Indicator math | Re-implements EMA/RSI from scratch | Uses production `run_*` functions from `strategies.py` |
+| Native timeframe | Daily bars for every strategy | 15m for Momentum, 1d for MA Crossover — correct per `STRATEGY_TIMEFRAME_CONFIG` |
+| Walk-forward | Full-year in-sample (data leakage) | Proper OOS via `build_windows()` + `optimize_strategy()` |
+| Regime labels | Hardcoded year → BEARISH/BULLISH | No labels needed — OOS result speaks for itself |
+| Sharpe scaling | Fixed `√252` or wrong basis | `INTERVAL_BARS_PER_YEAR[interval]` — correct 24/7 crypto scaling |
+| Trade count | 9 trades over 7 years (Momentum) | Typically 30–200+ trades at native interval |
+
+---
+
+### Statistical Significance Floors
+
+Before reporting a strategy as "validated" or "profitable", closed trade counts must reach these minimums:
+
+| Strategy | Interval | Min Annual Trades | Min Total (multi-year) | Note |
+|----------|----------|-------------------|------------------------|------|
+| Mean Reversion | 1d | 15 | **30** | Slow strategy — few signals/year expected |
+| MA Crossover | 1d | 8 | **30** | Few crossovers/year; 30+ needed for MC validity |
+| Momentum Scalping | 15m | 30 | **60** | Intraday — needs more to separate noise from edge |
+| VWAP Scalping | 5m | 40 | **80** | Very low count = filter stack too tight, not validation |
+| Grid Trading | 4h | 20 | **40** | Grid fills accumulate fast when deployed |
+| Liquidation Capture | 1d | 5/year | **15** | Rare event — use Monte Carlo verdict, not walk-forward Sharpe |
+
+**The `n_trades >= 10` rule in the automation loop is a floor for `.env` updates, not for strategy validation.** A 7-year "validation" claiming Momentum Scalping is the "best strategy" based on 9 total trades is statistically meaningless regardless of win rate or return.
+
+---
+
+### Regime Detection: Data-Driven, Not Hardcoded Labels
+
+**Do NOT use hardcoded year classifications.** This is a form of lookahead bias — the labels use knowledge that wasn't available at the start of each year.
+
+```python
+# ❌ WRONG — lookahead bias
+YEAR_CLASSIFICATIONS = {
+    2018: "BEARISH", 2022: "BEARISH",   # you only know these were bearish in hindsight
+    2019: "BULLISH", 2020: "BULLISH",   # a 2018 bot didn't know 2019 would be bullish
+}
+```
+
+The correct approach uses the GMM regime detector already in `strategies.py` — it's trained only on data before the test window, so there's no lookahead:
+
+```python
+from strategies import fit_gmm_regime, predict_gmm_regime, gmm_regime_summary
+
+# --- No hardcoded labels needed ---
+
+# Train GMM on the training window only (no lookahead)
+gmm_model, label_map, scaler = fit_gmm_regime(
+    df_train,
+    n_regimes       = 4,
+    lookback        = 60,
+    stability_window= 5,
+    random_state    = 42,
+)
+
+# Predict the test window's regime from the fitted model
+regime_df = predict_gmm_regime(df_test, gmm_model, label_map, scaler,
+                                lookback=60, stability_window=5)
+summary = gmm_regime_summary(regime_df)
+
+current_regime = summary["dominant_regime"]   # "calm" / "trending" / "volatile" / "crash"
+print(f"Test window regime: {current_regime}  (confidence={summary['avg_confidence']:.2f})")
+```
+
+For rough annual regime labels (if you genuinely need year-level classification), use annual return of the asset computed from the data itself — not hardcoded strings. But prefer the GMM path: it's the system already built.
+
+---
+
+### ⚠️ Known Lookahead Bias: `regime_strategy_settings.py`
+
+`BTV2/regime_strategy_settings.py` contains:
+
+```python
+bearish_years = {2018, 2022, 2026}   # ← 2026 hardcoded as BEARISH
+```
+
+This means any code using this file will classify **all of 2026 as a bear market** regardless of actual conditions. The live bot using this file will short-only for the entire year.
+
+**Treat this file as a temporary scaffold, not production logic.** Do not reference it in new tests or validation scripts. Use GMM regime detection or ADX-based per-window regime detection instead.
+
+---
+
+### Grid Trading: Logic Test ≠ P&L Validation
+
+`BTV2/tests/grid_regime_transition.py` tests the `simulate_partial_exit()` function — it verifies that short positions are closed in an uptrend and long positions are closed in a downtrend. This is a **logic unit test**.
+
+- A PASS on this test means: "the code closes the right positions when a regime transition is detected."
+- A PASS on this test does **NOT** mean: "grid trading is profitable."
+
+To validate grid trading P&L, run:
+```bash
+python BTV2/btv2_validate.py --strategy "Grid Trading" \
+    --start 2022-01-01 --end 2024-01-01 \
+    --json-out BTV2/results/grid_validation.json
+```
+
+The research plan in this guide already recommends disabling Grid Trading (`ENABLE_GRID_TRADING=false`) based on -5.91% returns and negative OOS Sharpe in 5 of 7 years.
+
+---
+
 ## Critical Rules (Do Not Violate)
 
 ### 1. Butterworth filter must be `lfilter`, never `filtfilt`
@@ -1601,9 +1847,12 @@ sharpe = bar_rets.mean() / bar_rets.std() * math.sqrt(105120)
 
 ### 6. Never apply proposals without OOS confidence
 Only apply agent proposals when:
-- `n_trades >= 10` (statistical floor)
-- `sharpe_delta > 0.10` (meaningful improvement)
+- `n_trades >= 30` for daily strategies (Mean Reversion, MA Crossover) — statistical floor
+- `n_trades >= 50` for intraday strategies (Momentum 15m, VWAP 5m) — noise floor is higher at LTF
+- `sharpe_delta > 0.10` (meaningful improvement over baseline)
 - `oos_sharpe > 0.0` (strategy is net positive after costs)
+
+> ⚠️ The older `n_trades >= 10` rule was insufficient for daily strategies. A 7-year test with 9 total trades (1.3/year) cannot confirm edge regardless of win rate.
 
 ---
 
@@ -1742,7 +1991,7 @@ python BTV2/optimizer_agent.py -s "VWAP Scalping" -n 80 --strict --dry-run
 | Metric | Accept | Reject |
 |--------|--------|--------|
 | OOS Sharpe improvement | Δ ≥ 0.05 | Δ < 0.05 |
-| Minimum OOS trades | ≥ 10 | < 10 |
+| Minimum OOS trades | ≥ 30 (daily) / ≥ 50 (intraday) | < 30 (daily) / < 50 (intraday) |
 | Max drawdown | ≥ −30% | < −30% |
 | Consistency | ≥ 50% windows Sharpe > 0 | < 50% |
 | Strict-mode Sharpe ratio | ≥ 70% of normal-mode | < 70% |
