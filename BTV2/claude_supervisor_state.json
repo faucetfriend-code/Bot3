@@ -1,0 +1,27 @@
+{
+  "_schema": "claude_supervisor_state_v1",
+  "_purpose": "Persistent state for the Claude supervisor routine (every-4h check). Read at the start of each check, written at the end. Survives across sessions.",
+  "_initialized_ts": "2026-05-02T00:00:00Z",
+
+  "last_check_ts":            null,
+  "last_balance":             null,
+  "peak_balance":             null,
+  "open_positions":           [],
+  "trades_since_last":        0,
+  "alerts_active":            [],
+  "consecutive_silent_checks": 0,
+  "next_check_ts":            null,
+  "last_report_path":         null,
+
+  "_field_docs": {
+    "last_check_ts":              "ISO-8601 UTC timestamp of the previous successful check.",
+    "last_balance":               "Account balance at end of previous check.",
+    "peak_balance":               "Highest balance ever observed across all checks. Used for drawdown calc.",
+    "open_positions":             "Snapshot of open positions at last check (list of dicts).",
+    "trades_since_last":          "Trade count between previous and most-recent check.",
+    "alerts_active":              "List of currently-flagged anomalies. Cleared when conditions resolve.",
+    "consecutive_silent_checks":  "Number of consecutive checks with zero new trades. Used to flag dead bot.",
+    "next_check_ts":              "ISO-8601 UTC timestamp the routine should fire next. Cadence escalates with drawdown.",
+    "last_report_path":           "Path to the most recent supervisor report markdown file."
+  }
+}
