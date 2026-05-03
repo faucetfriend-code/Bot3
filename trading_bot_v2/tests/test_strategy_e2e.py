@@ -227,9 +227,11 @@ class DataGenerator:
         # Decline to push price below VWAP
         for i in range(50):
             closes.append(closes[-1] - 0.08)
-        # Small uptick at end for positive MACD histogram
-        closes[-1] += 0.3
-        closes[-2] += 0.15
+        # Acceleration of decline at end: keeps MACD histogram NEGATIVE.
+        # Strategy (2026-05) requires histogram < 0 for BUY (sellers still
+        # active = enter before the reversal, not after).
+        closes[-1] -= 0.3
+        closes[-2] -= 0.15
         data = DataGenerator._make_ohlcv(closes)
         return data
 
@@ -242,9 +244,11 @@ class DataGenerator:
             closes.append(100 + random.uniform(-0.5, 0.5))
         for i in range(50):
             closes.append(closes[-1] + 0.08)
-        # Small downtick for negative MACD histogram
-        closes[-1] -= 0.3
-        closes[-2] -= 0.15
+        # Acceleration of rise at end: keeps MACD histogram POSITIVE.
+        # Strategy (2026-05) requires histogram > 0 for SELL (buyers still
+        # active = enter before the reversal, not after).
+        closes[-1] += 0.3
+        closes[-2] += 0.15
         data = DataGenerator._make_ohlcv(closes)
         return data
 
@@ -374,6 +378,10 @@ class TestMeanReversionE2E:
             bb_std_dev=2.0,
             atr_stop_multiplier=2.0,
             min_confidence=0.10,
+            # Explicit bb_proximity so the test is independent of .env values.
+            # Data generator produces distance_pct ≈ 0.17; 0.25 is intentionally
+            # generous to keep the focus on RSI + BB structure, not exact proximity.
+            bb_proximity=0.25,
         )
         defaults.update(kwargs)
         return MeanReversionStrategy(**defaults)
@@ -773,7 +781,9 @@ class TestGridTradingE2E:
         sig = signals[0]
         assert sig.strategy == StrategyType.GRID_TRADING
         assert sig.is_valid()
-        assert sig.indicators.get("grid_levels") == 5
+        # "grid_level" is the current level index (1-based); "grid_levels" (the
+        # total count) lives on the strategy object, not in the signal indicators.
+        assert sig.indicators.get("grid_level") == 1
 
     # -- Phase 2: Execution --
 
@@ -789,15 +799,16 @@ class TestGridTradingE2E:
         assert len(signals) >= 1
 
         sig = signals[0]
-        spacing = sig.indicators["spacing"]
-        # Simulate placing grid orders
-        for level in range(1, sig.indicators["grid_levels"] + 1):
+        # Indicator key is "grid_spacing" (not "spacing"); total level count is
+        # on the strategy object rather than inside the per-signal indicators dict.
+        spacing = sig.indicators["grid_spacing"]
+        for level in range(1, strategy.grid_levels + 1):
             buy_price = current_price - spacing * level
             mock_client.place_order(
                 symbol="BTC", side="bid", quantity="0.1",
                 order_type="limit", price=str(buy_price), reduce_only=False,
             )
-        assert mock_client.place_order.call_count == sig.indicators["grid_levels"]
+        assert mock_client.place_order.call_count == strategy.grid_levels
 
     # -- Phase 3: Position Closing --
 
