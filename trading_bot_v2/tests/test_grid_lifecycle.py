@@ -159,10 +159,21 @@ class TestGridLifecycleManager:
         # Grid is fully removed after force exit (no partial_unwind in test env)
         assert not grid_manager.has_active_grid(symbol)
 
-    @pytest.mark.skip(reason="cleanup_completed_grids method does not exist in current implementation")
     def test_cleanup_completed_grids(self, grid_manager):
         """Test cleanup of completed grids."""
-        pass
+        # Register two grids
+        grid_manager.register_new_grid("SUI", 1000.0, 1.50)
+        grid_manager.register_new_grid("DOGE", 500.0, 0.10)
+
+        # Manually close SUI grid (simulate completed lifecycle)
+        grid_manager._grids["SUI"]["state"] = GridState.CLOSED
+
+        # Run cleanup — only CLOSED grids should be removed
+        removed = grid_manager.cleanup_completed_grids()
+
+        assert removed == 1
+        assert "SUI" not in grid_manager._grids
+        assert grid_manager.has_active_grid("DOGE")
 
     def test_get_grid_statistics(self, grid_manager):
         """Test grid statistics generation."""

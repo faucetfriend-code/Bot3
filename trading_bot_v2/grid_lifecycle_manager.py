@@ -1738,6 +1738,28 @@ class GridLifecycleManager:
                     active_grids.append(status)
         return active_grids
 
+    def cleanup_completed_grids(self) -> int:
+        """
+        Remove CLOSED grids from memory to free resources.
+
+        Grids enter the CLOSED state after emergency exit or regime-based
+        shutdown. They are retained in ``_grids`` until this method is called
+        so that status queries can still inspect them after the fact.
+
+        Returns:
+            Number of grids removed from memory.
+        """
+        removed = 0
+        for symbol in list(self._grids.keys()):
+            if self._grids[symbol].get("state") == GridState.CLOSED:
+                del self._grids[symbol]
+                self._fills.pop(symbol, None)
+                self._processed_trades.pop(symbol, None)
+                self._metrics.pop(symbol, None)
+                removed += 1
+                logger.info(f"🗑️ Cleaned up closed grid for {symbol}")
+        return removed
+
     def get_grid_statistics(self) -> Dict[str, Any]:
         """Get aggregate statistics across all grids."""
         total_realized_pnl = 0.0
