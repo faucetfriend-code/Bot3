@@ -18,7 +18,8 @@ Sizing MUST come from RiskManager.
 
 from enum import Enum
 from typing import Dict, Any, List, Optional, Set
-from datetime import datetime, timedelta
+import os
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 from dataclasses import dataclass, field
 
@@ -99,7 +100,7 @@ class GridLifecycleManager:
         self._metrics: Dict[str, GridMetrics] = {}
 
         # Last time we checked for fills
-        self._last_fill_check: datetime = datetime.now() - timedelta(hours=1)
+        self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
 
     # =========================
     # ORPHAN DETECTION & REPAIR
@@ -205,7 +206,7 @@ class GridLifecycleManager:
                 grid_data["state"] = GridState.ACTIVE
 
             # Add repair metadata
-            grid_data["repaired_at"] = datetime.now()
+            grid_data["repaired_at"] = datetime.now(timezone.utc)
             grid_data["repair_issues"] = issues
 
             # Persist the repaired grid state
@@ -388,10 +389,20 @@ class GridLifecycleManager:
             num_levels = len(all_orders)
             total_capital = self._estimate_capital_from_exchange_orders(symbol) or 0
 
+            # SAFETY: compute a real emergency stop on re-adoption.
+            # _check_emergency_stop short-circuits on ≤ 0; without this the
+            # grid runs unprotected at the per-symbol level.
+            emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            if buy_prices:
+                emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
+            else:
+                emergency_stop = center_price * (1.0 - emergency_stop_pct)
+
             self._grids[symbol] = {
                 "state": GridState.ACTIVE,
                 "grid_capital": total_capital,
-                "emergency_stop": 0,
+                "emergency_stop": emergency_stop,  # FIX: was 0 — unprotected on re-adoption
                 "regime_on_creation": "unknown_readopted",
                 "atr_at_creation": 0,
                 "grid_spacing": grid_spacing or 0.004,
@@ -399,10 +410,10 @@ class GridLifecycleManager:
                 "orders_placed": num_levels,
                 "center_price": center_price,
                 "initial_center": center_price,
-                "created_at": datetime.now(),
+                "created_at": datetime.now(timezone.utc),
                 "refresh_count": 0,
                 "readopted": True,
-                "readopted_at": datetime.now(),
+                "readopted_at": datetime.now(timezone.utc),
             }
 
             self._fills[symbol] = []
@@ -547,7 +558,7 @@ class GridLifecycleManager:
             return
         old_spacing = self._grids[symbol].get("grid_spacing", 0)
         self._grids[symbol]["grid_spacing"] = new_spacing
-        self._grids[symbol]["spacing_updated_at"] = datetime.now()
+        self._grids[symbol]["spacing_updated_at"] = datetime.now(timezone.utc)
         logger.info(
             f"📊 Grid {symbol} spacing updated: ${old_spacing:.4f} → ${new_spacing:.4f} ({reason})"
         )
@@ -577,8 +588,8 @@ class GridLifecycleManager:
 
         # Safety: enforce minimum time between refreshes (45 minutes)
         last_refresh = self.get_last_refresh_time(symbol)
-        if last_refresh and (datetime.now() - last_refresh).total_seconds() < 2700:
-            remaining = 2700 - (datetime.now() - last_refresh).total_seconds()
+        if last_refresh and (datetime.now(timezone.utc) - last_refresh).total_seconds() < 2700:
+            remaining = 2700 - (datetime.now(timezone.utc) - last_refresh).total_seconds()
             logger.info(
                 f"Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
             )
@@ -596,20 +607,41 @@ class GridLifecycleManager:
             delta = new_center - current_center
             spacing = grid.get("grid_spacing", 0)
 
+            # Resolve correct tick size for this symbol from the exchange.
+            # Falls back to a sane default ONLY if instrument info is unavailable.
+            try:
+                instr = self.client.get_instrument_info(symbol) or {}
+                tick_size = float(instr.get("tick_size", 0)) or 0.0
+            except Exception as e:
+                logger.warning(f"get_instrument_info failed for {symbol}: {e}")
+                tick_size = 0.0
+            if tick_size <= 0:
+                # Last-resort fallback (BTC ticks ≈ $1, most alts ≈ $0.01).
+                # Logged because this can produce wrong prices on novel assets.
+                tick_size = 1.0 if "BTC" in symbol else 0.01
+                logger.warning(
+                    f"Using fallback tick_size={tick_size} for {symbol} "
+                    f"— get_instrument_info returned 0/missing"
+                )
+
             # Get current open orders from exchange
             orders = self.client.get_orders()
             symbol_orders = [o for o in orders if o.get("symbol") == symbol]
 
             if not symbol_orders:
                 logger.info(f"No open orders to recenter for {symbol}")
-                # Still update metadata
+                # Still update metadata (no orders to fail)
                 grid["center_price"] = new_center
-                grid["last_refresh"] = datetime.now()
+                grid["last_refresh"] = datetime.now(timezone.utc)
                 grid["last_refresh_reason"] = reason
                 return True
 
-            orders_adjusted = 0
-
+            # ATOMIC RECENTER: track skipped/failed/succeeded separately so we
+            # can decide whether the recenter as a whole was successful.
+            # Previously, partial failures left center_price updated as if all
+            # replacements had worked — corrupting the in-memory model.
+            orders_to_replace = []   # legs that pass safety checks
+            skipped_legs     = []    # legs we deliberately skipped (price shift cap)
             for order in symbol_orders:
                 order_id = order.get("id") or order.get("order_id")
                 old_price = float(order.get("price", 0))
@@ -627,18 +659,23 @@ class GridLifecycleManager:
                         f"Price shift too large for {symbol} order {order_id} "
                         f"(${old_price:.2f} → ${new_price:.2f}) - skipping this leg"
                     )
+                    skipped_legs.append(order_id)
                     continue
 
-                # Round price to appropriate tick size
-                tick_size = 1.0 if "BTC" in symbol else 0.01
+                # Round to tick size resolved above
                 new_price = round(new_price / tick_size) * tick_size
+                orders_to_replace.append((order_id, side, quantity, old_price, new_price))
 
+            # Phase 1: cancel-then-replace each leg, tracking failures
+            failed_replacements = []
+            orders_adjusted = 0
+            for order_id, side, quantity, old_price, new_price in orders_to_replace:
+                cancelled = False
                 try:
-                    # Cancel old order
                     self.client.cancel_order(symbol, order_id)
+                    cancelled = True
                     logger.debug(f"Cancelled old order {order_id} @ ${old_price:.4f}")
 
-                    # Place new order at adjusted price
                     new_order = self.client.place_order(
                         symbol, side, quantity, "limit", new_price
                     )
@@ -649,17 +686,53 @@ class GridLifecycleManager:
                     orders_adjusted += 1
 
                 except Exception as e:
-                    logger.error(f"Failed to replace order {order_id}: {e}")
-                    continue
+                    # Cancel succeeded but replace failed = orphan leg.
+                    # Log critically so the supervisor sees it; track for caller.
+                    state = "post-cancel" if cancelled else "pre-cancel"
+                    logger.critical(
+                        f"❌ Recenter leg failed for {symbol} order {order_id} "
+                        f"(state={state}, side={side}, qty={quantity}, "
+                        f"price ${old_price:.4f}→${new_price:.4f}): {e}"
+                    )
+                    failed_replacements.append({
+                        "order_id":  order_id,
+                        "side":      side,
+                        "quantity":  quantity,
+                        "old_price": old_price,
+                        "new_price": new_price,
+                        "state":     state,
+                        "error":     str(e),
+                    })
 
-            # Update grid metadata
+            # Phase 2: decide how to update grid metadata.
+            # If ANY orphan legs (cancel succeeded, replace failed), the grid
+            # has fewer live orders than tracked. We DO NOT update center_price
+            # in that case — the new center would be a lie. Caller can retry.
+            had_orphans = any(f["state"] == "post-cancel" for f in failed_replacements)
+            if had_orphans:
+                logger.critical(
+                    f"⚠️  Grid recenter for {symbol} left {len(failed_replacements)} "
+                    f"orphan leg(s). center_price NOT updated. "
+                    f"Adjusted {orders_adjusted}, skipped {len(skipped_legs)}, "
+                    f"failed {len(failed_replacements)}."
+                )
+                # Track in grid metadata so monitor / supervisor can see it
+                grid.setdefault("recenter_failures", []).append({
+                    "ts":      datetime.now(timezone.utc).isoformat(),
+                    "reason":  reason,
+                    "orphans": failed_replacements,
+                })
+                return False
+
+            # All legs that we attempted succeeded → safe to update metadata
             grid["center_price"] = new_center
-            grid["last_refresh"] = datetime.now()
+            grid["last_refresh"] = datetime.now(timezone.utc)
             grid["last_refresh_reason"] = reason
             grid["refresh_count"] = grid.get("refresh_count", 0) + 1
 
             logger.info(
-                f"✅ Grid recenter completed for {symbol} - {orders_adjusted} orders adjusted"
+                f"✅ Grid recenter completed for {symbol} - "
+                f"{orders_adjusted} adjusted, {len(skipped_legs)} skipped"
             )
             return True
 
@@ -687,7 +760,7 @@ class GridLifecycleManager:
 
         # Set state to CLOSED
         grid_data["state"] = GridState.CLOSED
-        grid_data["closed_at"] = datetime.now()
+        grid_data["closed_at"] = datetime.now(timezone.utc)
         grid_data["close_reason"] = reason
 
         logger.info(
@@ -778,7 +851,7 @@ class GridLifecycleManager:
             "orders_placed": 0,  # Track actual orders placed on exchange
             "center_price": center_price,  # For recentering logic
             "initial_center": center_price,  # Preserve original center
-            "created_at": datetime.now(),
+            "created_at": datetime.now(timezone.utc),
             "refresh_count": 0,
         }
 
@@ -1214,7 +1287,7 @@ class GridLifecycleManager:
                 if new_fills > 0:
                     self.update_grid_metrics_in_db(symbol)
 
-            self._last_fill_check = datetime.now()
+            self._last_fill_check = datetime.now(timezone.utc)
 
         except Exception as e:
             logger.error(f"Grid monitoring error: {e}")
@@ -1274,7 +1347,7 @@ class GridLifecycleManager:
                 elif isinstance(ts, str):
                     timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
                 else:
-                    timestamp = datetime.now()
+                    timestamp = datetime.now(timezone.utc)
 
             except (ValueError, TypeError) as e:
                 logger.warning(f"Invalid trade data for {symbol}: {e}")
@@ -1745,12 +1818,12 @@ class GridLifecycleManager:
             repair_entries = grid.get("repair_history_entries", [])
             if grid.get("repair_issues"):
                 repair_entries.append({
-                    "at": grid.get("repaired_at", datetime.now()).isoformat() if isinstance(grid.get("repaired_at"), datetime) else str(grid.get("repaired_at", "")),
+                    "at": grid.get("repaired_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("repaired_at"), datetime) else str(grid.get("repaired_at", "")),
                     "issues": grid.get("repair_issues", []),
                 })
             if grid.get("readopted"):
                 repair_entries.append({
-                    "at": grid.get("readopted_at", datetime.now()).isoformat() if isinstance(grid.get("readopted_at"), datetime) else str(grid.get("readopted_at", "")),
+                    "at": grid.get("readopted_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("readopted_at"), datetime) else str(grid.get("readopted_at", "")),
                     "type": "readopted_from_exchange",
                 })
             repair_history = json.dumps(repair_entries[-10:])  # Keep last 10
@@ -1792,7 +1865,7 @@ class GridLifecycleManager:
                         grid.get("orders_placed", 0),
                         grid.get("refresh_count", 0),
                         grid.get("last_refresh"),
-                        datetime.now().isoformat(),
+                        datetime.now(timezone.utc).isoformat(),
                         repair_history,
                     ),
                 )

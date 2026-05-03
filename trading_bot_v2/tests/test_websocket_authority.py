@@ -43,8 +43,10 @@ class TestWebSocketAuthority:
 
             assert ticker["symbol"] == "SUI-PERP"
             assert ticker["last"] == 1.50
-            assert "bid" in ticker
-            assert "ask" in ticker
+            # Updated 2026-05-02: WS ticker exposes only `last`. bid/ask are NOT
+            # fabricated — query the order book if you need them.
+            assert "bid" not in ticker
+            assert "ask" not in ticker
 
     def test_websocket_price_failure_no_fallback(self, mock_ws_client):
         """Test that WebSocket failure raises error (no REST fallback in Phase 2)."""
@@ -213,25 +215,25 @@ class TestWebSocketAuthority:
 
             ticker = bot._get_ticker_ws("SUI-PERP")
 
-            # Verify all required fields are present
-            required_fields = [
-                "symbol",
-                "last",
-                "bid",
-                "ask",
-                "high",
-                "low",
-                "volume",
-                "timestamp",
-            ]
+            # Updated 2026-05-02: WebSocket exposes only `last` price.
+            # bid/ask/high/low were previously fabricated as price ± 0.05% / ± 2%
+            # and removed because the synthetic values would silently corrupt
+            # any caller that read them as if real (e.g. stop-distance logic).
+            # If you need bid/ask, query the order book; for high/low use kline data.
+            required_fields = ["symbol", "last", "volume", "timestamp"]
             for field in required_fields:
-                assert field in ticker
+                assert field in ticker, f"missing required field: {field}"
 
             # Verify data types
             assert isinstance(ticker["last"], float)
-            assert isinstance(ticker["bid"], float)
-            assert isinstance(ticker["ask"], float)
-            assert ticker["bid"] < ticker["last"] < ticker["ask"]  # Bid < Last < Ask
+            assert ticker["last"] > 0
+
+            # Synthetic fields MUST NOT be present (regression guard)
+            for field in ("bid", "ask", "high", "low"):
+                assert field not in ticker, (
+                    f"WebSocket ticker must not fabricate {field!r}; "
+                    f"callers must source from order book / kline data"
+                )
 
     def test_websocket_cache_freshness_requirement(self):
         """Test that Phase 2 requires fresh WebSocket data (no stale cache acceptance)."""

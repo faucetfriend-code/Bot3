@@ -205,8 +205,9 @@ class TestWebSocketAuthority:
 
             assert ticker["symbol"] == "SUI-PERP"
             assert ticker["last"] == 1.50
-            assert "bid" in ticker
-            assert "ask" in ticker
+            # Updated 2026-05-02: WS ticker no longer fabricates bid/ask.
+            assert "bid" not in ticker
+            assert "ask" not in ticker
 
     def test_websocket_price_failure_no_fallback(self, mock_ws_client):
         """Test that WebSocket failure raises error (no REST fallback in Phase 2)."""
