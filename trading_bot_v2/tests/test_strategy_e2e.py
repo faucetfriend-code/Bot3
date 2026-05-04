@@ -1325,7 +1325,7 @@ class TestMomentumScalpingE2E:
         """EMA 9/21 bullish crossover with confirmations -> BUY."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
@@ -1341,7 +1341,7 @@ class TestMomentumScalpingE2E:
         """EMA 9/21 bearish crossover with confirmations -> SELL."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bearish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
@@ -1359,7 +1359,7 @@ class TestMomentumScalpingE2E:
         """Momentum signal -> order placed."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
@@ -1378,7 +1378,7 @@ class TestMomentumScalpingE2E:
         """Bullish signal TP is above entry."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
@@ -1391,7 +1391,7 @@ class TestMomentumScalpingE2E:
         """Bearish signal SL is above entry."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bearish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
@@ -1408,28 +1408,29 @@ class TestMomentumScalpingE2E:
         strategy.last_trade_time["BTC"] = datetime.utcnow()
 
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
 
         signals = strategy.generate_signals("BTC", multi_tf, data["close"][-1])
         assert signals == []
 
-    def test_missing_5m_data(self):
-        """No 5m data -> no signal."""
+    def test_missing_1h_data(self):
+        """No 1h data -> no signal (strategy requires 1h primary timeframe)."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=data)
+        # Only 4h data, no 1h key -> strategy returns early
+        multi_tf = DataGenerator.build_multi_tf_data(data_4h=data)
 
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         assert signals == []
 
     def test_insufficient_data(self):
-        """Too few candles -> no signal."""
+        """Too few 1h candles -> no signal."""
         strategy = self._make_strategy()
         short_data = {
             "high": [100] * 10, "low": [99] * 10,
             "close": [100] * 10, "volume": [1000] * 10,
         }
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=short_data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=short_data)
 
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         assert signals == []
@@ -1438,7 +1439,7 @@ class TestMomentumScalpingE2E:
         """After generating a signal, crossover should be cleared."""
         strategy = self._make_strategy()
         data = DataGenerator.momentum_bullish_data()
-        multi_tf = DataGenerator.build_multi_tf_data(data_5m=data)
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
         current_price = data["close"][-1]
 
         signals = strategy.generate_signals("BTC", multi_tf, current_price)
