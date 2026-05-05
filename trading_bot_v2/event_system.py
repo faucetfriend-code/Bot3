@@ -8,6 +8,7 @@ Components can publish events and subscribe to events they're interested in.
 import logging
 import threading
 import time
+from collections import deque
 from typing import Dict, List, Any, Callable, Optional
 from datetime import datetime
 from enum import Enum
@@ -94,8 +95,8 @@ class EventBus:
     def __init__(self):
         self._subscribers: Dict[EventType, List[Callable]] = {}
         self._lock = threading.Lock()
-        self._event_history: List[Event] = []
         self._max_history = 1000  # Keep last 1000 events
+        self._event_history: deque = deque(maxlen=self._max_history)
 
         logger.info("EventBus initialized")
 
@@ -142,11 +143,9 @@ class EventBus:
         """
         logger.debug(f"Publishing event: {event.event_type.value} from {event.source}")
 
-        # Store in history
+        # Store in history (deque auto-evicts oldest when maxlen is reached)
         with self._lock:
             self._event_history.append(event)
-            if len(self._event_history) > self._max_history:
-                self._event_history.pop(0)
 
         # Notify subscribers (outside lock to prevent blocking)
         subscribers = []
@@ -199,7 +198,8 @@ class EventBus:
             List of recent events (newest first)
         """
         with self._lock:
-            return self._event_history[-limit:][::-1]  # Reverse to get newest first
+            history = list(self._event_history)
+        return history[-limit:][::-1]  # newest first
 
     def get_events_by_type(self, event_type: EventType, limit: int = 50) -> List[Event]:
         """
@@ -213,10 +213,9 @@ class EventBus:
             List of events of the specified type
         """
         with self._lock:
-            matching_events = [
-                e for e in self._event_history if e.event_type == event_type
-            ]
-            return matching_events[-limit:][::-1]
+            history = list(self._event_history)
+        matching_events = [e for e in history if e.event_type == event_type]
+        return matching_events[-limit:][::-1]
 
     def clear_history(self) -> None:
         """Clear event history."""
@@ -235,19 +234,20 @@ class EventBus:
             subscriber_counts = {
                 et.value: len(callbacks) for et, callbacks in self._subscribers.items()
             }
+            history = list(self._event_history)
 
-            event_counts = {}
-            for event in self._event_history:
-                event_type = event.event_type.value
-                event_counts[event_type] = event_counts.get(event_type, 0) + 1
+        event_counts: Dict[str, int] = {}
+        for event in history:
+            key = event.event_type.value
+            event_counts[key] = event_counts.get(key, 0) + 1
 
-            return {
-                "total_subscribers": sum(subscriber_counts.values()),
-                "subscriber_counts": subscriber_counts,
-                "total_events": len(self._event_history),
-                "event_counts": event_counts,
-                "max_history": self._max_history,
-            }
+        return {
+            "total_subscribers": sum(subscriber_counts.values()),
+            "subscriber_counts": subscriber_counts,
+            "total_events": len(history),
+            "event_counts": event_counts,
+            "max_history": self._max_history,
+        }
 
 
 # Global event bus instance
