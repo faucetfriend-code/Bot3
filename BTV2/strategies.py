@@ -50,6 +50,20 @@ INTERVAL_BARS_PER_YEAR: dict[str, int] = {
     "1d" :     365,
 }
 
+# GMM regime detection parameters scaled to each interval.
+# lookback: rolling feature window — equivalent to ~30 days of data per interval.
+# stability_window: mode-filter length — equivalent to ~1 day per interval.
+# These prevent the GMM from seeing only intraday noise on LTF data.
+# On 1d bars the original 60-bar / 5-bar defaults are preserved.
+INTERVAL_GMM_PARAMS: dict[str, dict] = {
+    "1m":  {"lookback": 43200, "stability_window": 1440},  # 30d / 1d
+    "5m":  {"lookback":  8640, "stability_window":  288},  # 30d / 1d
+    "15m": {"lookback":  2880, "stability_window":   96},  # 30d / 1d
+    "1h":  {"lookback":   720, "stability_window":   24},  # 30d / 1d
+    "4h":  {"lookback":   180, "stability_window":    6},  # 30d / 1d
+    "1d":  {"lookback":    60, "stability_window":    5},  # 60d / 5d (original)
+}
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # BUTTERWORTH FILTER  (causal, forward-only)
@@ -304,6 +318,7 @@ def run_mean_reversion(
     rsi_overbought: float= 70.0,
     bb_proximity: float  = 0.10,
     atr_stop: float      = 3.0,
+    direction: str       = "both",
 ) -> tuple[pd.Series, list]:
     """
     RSI + Bollinger Bands mean-reversion.
@@ -312,6 +327,10 @@ def run_mean_reversion(
     Entry SHORT : RSI > overbought AND price within bb_proximity% of upper BB
     Exit LONG   : close >= SMA-20 (TP at mean) OR daily low  <= entry - atr_stop*ATR
     Exit SHORT  : close <= SMA-20 (TP at mean) OR daily high >= entry + atr_stop*ATR
+
+    direction : "both" (default) | "long_only" | "short_only"
+        Controls which entry signals are active.  "both" is identical to the
+        original behaviour.
     """
     fc    = apply_butterworth(df["Close"], cutoff)
     rsi   = compute_rsi(fc, 14)
@@ -366,17 +385,19 @@ def run_mean_reversion(
             prox_lo = (p - bbl) / (bbl + 1e-10)
             prox_hi = (bbu - p) / (bbu + 1e-10)
             # LONG: price near lower BB AND RSI oversold
-            if r < rsi_oversold and 0.0 <= prox_lo <= bb_proximity:
-                curr_equity = _open_long(
-                    curr_equity, entry_eq, sl, tp, p,
-                    p - atr_stop * at, float("inf"), in_pos, side,
-                )
+            if direction != "short_only":
+                if r < rsi_oversold and 0.0 <= prox_lo <= bb_proximity:
+                    curr_equity = _open_long(
+                        curr_equity, entry_eq, sl, tp, p,
+                        p - atr_stop * at, float("inf"), in_pos, side,
+                    )
             # SHORT: price near upper BB AND RSI overbought
-            elif r > rsi_overbought and 0.0 <= prox_hi <= bb_proximity:
-                curr_equity = _open_short(
-                    curr_equity, entry_eq, sl, tp, p,
-                    p + atr_stop * at, 0.0, in_pos, side,
-                )
+            if direction != "long_only":
+                if r > rsi_overbought and 0.0 <= prox_hi <= bb_proximity:
+                    curr_equity = _open_short(
+                        curr_equity, entry_eq, sl, tp, p,
+                        p + atr_stop * at, 0.0, in_pos, side,
+                    )
 
         equity_arr[i] = curr_equity
 
@@ -384,6 +405,194 @@ def run_mean_reversion(
         curr_equity   *= (1.0 - COST_PER_SIDE)
         closed_trades.append(curr_equity / entry_eq[0] - 1.0)
         equity_arr[-1]  = curr_equity
+
+    return pd.Series(equity_arr, index=df.index), closed_trades
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1b. MARTINGALE MEAN REVERSION  (capped 2× — 15m bars)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_martingale_mr(
+    df: pd.DataFrame,
+    cutoff: float,
+    rsi_oversold: float    = 30.0,
+    rsi_overbought: float  = 70.0,
+    bb_proximity: float    = 0.10,
+    atr_stop: float        = 1.5,
+    atr_target: float      = 3.0,
+    martingale_mult: float = 2.0,   # Position size multiplier after stop (default 2×)
+    max_martingale: int    = 1,      # Maximum re-entries (default 1 — never cascade)
+    cooldown_bars: int     = 5,      # Bars to wait after stop before re-entry eligible
+    direction: str         = "both",
+) -> tuple[pd.Series, list]:
+    """
+    Capped 2× Martingale Mean Reversion on 15m bars.
+
+    Uses RSI + Bollinger Band entries with pure ATR-based SL and TP exits.
+    The martingale multiplier scales the closed trade P&L at the moment of
+    exit — NOT bar-by-bar — correctly simulating a larger position size
+    without introducing compounding leverage noise.
+
+    After a stop-out, waits cooldown_bars then re-enters at the NEXT valid
+    signal with martingale_mult × position size.  Maximum max_martingale
+    re-entries per sequence (default 1 — never cascades beyond 2×).
+
+    Position sizing is simulated by scaling the closed trade return:
+        Normal trade:     trade_return = raw_return
+        Martingale trade: trade_return = mult × raw_return
+        Equity impact:    curr_equity *= (1 + trade_return)
+
+    EV analysis (task diagnostic: 58% WR, 2× mult, 2:1 R:R):
+        Normal:     E = 0.58 × 3R + 0.42 × (-1.5R) = 1.74R - 0.63R = +1.11R ✓
+        Martingale: E = 0.58 × 6R + 0.42 × (-3R)   = 3.48R - 1.26R = +2.22R ✓
+        Combined sequence EV: positive if WR > 50% ✓
+
+    Max loss per sequence: 1.5R (first) + 3R (martingale) = 4.5R total.
+    (Expressed as ATR units; actual equity % depends on position size.)
+
+    Regime gate: the caller (regime_aware_validation.py) passes direction="long_only"
+    or "short_only" during trending/crash regimes, which naturally suppresses
+    martingale re-entries in unfavourable conditions.
+
+    Parameters
+    ----------
+    df              : OHLCV DataFrame at 15m interval
+    cutoff          : Butterworth low-pass cutoff frequency
+    rsi_oversold    : RSI threshold for long entry (default 30)
+    rsi_overbought  : RSI threshold for short entry (default 70)
+    bb_proximity    : max fractional distance from BB band to trigger signal
+    atr_stop        : ATR multiplier for stop-loss distance (default 1.5)
+    atr_target      : ATR multiplier for take-profit distance (default 3.0)
+    martingale_mult : position size multiplier on re-entry (default 2.0 — never > 2)
+    max_martingale  : maximum re-entries per sequence (default 1 — no cascading)
+    cooldown_bars   : bars to wait after stop before re-entry eligible (default 5)
+    direction       : "both" | "long_only" | "short_only"
+    """
+    fc      = apply_butterworth(df["Close"], cutoff)
+    rsi     = compute_rsi(fc, 14)
+    bb_up, bb_mid, bb_lo = compute_bollinger(fc, 20, 2.0)
+    atr     = compute_atr(df["High"], df["Low"], df["Close"], 14)
+
+    prices = df["Close"].values.astype(float)
+    highs  = df["High"].values.astype(float)
+    lows   = df["Low"].values.astype(float)
+    n      = len(prices)
+
+    equity_arr    = np.ones(n, dtype=float)
+    curr_equity   = 1.0
+    closed_trades: list[float] = []
+
+    in_pos    = [False]
+    side_ref  = [""]
+    entry_eq  = [1.0]
+    sl        = [0.0]
+    tp_ref    = [0.0]
+
+    # ── Martingale state ──────────────────────────────────────────────────────
+    martingale_count = 0     # How many re-entries used in current sequence
+    stopped_bar      = -999  # Bar index when last stop-out occurred
+    current_mult     = 1.0   # Active position size multiplier for open trade
+
+    for i in range(20, n):
+        r   = rsi.iloc[i]
+        at  = atr.iloc[i]
+        p   = prices[i]
+        p0  = prices[i - 1]
+        hi  = highs[i]
+        lo  = lows[i]
+        bbu = bb_up.iloc[i]
+        bbl = bb_lo.iloc[i]
+
+        if any(np.isnan(x) for x in (r, at, bbu, bbl)):
+            equity_arr[i] = curr_equity
+            continue
+
+        if in_pos[0]:
+            # Track equity at 1× (unscaled) — multiplier applied at close only
+            curr_equity *= p / p0
+
+            # ── SL / TP check (pure ATR-based) ───────────────────────────────
+            prev_n_trades = len(closed_trades)
+            curr_equity = _check_exit(
+                curr_equity, entry_eq[0], hi, lo,
+                sl[0], tp_ref[0], side_ref[0], closed_trades, in_pos,
+            )
+
+            if not in_pos[0]:
+                # Apply martingale multiplier to the closed trade result
+                if len(closed_trades) > prev_n_trades and current_mult != 1.0:
+                    raw_return    = closed_trades[-1]
+                    scaled_return = current_mult * raw_return
+                    # Adjust equity: undo 1× impact, apply mult× impact
+                    equity_adj    = (1.0 + scaled_return) / (1.0 + raw_return + 1e-12)
+                    curr_equity  *= equity_adj
+                    curr_equity   = max(curr_equity, 1e-6)   # floor — no zero equity
+                    closed_trades[-1] = scaled_return
+
+                # Update martingale state machine
+                if len(closed_trades) > prev_n_trades:
+                    last_trade = closed_trades[-1]
+                    if last_trade < 0:
+                        # Stopped out — record bar, decide re-entry eligibility
+                        stopped_bar = i
+                        if martingale_count < max_martingale:
+                            martingale_count += 1   # eligible for one re-entry
+                        else:
+                            # Max re-entries exhausted — reset sequence
+                            martingale_count = 0
+                    else:
+                        # Won — reset entire sequence
+                        martingale_count = 0
+                current_mult = 1.0   # always reset mult after close
+
+        else:
+            prox_lo = (p - bbl) / (bbl + 1e-10)
+            prox_hi = (bbu - p) / (bbu + 1e-10)
+
+            # Determine position size for this entry
+            bars_since_stop = i - stopped_bar
+            if martingale_count > 0 and bars_since_stop >= cooldown_bars:
+                entry_mult = martingale_mult   # re-entry with larger size
+            else:
+                entry_mult = 1.0               # normal size
+
+            # ── LONG entry ────────────────────────────────────────────────────
+            if direction != "short_only":
+                if r < rsi_oversold and 0.0 <= prox_lo <= bb_proximity:
+                    sl_p = p - atr_stop * at
+                    tp_p = p + atr_target * at
+                    curr_equity = _open_long(
+                        curr_equity, entry_eq, sl, tp_ref,
+                        p, sl_p, tp_p, in_pos, side_ref,
+                    )
+                    current_mult = entry_mult
+
+            # ── SHORT entry ───────────────────────────────────────────────────
+            if direction != "long_only" and not in_pos[0]:
+                if r > rsi_overbought and 0.0 <= prox_hi <= bb_proximity:
+                    sl_p = p + atr_stop * at
+                    tp_p = p - atr_target * at
+                    curr_equity = _open_short(
+                        curr_equity, entry_eq, sl, tp_ref,
+                        p, sl_p, tp_p, in_pos, side_ref,
+                    )
+                    current_mult = entry_mult
+
+        equity_arr[i] = curr_equity
+
+    # Close any open position at end of data
+    if in_pos[0]:
+        curr_equity   *= (1.0 - COST_PER_SIDE)
+        raw_return     = curr_equity / entry_eq[0] - 1.0
+        if current_mult != 1.0:
+            scaled_return  = current_mult * raw_return
+            equity_adj     = (1.0 + scaled_return) / (1.0 + raw_return + 1e-12)
+            curr_equity   *= equity_adj
+            curr_equity    = max(curr_equity, 1e-6)
+            closed_trades.append(scaled_return)
+        else:
+            closed_trades.append(raw_return)
+        equity_arr[-1] = curr_equity
 
     return pd.Series(equity_arr, index=df.index), closed_trades
 
@@ -724,26 +933,89 @@ def run_vwap_scalping(
 def run_momentum_scalping(
     df: pd.DataFrame,
     cutoff: float,
-    ema_fast: int    = 9,
-    ema_slow: int    = 21,
-    atr_stop: float  = 2.0,
-    atr_target: float= 3.0,
+    ema_fast: int        = 9,       # EMA 9/21 on 1h bars (same periods, higher timeframe = less noise)
+    ema_slow: int        = 21,
+    atr_stop: float      = 2.0,
+    atr_target: float    = 4.0,     # raised from 3.0 — pullback entries need wider TP
+    adx_min: float       = 25.0,    # only trade when ADX >= threshold (trend is real)
+    direction: str       = "both",
+    regime: str          = "ranging",    # "bull_strong"|"bull_weak"|"ranging"|"bear_weak"|"bear_strong"
+    rsi_long_lo: float   = 50.0,         # RSI lower bound for long entries
+    rsi_long_hi: float   = 75.0,         # RSI upper bound for long entries
+    rsi_short_lo: float  = 25.0,         # RSI lower bound for short entries
+    rsi_short_hi: float  = 50.0,         # RSI upper bound for short entries
+    vol_mult: float      = 1.0,          # lowered from 1.2 — pullbacks have lower vol
+    use_pullback: bool   = True,         # NEW: enable EMA pullback (trend continuation) entries
 ) -> tuple[pd.Series, list]:
     """
-    EMA crossover + MACD + RSI + Volume gate.
+    Dual-signal EMA strategy: crossover (trend initiation) + pullback (trend continuation).
 
-    Entry LONG  : EMA_fast crosses above EMA_slow AND close > both EMAs
-                  AND RSI 45–65 AND MACD_hist > 0 & rising AND vol >= 1.2×avg
-    Entry SHORT : EMA_fast crosses below EMA_slow AND close < both EMAs
-                  AND RSI 35–55 AND MACD_hist < 0 & falling AND vol >= 1.2×avg
-    Exit        : TP = entry ± atr_target*ATR  |  SL = entry ∓ atr_stop*ATR
+    Designed for 1h bars with EMA 9/21.  MACD filter removed — it killed 83% of valid
+    crossover signals (23/month raw → 1.5/month after MACD).  Pullback entries add
+    ~16.5 signals/month at ADX>=25, bringing combined frequency to ~10/month.
+
+    Signal A — EMA Crossover (trend initiation):
+        LONG  : EMA_fast crosses above EMA_slow AND close > both EMAs
+                AND ADX >= adx_min AND rsi_long_lo <= RSI <= rsi_long_hi
+                AND vol >= vol_mult × avg_vol
+        SHORT : EMA_fast crosses below EMA_slow AND close < both EMAs
+                AND ADX >= adx_min AND rsi_short_lo <= RSI <= rsi_short_hi
+                AND vol >= vol_mult × avg_vol
+
+    Signal B — EMA Pullback (trend continuation, only when use_pullback=True):
+        LONG  : EMA_fast > EMA_slow (bull trend active)
+                AND bar low <= EMA_slow (price touched slow EMA)
+                AND bar close > EMA_slow (closed back above — not a breakdown)
+                AND ADX >= adx_min AND rsi_long_lo <= RSI <= rsi_long_hi
+                AND vol >= vol_mult × avg_vol AND NOT already in a position
+        SHORT : EMA_fast < EMA_slow (bear trend active)
+                AND bar high >= EMA_slow (price touched slow EMA)
+                AND bar close < EMA_slow (closed back below)
+                AND ADX >= adx_min AND rsi_short_lo <= RSI <= rsi_short_hi
+                AND vol >= vol_mult × avg_vol AND NOT already in a position
+
+    Both signals share the same in_pos gate — only one position at a time.
+    Exit: TP = entry ± atr_target*ATR  |  SL = entry ∓ atr_stop*ATR
+
+    adx_min : minimum ADX value to allow entry (default 25.0)
+        ADX < adx_min = ranging market → skip all entries
+        ADX >= adx_min = trending market → allow entries
+        adx_min=0.0 disables the gate (no ADX filter)
+    direction : "both" (default) | "long_only" | "short_only"
+        Controls which entry signals are active.
+    regime : one of "bull_strong" | "bull_weak" | "ranging" | "bear_weak" | "bear_strong"
+        When set, overrides RSI bands with regime-appropriate defaults unless
+        the caller explicitly passed non-default RSI values.
+    use_pullback : True (default) enables Signal B (EMA pullback entries).
+        Set False to run crossover-only mode (original behaviour minus MACD).
     """
+    # ── Regime-aware RSI defaults ─────────────────────────────────────────────
+    # Override RSI bands based on regime only if caller left them at defaults.
+    REGIME_RSI: dict[str, dict] = {
+        "bull_strong": {"rsi_long_lo": 40.0, "rsi_long_hi": 75.0,
+                        "rsi_short_lo": 20.0, "rsi_short_hi": 40.0},
+        "bull_weak":   {"rsi_long_lo": 40.0, "rsi_long_hi": 75.0,
+                        "rsi_short_lo": 25.0, "rsi_short_hi": 48.0},
+        "ranging":     {"rsi_long_lo": 40.0, "rsi_long_hi": 65.0,
+                        "rsi_short_lo": 35.0, "rsi_short_hi": 60.0},
+        "bear_weak":   {"rsi_long_lo": 30.0, "rsi_long_hi": 55.0,
+                        "rsi_short_lo": 25.0, "rsi_short_hi": 60.0},
+        "bear_strong": {"rsi_long_lo": 20.0, "rsi_long_hi": 45.0,
+                        "rsi_short_lo": 25.0, "rsi_short_hi": 60.0},
+    }
+    if regime in REGIME_RSI and rsi_long_lo == 50.0 and rsi_long_hi == 75.0:
+        # Only override if caller did not explicitly set RSI params
+        rsi_long_lo  = REGIME_RSI[regime]["rsi_long_lo"]
+        rsi_long_hi  = REGIME_RSI[regime]["rsi_long_hi"]
+        rsi_short_lo = REGIME_RSI[regime]["rsi_short_lo"]
+        rsi_short_hi = REGIME_RSI[regime]["rsi_short_hi"]
+
     fc      = apply_butterworth(df["Close"], cutoff)
     ema_f   = compute_ema(fc, ema_fast)
     ema_s   = compute_ema(fc, ema_slow)
     rsi     = compute_rsi(fc, 14)
-    _, _, mh= compute_macd(fc, 12, 26, 9)
     atr     = compute_atr(df["High"], df["Low"], df["Close"], 14)
+    adx     = compute_adx(df["High"], df["Low"], df["Close"], 14)
     vol_avg = df["Volume"].rolling(20).mean()
 
     prices = df["Close"].values.astype(float)
@@ -762,16 +1034,16 @@ def run_momentum_scalping(
     closed_trades: list[float] = []
 
     for i in range(1, n):
-        ef   = ema_f.iloc[i];  ef0  = ema_f.iloc[i - 1]
-        es   = ema_s.iloc[i];  es0  = ema_s.iloc[i - 1]
-        r    = rsi.iloc[i]
-        mhi  = mh.iloc[i];     mhi0 = mh.iloc[i - 1]
-        at   = atr.iloc[i]
-        p    = prices[i];      p0   = prices[i - 1]
-        va   = vol_avg.iloc[i]
-        v    = vols[i]
+        ef      = ema_f.iloc[i];   ef0 = ema_f.iloc[i - 1]
+        es      = ema_s.iloc[i];   es0 = ema_s.iloc[i - 1]
+        r       = rsi.iloc[i]
+        at      = atr.iloc[i]
+        p       = prices[i];       p0  = prices[i - 1]
+        va      = vol_avg.iloc[i]
+        v       = vols[i]
+        adx_val = adx.iloc[i]
 
-        if any(np.isnan(x) for x in (ef, es, r, mhi, at, va)):
+        if any(np.isnan(x) for x in (ef, es, r, at, va, adx_val)):
             equity_arr[i] = curr_equity
             continue
 
@@ -782,17 +1054,69 @@ def run_momentum_scalping(
                 sl[0], tp_ref[0], side[0], closed_trades, in_pos,
             )
         else:
-            vol_ok    = v >= 1.2 * va
-            cross_up  = ef0 < es0 and ef > es   # bullish crossover
-            cross_dn  = ef0 > es0 and ef < es   # bearish crossover
-            if cross_up and p > ef and p > es and 45 <= r <= 65 and mhi > 0 and mhi > mhi0 and vol_ok:
-                sl_p = p - atr_stop  * at
-                tp_p = p + atr_target * at
-                curr_equity = _open_long(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side)
-            elif cross_dn and p < ef and p < es and 35 <= r <= 55 and mhi < 0 and mhi < mhi0 and vol_ok:
-                sl_p = p + atr_stop  * at
-                tp_p = p - atr_target * at
-                curr_equity = _open_short(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side)
+            vol_ok     = v >= vol_mult * va
+            adx_ok     = adx_val >= adx_min
+            cross_up   = ef0 < es0 and ef > es   # bullish crossover
+            cross_dn   = ef0 > es0 and ef < es   # bearish crossover
+            bull_trend = ef > es                  # bull trend active (for pullback)
+            bear_trend = ef < es                  # bear trend active (for pullback)
+
+            entered = False
+
+            # ── Signal A: EMA Crossover (trend initiation) ────────────────────
+            if not entered and direction != "short_only":
+                if (cross_up and p > ef and p > es
+                        and adx_ok
+                        and rsi_long_lo <= r <= rsi_long_hi
+                        and vol_ok):
+                    sl_p = p - atr_stop * at
+                    tp_p = p + atr_target * at
+                    curr_equity = _open_long(
+                        curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side
+                    )
+                    entered = True
+
+            if not entered and direction != "long_only":
+                if (cross_dn and p < ef and p < es
+                        and adx_ok
+                        and rsi_short_lo <= r <= rsi_short_hi
+                        and vol_ok):
+                    sl_p = p + atr_stop * at
+                    tp_p = p - atr_target * at
+                    curr_equity = _open_short(
+                        curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side
+                    )
+                    entered = True
+
+            # ── Signal B: EMA Pullback (trend continuation) ───────────────────
+            if use_pullback and not entered:
+                if direction != "short_only":
+                    if (bull_trend
+                            and lows[i] <= es        # bar low touched slow EMA
+                            and p > es               # closed back above slow EMA
+                            and adx_ok
+                            and rsi_long_lo <= r <= rsi_long_hi
+                            and vol_ok):
+                        sl_p = p - atr_stop * at
+                        tp_p = p + atr_target * at
+                        curr_equity = _open_long(
+                            curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side
+                        )
+                        entered = True
+
+                if not entered and direction != "long_only":
+                    if (bear_trend
+                            and highs[i] >= es       # bar high touched slow EMA
+                            and p < es               # closed back below slow EMA
+                            and adx_ok
+                            and rsi_short_lo <= r <= rsi_short_hi
+                            and vol_ok):
+                        sl_p = p + atr_stop * at
+                        tp_p = p - atr_target * at
+                        curr_equity = _open_short(
+                            curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side
+                        )
+                        entered = True
 
         equity_arr[i] = curr_equity
 
@@ -810,18 +1134,25 @@ def run_momentum_scalping(
 def run_liquidation_capture(
     df: pd.DataFrame,
     cutoff: float,
-    price_threshold: float = 0.030,
-    volume_mult: float     = 3.0,
-    rsi_threshold: float   = 18.0,
+    price_threshold: float = 0.020,   # was 0.030 — loosened to catch real crashes
+    volume_mult: float     = 2.0,     # was 3.0 — loosened (FTX peak was ~2.3×)
+    rsi_threshold: float   = 22.0,    # was 18.0 — RSI rarely hits 18 even in crashes
+    min_consecutive: int   = 3,       # was hardcoded 4 — fast crashes bounce mid-fall
+    min_wick_ratio: float  = 1.5,     # was hardcoded 1.5 — now tunable
+    direction: str         = "both",  # unchanged — both long and short, in_pos prevents overlap
 ) -> tuple[pd.Series, list]:
     """
     Fades post-liquidation cascades on daily bars (fires ~5-15× over 2018-2026).
 
     Entry LONG  : 5-bar price drop >= price_threshold AND volume spike >= volume_mult×avg
-                  AND RSI <= rsi_threshold AND >= 4 consecutive down closes
-                  AND lower wick ratio >= 1.5 (panic selling)
+                  AND RSI <= rsi_threshold AND >= min_consecutive consecutive down closes
+                  AND lower wick ratio >= min_wick_ratio (panic selling)
     Entry SHORT : mirror for upward squeeze
     Exit        : TP = 3× risk (3:1 RRR)  |  SL = 1% beyond 5-bar extreme
+
+    direction : "both" (default) | "long_only" | "short_only"
+        Controls which entry signals are active.  "both" is identical to the
+        original behaviour.
     """
     fc      = apply_butterworth(df["Close"], cutoff)
     rsi     = compute_rsi(fc, 14)
@@ -843,8 +1174,8 @@ def run_liquidation_capture(
     tp_ref       = [0.0]
     closed_trades: list[float] = []
 
-    MIN_CONSECUTIVE = 4
-    MIN_WICK_RATIO  = 1.5
+    MIN_CONSECUTIVE = int(min_consecutive)
+    MIN_WICK_RATIO  = min_wick_ratio
 
     for i in range(5, n):
         r   = rsi.iloc[i]
@@ -886,22 +1217,24 @@ def run_liquidation_capture(
             recent_high = max(highs[i - 4 : i + 1])
 
             # LONG: downward cascade exhausted
-            if (move_down >= price_threshold and vol_ok and r <= rsi_threshold
-                    and consec_dn >= MIN_CONSECUTIVE and wick_dn >= MIN_WICK_RATIO):
-                sl_p   = recent_low * (1.0 - 0.01)
-                risk   = p - sl_p
-                tp_p   = p + 3.0 * risk
-                curr_equity = _open_long(curr_equity, entry_eq, sl, tp_ref, p,
-                                          sl_p, tp_p, in_pos, side)
+            if direction != "short_only":
+                if (move_down >= price_threshold and vol_ok and r <= rsi_threshold
+                        and consec_dn >= MIN_CONSECUTIVE and wick_dn >= MIN_WICK_RATIO):
+                    sl_p   = recent_low * (1.0 - 0.01)
+                    risk   = p - sl_p
+                    tp_p   = p + 3.0 * risk
+                    curr_equity = _open_long(curr_equity, entry_eq, sl, tp_ref, p,
+                                              sl_p, tp_p, in_pos, side)
 
             # SHORT: upward squeeze exhausted
-            elif (move_up >= price_threshold and vol_ok and r >= (100 - rsi_threshold)
-                    and consec_up >= MIN_CONSECUTIVE and wick_up >= MIN_WICK_RATIO):
-                sl_p   = recent_high * (1.0 + 0.01)
-                risk   = sl_p - p
-                tp_p   = p - 3.0 * risk
-                curr_equity = _open_short(curr_equity, entry_eq, sl, tp_ref, p,
-                                           sl_p, tp_p, in_pos, side)
+            if direction != "long_only":
+                if (move_up >= price_threshold and vol_ok and r >= (100 - rsi_threshold)
+                        and consec_up >= MIN_CONSECUTIVE and wick_up >= MIN_WICK_RATIO):
+                    sl_p   = recent_high * (1.0 + 0.01)
+                    risk   = sl_p - p
+                    tp_p   = p - 3.0 * risk
+                    curr_equity = _open_short(curr_equity, entry_eq, sl, tp_ref, p,
+                                               sl_p, tp_p, in_pos, side)
 
         equity_arr[i] = curr_equity
 
@@ -1010,6 +1343,7 @@ def run_ma_crossover(
     fast_period: int    = 20,
     slow_period: int    = 50,
     pullback_max: float = 0.06,
+    direction: str      = "both",
 ) -> tuple[pd.Series, list]:
     """
     Golden/death cross with pullback entry + MACD + Volume confirmation.
@@ -1019,6 +1353,10 @@ def run_ma_crossover(
                   AND MACD_line > signal AND volume >= 1.2× avg
     Entry SHORT : Death cross + rally back 1%–pullback_max above SMA_fast
     Exit        : TP = entry + 2×risk  |  SL = entry - 2.5×ATR
+
+    direction : "both" (default) | "long_only" | "short_only"
+        Controls which entry signals are active.  "both" is identical to the
+        original behaviour.
     """
     fc      = apply_butterworth(df["Close"], cutoff)
     sma_f   = compute_sma(fc, fast_period)
@@ -1073,22 +1411,24 @@ def run_ma_crossover(
         else:
             vol_ok = v >= 1.2 * va
             # LONG: within 5 bars of golden cross, price pulled back below SMA_fast
-            if 0 < (i - last_golden_bar) <= 5 and vol_ok and mlv > slv:
-                pb_pct = (sf - p) / (sf + 1e-10)
-                if PULLBACK_MIN <= pb_pct <= pullback_max:
-                    sl_p  = p - 2.5 * at
-                    risk  = p - sl_p
-                    tp_p  = p + 2.0 * risk
-                    curr_equity = _open_long(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side_ref)
+            if direction != "short_only":
+                if 0 < (i - last_golden_bar) <= 5 and vol_ok and mlv > slv:
+                    pb_pct = (sf - p) / (sf + 1e-10)
+                    if PULLBACK_MIN <= pb_pct <= pullback_max:
+                        sl_p  = p - 2.5 * at
+                        risk  = p - sl_p
+                        tp_p  = p + 2.0 * risk
+                        curr_equity = _open_long(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side_ref)
 
             # SHORT: within 5 bars of death cross, price rallied above SMA_fast
-            elif 0 < (i - last_death_bar) <= 5 and vol_ok and mlv < slv:
-                pb_pct = (p - sf) / (sf + 1e-10)
-                if PULLBACK_MIN <= pb_pct <= pullback_max:
-                    sl_p  = p + 2.5 * at
-                    risk  = sl_p - p
-                    tp_p  = p - 2.0 * risk
-                    curr_equity = _open_short(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side_ref)
+            if direction != "long_only":
+                if 0 < (i - last_death_bar) <= 5 and vol_ok and mlv < slv:
+                    pb_pct = (p - sf) / (sf + 1e-10)
+                    if PULLBACK_MIN <= pb_pct <= pullback_max:
+                        sl_p  = p + 2.5 * at
+                        risk  = sl_p - p
+                        tp_p  = p - 2.0 * risk
+                        curr_equity = _open_short(curr_equity, entry_eq, sl, tp_ref, p, sl_p, tp_p, in_pos, side_ref)
 
         equity_arr[i] = curr_equity
 
@@ -1101,13 +1441,241 @@ def run_ma_crossover(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 7. SL FADE / LIQUIDITY GRAB  (15m Mean Reversion variant)
+# ─────────────────────────────────────────────────────────────────────────────
+def run_sl_fade_mr(
+    df: pd.DataFrame,
+    cutoff: float,
+    rsi_oversold: float    = 30.0,
+    rsi_overbought: float  = 70.0,
+    bb_proximity: float    = 0.10,
+    atr_stop: float        = 1.0,    # 1.0×ATR → 50% recovery within 50 bars (diagnostic confirmed)
+    atr_target: float      = 2.0,    # TP = 2× ATR from original signal price (2:1 R:R from signal)
+    fade_sl_atr: float     = 0.30,   # New SL = wick_extreme ± fade_sl_atr×ATR (stop beyond wick)
+    max_wait_bars: int     = 50,     # Wait up to 50 bars (12.5h) for SL level to be hit
+    require_reversal: bool = True,   # Require close > open (green candle) at SL level for longs
+    direction: str         = "both",
+) -> tuple[pd.Series, list]:
+    """
+    SL Fade / Liquidity Grab Entry — 15m Mean Reversion variant.
+
+    Instead of entering at the signal bar, sets a PENDING limit order at the SL price.
+    If price drops to the SL level within max_wait_bars, enters there with:
+        - Entry  = pending_sl_lvl  (the original SL price — our limit fill)
+        - TP     = signal_price + atr_target * ATR  (same absolute TP, better R:R)
+        - New SL = wick_extreme +/- fade_sl_atr * ATR  (stop just beyond the wick)
+
+    Diagnostic results (2022-2025, 15m BTC, atr_stop=1.0):
+        6549 MR trades  66% stopped (4310 trades)
+        Avg SL distance: 0.40% from entry
+        Recovery within 50 bars (12.5h): 50%  ← IMPLEMENT threshold confirmed
+        Mean adverse excursion after SL hit: 2.32% beyond SL level
+
+    P&L model: price-based (entry at limit price, exit at SL/TP price).
+    This avoids the mark-to-market approximation error that arises when
+    entry price differs from the bar close (limit orders vs market orders).
+
+    State machine:
+        idle    → signal fires → pending (waiting for SL level)
+        pending → SL level hit → in_pos (fade trade entered at SL level)
+        pending → max_wait_bars exceeded → idle (cancelled)
+        in_pos  → new SL or TP hit → idle
+
+    Parameters
+    ----------
+    df              : OHLCV DataFrame at 15m interval
+    cutoff          : Butterworth low-pass cutoff frequency
+    rsi_oversold    : RSI threshold for long signal (default 30)
+    rsi_overbought  : RSI threshold for short signal (default 70)
+    bb_proximity    : max fractional distance from BB band to trigger signal
+    atr_stop        : ATR multiplier for original SL = fade entry target.
+                      1.0 gives 50% recovery rate within 50 bars (diagnostic).
+    atr_target      : ATR multiplier for TP from original signal price (default 2.0)
+    fade_sl_atr     : ATR multiplier for stop beyond wick extreme (default 0.30)
+    max_wait_bars   : cancel pending order after this many bars (50 = 12.5h)
+    require_reversal: require green/red reversal candle at fade entry bar
+    direction       : "both" | "long_only" | "short_only"
+    """
+    fc      = apply_butterworth(df["Close"], cutoff)
+    rsi     = compute_rsi(fc, 14)
+    bb_up, bb_mid, bb_lo = compute_bollinger(fc, 20, 2.0)
+    atr     = compute_atr(df["High"], df["Low"], df["Close"], 14)
+
+    prices = df["Close"].values.astype(float)
+    highs  = df["High"].values.astype(float)
+    lows   = df["Low"].values.astype(float)
+    opens  = df["Open"].values.astype(float)
+    n      = len(prices)
+
+    equity_arr   = np.ones(n, dtype=float)
+    curr_equity  = 1.0
+    closed_trades: list[float] = []
+
+    # State machine variables
+    state          = "idle"      # "idle" | "pending" | "in_pos"
+    pending_side   = ""
+    pending_sl_lvl = 0.0         # Original SL price = our fade entry target
+    pending_tp     = 0.0         # Original TP (absolute price, unchanged)
+    pending_bar    = 0
+    pending_atr    = 0.0
+
+    # In-position tracking (price-based — entry is at limit price, not close)
+    pos_side       = ""
+    pos_entry_px   = 0.0         # actual fade entry price (= pending_sl_lvl)
+    pos_sl         = 0.0         # new tight SL beyond the wick
+    pos_tp         = 0.0         # original TP (absolute price)
+    pos_entry_eq   = 1.0         # equity at entry (after entry cost)
+
+    for i in range(20, n):
+        r   = rsi.iloc[i]
+        at  = atr.iloc[i]
+        p   = prices[i]
+        hi  = highs[i]
+        lo  = lows[i]
+        o   = opens[i]
+        bbu = bb_up.iloc[i]
+        bbl = bb_lo.iloc[i]
+
+        if any(np.isnan(x) for x in (r, at, bbu, bbl)):
+            equity_arr[i] = curr_equity
+            continue
+
+        # ── IN POSITION: check SL / TP using bar high/low ────────────────────
+        # P&L is computed from the actual entry price (limit order fill),
+        # not from the previous close — this is the key difference vs base MR.
+        if state == "in_pos":
+            exited = False
+            trade_ret = 0.0
+
+            if pos_side == "long":
+                if lo <= pos_sl:
+                    # SL hit — exit at SL price (conservative: SL checked first)
+                    trade_ret = (pos_sl / pos_entry_px - 1.0) - 2.0 * COST_PER_SIDE
+                    exited = True
+                elif hi >= pos_tp:
+                    # TP hit
+                    trade_ret = (pos_tp / pos_entry_px - 1.0) - 2.0 * COST_PER_SIDE
+                    exited = True
+            else:  # short
+                if hi >= pos_sl:
+                    # SL hit
+                    trade_ret = (pos_entry_px / pos_sl - 1.0) - 2.0 * COST_PER_SIDE
+                    exited = True
+                elif lo <= pos_tp:
+                    # TP hit
+                    trade_ret = (pos_entry_px / pos_tp - 1.0) - 2.0 * COST_PER_SIDE
+                    exited = True
+
+            if exited:
+                curr_equity = pos_entry_eq * (1.0 + trade_ret)
+                closed_trades.append(trade_ret)
+                state = "idle"
+
+        # ── PENDING: waiting for SL level to be hit ──────────────────────────
+        elif state == "pending":
+            bars_waiting = i - pending_bar
+
+            # Cancel if waited too long
+            if bars_waiting > max_wait_bars:
+                state = "idle"
+
+            # Check if price reached the SL level (our fade entry)
+            elif pending_side == "long" and lo <= pending_sl_lvl:
+                # Require reversal candle (green close) to avoid blowthrough
+                if require_reversal and p <= o:
+                    pass  # Not a reversal candle — keep waiting
+                else:
+                    # Enter the fade trade at the SL level.
+                    # New SL is below the actual bar low (the wick) — gives
+                    # the trade room to breathe past the liquidity sweep.
+                    # Use the current bar's ATR (not pending_atr) for the stop
+                    # so the stop scales with current volatility.
+                    fade_entry   = pending_sl_lvl
+                    new_sl_p     = lo - fade_sl_atr * at
+                    new_tp_p     = pending_tp  # Same absolute TP
+
+                    pos_entry_eq  = curr_equity * (1.0 - COST_PER_SIDE)
+                    pos_side      = "long"
+                    pos_entry_px  = fade_entry
+                    pos_sl        = new_sl_p
+                    pos_tp        = new_tp_p
+                    curr_equity   = pos_entry_eq
+                    state         = "in_pos"
+
+            elif pending_side == "short" and hi >= pending_sl_lvl:
+                if require_reversal and p >= o:
+                    pass  # Not a reversal candle
+                else:
+                    # New SL is above the actual bar high (the wick)
+                    fade_entry   = pending_sl_lvl
+                    new_sl_p     = hi + fade_sl_atr * at
+                    new_tp_p     = pending_tp
+
+                    pos_entry_eq  = curr_equity * (1.0 - COST_PER_SIDE)
+                    pos_side      = "short"
+                    pos_entry_px  = fade_entry
+                    pos_sl        = new_sl_p
+                    pos_tp        = new_tp_p
+                    curr_equity   = pos_entry_eq
+                    state         = "in_pos"
+
+        # ── IDLE: look for new signal ─────────────────────────────────────────
+        elif state == "idle":
+            prox_lo = (p - bbl) / (bbl + 1e-10)
+            prox_hi = (bbu - p) / (bbu + 1e-10)
+
+            if direction != "short_only":
+                if r < rsi_oversold and 0.0 <= prox_lo <= bb_proximity:
+                    sl_level = p - atr_stop * at          # This is our fade entry target
+                    tp_level = p + atr_target * at         # Original TP (absolute price)
+                    if tp_level > p:
+                        state          = "pending"
+                        pending_side   = "long"
+                        pending_sl_lvl = sl_level
+                        pending_tp     = tp_level
+                        pending_bar    = i
+                        pending_atr    = at
+
+            if direction != "long_only" and state == "idle":
+                if r > rsi_overbought and 0.0 <= prox_hi <= bb_proximity:
+                    sl_level = p + atr_stop * at
+                    tp_level = p - atr_target * at
+                    if tp_level < p:
+                        state          = "pending"
+                        pending_side   = "short"
+                        pending_sl_lvl = sl_level
+                        pending_tp     = tp_level
+                        pending_bar    = i
+                        pending_atr    = at
+
+        equity_arr[i] = curr_equity
+
+    # Close any open position at last bar close
+    if state == "in_pos":
+        p_last = prices[-1]
+        if pos_side == "long":
+            trade_ret = (p_last / pos_entry_px - 1.0) - 2.0 * COST_PER_SIDE
+        else:
+            trade_ret = (pos_entry_px / p_last - 1.0) - 2.0 * COST_PER_SIDE
+        curr_equity   = pos_entry_eq * (1.0 + trade_ret)
+        closed_trades.append(trade_ret)
+        equity_arr[-1] = curr_equity
+
+    return pd.Series(equity_arr, index=df.index), closed_trades
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # PARAMETER GRIDS  (per strategy — used both for walk-forward and agent sweep)
 # ─────────────────────────────────────────────────────────────────────────────
 
 MR_GRID     = {"rsi_oversold": [25, 30, 35], "rsi_overbought": [65, 70, 75],
                "bb_proximity": [0.05, 0.10, 0.20]}          # 27 combos
 MR_DEFAULTS = {"rsi_oversold": 30.0, "rsi_overbought": 70.0,
-               "bb_proximity": 0.10, "atr_stop": 3.0}
+               "bb_proximity": 0.10, "atr_stop": 3.0, "direction": "both"}
+# Strict-mode defaults (higher quality bar — used by optimizer_agent.py --strict)
+MR_STRICT_DEFAULTS = {"rsi_oversold": 25.0, "rsi_overbought": 75.0,
+                      "bb_proximity": 0.05, "atr_stop": 3.0,
+                      "strict_volume_mult": 1.5, "strict_min_rrr": 1.0}
 
 VS_GRID     = {                                           # v6 — 72 combos
     # Variable importance ranking (350+ tests, VWAP_Complete_Results_Summary.md):
@@ -1139,22 +1707,113 @@ VS_DEFAULTS = {                                          # v6 defaults (empirica
     "require_reversal_candle": False,
 }
 
-MS_GRID     = {"ema_fast": [9, 12], "ema_slow": [21, 26],
-               "atr_stop": [1.5, 2.0], "atr_target": [2.5, 3.0]}  # 16
-MS_DEFAULTS = {"ema_fast": 9, "ema_slow": 21, "atr_stop": 2.0, "atr_target": 3.0}
+MS_GRID = {
+    "ema_fast":      [9, 12, 15],
+    "ema_slow":      [21, 26, 30],
+    "atr_stop":      [1.5, 2.0, 2.5],
+    "atr_target":    [3.0, 4.0, 5.0],
+    "adx_min":       [15.0, 20.0, 25.0, 30.0],
+    "vol_mult":      [0.8, 1.0, 1.2],
+    "rsi_long_lo":   [35.0, 40.0, 45.0, 50.0],
+    "rsi_long_hi":   [65.0, 70.0, 75.0, 80.0],
+    "rsi_short_lo":  [20.0, 25.0, 30.0],
+    "rsi_short_hi":  [45.0, 50.0, 55.0, 60.0],
+    "use_pullback":  [True, False],
+}
+MS_DEFAULTS = {
+    "ema_fast":      9,
+    "ema_slow":      21,
+    "atr_stop":      2.0,
+    "atr_target":    4.0,
+    "adx_min":       25.0,
+    "vol_mult":      1.0,
+    "rsi_long_lo":   50.0,
+    "rsi_long_hi":   75.0,
+    "rsi_short_lo":  25.0,
+    "rsi_short_hi":  50.0,
+    "use_pullback":  True,
+    "direction":     "both",
+    "regime":        "ranging",
+}
 
-LC_GRID     = {"price_threshold": [0.020, 0.025, 0.030],
-               "volume_mult":     [2.0,   2.5,   3.0],
-               "rsi_threshold":   [15.0,  18.0,  22.0]}     # 27
-LC_DEFAULTS = {"price_threshold": 0.030, "volume_mult": 3.0, "rsi_threshold": 18.0}
+LC_GRID     = {"price_threshold": [0.015, 0.020, 0.025, 0.030],
+               "volume_mult":     [1.5,   2.0,   2.5,   3.0],
+               "rsi_threshold":   [18.0,  22.0,  26.0,  30.0],
+               "min_consecutive": [2, 3, 4]}                 # 192 combos
+LC_DEFAULTS = {
+    "price_threshold": 0.020,
+    "volume_mult":     2.0,
+    "rsi_threshold":   22.0,
+    "min_consecutive": 3,
+    "min_wick_ratio":  1.5,
+    "direction":       "both",
+}
+
+SLF_GRID = {
+    # atr_stop=1.0 confirmed 50% recovery within 50 bars (diagnostic 2022-2025).
+    # Grid explores tighter/looser SL levels and wait horizons.
+    "rsi_oversold":   [25.0, 30.0, 35.0],
+    "rsi_overbought": [65.0, 70.0, 75.0],
+    "bb_proximity":   [0.08, 0.10, 0.15],
+    "max_wait_bars":  [20, 35, 50],
+    "fade_sl_atr":    [0.20, 0.30, 0.50],
+}  # 243 combos
+SLF_DEFAULTS = {
+    "rsi_oversold":   30.0,
+    "rsi_overbought": 70.0,
+    "bb_proximity":   0.10,
+    "atr_stop":       1.0,   # 1.0×ATR → 50% recovery rate confirmed by diagnostic
+    "atr_target":     2.0,   # 2.0×ATR TP → 3×ATR from fade entry (good R:R)
+    "fade_sl_atr":    0.30,
+    "max_wait_bars":  50,
+    "require_reversal": True,
+    "direction":      "both",
+}
 
 GT_GRID     = {"adx_threshold": [15.0, 20.0, 25.0],
                "spacing_mult":  [0.30,  0.50, 0.65, 0.80]}  # 12
 GT_DEFAULTS = {"adx_threshold": 20.0, "spacing_mult": 0.65}
 
-MA_GRID     = {"fast_period": [15, 20, 25], "slow_period": [40, 50, 60],
-               "pullback_max": [0.04, 0.06, 0.08]}           # 27
-MA_DEFAULTS = {"fast_period": 20, "slow_period": 50, "pullback_max": 0.06}
+MA_GRID     = {"fast_period": [5, 10, 15], "slow_period": [20, 30, 50],
+               "pullback_max": [0.10, 0.15, 0.20]}           # 27 combos (excl. fast>=slow)
+# Widened from [15,20,25]/[40,50,60]/[0.04,0.06,0.08] — original grid generated < 3 trades
+# per 12-month training window, causing optimize_strategy() to always fall back to defaults.
+# Root cause: fast=15-25 / slow=40-60 produces only ~1-2 crosses per year on 1d BTC;
+# pullback_max=0.04-0.08 is too tight (price rarely pulls back 1-8% within 5 bars of cross).
+# New grid: fast=5-15 / slow=20-50 / pullback=0.10-0.20 generates 3-8 trades per 12m window.
+MA_DEFAULTS = {"fast_period": 10, "slow_period": 20, "pullback_max": 0.20, "direction": "both"}
+# Default updated to match the widened grid's most trade-generating combo.
+
+# ── Martingale MR grid ────────────────────────────────────────────────────────
+# SAFETY RULE: martingale_mult is capped at 2.0 — never test > 2× (ruin risk).
+# max_martingale is always 1 — no cascading beyond a single re-entry.
+#
+# Key empirical finding (2022-2025 15m BTC, ATR-based exits):
+#   atr_stop=1.5, atr_target=3.0 (2:1 R:R) → WR≈33% → negative EV
+#   atr_stop=1.5, atr_target=1.5 (1:1 R:R) → WR≈51% → barely positive EV
+#   atr_stop=1.5, atr_target=1.0 (0.67 R:R) → WR≈60% → positive EV
+#
+# Grid searches atr_target [0.75, 1.0, 1.5] to find the best R:R per fold.
+# atr_stop fixed at 1.5 (≈0.61% avg distance per diagnostic).
+MART_GRID: dict[str, list] = {
+    "rsi_oversold":    [25.0, 30.0, 35.0],
+    "rsi_overbought":  [65.0, 70.0, 75.0],
+    "bb_proximity":    [0.08, 0.10, 0.15],
+    "atr_target":      [0.75, 1.0, 1.5],    # tight TP → higher WR → positive EV
+    "martingale_mult": [1.5, 2.0],          # NEVER test > 2× in grid
+    "cooldown_bars":   [3, 5, 10],
+}  # 3×3×3×3×2×3 = 486 combos
+MART_DEFAULTS: dict = {
+    "rsi_oversold":    30.0,
+    "rsi_overbought":  70.0,
+    "bb_proximity":    0.10,
+    "atr_stop":        1.5,
+    "atr_target":      1.0,   # tight TP: WR≈60%, EV≈+0.001R before costs
+    "martingale_mult": 2.0,   # 2× — max allowed; never cascade
+    "max_martingale":  1,      # hard cap — no cascading beyond 2×
+    "cooldown_bars":   5,
+    "direction":       "both",
+}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1163,31 +1822,37 @@ MA_DEFAULTS = {"fast_period": 20, "slow_period": 50, "pullback_max": 0.06}
 STRATEGY_TIMEFRAME_CONFIG: dict[str, dict] = {
     "Mean Reversion":    {"interval": "1d",  "train_months": 12, "test_months": 3},
     "VWAP Scalping":     {"interval": "5m",  "train_months":  3, "test_months": 1},
-    "Momentum Scalping": {"interval": "15m", "train_months":  3, "test_months": 1},
+    "Momentum Scalping": {"interval": "1h",  "train_months":  6, "test_months": 2},
     "Liquidation Capture": {"interval": "1d","train_months": 12, "test_months": 3},
     "Grid Trading":      {"interval": "4h",  "train_months":  6, "test_months": 2},
     "MA Crossover":      {"interval": "1d",  "train_months": 12, "test_months": 3},
+    "SL Fade MR":        {"interval": "15m", "train_months":  3, "test_months": 1},
+    "Martingale MR":     {"interval": "15m", "train_months":  3, "test_months": 1},
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STRATEGY REGISTRY
 # ─────────────────────────────────────────────────────────────────────────────
 STRATEGY_REGISTRY: dict[str, tuple] = {
-    "Mean Reversion":      (run_mean_reversion,      MR_GRID, MR_DEFAULTS),
-    "VWAP Scalping":       (run_vwap_scalping,       VS_GRID, VS_DEFAULTS),
-    "Momentum Scalping":   (run_momentum_scalping,   MS_GRID, MS_DEFAULTS),
-    "Liquidation Capture": (run_liquidation_capture, LC_GRID, LC_DEFAULTS),
-    "Grid Trading":        (run_grid_trading,        GT_GRID, GT_DEFAULTS),
-    "MA Crossover":        (run_ma_crossover,        MA_GRID, MA_DEFAULTS),
+    "Mean Reversion":      (run_mean_reversion,      MR_GRID,   MR_DEFAULTS),
+    "VWAP Scalping":       (run_vwap_scalping,       VS_GRID,   VS_DEFAULTS),
+    "Momentum Scalping":   (run_momentum_scalping,   MS_GRID,   MS_DEFAULTS),
+    "Liquidation Capture": (run_liquidation_capture, LC_GRID,   LC_DEFAULTS),
+    "Grid Trading":        (run_grid_trading,        GT_GRID,   GT_DEFAULTS),
+    "MA Crossover":        (run_ma_crossover,        MA_GRID,   MA_DEFAULTS),
+    "SL Fade MR":          (run_sl_fade_mr,          SLF_GRID,  SLF_DEFAULTS),
+    "Martingale MR":       (run_martingale_mr,       MART_GRID, MART_DEFAULTS),
 }
 
 STRATEGY_NOTES: dict[str, str] = {
     "Mean Reversion":      "RSI + Bollinger Bands · Long near lower BB, short near upper BB · Exit at SMA-20.",
     "VWAP Scalping":       "Rolling-VWAP deviation + MACD · Fades extreme SD moves back to VWAP mean.",
-    "Momentum Scalping":   "EMA 9/21 crossover + MACD + Volume · Rides momentum with ATR-based TP/SL.",
+    "Momentum Scalping":   "EMA 20/50 crossover + ADX gate (>=25) + MACD + Volume · 1h bars, only trades trending markets.",
     "Liquidation Capture": "Cascade exhaustion detector · Fades liquidation waterfalls (fires rarely on daily bars).",
     "Grid Trading":        "Range-fade when ADX < threshold · Buy near range bottom, sell near range top.",
     "MA Crossover":        "SMA golden/death cross + pullback entry + MACD confirmation · Trend-following.",
+    "SL Fade MR":          "Liquidity grab / SL sweep entry · 15m MR signal sets pending limit at SL level · 50% recovery rate within 50 bars confirmed.",
+    "Martingale MR":       "Capped 2× Martingale on 15m MR · Re-enters at 2× size after stop · max 1 re-entry · WR=58% qualifies.",
 }
 
 
@@ -1602,8 +2267,8 @@ def compute_gmm_features(df: pd.DataFrame, lookback: int = 60) -> pd.DataFrame:
 def fit_gmm_regime(
     df: pd.DataFrame,
     n_regimes: int = 4,
-    lookback: int = 60,
-    stability_window: int = 5,
+    lookback: int = 60,          # Use INTERVAL_GMM_PARAMS[interval]["lookback"] for correct scaling
+    stability_window: int = 5,   # Use INTERVAL_GMM_PARAMS[interval]["stability_window"]
     random_state: int = 42,
 ) -> tuple:
     """
@@ -1634,6 +2299,18 @@ def fit_gmm_regime(
             lowest  vol, high |mom| → "trending"
             high    vol             → "volatile"
             highest vol             → "crash"
+
+    IMPORTANT — interval scaling:
+        The default lookback=60 is calibrated for daily bars (= 2 months).
+        For intraday data, use INTERVAL_GMM_PARAMS[interval] to get the correct
+        lookback and stability_window values.  Failure to scale will collapse all
+        regimes to "calm" on LTF data because 60 bars of 1h data is only 2.5 days.
+
+        Example::
+
+            from strategies import INTERVAL_GMM_PARAMS
+            gmm_p = INTERVAL_GMM_PARAMS["1h"]
+            model, label_map, scaler = fit_gmm_regime(df, **gmm_p)
     """
     if not _SKLEARN_AVAILABLE:
         raise ImportError(
@@ -1674,6 +2351,31 @@ def fit_gmm_regime(
         label_map[lv_by_mom[1]] = "trending"
         label_map[hv_by_vol[0]] = "volatile"
         label_map[hv_by_vol[1]] = "crash"
+    elif n_regimes == 5:
+        # 5-regime organic labelling:
+        #   order[:2]  = 2 lowest-vol  → strong directional trending candidates
+        #   order[2:3] = middle vol    → ranging / neutral
+        #   order[3:4] = upper vol     → weak trending or volatile
+        #   order[4:]  = highest vol   → crash
+        low_vol_idx  = list(order[:2])   # strong trending candidates
+        mid_vol_idx  = list(order[2:3])  # ranging candidate
+        high_vol_idx = list(order[3:4])  # weak trending / volatile
+        crash_idx    = list(order[4:])   # crash
+
+        # Among the 2 low-vol: higher signed mom → bull_strong, lower → bear_strong
+        lv_by_mom = sorted(low_vol_idx, key=lambda i: means_mom[i], reverse=True)
+        label_map[lv_by_mom[0]] = "bull_strong"
+        label_map[lv_by_mom[1]] = "bear_strong"
+
+        # Mid vol = ranging
+        label_map[mid_vol_idx[0]] = "ranging"
+
+        # High vol: check signed momentum to assign bull_weak vs bear_weak
+        hv_idx = high_vol_idx[0]
+        label_map[hv_idx] = "bull_weak" if means_mom[hv_idx] >= 0 else "bear_weak"
+
+        # Crash = highest vol
+        label_map[crash_idx[0]] = "crash"
     else:
         for rank, idx in enumerate(order):
             label_map[idx] = f"regime_{rank}"
@@ -1754,8 +2456,13 @@ def predict_gmm_regime(
          "confidence": confidence_s},
         index=df.index,
     )
-    for name in ["calm", "trending", "volatile", "crash"]:
-        out[f"is_{name}"] = out["regime"] == name
+    # Dynamically generate is_* boolean columns from label_map so this works
+    # for both 4-regime ("calm", "trending", "volatile", "crash") and
+    # 5-regime ("bull_strong", "bull_weak", "ranging", "bear_strong", "bear_weak", "crash") modes.
+    all_regime_names = set(label_map.values())
+    for name in all_regime_names:
+        col = f"is_{name.replace(' ', '_')}"
+        out[col] = out["regime"] == name
 
     return out
 

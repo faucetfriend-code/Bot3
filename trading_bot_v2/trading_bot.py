@@ -1336,13 +1336,13 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error coordinating signal execution for {signal.asset}: {e}",
-                exc_info=True,
+            # Use loguru's opt(exception=True) so the full traceback is captured
+            logger.opt(exception=True).error(
+                f"Error coordinating signal execution for {signal.asset}: {type(e).__name__}: {e}"
             )
             self.signal_logger.log_signal_failed(
                 signal=signal,
-                error=str(e),
+                error=f"{type(e).__name__}: {e}",
                 notes="Exception during signal coordination",
             )
 
@@ -1697,15 +1697,12 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error executing standard signal for {signal.asset}: {e}",
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"Error executing standard signal for {signal.asset}: {type(e).__name__}: {e}"
             )
-
-            # Log exception
             self.signal_logger.log_signal_failed(
                 signal=signal,
-                error=str(e),
+                error=f"{type(e).__name__}: {e}",
                 notes="Exception during execution",
             )
 
