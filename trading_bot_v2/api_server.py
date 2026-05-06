@@ -1764,7 +1764,7 @@ async def get_event_history():
 
         return {
             "success": True,
-            "total_events": len(event_bus._event_history),
+            "total_events": getattr(event_bus, "_published_count", len(event_bus._event_history)),
             "subscribers": {k.value: len(v) for k, v in event_bus._subscribers.items()},
             "recent_events": recent_events,
             "callback_errors": callback_errors[-5:] if callback_errors else [],
@@ -1922,7 +1922,7 @@ async def trigger_signal_generation():
             trace["markets"].append(market_trace)
 
         # Get current event count
-        trace["event_count_after"] = len(bot.event_bus._event_history)
+        trace["event_count_after"] = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
 
         return {"success": True, "trace": trace}
 
@@ -2036,7 +2036,7 @@ async def get_bot_internals():
             "ws_client_connected": ws_connected,
             "strategy_manager_strategies": list(bot.strategy_manager.strategies.keys()) if hasattr(bot, "strategy_manager") else [],
             "event_bus_subscribers": {k.value: len(v) for k, v in bot.event_bus._subscribers.items()} if hasattr(bot, "event_bus") else {},
-            "event_history_count": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "event_history_count": getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history)) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         import traceback
@@ -2112,7 +2112,7 @@ async def get_loop_status():
             "events_generated_last_iteration": events_generated,
             "running_event_set": bot._running_event.is_set() if hasattr(bot, "_running_event") else None,
             "thread_alive": bot.thread.is_alive() if hasattr(bot, "thread") and bot.thread else False,
-            "total_events": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "total_events": getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history)) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2127,7 +2127,7 @@ async def call_actual_generate_signals():
             return {"success": False, "error": "Trading bot not initialized"}
 
         trace = {"steps": []}
-        events_before = len(bot.event_bus._event_history)
+        events_before = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
 
         try:
             from .event_system import EventType
@@ -2202,7 +2202,7 @@ async def call_actual_generate_signals():
                 trace["steps"].append(f"{symbol}: EXCEPTION: {e}")
                 trace["steps"].append(f"{symbol}: tb: {tb.format_exc()[:300]}")
 
-        events_after = len(bot.event_bus._event_history)
+        events_after = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
 
         return {
             "success": True,
@@ -2227,7 +2227,7 @@ async def call_generate_signals():
         trace = {"steps": []}
 
         # Get event count before
-        events_before = len(bot.event_bus._event_history)
+        events_before = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
         trace["events_before"] = events_before
 
         # Step 1: Get markets
@@ -2326,11 +2326,35 @@ async def call_generate_signals():
             trace["steps"].append(market_step)
 
         # Get event count after
-        events_after = len(bot.event_bus._event_history)
+        events_after = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
         trace["events_after"] = events_after
         trace["new_events"] = events_after - events_before
 
         return {"success": True, "trace": trace}
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.post("/api/debug/clear-regime-cache")
+async def clear_regime_cache(symbol: str = None):
+    """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
+    Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.
+    """
+    try:
+        bot = bot_integration.trading_bot
+        if not bot or not hasattr(bot, "strategy_manager"):
+            return {"success": False, "error": "Trading bot not initialized"}
+        detector = bot.strategy_manager.regime_detector
+        before = list(detector._regime_cache.keys())
+        detector.clear_regime_cache(symbol if symbol else None)
+        after = list(detector._regime_cache.keys())
+        return {
+            "success": True,
+            "cleared": symbol if symbol else "all",
+            "cache_before": before,
+            "cache_after": after,
+        }
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}

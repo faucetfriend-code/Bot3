@@ -122,7 +122,8 @@ class MultiTimeframeFetcher:
             logger.info(f"FAST PATH: Checking WS cache for {ws_symbol}, timeframes={timeframes}")
             for tf in timeframes:
                 ws_data = self.ws_client.get_kline_data(ws_symbol, tf)
-                min_candles_needed = min(50, lookback_candles)
+                # 5m is execution timing only; accept fewer WS candles to avoid slow REST fallback.
+                min_candles_needed = min(30 if tf == "5m" else 50, lookback_candles)
                 logger.debug(f"FAST PATH: {ws_symbol}_{tf} - ws_data={len(ws_data) if ws_data else 'None'}, need={min_candles_needed}")
                 if ws_data and len(ws_data) >= min_candles_needed:
                     candles_to_use = ws_data[-lookback_candles:] if len(ws_data) >= lookback_candles else ws_data
@@ -232,8 +233,9 @@ class MultiTimeframeFetcher:
                 # - Regime detection needs 29 candles (ADX calculation)
                 # - MA crossover needs 200+ candles (200 MA)
                 # - Use 50 as minimum to ensure basic regime detection works
+                # 5m is execution timing only; accept fewer WS candles to avoid slow REST fallback.
                 # Otherwise, fall back to REST API for historical data
-                min_candles_needed = min(50, lookback_candles)
+                min_candles_needed = min(30 if tf == "5m" else 50, lookback_candles)
                 if ws_data and len(ws_data) >= min_candles_needed:
                     # ws_data is already in REST API format, so parse it directly
                     candles_to_use = (
