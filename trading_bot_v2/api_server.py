@@ -2341,6 +2341,30 @@ async def call_generate_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
+@app.post("/api/debug/clear-regime-cache")
+async def clear_regime_cache(symbol: str = None):
+    """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
+    Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.
+    """
+    try:
+        bot = bot_integration.trading_bot
+        if not bot or not hasattr(bot, "strategy_manager"):
+            return {"success": False, "error": "Trading bot not initialized"}
+        detector = bot.strategy_manager.regime_detector
+        before = list(detector._regime_cache.keys())
+        detector.clear_regime_cache(symbol if symbol else None)
+        after = list(detector._regime_cache.keys())
+        return {
+            "success": True,
+            "cleared": symbol if symbol else "all",
+            "cache_before": before,
+            "cache_after": after,
+        }
+    except Exception as e:
+        import traceback
+        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
 if __name__ == "__main__":
     # Determine module path based on how script is run
     # When run as module (-m), __package__ is set; when run directly, it's None

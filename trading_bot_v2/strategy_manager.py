@@ -546,8 +546,9 @@ class StrategyManager:
                 logger.warning(f"{symbol} {tf}: Missing OHLCV fields: {missing_fields}")
                 continue
 
-            # Check minimum data length (need at least 10 candles for basic analysis)
-            min_length = 10
+            # 5m is execution-timing only — strategies compute signals on 1h/4h.
+            # Allow a lower floor so sparse-testnet 5m data doesn't block the symbol.
+            min_length = 5 if tf == "5m" else 10
             for field in required_fields:
                 if len(data[field]) < min_length:
                     logger.warning(

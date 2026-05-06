@@ -73,7 +73,7 @@ class MarketRegimeDetector:
         # Regime caching to prevent unnecessary recalculation
         self._regime_cache: Dict[str, Dict] = {}
         self._pending_regime_changes: Dict[str, Dict] = {}
-        self._cache_ttl_hours = 4  # Recalculate every 4 hours
+        self._cache_ttl_hours = 1  # Recalculate every 1 hour (was 4h — too slow for regime changes)
 
         # Trend direction caching (for partial grid unwind decisions)
         self._trend_direction_cache: Dict[str, Dict] = {}
