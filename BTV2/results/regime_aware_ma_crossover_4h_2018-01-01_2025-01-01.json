@@ -1,0 +1,806 @@
+{
+  "strategy": "MA Crossover",
+  "period": "2018-01-01 -> 2025-01-01",
+  "interval": "4h",
+  "symbol": "BTCUSDT",
+  "n_folds": 39,
+  "overall_metrics": {
+    "total_return_pct": 135.08538413874624,
+    "cagr_pct": 14.048766909816756,
+    "sharpe": 0.6962583443055137,
+    "max_dd_pct": -29.03984259559079,
+    "win_rate_pct": 64.44444444444444,
+    "profit_factor": 2.1325745004343526,
+    "n_trades": 45
+  },
+  "bull_metrics": {
+    "total_return_pct": 24.24836273193676,
+    "cagr_pct": 3.6856605363570827,
+    "sharpe": 0.564876627299126,
+    "max_dd_pct": -27.188714291829136,
+    "win_rate_pct": 53.84615384615385,
+    "profit_factor": 1.9259202741042665,
+    "n_trades": 13
+  },
+  "bear_metrics": {
+    "total_return_pct": 10.023068867854533,
+    "cagr_pct": 2.229847421156106,
+    "sharpe": 0.8718549953982588,
+    "max_dd_pct": -11.666081241789716,
+    "win_rate_pct": 83.33333333333334,
+    "profit_factor": 2.7793745875428653,
+    "n_trades": 6
+  },
+  "neutral_metrics": {
+    "total_return_pct": 71.96940935740848,
+    "cagr_pct": 9.191198653520383,
+    "sharpe": 0.7884544528232675,
+    "max_dd_pct": -23.450830600496953,
+    "win_rate_pct": 65.38461538461539,
+    "profit_factor": 2.1739768973487283,
+    "n_trades": 26
+  },
+  "mc_overall": {
+    "n_trades": 45,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 0.0,
+    "p5_return_pct": 151.51,
+    "p50_return_pct": 151.51,
+    "p95_return_pct": 151.51,
+    "worst5_maxdd_pct": -37.75,
+    "median_maxdd_pct": -22.79,
+    "spread_ratio": 99.0,
+    "overfitting_flag": "False",
+    "verdict": "ROBUST"
+  },
+  "mc_bull": {
+    "n_trades": 13,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 0.0,
+    "p5_return_pct": 26.7,
+    "p50_return_pct": 26.7,
+    "p95_return_pct": 26.7,
+    "worst5_maxdd_pct": -24.94,
+    "median_maxdd_pct": -16.84,
+    "spread_ratio": 99.0,
+    "overfitting_flag": "False",
+    "verdict": "ROBUST"
+  },
+  "mc_bear": {
+    "n_trades": 6,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 0.0,
+    "p5_return_pct": 11.02,
+    "p50_return_pct": 11.02,
+    "p95_return_pct": 11.02,
+    "worst5_maxdd_pct": -6.2,
+    "median_maxdd_pct": -6.2,
+    "spread_ratio": 99.0,
+    "overfitting_flag": "False",
+    "verdict": "ROBUST"
+  },
+  "bull_optimised_params": {
+    "fast_period": 10,
+    "slow_period": 30,
+    "pullback_max": 0.1
+  },
+  "bear_optimised_params": {
+    "fast_period": 15,
+    "slow_period": 30,
+    "pullback_max": 0.1
+  },
+  "year_summary": {
+    "2018": {
+      "dominant_regime": "crash",
+      "dominant_direction": "both",
+      "n_folds": 3,
+      "total_trades": 0,
+      "avg_fold_return_pct": 0.0,
+      "regime_breakdown": {
+        "crash": 1,
+        "volatile": 1,
+        "trending": 1
+      }
+    },
+    "2019": {
+      "dominant_regime": "volatile",
+      "dominant_direction": "both",
+      "n_folds": 6,
+      "total_trades": 5,
+      "avg_fold_return_pct": 0.91,
+      "regime_breakdown": {
+        "volatile": 3,
+        "calm": 2,
+        "trending": 1
+      }
+    },
+    "2020": {
+      "dominant_regime": "trending",
+      "dominant_direction": "long_only",
+      "n_folds": 6,
+      "total_trades": 8,
+      "avg_fold_return_pct": 1.66,
+      "regime_breakdown": {
+        "crash": 1,
+        "calm": 2,
+        "trending": 3
+      }
+    },
+    "2021": {
+      "dominant_regime": "trending",
+      "dominant_direction": "both",
+      "n_folds": 6,
+      "total_trades": 10,
+      "avg_fold_return_pct": 4.07,
+      "regime_breakdown": {
+        "volatile": 1,
+        "calm": 2,
+        "trending": 3
+      }
+    },
+    "2022": {
+      "dominant_regime": "trending",
+      "dominant_direction": "short_only",
+      "n_folds": 6,
+      "total_trades": 8,
+      "avg_fold_return_pct": 3.58,
+      "regime_breakdown": {
+        "crash": 1,
+        "volatile": 2,
+        "trending": 3
+      }
+    },
+    "2023": {
+      "dominant_regime": "trending",
+      "dominant_direction": "both",
+      "n_folds": 6,
+      "total_trades": 4,
+      "avg_fold_return_pct": 1.23,
+      "regime_breakdown": {
+        "volatile": 2,
+        "calm": 1,
+        "trending": 3
+      }
+    },
+    "2024": {
+      "dominant_regime": "calm",
+      "dominant_direction": "both",
+      "n_folds": 6,
+      "total_trades": 10,
+      "avg_fold_return_pct": 4.27,
+      "regime_breakdown": {
+        "volatile": 1,
+        "calm": 3,
+        "trending": 2
+      }
+    }
+  },
+  "fold_details": [
+    {
+      "fold": 1,
+      "year": 2018,
+      "test_period": "2018-07-01 -> 2018-08-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 2,
+      "year": 2018,
+      "test_period": "2018-09-01 -> 2018-10-31",
+      "dominant_regime": "crash",
+      "direction": "short_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 3,
+      "year": 2018,
+      "test_period": "2018-11-01 -> 2018-12-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 4,
+      "year": 2019,
+      "test_period": "2019-01-01 -> 2019-02-28",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 5,
+      "year": 2019,
+      "test_period": "2019-03-01 -> 2019-04-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 6,
+      "year": 2019,
+      "test_period": "2019-05-01 -> 2019-06-30",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 3,
+      "sharpe": 1.3759,
+      "return_pct": 4.49,
+      "win_rate_pct": 66.7,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 7,
+      "year": 2019,
+      "test_period": "2019-07-01 -> 2019-08-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 8,
+      "year": 2019,
+      "test_period": "2019-09-01 -> 2019-10-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 1,
+      "sharpe": 2.1014,
+      "return_pct": 7.29,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 9,
+      "year": 2019,
+      "test_period": "2019-11-01 -> 2019-12-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 1,
+      "sharpe": -5.0141,
+      "return_pct": -6.34,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 10,
+      "year": 2020,
+      "test_period": "2020-01-01 -> 2020-02-29",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 1,
+      "sharpe": -2.893,
+      "return_pct": -6.11,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 11,
+      "year": 2020,
+      "test_period": "2020-03-01 -> 2020-04-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 2,
+      "sharpe": 3.054,
+      "return_pct": 21.93,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 12,
+      "year": 2020,
+      "test_period": "2020-05-01 -> 2020-06-30",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 1,
+      "sharpe": -0.0998,
+      "return_pct": -2.2,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 50,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 13,
+      "year": 2020,
+      "test_period": "2020-07-01 -> 2020-08-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 14,
+      "year": 2020,
+      "test_period": "2020-09-01 -> 2020-10-31",
+      "dominant_regime": "crash",
+      "direction": "short_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 15,
+      "year": 2020,
+      "test_period": "2020-11-01 -> 2020-12-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 4,
+      "sharpe": -0.6095,
+      "return_pct": -3.69,
+      "win_rate_pct": 50.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 16,
+      "year": 2021,
+      "test_period": "2021-01-01 -> 2021-02-28",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 2,
+      "sharpe": 0.3169,
+      "return_pct": 0.42,
+      "win_rate_pct": 50.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 17,
+      "year": 2021,
+      "test_period": "2021-03-01 -> 2021-04-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 2,
+      "sharpe": 2.1924,
+      "return_pct": 14.18,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 18,
+      "year": 2021,
+      "test_period": "2021-05-01 -> 2021-06-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 3,
+      "sharpe": -1.3144,
+      "return_pct": -12.54,
+      "win_rate_pct": 33.3,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 19,
+      "year": 2021,
+      "test_period": "2021-07-01 -> 2021-08-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 20,
+      "year": 2021,
+      "test_period": "2021-09-01 -> 2021-10-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 2,
+      "sharpe": 3.0896,
+      "return_pct": 17.45,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 21,
+      "year": 2021,
+      "test_period": "2021-11-01 -> 2021-12-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 1,
+      "sharpe": 1.5353,
+      "return_pct": 4.88,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 22,
+      "year": 2022,
+      "test_period": "2022-01-01 -> 2022-02-28",
+      "dominant_regime": "crash",
+      "direction": "short_only",
+      "n_trades": 1,
+      "sharpe": 3.3255,
+      "return_pct": 4.96,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 50,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 23,
+      "year": 2022,
+      "test_period": "2022-03-01 -> 2022-04-30",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 1,
+      "sharpe": 2.6699,
+      "return_pct": 4.01,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 24,
+      "year": 2022,
+      "test_period": "2022-05-01 -> 2022-06-30",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 3,
+      "sharpe": 0.3476,
+      "return_pct": 1.02,
+      "win_rate_pct": 33.3,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 25,
+      "year": 2022,
+      "test_period": "2022-07-01 -> 2022-08-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 26,
+      "year": 2022,
+      "test_period": "2022-09-01 -> 2022-10-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 1,
+      "sharpe": 1.9506,
+      "return_pct": 8.89,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 27,
+      "year": 2022,
+      "test_period": "2022-11-01 -> 2022-12-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 2,
+      "sharpe": 1.7905,
+      "return_pct": 2.59,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 28,
+      "year": 2023,
+      "test_period": "2023-01-01 -> 2023-02-28",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 50,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 29,
+      "year": 2023,
+      "test_period": "2023-03-01 -> 2023-04-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 30,
+      "year": 2023,
+      "test_period": "2023-05-01 -> 2023-06-30",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 3,
+      "sharpe": 3.3087,
+      "return_pct": 11.2,
+      "win_rate_pct": 66.7,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 31,
+      "year": 2023,
+      "test_period": "2023-07-01 -> 2023-08-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 1,
+      "sharpe": -2.568,
+      "return_pct": -3.82,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 32,
+      "year": 2023,
+      "test_period": "2023-09-01 -> 2023-10-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 33,
+      "year": 2023,
+      "test_period": "2023-11-01 -> 2023-12-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 30,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 34,
+      "year": 2024,
+      "test_period": "2024-01-01 -> 2024-02-29",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 1,
+      "sharpe": 3.0439,
+      "return_pct": 6.81,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 35,
+      "year": 2024,
+      "test_period": "2024-03-01 -> 2024-04-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 36,
+      "year": 2024,
+      "test_period": "2024-05-01 -> 2024-06-30",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 3,
+      "sharpe": -0.8002,
+      "return_pct": -3.4,
+      "win_rate_pct": 33.3,
+      "params": {
+        "fast_period": 15,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 37,
+      "year": 2024,
+      "test_period": "2024-07-01 -> 2024-08-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 2,
+      "sharpe": 3.5054,
+      "return_pct": 12.14,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 38,
+      "year": 2024,
+      "test_period": "2024-09-01 -> 2024-10-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 1,
+      "sharpe": 1.8393,
+      "return_pct": 2.99,
+      "win_rate_pct": 100.0,
+      "params": {
+        "fast_period": 10,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    },
+    {
+      "fold": 39,
+      "year": 2024,
+      "test_period": "2024-11-01 -> 2024-12-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 3,
+      "sharpe": 1.2052,
+      "return_pct": 7.06,
+      "win_rate_pct": 66.7,
+      "params": {
+        "fast_period": 5,
+        "slow_period": 20,
+        "pullback_max": 0.1
+      }
+    }
+  ],
+  "baseline_sharpe": -0.12,
+  "improvement_vs_baseline": 0.8163
+}

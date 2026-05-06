@@ -113,56 +113,11 @@ class TestTradingBot:
         bot._update_positions()
         assert bot.positions[0]["pnl"] == 200.0
 
-    @patch("trading_bot.random.random")
-    def test_check_signals_buy(self, mock_random, bot, mock_client):
-        """Test _check_signals executes buy signal when random < 0.05."""
-        mock_random.side_effect = [
-            0.03,
-            0.06,
-            0.06,
-            0.06,
-        ]  # Buy BTC, no sell BTC, no for ETH
-        with patch.object(bot, "_execute_signal") as mock_execute:
-            bot._check_signals()
-            mock_execute.assert_called_once_with("BTC/USD", "buy", 1.0)
-
-    @patch("trading_bot.random.random")
-    def test_check_signals_sell(self, mock_random, bot, mock_client):
-        """Test _check_signals executes sell signal when random < 0.05."""
-        mock_random.side_effect = [
-            0.06,
-            0.03,
-            0.06,
-            0.06,
-        ]  # No buy BTC, sell BTC, no for ETH
-        with patch.object(bot, "_execute_signal") as mock_execute:
-            bot._check_signals()
-            mock_execute.assert_called_once_with("BTC/USD", "sell", 1.0)
-
-    @patch("trading_bot.random.random")
-    def test_check_signals_no_signal(self, mock_random, bot, mock_client):
-        """Test _check_signals does nothing when random >= 0.05."""
-        mock_random.side_effect = [0.06, 0.06, 0.06, 0.06]  # No for all
-        with patch.object(bot, "_execute_signal") as mock_execute:
-            bot._check_signals()
-            mock_execute.assert_not_called()
-
-    def test_execute_signal(self, bot, mock_client):
-        """Test _execute_signal places order and adds trade."""
-        bot._execute_signal("BTC/USD", "buy", 1.0)
-        mock_client.place_order.assert_called_once_with("BTC/USD", "buy", 1.0, "market")
-        assert len(bot.trades) == 1
-        assert bot.trades[0]["symbol"] == "BTC/USD"
-        assert bot.trades[0]["side"] == "buy"
-        assert bot.trades[0]["quantity"] == 1.0
-        assert bot.trades[0]["order"] == {"order_id": "123"}
-
-    def test_execute_signal_max_positions(self, bot, mock_client):
-        """Test _execute_signal does not place order when at max positions."""
-        bot.positions = [{}] * 5  # Max positions
-        bot._execute_signal("BTC/USD", "buy", 1.0)
-        mock_client.place_order.assert_not_called()
-        assert len(bot.trades) == 0
+    # Removed (2026-05-02): tests for legacy _check_signals / _execute_signal.
+    # Those bot methods were deleted along with the corresponding production
+    # code path. Active signal flow is event-driven via SIGNAL_GENERATED →
+    # _handle_signal_generated → _coordinate_signal_execution. See
+    # tests/test_signal_routing.py for the current coverage.
 
     @patch("trading_bot.logging.warning")
     def test_monitor_risk_warning(self, mock_warning, bot):

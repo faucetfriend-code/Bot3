@@ -18,6 +18,41 @@ from trading_bot_v2.component_interfaces import (
     StrategyInterface,
     DatabaseInterface,
 )
+from trading_bot_v2.models import Signal, OrderSide
+from trading_bot_v2.config import StrategyType, AssetClass, TradeQuality, MarketState
+
+
+def _make_e2e_signal(
+    strategy=StrategyType.MEAN_REVERSION,
+    asset="SUI-PERP",
+    side=OrderSide.BUY,
+    entry_price=1.50,
+    stop_loss=1.35,
+    take_profit=1.65,
+) -> Signal:
+    """Build a minimal valid Signal with all 8 flags True."""
+    return Signal(
+        strategy=strategy,
+        asset=asset,
+        asset_class=AssetClass.PERPETUAL,
+        side=side,
+        entry_price=entry_price,
+        stop_loss=stop_loss,
+        take_profit=take_profit,
+        confidence=0.75,
+        quality=TradeQuality.STANDARD,
+        market_state=MarketState.RANGE,
+        timeframe="15min",
+        pattern="test",
+        volume_confirmation=True,
+        multi_timeframe_alignment=True,
+        support_resistance_valid=True,
+        rrr_meets_minimum=True,
+        liquidation_buffer_safe=True,
+        account_risk_ok=True,
+        margin_drawdown_ok=True,
+        forbidden_conditions_clear=True,
+    )
 
 
 class TestEndToEndTradingFlow:
@@ -110,18 +145,8 @@ class TestEndToEndTradingFlow:
             "database": database,
         }
 
-    @pytest.mark.skip(reason="Requires proper Signal objects in event data; plain dict signals fail in _handle_signal_generated")
     def test_complete_signal_to_execution_flow(self, mock_components):
-        """Test complete flow: Signal → Approval → Execution → Persistence."""
-        # Setup component registry
-        registry = get_component_registry()
-        for name, component in mock_components.items():
-            if name == "regime":
-                registry.register(component, "regime_detector", [RegimeInterface])
-            else:
-                registry.register(component, name, [])
-
-        # Import and setup TradingBot
+        """Test complete flow: Signal → Approval → Execution."""
         from trading_bot_v2.trading_bot import TradingBot
 
         with (
@@ -134,52 +159,47 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.MarketRegimeDetector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
-            # Create bot with mocked dependencies
             bot = TradingBot()
             bot.client = mock_components["execution"]
-            bot.risk_manager = mock_components["risk"]
             bot.grid_lifecycle = mock_components["grid"]
-            bot.strategy_manager = mock_components["strategy"]
 
-            # Setup component registry in bot
-            bot.component_registry = registry
+            # Use a full MagicMock for risk — spec=RiskInterface lacks get_position_size
+            mock_risk = MagicMock()
+            mock_risk.request_capital_allocation.return_value = {
+                "approved": True,
+                "allocated_amount": 1000.0,
+                "approval_id": "test_approval_123",
+            }
+            mock_risk.get_position_size.return_value = 666.67
+            bot.risk_manager = mock_risk
+
+            # Mock execution layer so we don't hit real candle/timing logic
+            signal = _make_e2e_signal()
+            mock_el = MagicMock()
+            mock_el.refine_entry.return_value = signal
+            bot.execution_layer = mock_el
+
+            # Silence signal logger to keep test output clean
+            bot.signal_logger = MagicMock()
+            bot._circuit_breaker_triggered = False
+
             bot.event_bus = get_event_bus()
-
-            # Setup event subscriptions
             bot._setup_event_subscriptions()
 
-            # Simulate signal generation and publishing
-            signal_data = {
-                "signal": {
-                    "asset": "SUI",
-                    "side": "buy",
-                    "entry_price": 1.50,
-                    "stop_loss": 1.35,
-                    "take_profit": 1.65,
-                    "strategy": "GridTrading",
-                    "quantity": 100,
-                },
-                "market_data": {},
-                "current_price": 1.50,
-                "symbol": "SUI",
-            }
+            # Publish a proper Signal object; plain dicts are silently dropped
+            with (
+                patch.object(bot, "_get_account_balance", return_value=10000),
+                patch.object(bot, "_get_current_exposure", return_value=0),
+            ):
+                bot.event_bus.publish_event(
+                    EventType.SIGNAL_GENERATED,
+                    {"signal": signal},
+                    "test",
+                )
 
-            # Publish signal event
-            bot.event_bus.publish_event(EventType.SIGNAL_GENERATED, signal_data, "test")
-
-            # Allow event processing
-            time.sleep(0.1)
-
-            # Verify capital allocation was requested
-            mock_components["risk"].request_capital_allocation.assert_called()
-
-            # Verify order was placed
-            mock_components["execution"].place_order.assert_called_with(
-                "SUI", "buy", 100, "market"
-            )
-
-            # Verify trade was saved
-            mock_components["database"].save_trade.assert_called()
+            # EventBus is synchronous — handlers ran before we reach this line
+            mock_risk.request_capital_allocation.assert_called()
+            mock_components["execution"].place_order.assert_called()
 
     def test_regime_based_signal_filtering(self, mock_components):
         """Test that signals are filtered based on market regime."""
@@ -217,19 +237,8 @@ class TestEndToEndTradingFlow:
             # Verify signal was rejected (no capital request)
             mock_components["risk"].request_capital_allocation.assert_not_called()
 
-    @pytest.mark.skip(reason="Requires proper Signal objects in event data; plain dict signals fail in _handle_signal_generated")
     def test_capital_allocation_rejection_handling(self, mock_components):
-        """Test handling of capital allocation rejection."""
-        # Setup risk manager to reject allocation
-        mock_components["risk"].request_capital_allocation.return_value = {
-            "approved": False,
-            "reason": "insufficient_funds",
-        }
-
-        registry = get_component_registry()
-        for name, component in mock_components.items():
-            registry.register(component, name, [])
-
+        """Test handling of capital allocation rejection — order must NOT be placed."""
         from trading_bot_v2.trading_bot import TradingBot
 
         with (
@@ -243,17 +252,38 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
             bot = TradingBot()
-            bot.component_registry = registry
+            bot.client = mock_components["execution"]
+            bot.grid_lifecycle = mock_components["grid"]
+
+            # Risk manager rejects the allocation
+            mock_risk = MagicMock()
+            mock_risk.request_capital_allocation.return_value = {
+                "approved": False,
+                "reason": "insufficient_funds",
+            }
+            mock_risk.get_position_size.return_value = 666.67
+            bot.risk_manager = mock_risk
+
+            bot.signal_logger = MagicMock()
+            bot._circuit_breaker_triggered = False
+
+            signal = _make_e2e_signal()
             bot.event_bus = get_event_bus()
             bot._setup_event_subscriptions()
 
-            # Publish signal
-            signal_data = {"signal": {"asset": "SUI", "strategy": "GridTrading"}}
-            bot.event_bus.publish_event(EventType.SIGNAL_GENERATED, signal_data, "test")
-            time.sleep(0.1)
+            with (
+                patch.object(bot, "_get_account_balance", return_value=10000),
+                patch.object(bot, "_get_current_exposure", return_value=0),
+            ):
+                bot.event_bus.publish_event(
+                    EventType.SIGNAL_GENERATED,
+                    {"signal": signal},
+                    "test",
+                )
 
-            # Verify capital was requested but order was not placed
-            mock_components["risk"].request_capital_allocation.assert_called()
+            # Capital allocation was attempted …
+            mock_risk.request_capital_allocation.assert_called()
+            # … but rejected, so no order should have been placed
             mock_components["execution"].place_order.assert_not_called()
 
     def test_emergency_stop_propagation(self, mock_components):

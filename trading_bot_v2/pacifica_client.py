@@ -400,7 +400,21 @@ class PacificaClient:
         elif response.status_code >= 400:
             raise ValueError(f"API error: {response.text}")
 
-        return response.json()
+        parsed = response.json()
+
+        # Pacifica market-order endpoint intermittently returns the JSON string
+        # "success" (or '"success"') instead of an order object.  Normalise it
+        # here so every caller receives a consistent dict.
+        if isinstance(parsed, str):
+            text_lower = parsed.strip().lower().strip('"').strip("'")
+            if text_lower == "success":
+                logger.info(f"API returned string 'success' for {endpoint} — treating as OK")
+                return {"success": True, "data": {}, "status": "success"}
+            else:
+                logger.warning(f"API returned unexpected string for {endpoint}: {parsed!r}")
+                return {"success": False, "error": parsed, "data": {}}
+
+        return parsed
 
     @retry(
         stop=stop_after_attempt(5),

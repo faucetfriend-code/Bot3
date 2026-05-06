@@ -5,7 +5,7 @@ import sys
 import os
 import warnings
 from typing import Dict, List, Any, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 import urllib3
 from loguru import logger
 
@@ -126,13 +126,14 @@ class TradingBot:
         else:
             self.client = client
 
-        # Initialize risk manager
+        # Initialize risk manager.
+        # NOTE: in production, BotIntegration always passes a constructed
+        # RiskManager via the `risk_manager=` argument, so this fallback
+        # path is only used by tests and standalone instantiation.
+        # The fallback signature must match RiskManager.__init__ exactly —
+        # `db` and `risk_profile` (singular) are NOT valid kwargs.
         if risk_manager is None:
-            self.risk_manager = RiskManager(
-                db=self.db,
-                client=self.client,
-                risk_profile=RiskProfile[config.risk_profile.upper()],
-            )
+            self.risk_manager = RiskManager(client=self.client)
         else:
             self.risk_manager = risk_manager
 
@@ -401,16 +402,17 @@ class TradingBot:
 
             if price and price > 0:
                 logging.debug(f"WebSocket price for {clean_symbol}: ${price}")
-                # Return in same format as REST API for compatibility
+                # WebSocket exposes only the last price — DO NOT fabricate
+                # bid/ask/high/low. Anyone needing those must use kline data.
+                # Previous fabrication (price ± 0.05% / ± 2%) was passed back
+                # as if it were real, which would break stop-distance logic if
+                # any caller ever read ticker["high"] or ticker["low"].
                 return {
-                    "symbol": symbol,
-                    "last": float(price),
-                    "bid": float(price * 0.9995),  # Approximate bid (0.05% below)
-                    "ask": float(price * 1.0005),  # Approximate ask (0.05% above)
-                    "high": float(price * 1.02),
-                    "low": float(price * 0.98),
-                    "volume": 0,  # Not available via ticker WS
+                    "symbol":    symbol,
+                    "last":      float(price),
+                    "volume":    0,  # Not available via ticker WS
                     "timestamp": int(time.time() * 1000),
+                    "_source":   "ws_last_only",  # marker so callers can detect
                 }
             else:
                 # No WebSocket price - fall back to REST
@@ -452,7 +454,7 @@ class TradingBot:
         self._loop_events_generated = 0  # Track events generated in loop
         while self._running_event.is_set():
             self._loop_iteration += 1
-            self._last_loop_time = datetime.now()
+            self._last_loop_time = datetime.now(timezone.utc)
             self._loop_step = "starting"
             try:
                 logger.info(f"🔄 Trading loop iteration {self._loop_iteration} starting...")
@@ -471,16 +473,31 @@ class TradingBot:
 
                 # PHASE 2: Generate and publish signals as events (coordinator role)
                 self._loop_step = "generate_signals"
-                events_before = len(self.event_bus._event_history)
-                logger.info(f"📊 Calling _generate_and_publish_signals (events_before={events_before})...")
+                # Use the monotonic _published_count instead of len(_event_history).
+                # len() saturates at max_history (1000) and then always returns 1000,
+                # making "after - before" permanently 0 — a misleading metric.
+                count_before = self.event_bus._published_count
+                logger.info(f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})...")
                 self._generate_and_publish_signals()
-                events_after = len(self.event_bus._event_history)
-                self._loop_events_generated = events_after - events_before
-                logger.info(f"📊 Signal generation complete (events_after={events_after}, new={self._loop_events_generated})")
+                count_after = self.event_bus._published_count
+                self._loop_events_generated = count_after - count_before
+                logger.info(f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})")
 
                 # Monitor risk (delegated to RiskManager)
                 self._loop_step = "monitor_risk"
                 self._monitor_risk_coordinated()
+
+                # House-keeping: prune expired capital-approval entries.
+                # Without this, RiskManager._pending_approvals grows
+                # unboundedly (one entry per request, ~1200/hr at scale).
+                self._loop_step = "cleanup_approvals"
+                try:
+                    if self.risk_manager and hasattr(
+                        self.risk_manager, "cleanup_expired_approvals"
+                    ):
+                        self.risk_manager.cleanup_expired_approvals()
+                except Exception as e:
+                    logger.warning(f"cleanup_expired_approvals failed: {e}")
 
                 # Publish status update to API server hub
                 if self.hub_publish_func:
@@ -719,12 +736,26 @@ class TradingBot:
                 for o in all_orders
             )
 
+            # SAFETY: compute a real emergency stop on re-adoption.
+            # Without this, _check_emergency_stop short-circuits on ≤ 0 and the
+            # grid runs unprotected at the per-symbol level until next restart.
+            # Convention (matches grid_lifecycle_manager._sync_grids_from_exchange):
+            #   emergency_stop = lowest_buy_price × (1 - GRID_EMERGENCY_STOP_PCT)
+            # Falls back to center × (1 - pct) if no buy orders are visible.
+            emergency_stop_pct = float(
+                os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
+            )
+            if buy_prices:
+                emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
+            else:
+                emergency_stop = center_price * (1.0 - emergency_stop_pct)
+
             # Register directly in GridLifecycleManager
             if self.grid_lifecycle and symbol not in self.grid_lifecycle._grids:
                 self.grid_lifecycle._grids[symbol] = {
                     "state": GridState.ACTIVE,
                     "grid_capital": total_capital,
-                    "emergency_stop": 0,  # No emergency stop for re-adopted grids
+                    "emergency_stop": emergency_stop,  # FIX: was 0 — unprotected on re-adoption
                     "regime_on_creation": "unknown_readopted",
                     "atr_at_creation": 0,
                     "grid_spacing": grid_spacing,
@@ -732,13 +763,15 @@ class TradingBot:
                     "orders_placed": len(all_orders),
                     "center_price": center_price,
                     "initial_center": center_price,
-                    "created_at": datetime.now(),
+                    "created_at": datetime.now(timezone.utc),
                     "refresh_count": 0,
                     "readopted": True,  # Flag that this was re-adopted
                 }
 
                 logger.info(
                     f"✅ Re-adopted grid for {symbol}: center=${center_price:.4f}, "
+                    f"emergency_stop=${emergency_stop:.4f} "
+                    f"({emergency_stop_pct*100:.0f}% below lowest bid), "
                     f"{len(buy_orders)} bids + {len(sell_orders)} asks, "
                     f"capital≈${total_capital:.2f}"
                 )
@@ -1120,7 +1153,7 @@ class TradingBot:
 
             # Log signal details for debugging
             log_entry = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "symbol": signal.asset,
                 "strategy": signal.strategy.name,
                 "side": signal.side.name,
@@ -1154,14 +1187,49 @@ class TradingBot:
         """
         Validate if signal should be executed.
 
-        Checks:
-        1. Signal is valid (8 validation flags)
-        2. Stop loss is present and valid (CRITICAL SAFETY CHECK)
-        3. Account has sufficient capital
-        4. Risk limits not exceeded
-        5. No conflicting positions
+        Checks (in priority order — earliest short-circuits first):
+        0a. Circuit breaker — if portfolio loss tripped it, no new entries
+        0b. Supervisor pause flag — external pause without killing bot
+        1.  Signal is valid (8 validation flags)
+        2.  Stop loss is present and valid (CRITICAL SAFETY CHECK)
+        3.  Account has sufficient capital
+        4.  Risk limits not exceeded
+        5.  No conflicting positions
         """
         try:
+            # Check 0a: Circuit breaker (highest priority — defensive layer)
+            # Belt-and-suspenders: stop() clears _running_event, but we don't
+            # want to depend on stop() succeeding. If the breaker tripped,
+            # block new entries even if the loop is somehow still spinning.
+            if self._circuit_breaker_triggered:
+                reason = (
+                    f"Circuit breaker triggered (portfolio loss "
+                    f">= {self._circuit_breaker_loss_pct:.1f}%)"
+                )
+                logger.critical(
+                    f"🛑 Signal blocked by circuit breaker for {signal.asset} "
+                    f"{signal.strategy.name}"
+                )
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
+            # Check 0b: Supervisor pause
+            try:
+                from .supervisor_control import get_supervisor_control
+            except ImportError:
+                from supervisor_control import get_supervisor_control
+            sup = get_supervisor_control()
+            if sup.is_paused():
+                pause_status = sup.status().get("raw_state", {})
+                pause_reason = pause_status.get("reason", "no reason")
+                reason = f"supervisor pause: {pause_reason}"
+                logger.warning(
+                    f"⏸  Signal blocked by supervisor pause for {signal.asset} "
+                    f"{signal.strategy.name}: {pause_reason}"
+                )
+                self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
+                return False
+
             # Check signal validity
             if not signal.is_valid():
                 flags = {
@@ -1271,13 +1339,13 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error coordinating signal execution for {signal.asset}: {e}",
-                exc_info=True,
+            # Use loguru's opt(exception=True) so the full traceback is captured
+            logger.opt(exception=True).error(
+                f"Error coordinating signal execution for {signal.asset}: {type(e).__name__}: {e}"
             )
             self.signal_logger.log_signal_failed(
                 signal=signal,
-                error=str(e),
+                error=f"{type(e).__name__}: {e}",
                 notes="Exception during signal coordination",
             )
 
@@ -1632,15 +1700,12 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error executing standard signal for {signal.asset}: {e}",
-                exc_info=True,
+            logger.opt(exception=True).error(
+                f"Error executing standard signal for {signal.asset}: {type(e).__name__}: {e}"
             )
-
-            # Log exception
             self.signal_logger.log_signal_failed(
                 signal=signal,
-                error=str(e),
+                error=f"{type(e).__name__}: {e}",
                 notes="Exception during execution",
             )
 
@@ -1681,75 +1746,12 @@ class TradingBot:
             "event_history_size": len(self.event_bus._event_history),
         }
 
-    def _check_signals(self) -> None:
-        """
-        Check for trading signals and execute them.
-
-        LEGACY METHOD - PHASE 2: Now handled by _generate_and_publish_signals()
-        Kept for backward compatibility.
-        """
-        try:
-            # Get all markets
-            markets = self.client.get_markets()
-            if not markets:
-                logging.warning("No markets available")
-                return
-
-            logging.info(f"Checking {len(markets)} markets for signals...")
-
-            for market in markets[:10]:  # Limit to first 10 markets
-                try:
-                    symbol = market.get("symbol")
-                    if not symbol:
-                        continue
-
-                    # Get current price via WebSocket (eliminates REST API rate limiting)
-                    ticker = self._get_ticker_ws(symbol)
-                    current_price = float(ticker.get("last", 0))
-
-                    if current_price <= 0:
-                        logging.debug(
-                            f"Skipping {symbol}: invalid price {current_price}"
-                        )
-                        continue
-
-                    # Get multi-timeframe data (5m, 15m, 1h, 4h)
-                    multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
-                        symbol=symbol, timeframes=["5m", "15m", "1h", "4h"], lookback_candles=250
-                    )
-
-                    if not multi_tf_data:
-                        logging.debug(f"Skipping {symbol}: no multi-timeframe data")
-                        continue
-
-                    # Generate signals using strategy manager
-                    signals = self.strategy_manager.generate_signals_for_market(
-                        symbol=symbol,
-                        multi_tf_data=multi_tf_data,
-                        current_price=current_price,
-                    )
-
-                    # Execute valid signals
-                    for signal in signals:
-                        if signal.is_valid():
-                            logging.info(
-                                f"Valid signal: {signal.strategy.name} {signal.side.name} "
-                                f"{symbol} @ ${signal.entry_price:.4f} "
-                                f"(confidence: {signal.confidence:.1f}%)"
-                            )
-
-                            # Execute signal
-                            self._execute_signal(signal)
-                        else:
-                            logging.debug(
-                                f"Invalid signal for {symbol}: {signal.validation_flags}"
-                            )
-
-                except Exception as e:
-                    logging.error(f"Error checking signals for {symbol}: {e}")
-
-        except Exception as e:
-            logging.error(f"Error checking signals: {e}")
+    # Removed (2026-05-02): _check_signals() — legacy loop-driven signal pull.
+    # Active path is event-driven via _generate_and_publish_signals() →
+    # SIGNAL_GENERATED event → _handle_signal_generated() → _coordinate_signal_execution().
+    # The legacy method was unreachable from the main loop and contained a stale
+    # call to _execute_signal() that used "BUY"/"SELL"/"MARKET" (Pacifica wants lowercase).
+    # See trading_bot.git history for the original implementation.
 
     def _calculate_position_size(self, signal: Signal) -> float:
         """
@@ -1856,92 +1858,12 @@ class TradingBot:
             quantity=quantity, entry_price=entry_price
         )
 
-    def _execute_signal(self, signal: Signal) -> Optional[Dict]:
-        """
-        Execute a trading signal.
-
-        LEGACY METHOD - PHASE 2: Now handled by _coordinate_signal_execution()
-        Kept for backward compatibility.
-
-        Args:
-            signal: Signal to execute.
-
-        Returns:
-            Order details if successful, None otherwise.
-        """
-        try:
-            # Route to appropriate execution method based on strategy type
-            if signal.strategy == StrategyType.GRID_TRADING:
-                return self._execute_grid_signal(signal)
-            else:
-                return self._execute_standard_signal(signal)
-
-        except Exception as e:
-            logging.error(f"Error executing signal: {e}")
-            return None
-
-    def _execute_standard_signal(self, signal: Signal):
-        """
-        Execute a standard (non-grid) trading signal.
-
-        LEGACY METHOD - PHASE 2: Now handled by ExecutionLayer
-        Kept for backward compatibility.
-
-        Args:
-            signal: Signal to execute.
-
-        Returns:
-            Order details if successful, None otherwise.
-        """
-        try:
-            # Calculate position size
-            quantity = self._calculate_position_size(signal)
-
-            if quantity <= 0:
-                logging.warning(
-                    f"Invalid position size {quantity} for {signal.asset}"
-                )
-                return None
-
-            # Validate position size
-            if not self._validate_position_size(quantity, signal.entry_price):
-                logging.warning(
-                    f"Position size validation failed for {signal.asset}"
-                )
-                return None
-
-            # Place order
-            order_side = "BUY" if signal.side == OrderSide.BUY else "SELL"
-            order = self.client.place_order(
-                symbol=signal.asset,
-                side=order_side,
-                quantity=quantity,
-                order_type="MARKET",
-            )
-
-            logging.info(
-                f"Order placed: {order_side} {quantity} {signal.asset} @ ${signal.entry_price:.4f}"
-            )
-
-            # Save trade to database
-            self.db.save_trade(
-                symbol=signal.asset,
-                strategy=signal.strategy.name,
-                side=order_side,
-                quantity=quantity,
-                entry_price=signal.entry_price,
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                confidence=signal.confidence,
-                quality=signal.quality.name,
-                metadata={"notes": signal.notes, "indicators": signal.indicators},
-            )
-
-            return order
-
-        except Exception as e:
-            logging.error(f"Error executing standard signal: {e}")
-            return None
+    # Removed (2026-05-02): _execute_signal() and _execute_standard_signal() —
+    # legacy execution path. Replaced by _coordinate_signal_execution() →
+    # _execute_standard_signal_coordinated() which routes through ExecutionLayer.
+    # The deleted _execute_standard_signal contained a Pacifica side-name bug
+    # ("BUY"/"SELL"/"MARKET" instead of lowercase "buy"/"sell"/"market") that
+    # would have produced rejected orders if any caller had still reached it.
 
     def _calculate_emergency_stop(self, signal: Signal) -> float:
         """

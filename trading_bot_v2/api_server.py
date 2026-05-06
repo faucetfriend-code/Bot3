@@ -51,7 +51,49 @@ except ImportError:
     from pacifica_ws_client import get_ws_client
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# - Console: stdout (existing behavior)
+# - File:    "<repo>/server logs reports/current.log" — supervisor reads this
+#            Rotated to current_YYYYMMDD_HHMMSS.log on each bot start so
+#            "current.log" always reflects the active session.
+_LOG_FMT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=logging.INFO, format=_LOG_FMT)
+
+try:
+    _LOG_DIR = Path(__file__).resolve().parent.parent / "server logs reports"
+    _LOG_DIR.mkdir(exist_ok=True)
+    _CURRENT_LOG = _LOG_DIR / "current.log"
+
+    # Rotate previous current.log if non-empty
+    if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
+        _ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        _rotated = _LOG_DIR / f"current_{_ts}.log"
+        try:
+            _CURRENT_LOG.rename(_rotated)
+        except OSError:
+            # If rename fails (rare; e.g. file in use on Windows), append instead
+            pass
+
+    _file_handler = logging.FileHandler(_CURRENT_LOG, mode="a", encoding="utf-8")
+    _file_handler.setLevel(logging.INFO)
+    _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
+    logging.getLogger().addHandler(_file_handler)
+
+    # Loguru sink for modules that use loguru (signal_logger, kelly_position_sizer)
+    try:
+        from loguru import logger as _loguru
+        _loguru.add(
+            str(_CURRENT_LOG),
+            format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
+            level="INFO",
+            rotation=None,           # we rotate manually on bot start
+            enqueue=True,            # thread-safe writes
+        )
+    except ImportError:
+        pass  # loguru optional
+except Exception as _log_setup_err:
+    # Never let logging setup take down the bot
+    print(f"WARNING: file logging setup failed: {_log_setup_err}")
+
 logger = logging.getLogger(__name__)
 
 # Create FastAPI app with lifespan context manager
@@ -1180,6 +1222,75 @@ async def stop_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Supervisor endpoints (Claude routine + manual ops)
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/supervisor/status")
+async def supervisor_status():
+    """
+    Return current supervisor pause state.
+
+    Response:
+      { "is_paused": bool, "raw_state": {...}, "pause_file": "<path>" }
+    """
+    try:
+        from .supervisor_control import get_supervisor_control
+    except ImportError:
+        from supervisor_control import get_supervisor_control
+    try:
+        return get_supervisor_control().status()
+    except Exception as e:
+        logger.error(f"supervisor_status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/supervisor/pause")
+async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
+    """
+    Pause new trade entries. Existing positions and management continue.
+
+    Body (all optional):
+      { "reason": "FOMC at 14:00", "until_ts": "2026-05-02T16:00:00Z" }
+
+    until_ts: ISO-8601 UTC. If omitted, pause is indefinite until /resume.
+    """
+    try:
+        from .supervisor_control import get_supervisor_control
+    except ImportError:
+        from supervisor_control import get_supervisor_control
+
+    payload  = payload or {}
+    reason   = payload.get("reason",   "no reason given")
+    until_ts = payload.get("until_ts", None)
+
+    try:
+        new_state = get_supervisor_control().pause(reason=reason, until_ts=until_ts)
+        logger.warning(f"⏸  Supervisor PAUSE applied: {reason}, until={until_ts}")
+        return {"success": True, "state": new_state}
+    except Exception as e:
+        logger.error(f"supervisor_pause error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/supervisor/resume")
+async def supervisor_resume():
+    """
+    Clear the supervisor pause. New entries are immediately allowed again.
+    """
+    try:
+        from .supervisor_control import get_supervisor_control
+    except ImportError:
+        from supervisor_control import get_supervisor_control
+    try:
+        new_state = get_supervisor_control().resume()
+        logger.info("▶  Supervisor RESUME applied — new entries allowed")
+        return {"success": True, "state": new_state}
+    except Exception as e:
+        logger.error(f"supervisor_resume error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/grids/{symbol}/clear")
 async def clear_grid(symbol: str):
     """Clear a grid registration for a symbol (allows new grid creation)."""
@@ -1653,7 +1764,9 @@ async def get_event_history():
 
         return {
             "success": True,
-            "total_events": len(event_bus._event_history),
+            "total_published": getattr(event_bus, "_published_count", "n/a"),
+            "history_window": len(event_bus._event_history),
+            "max_history": event_bus._max_history,
             "subscribers": {k.value: len(v) for k, v in event_bus._subscribers.items()},
             "recent_events": recent_events,
             "callback_errors": callback_errors[-5:] if callback_errors else [],
@@ -1810,8 +1923,9 @@ async def trigger_signal_generation():
 
             trace["markets"].append(market_trace)
 
-        # Get current event count
-        trace["event_count_after"] = len(bot.event_bus._event_history)
+        # Get current event count (total_published is monotonic; history_window saturates at max_history)
+        trace["total_published"] = getattr(bot.event_bus, "_published_count", 0)
+        trace["history_window"] = len(bot.event_bus._event_history)
 
         return {"success": True, "trace": trace}
 
@@ -1925,7 +2039,8 @@ async def get_bot_internals():
             "ws_client_connected": ws_connected,
             "strategy_manager_strategies": list(bot.strategy_manager.strategies.keys()) if hasattr(bot, "strategy_manager") else [],
             "event_bus_subscribers": {k.value: len(v) for k, v in bot.event_bus._subscribers.items()} if hasattr(bot, "event_bus") else {},
-            "event_history_count": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "event_total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
+            "event_history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         import traceback
@@ -2001,7 +2116,8 @@ async def get_loop_status():
             "events_generated_last_iteration": events_generated,
             "running_event_set": bot._running_event.is_set() if hasattr(bot, "_running_event") else None,
             "thread_alive": bot.thread.is_alive() if hasattr(bot, "thread") and bot.thread else False,
-            "total_events": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
+            "history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2016,7 +2132,7 @@ async def call_actual_generate_signals():
             return {"success": False, "error": "Trading bot not initialized"}
 
         trace = {"steps": []}
-        events_before = len(bot.event_bus._event_history)
+        count_before = getattr(bot.event_bus, "_published_count", 0)
 
         try:
             from .event_system import EventType
@@ -2091,13 +2207,13 @@ async def call_actual_generate_signals():
                 trace["steps"].append(f"{symbol}: EXCEPTION: {e}")
                 trace["steps"].append(f"{symbol}: tb: {tb.format_exc()[:300]}")
 
-        events_after = len(bot.event_bus._event_history)
+        count_after = getattr(bot.event_bus, "_published_count", 0)
 
         return {
             "success": True,
-            "events_before": events_before,
-            "events_after": events_after,
-            "new_events": events_after - events_before,
+            "published_before": count_before,
+            "published_after": count_after,
+            "new_events": count_after - count_before,
             "trace": trace,
         }
     except Exception as e:
@@ -2115,9 +2231,9 @@ async def call_generate_signals():
 
         trace = {"steps": []}
 
-        # Get event count before
-        events_before = len(bot.event_bus._event_history)
-        trace["events_before"] = events_before
+        # Get event count before (use monotonic counter, not len() which saturates at max_history)
+        count_before = getattr(bot.event_bus, "_published_count", 0)
+        trace["published_before"] = count_before
 
         # Step 1: Get markets
         try:
@@ -2215,9 +2331,9 @@ async def call_generate_signals():
             trace["steps"].append(market_step)
 
         # Get event count after
-        events_after = len(bot.event_bus._event_history)
-        trace["events_after"] = events_after
-        trace["new_events"] = events_after - events_before
+        count_after = getattr(bot.event_bus, "_published_count", 0)
+        trace["published_after"] = count_after
+        trace["new_events"] = count_after - count_before
 
         return {"success": True, "trace": trace}
     except Exception as e:

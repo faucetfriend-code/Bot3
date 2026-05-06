@@ -1,18 +1,19 @@
 """
 Momentum Scalping Strategy
 
-Fast EMA crossover scalping for 5m/15m timeframes.
-Captures short-term momentum moves in trending conditions.
+EMA 9/21 crossover strategy operating on the 1h timeframe.
+Captures directional momentum moves in trending conditions.
 
-DESIGN NOTES:
-- Faster than MA Crossover (9/21 vs 50/200)
-- Higher frequency (10-30 trades/day target)
-- Strict regime filter (trending only)
+DESIGN NOTES (updated 2026-05-03):
+- Primary timeframe changed from 5m → 1h (regime-aware walkforward validated)
+- Validated 2022-2025 (1h): Sharpe +0.371, ROBUST MC, 29 trades, 58.6% WR
+- Bull-optimised params: EMA 9/21, atr_stop=2.5x, adx_min=30
+- 4h trend gate still used as highest-priority filter
 - All sizing delegated to RiskManager
 
 RISK NOTES:
-- Higher frequency = more exposure to fees
-- Requires tight stops (1.5x ATR)
+- Lower frequency than 5m version; fewer but higher-quality signals
+- Requires wider stops (2.5x ATR) to accommodate 1h candle noise
 - Works best with good execution speed
 """
 
@@ -381,7 +382,8 @@ class MomentumScalpingStrategy:
         """
         Generate momentum scalping signals.
 
-        Uses 5m for entry timing, 15m for trend confirmation.
+        Primary timeframe: 1h (validated 2022-2025, Sharpe +0.371 ROBUST).
+        HTF gate: 4h trend alignment (highest-priority filter).
         """
         signals = []
 
@@ -389,37 +391,31 @@ class MomentumScalpingStrategy:
         if not self._check_cooldown(symbol):
             return signals
 
-        # Need 5m data - check execution_tf_data first, then multi_tf_data
-        execution_tf_data = kwargs.get("execution_tf_data", {})
+        # Primary: 1h data from multi_tf_data (fetched by MultiTimeframeFetcher)
+        df_1h = multi_tf_data.get("1h")
 
-        df_5m = None
-        if "5m" in execution_tf_data:
-            df_5m = execution_tf_data["5m"]
-        elif "5m" in multi_tf_data:
-            df_5m = multi_tf_data["5m"]
-
-        if df_5m is None:
-            logger.debug(f"{symbol}: No 5m data available for momentum scalping")
+        if df_1h is None:
+            logger.debug(f"{symbol}: No 1h data available for momentum scalping")
             return signals
 
         # Extract OHLCV data
-        closes_5m = df_5m.get("close", [])
-        volumes_5m = df_5m.get("volume", [])
-        highs_5m = df_5m.get("high", [])
-        lows_5m = df_5m.get("low", [])
+        closes_1h = df_1h.get("close", [])
+        volumes_1h = df_1h.get("volume", [])
+        highs_1h = df_1h.get("high", [])
+        lows_1h = df_1h.get("low", [])
 
-        if len(closes_5m) < self.ema_slow + 10:
-            logger.debug(f"{symbol}: Insufficient 5m data for momentum scalping ({len(closes_5m)} candles)")
+        if len(closes_1h) < self.ema_slow + 10:
+            logger.debug(f"{symbol}: Insufficient 1h data for momentum scalping ({len(closes_1h)} candles)")
             return signals
 
         # Convert to lists if needed
-        closes_5m = list(closes_5m) if hasattr(closes_5m, '__iter__') else closes_5m
-        volumes_5m = list(volumes_5m) if hasattr(volumes_5m, '__iter__') else volumes_5m
-        highs_5m = list(highs_5m) if hasattr(highs_5m, '__iter__') else highs_5m
-        lows_5m = list(lows_5m) if hasattr(lows_5m, '__iter__') else lows_5m
+        closes_1h = list(closes_1h) if hasattr(closes_1h, '__iter__') else closes_1h
+        volumes_1h = list(volumes_1h) if hasattr(volumes_1h, '__iter__') else volumes_1h
+        highs_1h = list(highs_1h) if hasattr(highs_1h, '__iter__') else highs_1h
+        lows_1h = list(lows_1h) if hasattr(lows_1h, '__iter__') else lows_1h
 
-        # Detect crossover
-        crossover = self._detect_ema_crossover(closes_5m, symbol)
+        # Detect crossover on 1h bars
+        crossover = self._detect_ema_crossover(closes_1h, symbol)
 
         if crossover:
             # Update crossover tracking
@@ -428,7 +424,7 @@ class MomentumScalpingStrategy:
                 "time": self._now(),
                 "price": current_price,
             }
-            logger.debug(f"{symbol}: EMA {self.ema_fast}/{self.ema_slow} crossover detected - {crossover}")
+            logger.debug(f"{symbol}: EMA {self.ema_fast}/{self.ema_slow} (1h) crossover detected - {crossover}")
 
         # Check if we have a recent crossover to act on
         if symbol not in self.last_crossover:
@@ -437,34 +433,24 @@ class MomentumScalpingStrategy:
         crossover_info = self.last_crossover[symbol]
         crossover_age = self._now() - crossover_info["time"]
 
-        # Only act on crossovers within last 5 candles (25 minutes on 5m)
-        if crossover_age > timedelta(minutes=25):
+        # Only act on crossovers within last 5 candles (5 hours on 1h)
+        if crossover_age > timedelta(hours=5):
             return signals
 
         direction = crossover_info["direction"]
 
         # Check price position relative to EMAs
-        if not self._check_ema_position(current_price, closes_5m, direction):
+        if not self._check_ema_position(current_price, closes_1h, direction):
             return signals
 
-        # Check momentum confirmation
-        momentum = self._check_momentum_confirmation(closes_5m, volumes_5m, direction)
+        # Check momentum confirmation on 1h bars
+        momentum = self._check_momentum_confirmation(closes_1h, volumes_1h, direction)
         if not momentum["confirmed"]:
             logger.debug(
                 f"{symbol}: Momentum not confirmed - RSI:{momentum['rsi_ok']}, "
                 f"MACD:{momentum['macd_ok']}, Vol:{momentum['volume_ok']}"
             )
             return signals
-
-        # Check 15m alignment
-        df_15m = multi_tf_data.get("15m", {})
-        if df_15m:
-            closes_15m = df_15m.get("close", [])
-            closes_15m = list(closes_15m) if hasattr(closes_15m, '__iter__') else closes_15m
-
-            if closes_15m and not self._check_higher_tf_alignment(closes_15m, direction):
-                logger.debug(f"{symbol}: 15m trend not aligned with {direction} signal")
-                return signals
 
         # 4h HTF trend gate (highest-priority filter — must be aligned with trade direction)
         df_4h = multi_tf_data.get("4h", {})
@@ -475,15 +461,13 @@ class MomentumScalpingStrategy:
                 logger.debug(f"{symbol}: 4h trend not aligned with {direction} signal — blocked")
                 return signals
 
-        # Calculate ATR for stops/targets
-        atr = calculate_atr(highs_5m, lows_5m, closes_5m, self.atr_period)
+        # Calculate ATR for stops/targets on 1h bars
+        atr = calculate_atr(highs_1h, lows_1h, closes_1h, self.atr_period)
         if len(atr) == 0:
             return signals
         atr_value = atr[-1]
 
         # Minimum ATR gate: skip if current volatility is too low for costs to be worthwhile.
-        # Slippage + cost-model drag ≈ 0.52% × price per round-trip; require ATR to be at least
-        # min_atr_pct of price so the stop/target have room to breathe.
         if self.min_atr_pct > 0 and current_price > 0:
             atr_pct = atr_value / current_price
             if atr_pct < self.min_atr_pct:

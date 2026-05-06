@@ -1,0 +1,669 @@
+{
+  "strategy": "Martingale MR",
+  "period": "2018-01-01 -> 2025-01-01",
+  "interval": "1d",
+  "symbol": "BTCUSDT",
+  "n_folds": 24,
+  "overall_metrics": {
+    "total_return_pct": -11.849690194031393,
+    "cagr_pct": -2.080642062531779,
+    "sharpe": 0.05718038370116059,
+    "max_dd_pct": -49.95099922273914,
+    "win_rate_pct": 45.1219512195122,
+    "profit_factor": 1.091670092229411,
+    "n_trades": 82
+  },
+  "bull_metrics": {
+    "total_return_pct": 0.0,
+    "cagr_pct": 0.0,
+    "sharpe": 0.0,
+    "max_dd_pct": 0.0,
+    "win_rate_pct": 0.0,
+    "profit_factor": 0.0,
+    "n_trades": 0
+  },
+  "bear_metrics": {
+    "total_return_pct": -33.727743983676376,
+    "cagr_pct": -9.227990873209812,
+    "sharpe": -1.0127514931585726,
+    "max_dd_pct": -37.69667872580706,
+    "win_rate_pct": 29.411764705882355,
+    "profit_factor": 0.42369496770840215,
+    "n_trades": 17
+  },
+  "neutral_metrics": {
+    "total_return_pct": 33.01238724128566,
+    "cagr_pct": 5.089334044118421,
+    "sharpe": 0.4300767922291602,
+    "max_dd_pct": -39.939878644907914,
+    "win_rate_pct": 49.23076923076923,
+    "profit_factor": 1.315210384695719,
+    "n_trades": 65
+  },
+  "mc_overall": {
+    "n_trades": 82,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 100.0,
+    "p5_return_pct": -0.3,
+    "p50_return_pct": -0.3,
+    "p95_return_pct": -0.3,
+    "worst5_maxdd_pct": -67.91,
+    "median_maxdd_pct": -49.32,
+    "spread_ratio": -1.0,
+    "overfitting_flag": "False",
+    "verdict": "FRAGILE"
+  },
+  "mc_bull": {
+    "verdict": "SKIP (< 5 trades)"
+  },
+  "mc_bear": {
+    "n_trades": 17,
+    "n_sims": 1000,
+    "prob_of_loss_pct": 100.0,
+    "p5_return_pct": -32.01,
+    "p50_return_pct": -32.01,
+    "p95_return_pct": -32.01,
+    "worst5_maxdd_pct": -43.78,
+    "median_maxdd_pct": -36.03,
+    "spread_ratio": -1.0,
+    "overfitting_flag": "False",
+    "verdict": "FRAGILE"
+  },
+  "bull_optimised_params": {
+    "rsi_oversold": 25.0,
+    "rsi_overbought": 70.0,
+    "bb_proximity": 0.15,
+    "atr_stop": 1.5,
+    "atr_target": 1.5,
+    "martingale_mult": 1.5,
+    "max_martingale": 1,
+    "cooldown_bars": 3
+  },
+  "bear_optimised_params": {
+    "rsi_oversold": 30.0,
+    "rsi_overbought": 65.0,
+    "bb_proximity": 0.1,
+    "atr_stop": 1.5,
+    "atr_target": 0.75,
+    "martingale_mult": 2.0,
+    "max_martingale": 1,
+    "cooldown_bars": 10
+  },
+  "year_summary": {
+    "2019": {
+      "dominant_regime": "trending",
+      "dominant_direction": "short_only",
+      "n_folds": 4,
+      "total_trades": 9,
+      "avg_fold_return_pct": 0.32,
+      "regime_breakdown": {
+        "calm": 1,
+        "trending": 3
+      }
+    },
+    "2020": {
+      "dominant_regime": "trending",
+      "dominant_direction": "both",
+      "n_folds": 4,
+      "total_trades": 13,
+      "avg_fold_return_pct": 14.19,
+      "regime_breakdown": {
+        "trending": 2,
+        "calm": 2
+      }
+    },
+    "2021": {
+      "dominant_regime": "calm",
+      "dominant_direction": "both",
+      "n_folds": 4,
+      "total_trades": 18,
+      "avg_fold_return_pct": -3.82,
+      "regime_breakdown": {
+        "calm": 2,
+        "volatile": 1,
+        "crash": 1
+      }
+    },
+    "2022": {
+      "dominant_regime": "trending",
+      "dominant_direction": "short_only",
+      "n_folds": 4,
+      "total_trades": 14,
+      "avg_fold_return_pct": -3.49,
+      "regime_breakdown": {
+        "trending": 2,
+        "calm": 2
+      }
+    },
+    "2023": {
+      "dominant_regime": "trending",
+      "dominant_direction": "both",
+      "n_folds": 4,
+      "total_trades": 14,
+      "avg_fold_return_pct": -0.84,
+      "regime_breakdown": {
+        "trending": 2,
+        "volatile": 2
+      }
+    },
+    "2024": {
+      "dominant_regime": "calm",
+      "dominant_direction": "both",
+      "n_folds": 4,
+      "total_trades": 14,
+      "avg_fold_return_pct": -3.06,
+      "regime_breakdown": {
+        "calm": 3,
+        "trending": 1
+      }
+    }
+  },
+  "fold_details": [
+    {
+      "fold": 1,
+      "year": 2019,
+      "test_period": "2019-01-01 -> 2019-03-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 6,
+      "sharpe": 2.7319,
+      "return_pct": 14.4,
+      "win_rate_pct": 66.7,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 75.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 10
+      }
+    },
+    {
+      "fold": 2,
+      "year": 2019,
+      "test_period": "2019-04-01 -> 2019-06-30",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.0,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 3,
+      "year": 2019,
+      "test_period": "2019-07-01 -> 2019-09-30",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 2,
+      "sharpe": -2.0361,
+      "return_pct": -4.64,
+      "win_rate_pct": 50.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 75.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 4,
+      "year": 2019,
+      "test_period": "2019-10-01 -> 2019-12-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 1,
+      "sharpe": -1.7349,
+      "return_pct": -8.49,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 70.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 5,
+      "year": 2020,
+      "test_period": "2020-01-01 -> 2020-03-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 4,
+      "sharpe": 0.695,
+      "return_pct": 3.29,
+      "win_rate_pct": 25.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 75.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 6,
+      "year": 2020,
+      "test_period": "2020-04-01 -> 2020-06-30",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 70.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 10
+      }
+    },
+    {
+      "fold": 7,
+      "year": 2020,
+      "test_period": "2020-07-01 -> 2020-09-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 5,
+      "sharpe": 0.5121,
+      "return_pct": 3.11,
+      "win_rate_pct": 60.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 8,
+      "year": 2020,
+      "test_period": "2020-10-01 -> 2020-12-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 4,
+      "sharpe": 4.4791,
+      "return_pct": 50.37,
+      "win_rate_pct": 100.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 9,
+      "year": 2021,
+      "test_period": "2021-01-01 -> 2021-03-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 5,
+      "sharpe": -1.0327,
+      "return_pct": -10.41,
+      "win_rate_pct": 40.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 10,
+      "year": 2021,
+      "test_period": "2021-04-01 -> 2021-06-30",
+      "dominant_regime": "crash",
+      "direction": "short_only",
+      "n_trades": 2,
+      "sharpe": -2.3039,
+      "return_pct": -15.22,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 11,
+      "year": 2021,
+      "test_period": "2021-07-01 -> 2021-09-30",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 7,
+      "sharpe": 2.759,
+      "return_pct": 22.27,
+      "win_rate_pct": 57.1,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 12,
+      "year": 2021,
+      "test_period": "2021-10-01 -> 2021-12-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 4,
+      "sharpe": -1.2587,
+      "return_pct": -11.91,
+      "win_rate_pct": 25.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 1.0,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 13,
+      "year": 2022,
+      "test_period": "2022-01-01 -> 2022-03-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 2,
+      "sharpe": 0.4036,
+      "return_pct": 1.53,
+      "win_rate_pct": 50.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 1.0,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 10
+      }
+    },
+    {
+      "fold": 14,
+      "year": 2022,
+      "test_period": "2022-04-01 -> 2022-06-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 1,
+      "sharpe": -3.1124,
+      "return_pct": -5.82,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 75.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 15,
+      "year": 2022,
+      "test_period": "2022-07-01 -> 2022-09-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 7,
+      "sharpe": 0.3266,
+      "return_pct": 1.27,
+      "win_rate_pct": 57.1,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 75.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 10
+      }
+    },
+    {
+      "fold": 16,
+      "year": 2022,
+      "test_period": "2022-10-01 -> 2022-12-31",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 4,
+      "sharpe": -1.8897,
+      "return_pct": -10.94,
+      "win_rate_pct": 25.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 17,
+      "year": 2023,
+      "test_period": "2023-01-01 -> 2023-03-31",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 7,
+      "sharpe": 0.3255,
+      "return_pct": 1.33,
+      "win_rate_pct": 42.9,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 1.5,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 18,
+      "year": 2023,
+      "test_period": "2023-04-01 -> 2023-06-30",
+      "dominant_regime": "volatile",
+      "direction": "both",
+      "n_trades": 5,
+      "sharpe": 0.0907,
+      "return_pct": -0.59,
+      "win_rate_pct": 20.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.1,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 19,
+      "year": 2023,
+      "test_period": "2023-07-01 -> 2023-09-30",
+      "dominant_regime": "trending",
+      "direction": "short_only",
+      "n_trades": 2,
+      "sharpe": -0.6903,
+      "return_pct": -4.09,
+      "win_rate_pct": 50.0,
+      "params": {
+        "rsi_oversold": 30.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 20,
+      "year": 2023,
+      "test_period": "2023-10-01 -> 2023-12-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 35.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 21,
+      "year": 2024,
+      "test_period": "2024-01-01 -> 2024-03-31",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 5,
+      "sharpe": 1.9294,
+      "return_pct": 16.76,
+      "win_rate_pct": 80.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 22,
+      "year": 2024,
+      "test_period": "2024-04-01 -> 2024-06-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 3,
+      "sharpe": 0.8243,
+      "return_pct": 5.08,
+      "win_rate_pct": 33.3,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 65.0,
+        "bb_proximity": 0.08,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 23,
+      "year": 2024,
+      "test_period": "2024-07-01 -> 2024-09-30",
+      "dominant_regime": "calm",
+      "direction": "both",
+      "n_trades": 6,
+      "sharpe": -4.2714,
+      "return_pct": -34.08,
+      "win_rate_pct": 16.7,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 70.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 1.5,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    },
+    {
+      "fold": 24,
+      "year": 2024,
+      "test_period": "2024-10-01 -> 2024-12-31",
+      "dominant_regime": "trending",
+      "direction": "long_only",
+      "n_trades": 0,
+      "sharpe": 0.0,
+      "return_pct": 0.0,
+      "win_rate_pct": 0.0,
+      "params": {
+        "rsi_oversold": 25.0,
+        "rsi_overbought": 70.0,
+        "bb_proximity": 0.15,
+        "atr_stop": 1.5,
+        "atr_target": 0.75,
+        "martingale_mult": 2.0,
+        "max_martingale": 1,
+        "cooldown_bars": 3
+      }
+    }
+  ],
+  "baseline_sharpe": -0.12,
+  "improvement_vs_baseline": 0.1772
+}

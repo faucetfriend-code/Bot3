@@ -586,20 +586,11 @@ class DatabaseManager:
             if status:
                 cursor = conn.execute(
                     """
-                    SELECT * FROM (
-                        SELECT
-                            id, symbol, asset_class, side, quantity, entry_price, exit_price,
-                            realized_pnl as pnl, opened_at as entry_time, closed_at as exit_time,
-                            'closed_position' as type, status
-                        FROM positions
-                        WHERE status = 'closed'
-                        UNION ALL
-                        SELECT
-                            id, symbol, asset_class, side, quantity, entry_price, exit_price,
-                            pnl, entry_time, exit_time, 'trade' as type, status
-                        FROM trades
-                        WHERE status = ?
-                    )
+                    SELECT
+                        id, symbol, asset_class, side, quantity, entry_price, exit_price,
+                        pnl, entry_time, exit_time, 'trade' as type, status
+                    FROM trades
+                    WHERE status = ?
                     ORDER BY entry_time DESC LIMIT ?
                 """,
                     (status, limit),
@@ -607,19 +598,10 @@ class DatabaseManager:
             else:
                 cursor = conn.execute(
                     """
-                    SELECT * FROM (
-                        SELECT
-                            id, symbol, asset_class, side, quantity, entry_price, exit_price,
-                            realized_pnl as pnl, opened_at as entry_time, closed_at as exit_time,
-                            'closed_position' as type, status
-                        FROM positions
-                        WHERE status = 'closed'
-                        UNION ALL
-                        SELECT
-                            id, symbol, asset_class, side, quantity, exit_price, exit_price,
-                            pnl, entry_time, exit_time, 'trade' as type, status
-                        FROM trades
-                    )
+                    SELECT
+                        id, symbol, asset_class, side, quantity, entry_price, exit_price,
+                        pnl, entry_time, exit_time, 'trade' as type, status
+                    FROM trades
                     ORDER BY entry_time DESC LIMIT ?
                 """,
                     (limit,),
