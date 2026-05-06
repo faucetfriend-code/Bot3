@@ -97,6 +97,10 @@ class EventBus:
         self._lock = threading.Lock()
         self._max_history = 1000  # Keep last 1000 events
         self._event_history: deque = deque(maxlen=self._max_history)
+        # Monotonically-increasing counter — never resets, never saturates.
+        # Use this (not len(_event_history)) to measure published-event rate;
+        # len() permanently returns max_history once the deque is full.
+        self._published_count: int = 0
 
         logger.info("EventBus initialized")
 
@@ -144,8 +148,10 @@ class EventBus:
         logger.debug(f"Publishing event: {event.event_type.value} from {event.source}")
 
         # Store in history (deque auto-evicts oldest when maxlen is reached)
+        # Also increment the monotonic counter used for rate measurement.
         with self._lock:
             self._event_history.append(event)
+            self._published_count += 1
 
         # Notify subscribers (outside lock to prevent blocking)
         subscribers = []
@@ -235,6 +241,7 @@ class EventBus:
                 et.value: len(callbacks) for et, callbacks in self._subscribers.items()
             }
             history = list(self._event_history)
+            published_count = self._published_count
 
         event_counts: Dict[str, int] = {}
         for event in history:
@@ -244,7 +251,9 @@ class EventBus:
         return {
             "total_subscribers": sum(subscriber_counts.values()),
             "subscriber_counts": subscriber_counts,
-            "total_events": len(history),
+            "total_published": published_count,      # monotonic, never saturates
+            "history_window": len(history),          # capped at max_history
+            "total_events": len(history),            # kept for back-compat
             "event_counts": event_counts,
             "max_history": self._max_history,
         }

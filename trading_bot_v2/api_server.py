@@ -1764,7 +1764,9 @@ async def get_event_history():
 
         return {
             "success": True,
-            "total_events": getattr(event_bus, "_published_count", len(event_bus._event_history)),
+            "total_published": getattr(event_bus, "_published_count", "n/a"),
+            "history_window": len(event_bus._event_history),
+            "max_history": event_bus._max_history,
             "subscribers": {k.value: len(v) for k, v in event_bus._subscribers.items()},
             "recent_events": recent_events,
             "callback_errors": callback_errors[-5:] if callback_errors else [],
@@ -1921,8 +1923,9 @@ async def trigger_signal_generation():
 
             trace["markets"].append(market_trace)
 
-        # Get current event count
-        trace["event_count_after"] = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
+        # Get current event count (total_published is monotonic; history_window saturates at max_history)
+        trace["total_published"] = getattr(bot.event_bus, "_published_count", 0)
+        trace["history_window"] = len(bot.event_bus._event_history)
 
         return {"success": True, "trace": trace}
 
@@ -2036,7 +2039,8 @@ async def get_bot_internals():
             "ws_client_connected": ws_connected,
             "strategy_manager_strategies": list(bot.strategy_manager.strategies.keys()) if hasattr(bot, "strategy_manager") else [],
             "event_bus_subscribers": {k.value: len(v) for k, v in bot.event_bus._subscribers.items()} if hasattr(bot, "event_bus") else {},
-            "event_history_count": getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history)) if hasattr(bot, "event_bus") else 0,
+            "event_total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
+            "event_history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         import traceback
@@ -2112,7 +2116,8 @@ async def get_loop_status():
             "events_generated_last_iteration": events_generated,
             "running_event_set": bot._running_event.is_set() if hasattr(bot, "_running_event") else None,
             "thread_alive": bot.thread.is_alive() if hasattr(bot, "thread") and bot.thread else False,
-            "total_events": getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history)) if hasattr(bot, "event_bus") else 0,
+            "total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
+            "history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2127,7 +2132,7 @@ async def call_actual_generate_signals():
             return {"success": False, "error": "Trading bot not initialized"}
 
         trace = {"steps": []}
-        events_before = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
+        count_before = getattr(bot.event_bus, "_published_count", 0)
 
         try:
             from .event_system import EventType
@@ -2202,13 +2207,13 @@ async def call_actual_generate_signals():
                 trace["steps"].append(f"{symbol}: EXCEPTION: {e}")
                 trace["steps"].append(f"{symbol}: tb: {tb.format_exc()[:300]}")
 
-        events_after = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
+        count_after = getattr(bot.event_bus, "_published_count", 0)
 
         return {
             "success": True,
-            "events_before": events_before,
-            "events_after": events_after,
-            "new_events": events_after - events_before,
+            "published_before": count_before,
+            "published_after": count_after,
+            "new_events": count_after - count_before,
             "trace": trace,
         }
     except Exception as e:
@@ -2226,9 +2231,9 @@ async def call_generate_signals():
 
         trace = {"steps": []}
 
-        # Get event count before
-        events_before = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
-        trace["events_before"] = events_before
+        # Get event count before (use monotonic counter, not len() which saturates at max_history)
+        count_before = getattr(bot.event_bus, "_published_count", 0)
+        trace["published_before"] = count_before
 
         # Step 1: Get markets
         try:
@@ -2326,9 +2331,9 @@ async def call_generate_signals():
             trace["steps"].append(market_step)
 
         # Get event count after
-        events_after = getattr(bot.event_bus, "_published_count", len(bot.event_bus._event_history))
-        trace["events_after"] = events_after
-        trace["new_events"] = events_after - events_before
+        count_after = getattr(bot.event_bus, "_published_count", 0)
+        trace["published_after"] = count_after
+        trace["new_events"] = count_after - count_before
 
         return {"success": True, "trace": trace}
     except Exception as e:

@@ -473,12 +473,15 @@ class TradingBot:
 
                 # PHASE 2: Generate and publish signals as events (coordinator role)
                 self._loop_step = "generate_signals"
-                events_before = len(self.event_bus._event_history)
-                logger.info(f"📊 Calling _generate_and_publish_signals (events_before={events_before})...")
+                # Use the monotonic _published_count instead of len(_event_history).
+                # len() saturates at max_history (1000) and then always returns 1000,
+                # making "after - before" permanently 0 — a misleading metric.
+                count_before = self.event_bus._published_count
+                logger.info(f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})...")
                 self._generate_and_publish_signals()
-                events_after = len(self.event_bus._event_history)
-                self._loop_events_generated = events_after - events_before
-                logger.info(f"📊 Signal generation complete (events_after={events_after}, new={self._loop_events_generated})")
+                count_after = self.event_bus._published_count
+                self._loop_events_generated = count_after - count_before
+                logger.info(f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})")
 
                 # Monitor risk (delegated to RiskManager)
                 self._loop_step = "monitor_risk"
