@@ -1395,3 +1395,7 @@ timestamp,symbol,strategy,side,entry_price,stop_loss,take_profit,confidence,qual
 2026-02-26T17:31:41.990278,"{'asset': 'SUI', 'strategy': 'GridTrading'}",,,0,0,0,0,,,failed,,ERROR: 'dict' object has no attribute 'strategy',,,,,Exception in _handle_signal_generated
 2026-02-26T17:31:41.992710,"{'asset': 'SUI', 'strategy': 'GridTrading'}",,,0,0,0,0,,,failed,,ERROR: 'dict' object has no attribute 'strategy',,,,,Exception in _handle_signal_generated
 2026-02-26T17:31:41.995146,"{'asset': 'SUI', 'strategy': 'GridTrading'}",,,0,0,0,0,,,failed,,ERROR: 'dict' object has no attribute 'strategy',,,,,Exception in _handle_signal_generated
+2026-05-07T12:20:32.697723,SUI,GRID_TRADING,BUY,0.9930487142857143,0.9730201428571429,0.999558,0.3085433915116441,STANDARD,RANGING_CALM,generated,,,,,,,Generated from GRID_TRADING
+2026-05-07T12:20:35.751445,SUI,GRID_TRADING,BUY,0.9930487142857143,0.9730201428571429,0.999558,0.3085433915116441,STANDARD,,failed,,ERROR: Unknown error,,,,,"Grid placement failed, capital: $364.87"
+2026-05-07T12:20:35.755515,SUI,GRID_TRADING,SELL,1.0060672857142856,1.0260958571428571,0.999558,0.3085433915116441,STANDARD,RANGING_CALM,generated,,,,,,,Generated from GRID_TRADING
+2026-05-07T12:20:39.122634,SUI,GRID_TRADING,SELL,1.0060672857142856,1.0260958571428571,0.999558,0.3085433915116441,STANDARD,,failed,,ERROR: Unknown error,,,,,"Grid placement failed, capital: $364.87"

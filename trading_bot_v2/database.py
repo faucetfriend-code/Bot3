@@ -350,6 +350,7 @@ def init_database():
                 "ALTER TABLE signals ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
                 "ALTER TABLE performance_metrics ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
                 "ALTER TABLE positions ADD COLUMN funding_pnl REAL DEFAULT 0",
+                "ALTER TABLE positions ADD COLUMN exit_price REAL",
             ]
 
             for alter_sql in alter_statements:

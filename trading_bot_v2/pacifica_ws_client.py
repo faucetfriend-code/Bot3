@@ -38,6 +38,7 @@ class PacificaWebSocketClient:
         "_agent_keypair",
         "_account_pubkey",
         "_ws_url",
+        "_skip_private_channels",
         "_price_cache",
         "_funding_cache",
         "_position_cache",
@@ -71,10 +72,24 @@ class PacificaWebSocketClient:
         self._ui_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._channel_callbacks: Dict[str, Callable[[Dict[str, Any]], None]] = {}
 
-        # Determine WebSocket URL based on TESTNET env
+        # Determine WebSocket URL.
+        # PACIFICA_DATA_WS_URL overrides the TESTNET flag for the market-data feed,
+        # allowing live candle/price data while order execution stays on testnet REST.
         testnet = os.getenv("TESTNET", "true").lower() == "true"
-        self._ws_url = (
-            "wss://test-ws.pacifica.fi/ws" if testnet else "wss://ws.pacifica.fi/ws"
+        data_ws_override = os.getenv("PACIFICA_DATA_WS_URL", "").strip()
+        if data_ws_override:
+            self._ws_url = data_ws_override
+        else:
+            self._ws_url = (
+                "wss://test-ws.pacifica.fi/ws" if testnet else "wss://ws.pacifica.fi/ws"
+            )
+
+        # When pointing at the live WS while running in testnet mode, our testnet
+        # keys have no mainnet account, so private channel subscriptions (position,
+        # balance, order) would return nothing useful. Skip them and rely on testnet
+        # REST polling for account state.
+        self._skip_private_channels = (
+            data_ws_override == "wss://ws.pacifica.fi/ws" and testnet
         )
 
         # Caches (thread-safe via GIL + atomic ops)
@@ -527,14 +542,24 @@ class PacificaWebSocketClient:
                     self._ws = ws
                     self._connected = True
                     self._reconnect_delay = 1
-                    logger.success("Connected to Pacifica WebSocket")
+                    logger.success(
+                        f"Connected to Pacifica WebSocket: {self._ws_url}"
+                        + (" (public data only — testnet keys, live endpoint)" if self._skip_private_channels else "")
+                    )
 
-                    # Authenticate for private channels
-                    await self._authenticate(ws)
+                    # Authenticate for private channels.
+                    # Skipped when using the live WS with testnet credentials because
+                    # testnet keys have no mainnet account.
+                    if not self._skip_private_channels:
+                        await self._authenticate(ws)
 
-                    # Subscribe to everything
+                    # Public subscriptions (prices, candles) work on any endpoint.
                     await self._subscribe_public(ws)
-                    await self._subscribe_private(ws)
+
+                    # Private subscriptions only make sense when our auth credentials
+                    # match the WS endpoint (both testnet or both mainnet).
+                    if not self._skip_private_channels:
+                        await self._subscribe_private(ws)
 
                     # Listen loop
                     async for message in ws:

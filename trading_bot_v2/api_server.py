@@ -303,10 +303,11 @@ class BotIntegration:
                 if not self._initialized:
                     return status
 
-                # Get positions count
+                # Get positions count (filtered: same logic as get_positions)
                 if self.database:
                     positions = self.database.get_positions()
-                    status["positions_count"] = len(positions) if positions else 0
+                    filtered = [p for p in (positions or []) if float(p.get('quantity', 0)) > 0]
+                    status["positions_count"] = len(filtered)
 
                     # Get trades count and PnL
                     trades = self.database.get_trades(limit=1000)

@@ -45,7 +45,18 @@
       "PowerShell($now = [System.DateTime]::UtcNow; $now.ToString\\(\"yyyy-MM-ddTHH:mm:ssZ\"\\); $last = [System.DateTime]::Parse\\(\"2026-05-05T04:10:46Z\"\\).ToUniversalTime\\(\\); $elapsed = \\($now - $last\\).TotalHours; \"Elapsed: {0:F1}h\" -f $elapsed; $nextFull = [System.DateTime]::Parse\\(\"2026-05-05T08:07:25Z\"\\).ToUniversalTime\\(\\); $rem = \\($nextFull - $now\\).TotalSeconds; \"Remaining: {0:F1}h \\({1:F0}s\\)\" -f \\($rem/3600\\), $rem)",
       "PowerShell($now = [System.DateTime]::UtcNow; $now.ToString\\(\"yyyy-MM-ddTHH:mm:ssZ\"\\); $last = [System.DateTime]::Parse\\(\"2026-05-05T04:10:46Z\"\\).ToUniversalTime\\(\\); $elapsed = \\($now - $last\\).TotalHours; \"Elapsed: {0:F1}h\" -f $elapsed; $nextFull = [System.DateTime]::Parse\\(\"2026-05-05T08:07:25Z\"\\).ToUniversalTime\\(\\); $rem = \\($nextFull - $now\\).TotalSeconds; \"Remaining to cadence: {0:F0}s\" -f $rem)",
       "PowerShell(\\(Invoke-WebRequest -Uri \"http://localhost:8000/api/activity\" -UseBasicParsing -TimeoutSec 10\\).Content | ConvertFrom-Json | ConvertTo-Json -Depth 3)",
-      "PowerShell($now = [System.DateTime]::UtcNow; $now.ToString\\(\"yyyy-MM-ddTHH:mm:ssZ\"\\); $last = [System.DateTime]::Parse\\(\"2026-05-05T12:23:11Z\"\\).ToUniversalTime\\(\\); $elapsed = \\($now - $last\\).TotalHours; \"Elapsed since 12:23Z \\(user check\\): {0:F1}h\" -f $elapsed; $nextFull = [System.DateTime]::Parse\\(\"2026-05-05T16:23:11Z\"\\).ToUniversalTime\\(\\); $rem = \\($nextFull - $now\\).TotalSeconds; \"Remaining to next full check \\(16:23Z\\): {0:F1}h \\({1:F0}s\\)\" -f \\($rem/3600\\), $rem)"
+      "PowerShell($now = [System.DateTime]::UtcNow; $now.ToString\\(\"yyyy-MM-ddTHH:mm:ssZ\"\\); $last = [System.DateTime]::Parse\\(\"2026-05-05T12:23:11Z\"\\).ToUniversalTime\\(\\); $elapsed = \\($now - $last\\).TotalHours; \"Elapsed since 12:23Z \\(user check\\): {0:F1}h\" -f $elapsed; $nextFull = [System.DateTime]::Parse\\(\"2026-05-05T16:23:11Z\"\\).ToUniversalTime\\(\\); $rem = \\($nextFull - $now\\).TotalSeconds; \"Remaining to next full check \\(16:23Z\\): {0:F1}h \\({1:F0}s\\)\" -f \\($rem/3600\\), $rem)",
+      "WebFetch(domain:localhost)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/status\" -UseBasicParsing -TimeoutSec 10; $r.Content)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/signals/stats\" -UseBasicParsing -TimeoutSec 10; $r.Content)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/activity\" -UseBasicParsing -TimeoutSec 10; $r.Content)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/positions\" -UseBasicParsing -TimeoutSec 10; $r.Content)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/trades\" -UseBasicParsing -TimeoutSec 10; $r.Content | ConvertFrom-Json | ConvertTo-Json -Depth 5)",
+      "PowerShell(Get-Content \"server logs reports\\\\current_20260507_002841.log\" | Where-Object { $_ -match \"ERROR|CRITICAL|Verification failed|circuit_breaker|published_this_loop|total_published|signal\" } | Select-Object -Last 30)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:8000/api/signals/recent\" -UseBasicParsing -TimeoutSec 10; $r.Content | ConvertFrom-Json | ConvertTo-Json -Depth 5 | Select-Object -First 50)",
+      "PowerShell(Get-Process -Id 180164 -ErrorAction SilentlyContinue)",
+      "PowerShell(Get-Content \"server logs reports\\\\current_20260507_002841.log\" | Where-Object { $_ -match \"ERROR|CRITICAL|Verification failed|exception|traceback\" } | Select-Object -First 20)",
+      "PowerShell(Get-Content \"server logs reports\\\\current_20260507_002841.log\" | Where-Object { $_ -match \"ERROR|RateLimitError\" } | Group-Object { $_ -replace '^\\(.{20}\\).+$','$1' } | Select-Object Count, Name | Sort-Object Count -Descending | Select-Object -First 10)"
     ]
   },
   "outputStyle": "default"

@@ -714,7 +714,7 @@
                 <div id="signal-stats" class="stats-cards">
                     <div class="stats-card"><div class="card-value" id="stat-total">0</div><div class="card-label">Total</div></div>
                     <div class="stats-card"><div class="card-value positive" id="stat-executed">0</div><div class="card-label">Executed</div></div>
-                    <div class="stats-card"><div class="card-value positive" id="stat-updated">0</div><div class="card-label">Updated</div></div>
+                    <div class="stats-card"><div class="card-value positive" id="stat-generated">0</div><div class="card-label">Generated</div></div>
                     <div class="stats-card"><div class="card-value negative" id="stat-rejected">0</div><div class="card-label">Rejected</div></div>
                     <div class="stats-card"><div class="card-value" id="stat-failed" style="color:var(--warning-color)">0</div><div class="card-label">Failed</div></div>
                     <div class="stats-card"><div class="card-value" id="stat-exec-rate">0%</div><div class="card-label">Exec Rate</div></div>
@@ -1242,7 +1242,10 @@
 
                         // Price
                         const priceCell = document.createElement('td');
-                        priceCell.textContent = activity.price;
+                        const priceVal = parseFloat(activity.price);
+                        priceCell.textContent = priceVal >= 1
+                            ? '$' + priceVal.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})
+                            : '$' + priceVal.toFixed(6);
                         row.appendChild(priceCell);
 
                         // Regime (with color)
@@ -1266,7 +1269,7 @@
                         let rsi15mClass = 'rsi-neutral';
                         if (rsi15m < 30) rsi15mClass = 'rsi-oversold';
                         else if (rsi15m > 70) rsi15mClass = 'rsi-overbought';
-                        rsi15mCell.innerHTML = `<span class="${rsi15mClass}">${activity.rsi_15m}</span>`;
+                        rsi15mCell.innerHTML = `<span class="${rsi15mClass}">${activity.rsi_15m ?? '-'}</span>`;
                         row.appendChild(rsi15mCell);
 
                         // RSI 1h (with color based on value)
@@ -1275,7 +1278,7 @@
                         let rsi1hClass = 'rsi-neutral';
                         if (rsi1h < 30) rsi1hClass = 'rsi-oversold';
                         else if (rsi1h > 70) rsi1hClass = 'rsi-overbought';
-                        rsi1hCell.innerHTML = `<span class="${rsi1hClass}">${activity.rsi_1h}</span>`;
+                        rsi1hCell.innerHTML = `<span class="${rsi1hClass}">${activity.rsi_1h ?? '-'}</span>`;
                         row.appendChild(rsi1hCell);
 
                         // Active Strategies (with per-strategy badge colors)
@@ -1635,6 +1638,7 @@
                 if (response.success && response.data) {
                     const stats = response.data;
                     document.getElementById('stat-total').textContent = stats.total || 0;
+                    document.getElementById('stat-generated').textContent = stats.generated || 0;
                     document.getElementById('stat-executed').textContent = stats.executed || 0;
                     document.getElementById('stat-rejected').textContent = stats.rejected || 0;
                     document.getElementById('stat-failed').textContent = stats.failed || 0;

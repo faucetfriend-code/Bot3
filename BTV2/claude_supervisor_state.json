@@ -3,47 +3,49 @@
   "_purpose": "Persistent state for the Claude supervisor routine (every-4h check). Read at the start of each check, written at the end. Survives across sessions.",
   "_initialized_ts": "2026-05-02T00:00:00Z",
 
-  "last_check_ts":            "2026-05-05T12:23:11Z",
-  "last_balance":             9121.188953,
-  "peak_balance":             9121.188953,
+  "last_check_ts":            "2026-05-07T12:27:00Z",
+  "last_balance":             9121.703539,
+  "peak_balance":             9121.703539,
   "open_positions":           [
     {
       "symbol": "XRP",
       "side": "long",
       "quantity": 133.21,
       "entry_price": 1.399373,
-      "current_price": 1.443052,
-      "unrealized_pnl": 5.82,
+      "current_price": 1.41,
+      "unrealized_pnl": 1.42,
       "opened_at": "2026-02-09T03:22:55Z",
-      "note": "Day 85 stale position. Exchange confirmed open (margin ~$69.61, unrealized +$5.82, funding_pnl -$0.055). DB last updated 2026-02-10."
+      "note": "Day 87 stale position. Exchange confirmed open (positions_count=1, margin ~$73.49, unrealized ~+$1.42 at $1.41 current — price dropped from $1.44). DB last updated 2026-02-10."
     }
   ],
   "trades_since_last":        0,
   "alerts_active":            [
     "all_orders_failing_success_error",
     "db_schema_exit_price_missing",
-    "event_counter_at_cap_1000",
-    "xrp_position_stale_85d",
+    "xrp_position_stale_87d",
     "ghost_positions_db",
-    "ws_data_quality_xrp_trump",
+    "ws_data_quality_xrp_trump_sui",
     "activity_endpoint_stale_indicators",
-    "mean_reversion_regime_mismatch"
+    "mean_reversion_regime_mismatch",
+    "pacifica_api_transient_502",
+    "event_counter_watch"
   ],
-  "consecutive_silent_checks": 6,
-  "next_check_ts":            "2026-05-05T16:23:11Z",
-  "next_wakeup_ts":           "2026-05-05T13:23:11Z",
+  "consecutive_silent_checks": 7,
+  "next_check_ts":            "2026-05-07T16:27:00Z",
+  "next_wakeup_ts":           "2026-05-07T13:27:00Z",
   "cadence_note":             "ScheduleWakeup max=3600s; wakeup fires 1h, full check at next_check_ts. Skip if elapsed < cadence.",
-  "last_report_path":         "BTV2/supervisor_reports/2026-05-05.md",
+  "last_report_path":         "BTV2/supervisor_reports/2026-05-07.md",
 
   "_alert_detail": {
-    "all_orders_failing_success_error": "Every order fails with ERROR: '\"success\"'. Persistent Pacifica testnet bug. No fills since bot inception.",
+    "all_orders_failing_success_error": "Every order fails with ERROR: '\"success\"'. Persistent Pacifica testnet bug. No fills since bot inception. Not tested this session (no signals generated).",
     "db_schema_exit_price_missing": "exit_price column missing from trades table. /api/status SQL error; balance read from log instead.",
-    "event_counter_at_cap_1000": "CRITICAL. In-memory EventBus/signal counter hits 1000 events ~6h after restart, then new=0 every cycle. Signals suppressed for remaining uptime. Last signal: 2026-05-04T07:39. Signal silence now 28.7h. Bot operationally inactive. Requires code fix.",
-    "xrp_position_stale_85d": "XRP long 133.21 @ $1.3994 open since 2026-02-09, DB last updated 2026-02-10. Day 85. Exchange confirms margin ~$69.61, unrealized +$5.82.",
+    "xrp_position_stale_87d": "XRP long 133.21 @ $1.3994 open since 2026-02-09, DB last updated 2026-02-10. Day 87. Exchange confirms positions_count=1, margin ~$73.49. Price slipped to $1.41; unrealized ~+$1.42 (was +$5.82 at $1.4431).",
     "ghost_positions_db": "3 zero-qty rows in positions table: AVAX bid 0.0, SUI bid 0.0, XRP bid 0.0, opened ~2026-02-17. Order artifacts. Inflate positions_count to 4 in /api/status. Safe: DELETE FROM positions WHERE quantity=0.",
-    "ws_data_quality_xrp_trump": "TRUMP 0/50 all timeframes (persistent). XRP 15m borderline (9/50). Signals skipped for both every cycle.",
-    "activity_endpoint_stale_indicators": "HIGH. BTC/ETH RSI exactly 50.0 (likely default/init value — calculation failing). ADX values jumping without basis (BTC 0→77.2 in 4h). SOL/DOGE/SUI/XRP indicators frozen across all checks. Activity endpoint unreliable for manual monitoring; regime detector independent and accurate.",
-    "mean_reversion_regime_mismatch": "MEAN_REVERSION occasionally fires BTC signals in TRENDING_STRONG. Quiet since restart May 4 17:15. Keep monitoring."
+    "ws_data_quality_xrp_trump_sui": "TRUMP 0/50 all timeframes (persistent — no candle data from Pacifica). XRP 5m/15m/1h insufficient. SUI 5m/15m/1h insufficient. Signals skipped for all three every cycle.",
+    "activity_endpoint_stale_indicators": "HIGH. ETH RSI=100/ADX=0, BTC RSI=50.0 (default value — calculation failing). Dashboard indicators unreliable. Regime detector independent and accurate.",
+    "mean_reversion_regime_mismatch": "MEAN_REVERSION occasionally fires BTC signals in TRENDING_STRONG. No recurrence since May 4 restart. Keep monitoring.",
+    "pacifica_api_transient_502": "Brief Pacifica testnet outage 2026-05-07 05:36–06:37 local. Bad Gateway on REST + WebSocket 502. Bot recovered automatically (exponential backoff + WS reconnect). Testnet instability pattern — may recur.",
+    "event_counter_watch": "Downgraded from CRITICAL. Prior event_counter_at_cap_1000 issue (signals suppressed) appears resolved — counter now at 1227 (past old 1000 cap) and incrementing each loop in current session. published_this_loop=0 appears to be normal strategy behavior (no crossover conditions met), not event suppression. Monitor to confirm."
   },
 
   "_field_docs": {

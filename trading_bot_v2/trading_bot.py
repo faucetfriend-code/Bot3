@@ -1649,9 +1649,14 @@ class TradingBot:
                     order_data = {}
                 order_id = order_data.get("order_id") or order_data.get("id")
 
+                # Pacifica intermittently returns bare string "success" for market orders
+                # (normalised by pacifica_client to {"success": True, "data": {}, "status": "success"}).
+                # That is a valid accepted-order response even though no order_id comes back.
+                is_success_ack = order_response.get("status") == "success"
+
                 # Convert to execution result format
                 execution_result = {
-                    "success": order_response.get("success", False) and order_id is not None,
+                    "success": order_response.get("success", False) and (order_id is not None or is_success_ack),
                     "order_id": order_id,
                     "executed_price": order_data.get("price", signal.entry_price),
                     "error": order_response.get("error") if not order_response.get("success") else None,

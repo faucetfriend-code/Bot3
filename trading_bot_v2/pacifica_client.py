@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import uuid
 import base58
@@ -316,6 +317,12 @@ class PacificaClient:
             else "https://api.pacifica.fi/api/v1"
         )
 
+        # data_base_url is used only for read-only public endpoints (e.g. /kline).
+        # PACIFICA_DATA_REST_URL lets you point candle fetches at the live API while
+        # keeping order/account endpoints on testnet (base_url stays unchanged).
+        data_rest_override = os.getenv("PACIFICA_DATA_REST_URL", "").strip()
+        self.data_base_url: str = data_rest_override if data_rest_override else self.base_url
+
         # Connection pooling - reuse TCP connections for better performance
         self.session = requests.Session()
         self.session.headers.update({"Content-Type": "application/json"})
@@ -429,7 +436,10 @@ class PacificaClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     def _make_get_request(
-        self, endpoint: str, params: Optional[Dict[str, Any]] = None
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Make a GET request to the API with retry logic.
@@ -437,6 +447,7 @@ class PacificaClient:
         Args:
             endpoint: API endpoint.
             params: Query parameters.
+            base_url: Override the instance base_url (used for data endpoints).
 
         Returns:
             JSON response as dict.
@@ -445,7 +456,7 @@ class PacificaClient:
             ValueError: For authentication or API errors.
             RateLimitError: For rate limit (429) - will be retried with backoff.
         """
-        url = self.base_url + endpoint
+        url = (base_url or self.base_url) + endpoint
 
         try:
             response = self.session.get(url, params=params, timeout=API_TIMEOUT)
@@ -1115,7 +1126,7 @@ class PacificaClient:
             params["end_time"] = end_time
 
         try:
-            response = self._make_get_request("/kline", params)
+            response = self._make_get_request("/kline", params, base_url=self.data_base_url)
         except ValueError as e:
             logger.error(f"Failed to fetch candles for {clean_symbol}: {e}")
             return []
