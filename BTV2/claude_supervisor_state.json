@@ -3,49 +3,60 @@
   "_purpose": "Persistent state for the Claude supervisor routine (every-4h check). Read at the start of each check, written at the end. Survives across sessions.",
   "_initialized_ts": "2026-05-02T00:00:00Z",
 
-  "last_check_ts":            "2026-05-07T12:27:00Z",
-  "last_balance":             9121.703539,
-  "peak_balance":             9121.703539,
+  "whitelisted_ips":          [
+    "2607:fea8:4ea1:2a00:e069:6c2d:afb0:6788"
+  ],
+  "_whitelisted_ips_note":    "IPs the user has confirmed are whitelisted on Pacifica. Update this list whenever the user adds a new IP. Both IPv6 and IPv4 can appear here.",
+
+  "last_check_ts":            "2026-05-08T04:30:00Z",
+  "last_balance":             9121.897784,
+  "peak_balance":             9121.897784,
   "open_positions":           [
     {
-      "symbol": "XRP",
-      "side": "long",
-      "quantity": 133.21,
-      "entry_price": 1.399373,
-      "current_price": 1.41,
-      "unrealized_pnl": 1.42,
-      "opened_at": "2026-02-09T03:22:55Z",
-      "note": "Day 87 stale position. Exchange confirmed open (positions_count=1, margin ~$73.49, unrealized ~+$1.42 at $1.41 current — price dropped from $1.44). DB last updated 2026-02-10."
+      "symbol": "SUI",
+      "side": "short",
+      "quantity": 739.9,
+      "entry_price": 1.026401,
+      "current_price": 0.963724,
+      "unrealized_pnl": 46.37,
+      "funding_pnl": 5.018421,
+      "opened_at": "2026-02-14T11:32:52Z",
+      "note": "Day 83 stale position. Confirmed real via equity math. Price declining (0.971→0.964) favorable for short. Grid placed for SUI at 00:21 UTC (5 BUY, 5 SELL, pending fills)."
     }
   ],
   "trades_since_last":        0,
   "alerts_active":            [
-    "all_orders_failing_success_error",
+    "trump_lot_size_error",
     "db_schema_exit_price_missing",
-    "xrp_position_stale_87d",
+    "position_data_inconsistency",
+    "sui_position_stale_83d",
     "ghost_positions_db",
-    "ws_data_quality_xrp_trump_sui",
+    "ws_data_quality_xrp_sui",
     "activity_endpoint_stale_indicators",
-    "mean_reversion_regime_mismatch",
-    "pacifica_api_transient_502",
-    "event_counter_watch"
+    "mean_reversion_regime_mismatch"
   ],
-  "consecutive_silent_checks": 7,
-  "next_check_ts":            "2026-05-07T16:27:00Z",
-  "next_wakeup_ts":           "2026-05-07T13:27:00Z",
+  "consecutive_silent_checks": 9,
+  "next_check_ts":            "2026-05-08T08:30:00Z",
+  "next_wakeup_ts":           "2026-05-08T05:30:00Z",
   "cadence_note":             "ScheduleWakeup max=3600s; wakeup fires 1h, full check at next_check_ts. Skip if elapsed < cadence.",
-  "last_report_path":         "BTV2/supervisor_reports/2026-05-07.md",
+  "last_report_path":         "BTV2/supervisor_reports/2026-05-08.md",
 
   "_alert_detail": {
-    "all_orders_failing_success_error": "Every order fails with ERROR: '\"success\"'. Persistent Pacifica testnet bug. No fills since bot inception. Not tested this session (no signals generated).",
-    "db_schema_exit_price_missing": "exit_price column missing from trades table. /api/status SQL error; balance read from log instead.",
-    "xrp_position_stale_87d": "XRP long 133.21 @ $1.3994 open since 2026-02-09, DB last updated 2026-02-10. Day 87. Exchange confirms positions_count=1, margin ~$73.49. Price slipped to $1.41; unrealized ~+$1.42 (was +$5.82 at $1.4431).",
-    "ghost_positions_db": "3 zero-qty rows in positions table: AVAX bid 0.0, SUI bid 0.0, XRP bid 0.0, opened ~2026-02-17. Order artifacts. Inflate positions_count to 4 in /api/status. Safe: DELETE FROM positions WHERE quantity=0.",
-    "ws_data_quality_xrp_trump_sui": "TRUMP 0/50 all timeframes (persistent — no candle data from Pacifica). XRP 5m/15m/1h insufficient. SUI 5m/15m/1h insufficient. Signals skipped for all three every cycle.",
-    "activity_endpoint_stale_indicators": "HIGH. ETH RSI=100/ADX=0, BTC RSI=50.0 (default value — calculation failing). Dashboard indicators unreliable. Regime detector independent and accurate.",
-    "mean_reversion_regime_mismatch": "MEAN_REVERSION occasionally fires BTC signals in TRENDING_STRONG. No recurrence since May 4 restart. Keep monitoring.",
-    "pacifica_api_transient_502": "Brief Pacifica testnet outage 2026-05-07 05:36–06:37 local. Bad Gateway on REST + WebSocket 502. Bot recovered automatically (exponential backoff + WS reconnect). Testnet instability pattern — may recur.",
-    "event_counter_watch": "Downgraded from CRITICAL. Prior event_counter_at_cap_1000 issue (signals suppressed) appears resolved — counter now at 1227 (past old 1000 cap) and incrementing each loop in current session. published_this_loop=0 appears to be normal strategy behavior (no crossover conditions met), not event suppression. Monitor to confirm."
+    "trump_lot_size_error": "NEW 2026-05-08. TRUMP MEAN_REVERSION SELL orders failing since 00:24 UTC with '400: Market order amount X is not a multiple of lot size 0.1'. Example: amount=572.69238247112 must be floored to nearest 0.1. Recurring every ~1min (8+ failures). Fix: floor(raw_qty / lot_size) * lot_size in position sizer or execution layer before order submission. Affects TRUMP; likely other symbols too.",
+    "db_schema_exit_price_missing": "exit_price column missing from trades table. /api/status SQL error; balance read from log instead. Unchanged.",
+    "position_data_inconsistency": "Prior sessions reported XRP long 133.21 @ 1.3994. Current API shows SUI short 739.9 @ 1.026401 (opened 2026-02-14). Equity math confirms SUI short is real exchange position. XRP row likely a ghost/artifact. Recommend: SELECT * FROM positions WHERE quantity > 0 to confirm.",
+    "sui_position_stale_83d": "SUI short 739.9 @ 1.026401 open since 2026-02-14 (Day 83 as of 2026-05-08). Unrealized +$46.37 (improved from +$40.58). SUI price declining ($0.971 → $0.964 since last check) — favorable for short. Margin $71.85. Grid also placed for SUI (5 BUY, 5 SELL) pending fills.",
+    "ghost_positions_db": "3 zero-qty rows in positions table: AVAX bid 0.0, SUI bid 0.0, XRP bid 0.0, opened ~2026-02-17. Order artifacts. Inflate positions_count in /api/status. Safe to DELETE WHERE quantity=0.",
+    "ws_data_quality_xrp_sui": "SUI 5m/15m/1h insufficient from WS (6/6/18 candles). XRP 5m/15m/1h insufficient (0/14/46 candles). TRUMP 0 from WS but REST fallback working. SUI signals generating via REST fallback for MEAN_REVERSION and GRID_TRADING.",
+    "activity_endpoint_stale_indicators": "BTC ADX=0, RSI=4.2 (stale) in activity endpoint. LTC ADX=0, RSI=50 stale. Regime detector uses log-confirmed values and is accurate.",
+    "mean_reversion_regime_mismatch": "MEAN_REVERSION BUY SUI while RSI=81.8 (overbought) — suspect signal direction error. No confirmed BTC recurrence. Keeping flagged."
+  },
+
+  "_resolved_since_last": {
+    "ip_not_whitelisted_ipv6": "RESOLVED 2026-05-08T00:21Z. GRID_TRADING successfully placed 5 BUY + 5 SELL for SUI — confirms IPv6 2607:fea8:4ea1:2a00:e069:6c2d:afb0:6788 is now whitelisted on Pacifica. User must have added it between ~21:20 UTC May 7 and 00:21 UTC May 8.",
+    "all_orders_failing_success_error": "Resolved. Old '\"success\"' error no longer observed.",
+    "event_counter_watch": "Resolved. total_published=942+ and signals generating normally.",
+    "pacifica_api_transient_502": "No 502s observed."
   },
 
   "_field_docs": {

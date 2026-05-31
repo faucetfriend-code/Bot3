@@ -1,5 +1,15 @@
 .env
 *.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+playwright-report/
+test-results/
+*.db-wal
+*.db-shm
 nul
 signals_log.csv
 .claude/worktrees/competent-shirley-9d8d5f/

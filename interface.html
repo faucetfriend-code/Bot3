@@ -1544,7 +1544,7 @@
 
                         // Time
                         const timeCell = document.createElement('td');
-                        const time = new Date(signal.timestamp);
+                        const time = new Date(signal.timestamp + 'Z');
                         timeCell.textContent = time.toLocaleTimeString();
                         timeCell.title = time.toLocaleString();
                         row.appendChild(timeCell);
@@ -1588,7 +1588,7 @@
 
                         // Confidence
                         const confCell = document.createElement('td');
-                        const conf = parseFloat(signal.confidence || 0);
+                        const conf = parseFloat(signal.confidence || 0) * 100;
                         confCell.textContent = conf.toFixed(0) + '%';
                         if (conf >= 70) {
                             confCell.className = 'positive';

@@ -48,6 +48,11 @@ class SignalLogger:
         # In-memory log
         self._signal_log: List[Dict[str, Any]] = []
 
+        # Pending entries: signal_key → entry dict already in _signal_log.
+        # Outcome methods (executed/rejected/failed) update these in-place so
+        # each signal only ever occupies one row in the log.
+        self._pending: Dict[str, Dict[str, Any]] = {}
+
         # Signal deduplication tracking (60-second window)
         self._recent_signal_ids: Set[str] = set()
         self._signal_timestamps: Dict[str, float] = {}
@@ -175,8 +180,33 @@ class SignalLogger:
             "notes": notes,
         }
 
-        self._add_entry(entry)
+        # Add to memory and mark as pending — CSV/DB write deferred until outcome.
+        with self._lock:
+            self._signal_log.append(entry)
+            if len(self._signal_log) > self.max_memory_entries:
+                self._signal_log = self._signal_log[-self.max_memory_entries:]
+            self._pending[signal_id] = entry
+
         return entry
+
+    def _finalize_signal(self, signal, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Update a pending 'generated' entry in-place with outcome data.
+        Returns the entry if a pending match was found, None otherwise.
+        CSV/DB write happens here (once, with final state).
+        """
+        signal_id = self._generate_signal_id(signal)
+        entry_to_write = None
+        with self._lock:
+            if signal_id in self._pending:
+                entry = self._pending.pop(signal_id)
+                entry.update(updates)
+                entry_to_write = entry
+        if entry_to_write is not None:
+            self._append_to_csv(entry_to_write)
+            self._save_to_database(entry_to_write)
+            return entry_to_write
+        return None
 
     def log_signal_rejected(
         self,
@@ -197,8 +227,18 @@ class SignalLogger:
         Returns:
             Log entry dict
         """
-        entry = {
+        updates = {
+            "status": "rejected",
+            "rejection_reason": reason,
             "timestamp": datetime.utcnow().isoformat(),
+        }
+        merged = self._finalize_signal(signal, updates)
+        if merged is not None:
+            return merged
+
+        # No pending entry — pre-validation rejection, append as new row.
+        entry = {
+            "timestamp": updates["timestamp"],
             "symbol": getattr(signal, 'asset', str(signal)),
             "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
             "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
@@ -217,7 +257,6 @@ class SignalLogger:
             "pnl": "",
             "notes": notes,
         }
-
         self._add_entry(entry)
         return entry
 
@@ -252,8 +291,24 @@ class SignalLogger:
             logger.warning(f"Invalid status '{status}' - defaulting to 'executed'")
             status = "executed"
 
-        entry = {
+        updates = {
+            "status": status,
+            "execution_result": execution_result,
+            "order_id": str(order_id),
+            "filled_price": filled_price,
+            "filled_quantity": filled_quantity,
             "timestamp": datetime.utcnow().isoformat(),
+        }
+        if notes:
+            updates["notes"] = notes
+        if regime:
+            updates["regime"] = regime
+        merged = self._finalize_signal(signal, updates)
+        if merged is not None:
+            return merged
+
+        entry = {
+            "timestamp": updates["timestamp"],
             "symbol": getattr(signal, 'asset', str(signal)),
             "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
             "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
@@ -295,8 +350,21 @@ class SignalLogger:
         Returns:
             Log entry dict
         """
-        entry = {
+        updates = {
+            "status": "failed",
+            "execution_result": f"ERROR: {error}",
             "timestamp": datetime.utcnow().isoformat(),
+        }
+        if notes:
+            updates["notes"] = notes
+        if regime:
+            updates["regime"] = regime
+        merged = self._finalize_signal(signal, updates)
+        if merged is not None:
+            return merged
+
+        entry = {
+            "timestamp": updates["timestamp"],
             "symbol": getattr(signal, 'asset', str(signal)),
             "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
             "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
