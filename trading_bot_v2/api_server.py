@@ -18,7 +18,8 @@ sys.path.insert(
 )
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from trading_bot_v2.metrics import metrics
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -1082,6 +1083,15 @@ async def get_status():
     except Exception as e:
         logger.error(f"Error getting status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/metrics")
+async def metrics_endpoint():
+    """Prometheus metrics endpoint."""
+    return Response(
+        content=metrics.get_metrics(),
+        media_type=metrics.get_content_type()
+    )
 
 
 @app.get("/api/trades")
