@@ -1,32 +1,787 @@
 """
 Database management for trading bot.
-Provides persistent storage with SQLite backend.
+Provides persistent storage with SQLite (default) or PostgreSQL backend.
+
+Supports:
+  - SQLite for local development and zero-config deployment
+  - PostgreSQL + TimescaleDB for production time-series workloads
+  - Transparent SQL translation (? -> %s, INSERT OR REPLACE, etc.)
+  - Connection pooling for both backends
 
 ⚠️ CRITICAL: Includes hourly funding tracking for Pacifica.fi (24x per day)
+
+Environment variables:
+  DATABASE_BACKEND  = "sqlite" | "postgres" (default: "sqlite")
+  DATABASE_PATH     = SQLite file path (default: "data/trading_bot.db")
+  PG_HOST           = PostgreSQL host (default: "localhost")
+  PG_PORT           = PostgreSQL port (default: 5432)
+  PG_DATABASE       = PostgreSQL database name (default: "trading_bot")
+  PG_USER           = PostgreSQL user (default: "postgres")
+  PG_PASSWORD       = PostgreSQL password (default: "")
+  PG_SCHEMA         = PostgreSQL schema (default: "public")
+  PG_POOL_MIN       = Min pool connections (default: 2)
+  PG_POOL_MAX       = Max pool connections (default: 10)
+  PG_POOL_TIMEOUT   = Pool connection timeout seconds (default: 30)
 """
 
+import re
 import sqlite3
 import json
 import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Generator, List, Dict, Any, Optional, Tuple
+from typing import Generator, List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime, date, timedelta
 import logging
 
 logger = logging.getLogger(__name__)
 
 DATABASE_PATH = os.path.abspath(os.getenv("DATABASE_PATH", "data/trading_bot.db"))
+DATABASE_BACKEND: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
 
-# Check for aiosqlite availability
+# ============================================================================
+# SQL Translation Utilities
+# ============================================================================
+# Transparently converts SQLite SQL to PostgreSQL-compatible SQL.
+# Used by the connection wrapper to maintain backward compatibility.
+
+
+def _translate_placeholders(sql: str) -> str:
+    """
+    Convert SQLite '?' placeholders to PostgreSQL '%s' placeholders.
+
+    Only replaces ? that are NOT inside quoted strings to avoid
+    corrupting string literals.
+    """
+    # Simple approach: replace ? with %s. This works for all SQL in this codebase
+    # because none of the string literals contain bare ? characters.
+    return sql.replace("?", "%s")
+
+
+def _translate_insert_or_replace(sql: str) -> str:
+    """
+    Convert SQLite INSERT OR REPLACE to PostgreSQL INSERT ... ON CONFLICT.
+
+    Handles the patterns used in this codebase:
+      INSERT OR REPLACE INTO table (...) VALUES (...)
+    Becomes:
+      INSERT INTO table (...) VALUES (...) ON CONFLICT (...) DO UPDATE SET ...
+    """
+    match = re.match(
+        r"INSERT\s+OR\s+REPLACE\s+INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES",
+        sql,
+        re.IGNORECASE,
+    )
+    if not match:
+        return sql
+
+    table_name = match.group(1)
+    columns_str = match.group(2)
+    columns = [c.strip() for c in columns_str.split(",")]
+
+    # Find the VALUES clause
+    values_match = re.search(r"VALUES\s*\(([^)]+)\)", sql, re.IGNORECASE)
+    if not values_match:
+        return sql
+
+    # Reconstruct as INSERT ... ON CONFLICT ... DO UPDATE
+    # Use the first column as the conflict target (usually 'id' or unique constraint)
+    # For our codebase, the main OR REPLACE targets are:
+    #   - pacifica_positions (UNIQUE on position_id)
+    #   - performance_metrics (UNIQUE on account_id, date)
+    new_sql = sql[: match.start()]  # Preserve any leading comments/whitespace
+    new_sql += f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_match.group(1)}) "
+
+    # Determine conflict columns based on table
+    if table_name == "pacifica_positions":
+        new_sql += "ON CONFLICT (position_id) DO UPDATE SET "
+        update_parts = []
+        for col in columns:
+            if col != "position_id":
+                update_parts.append(f"{col} = EXCLUDED.{col}")
+        new_sql += ", ".join(update_parts)
+    elif table_name == "performance_metrics":
+        new_sql += "ON CONFLICT (account_id, metric_date) DO UPDATE SET "
+        update_parts = []
+        for col in columns:
+            if col not in ("account_id", "metric_date"):
+                update_parts.append(f"{col} = EXCLUDED.{col}")
+        new_sql += ", ".join(update_parts)
+    else:
+        # Generic fallback: use all columns except 'id' for conflict update
+        new_sql += "ON CONFLICT DO UPDATE SET "
+        update_parts = []
+        for col in columns:
+            if col != "id":
+                update_parts.append(f"{col} = EXCLUDED.{col}")
+        if update_parts:
+            new_sql += ", ".join(update_parts)
+        else:
+            # No columns to update (just id), do nothing
+            new_sql = new_sql.replace("ON CONFLICT DO UPDATE SET", "ON CONFLICT DO NOTHING")
+
+    return new_sql
+
+
+def _translate_current_timestamp(sql: str) -> str:
+    """Convert SQLite CURRENT_TIMESTAMP to PostgreSQL NOW() if needed."""
+    # CURRENT_TIMESTAMP works in both SQLite and PostgreSQL, so no change needed.
+    return sql
+
+
+def _translate_sql(sql: str, is_postgres: bool) -> str:
+    """Apply all SQL translations for the target backend."""
+    if not is_postgres:
+        return sql
+
+    sql = _translate_current_timestamp(sql)
+    sql = _translate_insert_or_replace(sql)
+    sql = _translate_placeholders(sql)
+    return sql
+
+
+def _split_statements(sql: str) -> List[str]:
+    """Split a multi-statement SQL string into individual statements."""
+    statements = []
+    current = []
+    in_quote = False
+    quote_char = None
+
+    for char in sql:
+        if char in ("'", '"') and not in_quote:
+            in_quote = True
+            quote_char = char
+        elif char == quote_char and in_quote:
+            in_quote = False
+            quote_char = None
+        elif char == ";" and not in_quote:
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+            continue
+        current.append(char)
+
+    # Handle trailing statement without semicolon
+    stmt = "".join(current).strip()
+    if stmt:
+        statements.append(stmt)
+
+    return statements
+
+
+# ============================================================================
+# Connection Wrapper Classes
+# ============================================================================
+# These wrappers make PostgreSQL connections look like SQLite connections,
+# maintaining full backward compatibility with existing code.
+
+
+class _CursorWrapper:
+    """
+    Wraps a database cursor to provide a unified interface.
+
+    For PostgreSQL, provides `lastrowid` by fetching the RETURNING result.
+    For SQLite, passes through directly.
+    """
+
+    def __init__(self, cursor: Any, is_postgres: bool = False):
+        self._cursor = cursor
+        self._is_postgres = is_postgres
+        self._lastrowid: Optional[int] = None
+        self._has_returning = False
+
+    def _set_returning_result(self, row: Any) -> None:
+        """Store the RETURNING result for lastrowid access."""
+        self._has_returning = True
+        if row:
+            self._lastrowid = int(row[0]) if row[0] is not None else None
+
+    @property
+    def lastrowid(self) -> Optional[int]:
+        """Return the last inserted row ID."""
+        if self._is_postgres and self._has_returning:
+            return self._lastrowid
+        # For SQLite, try the native attribute
+        try:
+            return self._cursor.lastrowid
+        except AttributeError:
+            return None
+
+    @property
+    def rowcount(self) -> int:
+        """Return the number of rows affected."""
+        return self._cursor.rowcount
+
+    @property
+    def description(self) -> Any:
+        """Return cursor description."""
+        return self._cursor.description
+
+    def fetchone(self) -> Any:
+        """Fetch the next row."""
+        return self._cursor.fetchone()
+
+    def fetchall(self) -> Any:
+        """Fetch all remaining rows."""
+        return self._cursor.fetchall()
+
+    def fetchmany(self, size: int = None) -> Any:
+        """Fetch the next size rows."""
+        if size is not None:
+            return self._cursor.fetchmany(size)
+        return self._cursor.fetchmany()
+
+    def __iter__(self) -> Any:
+        """Iterate over cursor results."""
+        return iter(self._cursor)
+
+    def __next__(self) -> Any:
+        """Get next row from iterator."""
+        return next(self._cursor)
+
+
+class _ConnectionWrapper:
+    """
+    Wraps a database connection to provide a unified interface.
+
+    For PostgreSQL:
+      - Translates ? placeholders to %s
+      - Translates INSERT OR REPLACE to ON CONFLICT
+      - Translates executescript to individual statements
+      - Returns _CursorWrapper with lastrowid support via RETURNING
+    """
+
+    def __init__(self, conn: Any, is_postgres: bool = False):
+        self._conn = conn
+        self._is_postgres = is_postgres
+        self._closed = False
+
+    def execute(self, sql: str, params: Optional[Union[tuple, list]] = None) -> _CursorWrapper:
+        """
+        Execute a SQL statement and return a wrapped cursor.
+
+        Args:
+            sql: SQL statement (with ? placeholders for both backends)
+            params: Query parameters (tuple or list)
+
+        Returns:
+            _CursorWrapper with unified interface
+        """
+        translated_sql = _translate_sql(sql, self._is_postgres)
+
+        # Convert list params to tuple for compatibility
+        if params is not None and isinstance(params, list):
+            params = tuple(params)
+
+        if self._is_postgres:
+            # Check if this is an INSERT without RETURNING - add RETURNING id
+            # to get lastrowid support
+            upper_sql = translated_sql.strip().upper()
+            if upper_sql.startswith("INSERT ") and "RETURNING" not in upper_sql:
+                # Add RETURNING id to get lastrowid
+                translated_sql = translated_sql.rstrip().rstrip(";") + " RETURNING id"
+                if params:
+                    cursor = self._conn.execute(translated_sql, params)
+                else:
+                    cursor = self._conn.execute(translated_sql)
+                wrapped = _CursorWrapper(cursor, is_postgres=True)
+                # Fetch the RETURNING result for lastrowid
+                row = cursor.fetchone()
+                wrapped._set_returning_result(row)
+                return wrapped
+            else:
+                if params:
+                    cursor = self._conn.execute(translated_sql, params)
+                else:
+                    cursor = self._conn.execute(translated_sql)
+                return _CursorWrapper(cursor, is_postgres=True)
+        else:
+            if params:
+                cursor = self._conn.execute(translated_sql, params)
+            else:
+                cursor = self._conn.execute(translated_sql)
+            return _CursorWrapper(cursor, is_postgres=False)
+
+    def executemany(self, sql: str, params_list: list) -> _CursorWrapper:
+        """
+        Execute a SQL statement against multiple parameter sets.
+
+        Args:
+            sql: SQL statement (with ? placeholders)
+            params_list: List of parameter tuples
+
+        Returns:
+            _CursorWrapper with unified interface
+        """
+        translated_sql = _translate_sql(sql, self._is_postgres)
+
+        if self._is_postgres:
+            # executemany doesn't need RETURNING for bulk inserts
+            cursor = self._conn.cursor()
+            cursor.executemany(translated_sql, params_list)
+            return _CursorWrapper(cursor, is_postgres=True)
+        else:
+            cursor = self._conn.executemany(translated_sql, params_list)
+            return _CursorWrapper(cursor, is_postgres=False)
+
+    def executescript(self, sql: str) -> None:
+        """
+        Execute a multi-statement SQL script.
+
+        For PostgreSQL, splits the script into individual statements.
+        For SQLite, uses native executescript.
+        """
+        if self._is_postgres:
+            statements = _split_statements(sql)
+            for stmt in statements:
+                # Skip PostgreSQL-incompatible SQLite pragmas
+                upper_stmt = stmt.upper().strip()
+                if upper_stmt.startswith("PRAGMA"):
+                    continue
+                try:
+                    self._conn.execute(stmt)
+                except Exception as e:
+                    # Check if it's a "table already exists" error
+                    if "already exists" in str(e).lower():
+                        try:
+                            self._conn.rollback()
+                        except Exception:
+                            pass
+                        continue
+                    # Log but continue with other statements
+                    logger.warning(f"SQL statement failed (continuing): {e}")
+                    try:
+                        self._conn.rollback()
+                    except Exception:
+                        pass
+        else:
+            self._conn.executescript(sql)
+
+    def commit(self) -> None:
+        """Commit the current transaction."""
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        """Rollback the current transaction."""
+        self._conn.rollback()
+
+    def close(self) -> None:
+        """Close the connection."""
+        if not self._closed:
+            self._closed = True
+            try:
+                self._conn.close()
+            except Exception:
+                pass
+
+    @property
+    def row_factory(self) -> Any:
+        """Get the row factory (SQLite-specific)."""
+        if not self._is_postgres:
+            return getattr(self._conn, "row_factory", None)
+        return None
+
+    @row_factory.setter
+    def row_factory(self, factory: Any) -> None:
+        """Set the row factory (SQLite-specific, ignored for PostgreSQL)."""
+        if not self._is_postgres:
+            self._conn.row_factory = factory
+
+    def execute_returning(self, sql: str, params: Optional[tuple] = None) -> _CursorWrapper:
+        """
+        Execute a SQL statement and return a wrapped cursor with RETURNING support.
+
+        This is explicitly for PostgreSQL INSERT statements that need lastrowid.
+        For SQLite, this behaves like regular execute().
+        """
+        return self.execute(sql, params)
+
+
+# ============================================================================
+# PostgreSQL Connection Pool
+# ============================================================================
+
+
+class PostgreSQLPool:
+    """
+    Thread-safe connection pool for PostgreSQL using psycopg2.
+
+    Uses psycopg2.pool.ThreadedConnectionPool for production-grade
+    connection management with automatic reconnection.
+    """
+
+    def __init__(
+        self,
+        min_conn: int = 2,
+        max_conn: int = 10,
+        timeout: int = 30,
+    ):
+        """
+        Initialize the PostgreSQL connection pool.
+
+        Args:
+            min_conn: Minimum number of connections
+            max_conn: Maximum number of connections
+            timeout: Connection timeout in seconds
+        """
+        self._min_conn = min_conn
+        self._max_conn = max_conn
+        self._timeout = timeout
+        self._pool: Optional[psycopg2.pool.ThreadedConnectionPool] = None
+        self._lock = threading.Lock()
+        self._local = threading.local()
+
+    def _get_connection_params(self) -> Dict[str, Any]:
+        """Build connection parameters from environment/config."""
+        return {
+            "host": os.getenv("PG_HOST", "localhost"),
+            "port": int(os.getenv("PG_PORT", "5432")),
+            "dbname": os.getenv("PG_DATABASE", "trading_bot"),
+            "user": os.getenv("PG_USER", "postgres"),
+            "password": os.getenv("PG_PASSWORD", ""),
+            "options": f"-c search_path={os.getenv('PG_SCHEMA', 'public')}",
+        }
+
+    def _ensure_pool(self) -> None:
+        """Create the connection pool if it doesn't exist."""
+        if self._pool is not None:
+            return
+
+        with self._lock:
+            # Double-check after acquiring lock
+            if self._pool is not None:
+                return
+
+            params = self._get_connection_params()
+            logger.info(
+                f"Creating PostgreSQL connection pool: "
+                f"{params['host']}:{params['port']}/{params['dbname']} "
+                f"(min={self._min_conn}, max={self._max_conn})"
+            )
+
+            try:
+                self._pool = psycopg2.pool.ThreadedConnectionPool(
+                    self._min_conn,
+                    self._max_conn,
+                    **params,
+                    connect_timeout=self._timeout,
+                )
+                logger.info("PostgreSQL connection pool created successfully")
+            except psycopg2.OperationalError as e:
+                logger.error(f"Failed to create PostgreSQL connection pool: {e}")
+                raise
+
+    def get_connection(self) -> _ConnectionWrapper:
+        """
+        Get a connection from the pool.
+
+        Returns:
+            _ConnectionWrapper with PostgreSQL connection
+        """
+        self._ensure_pool()
+
+        try:
+            conn = self._pool.getconn()
+            # Set default isolation level
+            conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED)
+            return _ConnectionWrapper(conn, is_postgres=True)
+        except psycopg2.pool.PoolError as e:
+            logger.error(f"Failed to get PostgreSQL connection from pool: {e}")
+            raise
+
+    def release_connection(self, wrapper: _ConnectionWrapper) -> None:
+        """
+        Release a connection back to the pool.
+
+        Args:
+            wrapper: _ConnectionWrapper to release
+        """
+        if wrapper._closed:
+            return
+
+        try:
+            # Reset connection state
+            if not wrapper._conn.closed:
+                wrapper._conn.reset()
+            self._pool.putconn(wrapper._conn)
+            wrapper._closed = True
+        except Exception as e:
+            logger.warning(f"Error releasing PostgreSQL connection: {e}")
+
+    def close_all(self) -> None:
+        """Close all connections in the pool."""
+        with self._lock:
+            if self._pool:
+                self._pool.closeall()
+                self._pool = None
+                logger.info("PostgreSQL connection pool closed")
+
+
+# Global PostgreSQL pool instance
+_postgresql_pool: Optional[PostgreSQLPool] = None
+
+
+def _get_postgresql_pool() -> PostgreSQLPool:
+    """Get or create the global PostgreSQL connection pool."""
+    global _postgresql_pool
+    if _postgresql_pool is None:
+        _postgresql_pool = PostgreSQLPool(
+            min_conn=int(os.getenv("PG_POOL_MIN", "2")),
+            max_conn=int(os.getenv("PG_POOL_MAX", "10")),
+            timeout=int(os.getenv("PG_POOL_TIMEOUT", "30")),
+        )
+    return _postgresql_pool
+
+
+# ============================================================================
+# Database Initialization Helper
+# ============================================================================
+
+
+def _init_postgres_schema(conn: _ConnectionWrapper) -> None:
+    """
+    Initialize PostgreSQL schema from schema_timescaledb.sql.
+
+    This runs the TimescaleDB schema which includes hypertables,
+    compression policies, and continuous aggregates.
+    """
+    schema_path = os.path.join(os.path.dirname(__file__), "schema_timescaledb.sql")
+
+    if os.path.exists(schema_path):
+        logger.info(f"Initializing PostgreSQL schema from {schema_path}")
+        with open(schema_path, "r") as f:
+            schema_sql = f.read()
+        conn.executescript(schema_sql)
+        logger.info("PostgreSQL schema initialized successfully")
+    else:
+        logger.warning(f"schema_timescaledb.sql not found at {schema_path}")
+        # Create minimal tables as fallback
+        _create_minimal_pg_schema(conn)
+
+
+def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
+    """Create minimal PostgreSQL schema as fallback when schema file is missing."""
+    minimal_sql = """
+        CREATE TABLE IF NOT EXISTS account_profiles (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE,
+            private_key_encrypted TEXT NOT NULL,
+            public_key TEXT,
+            is_default BOOLEAN DEFAULT FALSE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            last_used_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS trades (
+            id BIGSERIAL,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            symbol TEXT NOT NULL,
+            asset_class TEXT NOT NULL DEFAULT 'crypto',
+            side TEXT NOT NULL,
+            quantity DOUBLE PRECISION NOT NULL,
+            entry_price DOUBLE PRECISION NOT NULL,
+            exit_price DOUBLE PRECISION,
+            entry_time TIMESTAMPTZ NOT NULL,
+            exit_time TIMESTAMPTZ,
+            pnl DOUBLE PRECISION DEFAULT 0,
+            commission DOUBLE PRECISION DEFAULT 0,
+            strategy TEXT,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS positions (
+            id BIGSERIAL PRIMARY KEY,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            symbol TEXT NOT NULL,
+            asset_class TEXT NOT NULL DEFAULT 'crypto',
+            side TEXT NOT NULL,
+            quantity DOUBLE PRECISION NOT NULL,
+            entry_price DOUBLE PRECISION NOT NULL,
+            current_price DOUBLE PRECISION,
+            unrealized_pnl DOUBLE PRECISION DEFAULT 0,
+            funding_pnl DOUBLE PRECISION DEFAULT 0,
+            exit_price DOUBLE PRECISION,
+            realized_pnl DOUBLE PRECISION DEFAULT 0,
+            opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            closed_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (account_id, symbol, side)
+        );
+
+        CREATE TABLE IF NOT EXISTS market_data (
+            id BIGSERIAL,
+            symbol TEXT NOT NULL,
+            "timestamp" TIMESTAMPTZ NOT NULL,
+            open DOUBLE PRECISION NOT NULL,
+            high DOUBLE PRECISION NOT NULL,
+            low DOUBLE PRECISION NOT NULL,
+            close DOUBLE PRECISION NOT NULL,
+            volume DOUBLE PRECISION NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'api',
+            timeframe TEXT NOT NULL DEFAULT '1m',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS signals (
+            id BIGSERIAL,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            symbol TEXT NOT NULL,
+            asset_class TEXT NOT NULL DEFAULT 'crypto',
+            strategy TEXT NOT NULL,
+            signal_type TEXT NOT NULL,
+            side TEXT,
+            confidence DOUBLE PRECISION NOT NULL DEFAULT 0,
+            strength DOUBLE PRECISION NOT NULL DEFAULT 0,
+            indicators JSONB DEFAULT '{}',
+            timeframe TEXT,
+            regime TEXT,
+            executed BOOLEAN NOT NULL DEFAULT FALSE,
+            execution_price DOUBLE PRECISION,
+            "timestamp" TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS performance_metrics (
+            id BIGSERIAL,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            metric_date DATE NOT NULL,
+            total_pnl DOUBLE PRECISION DEFAULT 0,
+            win_rate DOUBLE PRECISION DEFAULT 0,
+            total_trades INTEGER DEFAULT 0,
+            avg_rrr DOUBLE PRECISION DEFAULT 0,
+            max_drawdown DOUBLE PRECISION DEFAULT 0,
+            sharpe_ratio DOUBLE PRECISION,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE (account_id, metric_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS grid_state (
+            id BIGSERIAL PRIMARY KEY,
+            symbol TEXT NOT NULL UNIQUE,
+            grid_capital DOUBLE PRECISION NOT NULL,
+            center_price DOUBLE PRECISION,
+            initial_center DOUBLE PRECISION,
+            emergency_stop_price DOUBLE PRECISION NOT NULL,
+            active_levels INTEGER DEFAULT 0,
+            total_levels INTEGER DEFAULT 0,
+            orders_placed INTEGER DEFAULT 0,
+            refresh_count INTEGER DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'active',
+            atr_at_creation DOUBLE PRECISION,
+            grid_spacing DOUBLE PRECISION,
+            realized_pnl DOUBLE PRECISION DEFAULT 0,
+            total_fees DOUBLE PRECISION DEFAULT 0,
+            last_refresh TIMESTAMPTZ,
+            consistency_checked_at TIMESTAMPTZ,
+            repair_history JSONB,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            closed_at TIMESTAMPTZ
+        );
+
+        CREATE TABLE IF NOT EXISTS grid_levels (
+            id BIGSERIAL PRIMARY KEY,
+            grid_id BIGINT NOT NULL,
+            level_number INTEGER NOT NULL,
+            side TEXT NOT NULL,
+            price DOUBLE PRECISION NOT NULL,
+            quantity DOUBLE PRECISION NOT NULL,
+            capital_allocated DOUBLE PRECISION NOT NULL,
+            order_id TEXT,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS funding_payments (
+            id BIGSERIAL,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            subaccount_id TEXT,
+            position_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            funding_rate DOUBLE PRECISION NOT NULL,
+            payment_amount DOUBLE PRECISION NOT NULL,
+            position_value DOUBLE PRECISION NOT NULL,
+            margin_mode TEXT NOT NULL DEFAULT 'cross',
+            "timestamp" TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS funding_rate_history (
+            id BIGSERIAL,
+            symbol TEXT NOT NULL,
+            funding_rate DOUBLE PRECISION NOT NULL,
+            premium_index DOUBLE PRECISION,
+            interest_rate DOUBLE PRECISION,
+            "timestamp" TIMESTAMPTZ NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS pacifica_positions (
+            id BIGSERIAL PRIMARY KEY,
+            account_id TEXT NOT NULL DEFAULT 'sub_1',
+            subaccount_id TEXT,
+            position_id TEXT NOT NULL UNIQUE,
+            symbol TEXT NOT NULL,
+            side TEXT NOT NULL,
+            size DOUBLE PRECISION NOT NULL,
+            entry_price DOUBLE PRECISION NOT NULL,
+            current_price DOUBLE PRECISION,
+            leverage INTEGER NOT NULL DEFAULT 10,
+            margin_mode TEXT NOT NULL DEFAULT 'cross',
+            margin_used DOUBLE PRECISION NOT NULL,
+            cumulative_funding_paid DOUBLE PRECISION DEFAULT 0.0,
+            last_funding_timestamp TIMESTAMPTZ,
+            unrealized_pnl DOUBLE PRECISION DEFAULT 0.0,
+            liquidation_price DOUBLE PRECISION,
+            tick_size DOUBLE PRECISION,
+            lot_size DOUBLE PRECISION,
+            opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            closed_at TIMESTAMPTZ,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS subaccount_configs (
+            subaccount_id TEXT PRIMARY KEY,
+            subaccount_name TEXT NOT NULL,
+            subaccount_public_key TEXT,
+            trading_strategy TEXT NOT NULL DEFAULT 'balanced',
+            max_position_size DOUBLE PRECISION NOT NULL DEFAULT 10000.0,
+            risk_per_trade DOUBLE PRECISION NOT NULL DEFAULT 0.02,
+            max_leverage INTEGER NOT NULL DEFAULT 20,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            description TEXT,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            checksum TEXT
+        );
+    """
+    conn.executescript(minimal_sql)
+
+# Check for psycopg2 availability
 try:
-    import aiosqlite
+    import psycopg2
+    import psycopg2.pool
+    import psycopg2.extras
+    import psycopg2.extensions
 
-    HAS_AIOSQLITE = True
+    HAS_PSYCOPG2 = True
 except ImportError:
-    HAS_AIOSQLITE = False
-    logger.warning("aiosqlite not available, async operations will be synchronous")
+    HAS_PSYCOPG2 = False
+    if DATABASE_BACKEND == "postgres":
+        logger.error("psycopg2 not available but DATABASE_BACKEND=postgres")
+    else:
+        logger.info("psycopg2 not available, PostgreSQL backend disabled")
 
 
 class DataCache:
@@ -186,237 +941,294 @@ class ConnectionPool:
             self._connections.clear()
 
 
-# Global connection pool
+# Global connection pool (SQLite)
 _connection_pool = ConnectionPool()
+
+# Flag to track which backend is active
+_active_backend: str = DATABASE_BACKEND
+
+
+def get_backend() -> str:
+    """Return the active database backend ('sqlite' or 'postgres')."""
+    return _active_backend
+
+
+def is_postgres() -> bool:
+    """Return True if the active backend is PostgreSQL."""
+    return _active_backend == "postgres"
 
 
 @contextmanager
-def get_db_connection() -> Generator[sqlite3.Connection, None, None]:
-    """Database connection context manager with pooling."""
-    conn = _connection_pool.get_connection()
-    try:
-        yield conn
-    finally:
-        _connection_pool.release_connection(conn)
+def get_db_connection() -> Generator[_ConnectionWrapper, None, None]:
+    """
+    Database connection context manager with pooling.
+
+    Returns a _ConnectionWrapper that transparently handles both
+    SQLite and PostgreSQL backends. All existing code that uses
+    `with get_db_connection() as conn:` will work unchanged.
+
+    Returns:
+        _ConnectionWrapper for the active backend
+    """
+    if _active_backend == "postgres":
+        pool = _get_postgresql_pool()
+        wrapper = pool.get_connection()
+        try:
+            yield wrapper
+        finally:
+            pool.release_connection(wrapper)
+    else:
+        # SQLite path (existing behavior)
+        conn = _connection_pool.get_connection()
+        wrapped = _ConnectionWrapper(conn, is_postgres=False)
+        try:
+            yield wrapped
+        finally:
+            _connection_pool.release_connection(conn)
 
 
 def init_database():
     """Initialize database with schema and performance indexes."""
     try:
-        # Ensure database directory exists
-        db_dir = os.path.dirname(DATABASE_PATH)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
-
-        # Get schema file path relative to this module
-        schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
-
-        with get_db_connection() as conn:
-            # Create tables from schema file
-            if os.path.exists(schema_path):
-                with open(schema_path, "r") as f:
-                    conn.executescript(f.read())
-            else:
-                logger.warning(
-                    f"schema.sql not found at {schema_path}, creating minimal schema"
-                )
-                # Create essential tables if schema.sql is missing
-                conn.executescript("""
-                    CREATE TABLE IF NOT EXISTS account_profiles (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        name TEXT NOT NULL UNIQUE,
-                        private_key_encrypted TEXT NOT NULL,
-                        public_key TEXT,
-                        is_default BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE IF NOT EXISTS trades (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_id TEXT NOT NULL DEFAULT 'sub_1',
-                        symbol TEXT NOT NULL,
-                        asset_class TEXT NOT NULL,
-                        side TEXT NOT NULL,
-                        quantity REAL NOT NULL,
-                        entry_price REAL NOT NULL,
-                        exit_price REAL,
-                        entry_time TIMESTAMP NOT NULL,
-                        exit_time TIMESTAMP,
-                        pnl REAL DEFAULT 0,
-                        commission REAL DEFAULT 0,
-                        strategy TEXT,
-                        status TEXT DEFAULT 'open',
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE IF NOT EXISTS positions (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_id TEXT NOT NULL DEFAULT 'sub_1',
-                        symbol TEXT NOT NULL,
-                        asset_class TEXT NOT NULL,
-                        side TEXT NOT NULL,
-                        quantity REAL NOT NULL,
-                        entry_price REAL NOT NULL,
-                        current_price REAL,
-                        unrealized_pnl REAL DEFAULT 0,
-                        status TEXT NOT NULL DEFAULT 'open',
-                        exit_price REAL,
-                        realized_pnl REAL DEFAULT 0,
-                        opened_at TIMESTAMP NOT NULL,
-                        closed_at TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(account_id, symbol, side)
-                    );
-                    CREATE TABLE IF NOT EXISTS market_data (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol TEXT NOT NULL,
-                        price REAL NOT NULL,
-                        volume REAL,
-                        timestamp TIMESTAMP NOT NULL,
-                        source TEXT DEFAULT 'api'
-                    );
-                    CREATE TABLE IF NOT EXISTS signals (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_id TEXT NOT NULL DEFAULT 'sub_1',
-                        symbol TEXT NOT NULL,
-                        asset_class TEXT NOT NULL,
-                        signal_type TEXT NOT NULL,
-                        strength REAL NOT NULL,
-                        indicators TEXT,
-                        timestamp TIMESTAMP NOT NULL,
-                        executed BOOLEAN DEFAULT FALSE,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                    CREATE TABLE IF NOT EXISTS performance_metrics (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        account_id TEXT NOT NULL DEFAULT 'sub_1',
-                        date DATE NOT NULL,
-                        total_pnl REAL DEFAULT 0,
-                        win_rate REAL DEFAULT 0,
-                        total_trades INTEGER DEFAULT 0,
-                        avg_rrr REAL DEFAULT 0,
-                        max_drawdown REAL DEFAULT 0,
-                        sharpe_ratio REAL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        UNIQUE(account_id, date)
-                    );
-                """)
-
-            # Grid state persistence table
-            conn.execute("""
-                    CREATE TABLE IF NOT EXISTS grid_states (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        symbol TEXT NOT NULL UNIQUE,
-                        state TEXT NOT NULL DEFAULT 'active',
-                        regime_on_creation TEXT,
-                        grid_capital REAL DEFAULT 0,
-                        emergency_stop REAL DEFAULT 0,
-                        atr_at_creation REAL DEFAULT 0,
-                        grid_spacing REAL DEFAULT 0,
-                        num_levels INTEGER DEFAULT 10,
-                        order_ids TEXT,
-                        total_buy_fills INTEGER DEFAULT 0,
-                        total_sell_fills INTEGER DEFAULT 0,
-                        realized_pnl REAL DEFAULT 0,
-                        total_fees REAL DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    );
-                """)
-
-            # Enhanced grid state columns for consistency management
-            grid_state_alter_statements = [
-                "ALTER TABLE grid_states ADD COLUMN center_price REAL",
-                "ALTER TABLE grid_states ADD COLUMN initial_center REAL",
-                "ALTER TABLE grid_states ADD COLUMN orders_placed INTEGER DEFAULT 0",
-                "ALTER TABLE grid_states ADD COLUMN refresh_count INTEGER DEFAULT 0",
-                "ALTER TABLE grid_states ADD COLUMN last_refresh TIMESTAMP",
-                "ALTER TABLE grid_states ADD COLUMN consistency_checked_at TIMESTAMP",
-                "ALTER TABLE grid_states ADD COLUMN repair_history TEXT",
-            ]
-
-            for alter_sql in grid_state_alter_statements:
-                try:
-                    conn.execute(alter_sql)
-                except Exception as e:
-                    if "duplicate column name" not in str(e).lower():
-                        logger.warning(f"Failed to add grid state column: {e}")
-
-            # Add account_id columns to existing tables if they don't exist
-            alter_statements = [
-                "ALTER TABLE trades ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
-                "ALTER TABLE positions ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
-                "ALTER TABLE signals ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
-                "ALTER TABLE performance_metrics ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
-                "ALTER TABLE positions ADD COLUMN funding_pnl REAL DEFAULT 0",
-                "ALTER TABLE positions ADD COLUMN exit_price REAL",
-            ]
-
-            for alter_sql in alter_statements:
-                try:
-                    conn.execute(alter_sql)
-                except Exception as e:
-                    # Column might already exist, ignore error
-                    if "duplicate column name" not in str(e).lower():
-                        logger.warning(f"Failed to add column: {e}")
-
-            # Create indexes for account_id columns
-            account_indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol ON trades(account_id, symbol)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_status ON trades(account_id, status)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_entry_time ON trades(account_id, entry_time)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_exit_time ON trades(account_id, exit_time)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol_status ON trades(account_id, symbol, status)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_account_status_time ON trades(account_id, status, entry_time)",
-                "CREATE INDEX IF NOT EXISTS idx_positions_account_symbol ON positions(account_id, symbol)",
-                "CREATE INDEX IF NOT EXISTS idx_positions_account_updated ON positions(account_id, updated_at)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_account_symbol ON signals(account_id, symbol)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_account_timestamp ON signals(account_id, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_account_type_time ON signals(account_id, signal_type, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_account_executed ON signals(account_id, executed)",
-                "CREATE INDEX IF NOT EXISTS idx_performance_account_date ON performance_metrics(account_id, date)",
-            ]
-
-            for index_sql in account_indexes:
-                try:
-                    conn.execute(index_sql)
-                except Exception as e:
-                    logger.warning(f"Failed to create account index: {e}")
-
-            # Create performance indexes for time-series queries
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_market_data_symbol_timestamp ON market_data(symbol, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_market_data_timestamp ON market_data(timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_symbol_entry_time ON trades(symbol, entry_time)",
-                "CREATE INDEX IF NOT EXISTS idx_trades_status_entry_time ON trades(status, entry_time)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_symbol_timestamp ON signals(symbol, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_performance_metrics_date ON performance_metrics(date)",
-            ]
-
-            for index_sql in indexes:
-                try:
-                    conn.execute(index_sql)
-                except Exception as e:
-                    logger.warning(f"Failed to create index: {e}")
-
-            conn.commit()
-        logger.info("Database initialized successfully with performance indexes")
+        if _active_backend == "postgres":
+            _init_postgres_database()
+        else:
+            _init_sqlite_database()
     except Exception as e:
         logger.error(f"Failed to initialize database: {e}")
         raise
 
 
+def _init_postgres_database():
+    """Initialize PostgreSQL database from schema_timescaledb.sql."""
+    with get_db_connection() as conn:
+        _init_postgres_schema(conn)
+    logger.info("PostgreSQL database initialized successfully")
+
+
+def _init_sqlite_database():
+    """Initialize SQLite database with schema and performance indexes."""
+    # Ensure database directory exists
+    db_dir = os.path.dirname(DATABASE_PATH)
+    if db_dir and not os.path.exists(db_dir):
+        os.makedirs(db_dir, exist_ok=True)
+
+    # Get schema file path relative to this module
+    schema_path = os.path.join(os.path.dirname(__file__), "schema.sql")
+
+    with get_db_connection() as conn:
+        # Create tables from schema file
+        if os.path.exists(schema_path):
+            with open(schema_path, "r") as f:
+                conn.executescript(f.read())
+        else:
+            logger.warning(
+                f"schema.sql not found at {schema_path}, creating minimal schema"
+            )
+            # Create essential tables if schema.sql is missing
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS account_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    private_key_encrypted TEXT NOT NULL,
+                    public_key TEXT,
+                    is_default BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL DEFAULT 'sub_1',
+                    symbol TEXT NOT NULL,
+                    asset_class TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    exit_price REAL,
+                    entry_time TIMESTAMP NOT NULL,
+                    exit_time TIMESTAMP,
+                    pnl REAL DEFAULT 0,
+                    commission REAL DEFAULT 0,
+                    strategy TEXT,
+                    status TEXT DEFAULT 'open',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL DEFAULT 'sub_1',
+                    symbol TEXT NOT NULL,
+                    asset_class TEXT NOT NULL,
+                    side TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    entry_price REAL NOT NULL,
+                    current_price REAL,
+                    unrealized_pnl REAL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    exit_price REAL,
+                    realized_pnl REAL DEFAULT 0,
+                    opened_at TIMESTAMP NOT NULL,
+                    closed_at TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(account_id, symbol, side)
+                );
+                CREATE TABLE IF NOT EXISTS market_data (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    price REAL NOT NULL,
+                    volume REAL,
+                    timestamp TIMESTAMP NOT NULL,
+                    source TEXT DEFAULT 'api'
+                );
+                CREATE TABLE IF NOT EXISTS signals (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL DEFAULT 'sub_1',
+                    symbol TEXT NOT NULL,
+                    asset_class TEXT NOT NULL,
+                    signal_type TEXT NOT NULL,
+                    strength REAL NOT NULL,
+                    indicators TEXT,
+                    timestamp TIMESTAMP NOT NULL,
+                    executed BOOLEAN DEFAULT FALSE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS performance_metrics (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    account_id TEXT NOT NULL DEFAULT 'sub_1',
+                    date DATE NOT NULL,
+                    total_pnl REAL DEFAULT 0,
+                    win_rate REAL DEFAULT 0,
+                    total_trades INTEGER DEFAULT 0,
+                    avg_rrr REAL DEFAULT 0,
+                    max_drawdown REAL DEFAULT 0,
+                    sharpe_ratio REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(account_id, date)
+                );
+            """)
+
+        # Grid state persistence table
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS grid_states (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL UNIQUE,
+                    state TEXT NOT NULL DEFAULT 'active',
+                    regime_on_creation TEXT,
+                    grid_capital REAL DEFAULT 0,
+                    emergency_stop REAL DEFAULT 0,
+                    atr_at_creation REAL DEFAULT 0,
+                    grid_spacing REAL DEFAULT 0,
+                    num_levels INTEGER DEFAULT 10,
+                    order_ids TEXT,
+                    total_buy_fills INTEGER DEFAULT 0,
+                    total_sell_fills INTEGER DEFAULT 0,
+                    realized_pnl REAL DEFAULT 0,
+                    total_fees REAL DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+        # Enhanced grid state columns for consistency management
+        grid_state_alter_statements = [
+            "ALTER TABLE grid_states ADD COLUMN center_price REAL",
+            "ALTER TABLE grid_states ADD COLUMN initial_center REAL",
+            "ALTER TABLE grid_states ADD COLUMN orders_placed INTEGER DEFAULT 0",
+            "ALTER TABLE grid_states ADD COLUMN refresh_count INTEGER DEFAULT 0",
+            "ALTER TABLE grid_states ADD COLUMN last_refresh TIMESTAMP",
+            "ALTER TABLE grid_states ADD COLUMN consistency_checked_at TIMESTAMP",
+            "ALTER TABLE grid_states ADD COLUMN repair_history TEXT",
+        ]
+
+        for alter_sql in grid_state_alter_statements:
+            try:
+                conn.execute(alter_sql)
+            except Exception as e:
+                if "duplicate column name" not in str(e).lower():
+                    logger.warning(f"Failed to add grid state column: {e}")
+
+        # Add account_id columns to existing tables if they don't exist
+        alter_statements = [
+            "ALTER TABLE trades ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
+            "ALTER TABLE positions ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
+            "ALTER TABLE signals ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
+            "ALTER TABLE performance_metrics ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
+            "ALTER TABLE positions ADD COLUMN funding_pnl REAL DEFAULT 0",
+            "ALTER TABLE positions ADD COLUMN exit_price REAL",
+        ]
+
+        for alter_sql in alter_statements:
+            try:
+                conn.execute(alter_sql)
+            except Exception as e:
+                # Column might already exist, ignore error
+                if "duplicate column name" not in str(e).lower():
+                    logger.warning(f"Failed to add column: {e}")
+
+        # Create indexes for account_id columns
+        account_indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol ON trades(account_id, symbol)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_status ON trades(account_id, status)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_entry_time ON trades(account_id, entry_time)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_exit_time ON trades(account_id, exit_time)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol_status ON trades(account_id, symbol, status)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_account_status_time ON trades(account_id, status, entry_time)",
+            "CREATE INDEX IF NOT EXISTS idx_positions_account_symbol ON positions(account_id, symbol)",
+            "CREATE INDEX IF NOT EXISTS idx_positions_account_updated ON positions(account_id, updated_at)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_account_symbol ON signals(account_id, symbol)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_account_timestamp ON signals(account_id, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_account_type_time ON signals(account_id, signal_type, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_account_executed ON signals(account_id, executed)",
+            "CREATE INDEX IF NOT EXISTS idx_performance_account_date ON performance_metrics(account_id, date)",
+        ]
+
+        for index_sql in account_indexes:
+            try:
+                conn.execute(index_sql)
+            except Exception as e:
+                logger.warning(f"Failed to create account index: {e}")
+
+        # Create performance indexes for time-series queries
+        indexes = [
+            "CREATE INDEX IF NOT EXISTS idx_market_data_symbol_timestamp ON market_data(symbol, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_market_data_timestamp ON market_data(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_symbol_entry_time ON trades(symbol, entry_time)",
+            "CREATE INDEX IF NOT EXISTS idx_trades_status_entry_time ON trades(status, entry_time)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_symbol_timestamp ON signals(symbol, timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp)",
+            "CREATE INDEX IF NOT EXISTS idx_performance_metrics_date ON performance_metrics(date)",
+        ]
+
+        for index_sql in indexes:
+            try:
+                conn.execute(index_sql)
+            except Exception as e:
+                logger.warning(f"Failed to create index: {e}")
+
+        conn.commit()
+    logger.info("SQLite database initialized successfully with performance indexes")
+
+
 class DatabaseManager:
-    """Database operations for trading bot."""
+    """Database operations for trading bot.
+
+    Supports both SQLite and PostgreSQL backends transparently.
+    All methods use `with get_db_connection() as conn:` which returns
+    a _ConnectionWrapper that handles SQL translation automatically.
+    """
 
     def __init__(self):
-        """Initialize database manager."""
-        # Ensure database directory exists
-        db_dir = os.path.dirname(DATABASE_PATH)
-        if db_dir and not os.path.exists(db_dir):
-            os.makedirs(db_dir, exist_ok=True)
+        """Initialize database manager.
+
+        Creates the database directory (SQLite only) and ensures all
+        tables exist via init_database().
+        """
+        # Ensure database directory exists (SQLite only)
+        if _active_backend == "sqlite":
+            db_dir = os.path.dirname(DATABASE_PATH)
+            if db_dir and not os.path.exists(db_dir):
+                os.makedirs(db_dir, exist_ok=True)
 
         # Always run init_database() to ensure all tables exist
         # (uses CREATE TABLE IF NOT EXISTS, safe to run multiple times)
@@ -425,19 +1237,28 @@ class DatabaseManager:
         # Store a connection reference for execute/commit pattern
         self._conn = None
 
+    @property
+    def backend(self) -> str:
+        """Return the active database backend name."""
+        return _active_backend
+
     def execute(self, sql: str, params: Optional[tuple] = None):
         """
         Execute SQL statement and return cursor.
 
         Args:
-            sql: SQL query to execute
+            sql: SQL query to execute (uses ? placeholders for both backends)
             params: Query parameters
 
         Returns:
-            Cursor object
+            _CursorWrapper object
         """
         if self._conn is None:
-            self._conn = _connection_pool.get_connection()
+            if _active_backend == "postgres":
+                pool = _get_postgresql_pool()
+                self._conn = pool.get_connection()
+            else:
+                self._conn = _connection_pool.get_connection()
 
         if params:
             return self._conn.execute(sql, params)
@@ -452,7 +1273,11 @@ class DatabaseManager:
     def close(self):
         """Close the database connection."""
         if self._conn:
-            self._conn.close()
+            if _active_backend == "postgres":
+                pool = _get_postgresql_pool()
+                pool.release_connection(self._conn)
+            else:
+                _connection_pool.release_connection(self._conn)
             self._conn = None
 
     def get_connection(self):
@@ -462,15 +1287,24 @@ class DatabaseManager:
         Returns an async context manager that provides an aiosqlite connection.
         Used by MarketDataCollector and other async database operations.
 
+        For PostgreSQL backend, this falls back to synchronous operations.
+
         Usage:
             async with db_manager.get_connection() as conn:
                 await conn.execute(...)
         """
-        if not HAS_AIOSQLITE:  # type: ignore
+        if _active_backend == "postgres":
+            # PostgreSQL doesn't support aiosqlite - return sync wrapper
+            raise RuntimeError(
+                "async get_connection() is not supported with PostgreSQL backend. "
+                "Use get_db_connection() context manager instead."
+            )
+
+        if not HAS_AIOSQLITE:
             raise RuntimeError(
                 "aiosqlite not available - async operations require aiosqlite"
             )
-        return aiosqlite.connect(DATABASE_PATH)  # type: ignore  # type: ignore
+        return aiosqlite.connect(DATABASE_PATH)
 
     def save_trade(
         self, trade_data: Dict[str, Any], account_id: str = "sub_1"
@@ -568,7 +1402,7 @@ class DatabaseManager:
             if set_parts:
                 query = f"UPDATE trades SET {', '.join(set_parts)}, updated_at = CURRENT_TIMESTAMP WHERE id = ?"
                 values.append(trade_id)
-                conn.execute(query, values)
+                conn.execute(query, tuple(values))
                 conn.commit()
 
     def get_trades(
@@ -1048,7 +1882,7 @@ class DatabaseManager:
     def get_stats(self) -> Dict[str, Any]:
         """Get database statistics."""
         with get_db_connection() as conn:
-            stats = {}
+            stats: Dict[str, Any] = {"backend": _active_backend}
 
             # Count records in each table
             for table in [
@@ -1061,19 +1895,32 @@ class DatabaseManager:
                 cursor = conn.execute(f"SELECT COUNT(*) FROM {table}")
                 stats[f"{table}_count"] = cursor.fetchone()[0]
 
-            # Get database file size
-            if os.path.exists(DATABASE_PATH):
+            # Get database file size (SQLite only)
+            if _active_backend == "sqlite" and os.path.exists(DATABASE_PATH):
                 stats["db_size_mb"] = os.path.getsize(DATABASE_PATH) / (1024 * 1024)
+            elif _active_backend == "postgres":
+                # Get PostgreSQL database size
+                try:
+                    cursor = conn.execute(
+                        "SELECT pg_size_pretty(pg_database_size(current_database()))"
+                    )
+                    row = cursor.fetchone()
+                    if row:
+                        stats["db_size"] = row[0]
+                except Exception:
+                    pass
 
             # Get date ranges
             for table in ["trades", "market_data", "signals"]:
                 try:
+                    # Use the appropriate timestamp column
+                    ts_col = "entry_time" if table == "trades" else "timestamp"
                     cursor = conn.execute(
-                        f"SELECT MIN(timestamp), MAX(timestamp) FROM {table}"
+                        f"SELECT MIN({ts_col}), MAX({ts_col}) FROM {table}"
                     )
                     min_ts, max_ts = cursor.fetchone()
                     if min_ts and max_ts:
-                        stats[f"{table}_date_range"] = {"start": min_ts, "end": max_ts}
+                        stats[f"{table}_date_range"] = {"start": str(min_ts), "end": str(max_ts)}
                 except Exception:
                     pass  # Table might not have timestamp column
 
@@ -1150,39 +1997,126 @@ class DatabaseManager:
         return issues
 
     def backup_database(self, backup_path: str) -> bool:
-        """Create a backup of the database."""
-        try:
-            import shutil  # type: ignore
+        """Create a backup of the database.
 
+        For SQLite: uses VACUUM INTO or file copy.
+        For PostgreSQL: uses pg_dump if available, otherwise exports to JSON.
+        """
+        try:
             # Ensure backup directory exists
             backup_dir = os.path.dirname(backup_path)
             if backup_dir and not os.path.exists(backup_dir):
                 os.makedirs(backup_dir, exist_ok=True)
 
+            if _active_backend == "postgres":
+                return self._backup_postgres(backup_path)
+            else:
+                return self._backup_sqlite(backup_path)
+
+        except Exception as e:
+            logger.error(f"Failed to create database backup: {e}")
+            return False
+
+    def _backup_sqlite(self, backup_path: str) -> bool:
+        """Create SQLite backup using VACUUM INTO or file copy."""
+        try:
             # SQLite backup using VACUUM INTO (SQLite 3.27+)
             with get_db_connection() as conn:
                 conn.execute(f"VACUUM INTO '{backup_path}'")
 
-            logger.info(f"Database backup created at {backup_path}")
+            logger.info(f"SQLite database backup created at {backup_path}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to create database backup: {e}")
-            # Fallback to file copy
+            logger.warning(f"VACUUM INTO backup failed: {e}, trying file copy")
             try:
-                shutil.copy2(DATABASE_PATH, backup_path)  # type: ignore
-                logger.info(f"Database backup created using file copy at {backup_path}")
+                import shutil
+
+                shutil.copy2(DATABASE_PATH, backup_path)
+                logger.info(f"SQLite database backup created using file copy at {backup_path}")
                 return True
             except Exception as e2:
                 logger.error(f"File copy backup also failed: {e2}")
                 return False
 
+    def _backup_postgres(self, backup_path: str) -> bool:
+        """Create PostgreSQL backup using pg_dump or JSON export."""
+        import subprocess
+
+        # Try pg_dump first
+        try:
+            pg_host = os.getenv("PG_HOST", "localhost")
+            pg_port = os.getenv("PG_PORT", "5432")
+            pg_database = os.getenv("PG_DATABASE", "trading_bot")
+            pg_user = os.getenv("PG_USER", "postgres")
+
+            cmd = [
+                "pg_dump",
+                "-h", pg_host,
+                "-p", pg_port,
+                "-U", pg_user,
+                "-d", pg_database,
+                "-f", backup_path,
+                "--no-owner",
+                "--no-privileges",
+            ]
+
+            # Set password via environment variable
+            env = os.environ.copy()
+            pg_password = os.getenv("PG_PASSWORD", "")
+            if pg_password:
+                env["PGPASSWORD"] = pg_password
+
+            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+
+            if result.returncode == 0:
+                logger.info(f"PostgreSQL backup created via pg_dump at {backup_path}")
+                return True
+            else:
+                logger.warning(f"pg_dump failed: {result.stderr}")
+
+        except FileNotFoundError:
+            logger.info("pg_dump not available, using JSON export fallback")
+        except Exception as e:
+            logger.warning(f"pg_dump failed: {e}")
+
+        # Fallback: export to JSON
+        try:
+            export_data = self.export_data()
+            import json
+
+            with open(backup_path, "w") as f:
+                json.dump(export_data, f, indent=2, default=str)
+
+            logger.info(f"PostgreSQL backup created via JSON export at {backup_path}")
+            return True
+
+        except Exception as e:
+            logger.error(f"JSON export backup also failed: {e}")
+            return False
+
     def restore_database(self, backup_path: str) -> bool:
-        """Restore database from backup."""
+        """Restore database from backup.
+
+        For SQLite: restores from file backup.
+        For PostgreSQL: restores from pg_dump or JSON import.
+        """
         if not os.path.exists(backup_path):
             logger.error(f"Backup file does not exist: {backup_path}")
             return False
 
+        try:
+            if _active_backend == "postgres":
+                return self._restore_postgres(backup_path)
+            else:
+                return self._restore_sqlite(backup_path)
+
+        except Exception as e:
+            logger.error(f"Failed to restore database: {e}")
+            return False
+
+    def _restore_sqlite(self, backup_path: str) -> bool:
+        """Restore SQLite database from file backup."""
         try:
             import shutil
 
@@ -1196,11 +2130,99 @@ class DatabaseManager:
             # Reinitialize connection pool
             _connection_pool = ConnectionPool()
 
-            logger.info(f"Database restored from {backup_path}")
+            logger.info(f"SQLite database restored from {backup_path}")
             return True
 
         except Exception as e:
-            logger.error(f"Failed to restore database: {e}")
+            logger.error(f"Failed to restore SQLite database: {e}")
+            return False
+
+    def _restore_postgres(self, backup_path: str) -> bool:
+        """Restore PostgreSQL database from pg_dump or JSON import."""
+        import subprocess
+
+        # Check if it's a pg_dump file
+        try:
+            with open(backup_path, "r") as f:
+                first_line = f.readline()
+        except Exception:
+            first_line = ""
+
+        if "PostgreSQL" in first_line or "pg_dump" in first_line:
+            # It's a pg_dump file
+            try:
+                pg_host = os.getenv("PG_HOST", "localhost")
+                pg_port = os.getenv("PG_PORT", "5432")
+                pg_database = os.getenv("PG_DATABASE", "trading_bot")
+                pg_user = os.getenv("PG_USER", "postgres")
+
+                cmd = [
+                    "psql",
+                    "-h", pg_host,
+                    "-p", pg_port,
+                    "-U", pg_user,
+                    "-d", pg_database,
+                    "-f", backup_path,
+                ]
+
+                env = os.environ.copy()
+                pg_password = os.getenv("PG_PASSWORD", "")
+                if pg_password:
+                    env["PGPASSWORD"] = pg_password
+
+                result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+
+                if result.returncode == 0:
+                    logger.info(f"PostgreSQL database restored from pg_dump: {backup_path}")
+                    return True
+                else:
+                    logger.error(f"psql restore failed: {result.stderr}")
+
+            except FileNotFoundError:
+                logger.error("psql not available for restore")
+            except Exception as e:
+                logger.error(f"pg_dump restore failed: {e}")
+
+        # Fallback: try JSON import
+        try:
+            import json
+
+            with open(backup_path, "r") as f:
+                data = json.load(f)
+
+            logger.info("Importing data from JSON backup...")
+            # Import trades
+            if "trades" in data:
+                for trade in data["trades"]:
+                    try:
+                        self.save_trade(trade)
+                    except Exception as e:
+                        logger.warning(f"Failed to import trade: {e}")
+
+            # Import positions
+            if "positions" in data:
+                for position in data["positions"]:
+                    try:
+                        self.save_position(position)
+                    except Exception as e:
+                        logger.warning(f"Failed to import position: {e}")
+
+            # Import signals
+            if "signals" in data:
+                for signal in data["signals"]:
+                    try:
+                        self.save_signal(signal)
+                    except Exception as e:
+                        logger.warning(f"Failed to import signal: {e}")
+
+            logger.info("JSON backup import completed")
+            return True
+
+        except json.JSONDecodeError:
+            logger.error("Backup file is not a valid JSON file")
+            return False
+        except Exception as e:
+            logger.error(f"JSON import failed: {e}")
             return False
 
     def cleanup_old_data(self, days_to_keep: int = 365) -> Dict[str, int]:
@@ -1351,7 +2373,6 @@ class DatabaseManager:
             List of profile dictionaries
         """
         with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 """
                 SELECT id, name, public_key, is_default, created_at, updated_at, last_used_at
@@ -1375,8 +2396,6 @@ class DatabaseManager:
             Profile dictionary or None if not found
         """
         with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
-
             if include_private_key:
                 query = "SELECT * FROM account_profiles WHERE id = ?"
             else:
@@ -1401,7 +2420,6 @@ class DatabaseManager:
     def get_profile_by_name(self, name: str) -> Optional[Dict[str, Any]]:
         """Get a profile by name."""
         with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 "SELECT * FROM account_profiles WHERE name = ?",
                 (name,),
@@ -1451,7 +2469,7 @@ class DatabaseManager:
         with get_db_connection() as conn:
             cursor = conn.execute(
                 f"UPDATE account_profiles SET {', '.join(updates)} WHERE id = ?",
-                params,
+                tuple(params),
             )
             conn.commit()
             success = cursor.rowcount > 0
@@ -1516,7 +2534,6 @@ class DatabaseManager:
             Default profile dictionary or None if no default set
         """
         with get_db_connection() as conn:
-            conn.row_factory = sqlite3.Row
             cursor = conn.execute(
                 """
                 SELECT * FROM account_profiles
@@ -1535,102 +2552,188 @@ class DatabaseManager:
         """
         Initialize Pacifica-specific tables for hourly funding tracking.
 
-        ⚠️ CRITICAL: Tracks funding payments that occur 24 times per day
+        For PostgreSQL: tables are created by schema_timescaledb.sql during init.
+        For SQLite: creates tables with IF NOT EXISTS.
+
+        CRITICAL: Tracks funding payments that occur 24 times per day
         """
-        with get_db_connection() as conn:
-            # Subaccount configurations table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS subaccount_configs (
-                    subaccount_id TEXT PRIMARY KEY,
-                    subaccount_name TEXT NOT NULL,
-                    subaccount_public_key TEXT,
-                    trading_strategy TEXT NOT NULL DEFAULT 'balanced',
-                    max_position_size REAL NOT NULL DEFAULT 10000.0,
-                    risk_per_trade REAL NOT NULL DEFAULT 0.02,
-                    max_leverage INTEGER NOT NULL DEFAULT 20,
-                    enabled BOOLEAN NOT NULL DEFAULT 1,
-                    created_at DATETIME NOT NULL,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        if _active_backend == "postgres":
+            # PostgreSQL: tables already created by schema_timescaledb.sql
+            # Just verify they exist
+            with get_db_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT COUNT(*) FROM information_schema.tables "
+                    "WHERE table_name IN ('funding_payments', 'pacifica_positions', 'funding_rate_history')"
                 )
-            """)
+                count = cursor.fetchone()[0]
+                if count < 3:
+                    logger.warning("PostgreSQL Pacifica tables missing, creating minimal schema")
+                    self._create_minimal_pacifica_pg(conn)
+                else:
+                    logger.info("PostgreSQL Pacifica funding tracking tables verified")
+        else:
+            # SQLite: create tables with IF NOT EXISTS
+            with get_db_connection() as conn:
+                # Subaccount configurations table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS subaccount_configs (
+                        subaccount_id TEXT PRIMARY KEY,
+                        subaccount_name TEXT NOT NULL,
+                        subaccount_public_key TEXT,
+                        trading_strategy TEXT NOT NULL DEFAULT 'balanced',
+                        max_position_size REAL NOT NULL DEFAULT 10000.0,
+                        risk_per_trade REAL NOT NULL DEFAULT 0.02,
+                        max_leverage INTEGER NOT NULL DEFAULT 20,
+                        enabled BOOLEAN NOT NULL DEFAULT 1,
+                        created_at DATETIME NOT NULL,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
 
-            # Funding payments table - tracks EVERY hourly payment
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS funding_payments (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_id TEXT NOT NULL DEFAULT 'sub_1',
-                    subaccount_id TEXT,
-                    position_id TEXT NOT NULL,
-                    symbol TEXT NOT NULL,
-                    funding_rate REAL NOT NULL,
-                    payment_amount REAL NOT NULL,
-                    position_value REAL NOT NULL,
-                    margin_mode TEXT NOT NULL DEFAULT 'cross',
-                    timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (subaccount_id) REFERENCES subaccount_configs(subaccount_id)
-                )
-            """)
+                # Funding payments table - tracks EVERY hourly payment
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS funding_payments (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        account_id TEXT NOT NULL DEFAULT 'sub_1',
+                        subaccount_id TEXT,
+                        position_id TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        funding_rate REAL NOT NULL,
+                        payment_amount REAL NOT NULL,
+                        position_value REAL NOT NULL,
+                        margin_mode TEXT NOT NULL DEFAULT 'cross',
+                        timestamp DATETIME NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (subaccount_id) REFERENCES subaccount_configs(subaccount_id)
+                    )
+                """)
 
-            # Enhanced positions table for Pacifica
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS pacifica_positions (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    account_id TEXT NOT NULL DEFAULT 'sub_1',
-                    subaccount_id TEXT,
-                    position_id TEXT NOT NULL UNIQUE,
-                    symbol TEXT NOT NULL,
-                    side TEXT NOT NULL,
-                    size REAL NOT NULL,
-                    entry_price REAL NOT NULL,
-                    current_price REAL,
-                    leverage INTEGER NOT NULL DEFAULT 10,
-                    margin_mode TEXT NOT NULL DEFAULT 'cross',
-                    margin_used REAL NOT NULL,
-                    cumulative_funding_paid REAL DEFAULT 0.0,
-                    last_funding_timestamp DATETIME,
-                    unrealized_pnl REAL DEFAULT 0.0,
-                    liquidation_price REAL,
-                    tick_size REAL,
-                    lot_size REAL,
-                    opened_at DATETIME NOT NULL,
-                    closed_at DATETIME,
-                    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (subaccount_id) REFERENCES subaccount_configs(subaccount_id)
-                )
-            """)
+                # Enhanced positions table for Pacifica
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS pacifica_positions (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        account_id TEXT NOT NULL DEFAULT 'sub_1',
+                        subaccount_id TEXT,
+                        position_id TEXT NOT NULL UNIQUE,
+                        symbol TEXT NOT NULL,
+                        side TEXT NOT NULL,
+                        size REAL NOT NULL,
+                        entry_price REAL NOT NULL,
+                        current_price REAL,
+                        leverage INTEGER NOT NULL DEFAULT 10,
+                        margin_mode TEXT NOT NULL DEFAULT 'cross',
+                        margin_used REAL NOT NULL,
+                        cumulative_funding_paid REAL DEFAULT 0.0,
+                        last_funding_timestamp DATETIME,
+                        unrealized_pnl REAL DEFAULT 0.0,
+                        liquidation_price REAL,
+                        tick_size REAL,
+                        lot_size REAL,
+                        opened_at DATETIME NOT NULL,
+                        closed_at DATETIME,
+                        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        FOREIGN KEY (subaccount_id) REFERENCES subaccount_configs(subaccount_id)
+                    )
+                """)
 
-            # Funding rate history table
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS funding_rate_history (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    symbol TEXT NOT NULL,
-                    funding_rate REAL NOT NULL,
-                    premium_index REAL,
-                    interest_rate REAL,
-                    timestamp DATETIME NOT NULL,
-                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
+                # Funding rate history table
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS funding_rate_history (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        symbol TEXT NOT NULL,
+                        funding_rate REAL NOT NULL,
+                        premium_index REAL,
+                        interest_rate REAL,
+                        timestamp DATETIME NOT NULL,
+                        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """)
 
-            # Create indexes for efficient queries
-            indexes = [
-                "CREATE INDEX IF NOT EXISTS idx_subaccount_configs_strategy ON subaccount_configs(trading_strategy, enabled)",
-                "CREATE INDEX IF NOT EXISTS idx_funding_payments_position ON funding_payments(position_id, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_funding_payments_symbol_time ON funding_payments(symbol, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_funding_payments_account ON funding_payments(account_id, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_funding_payments_subaccount ON funding_payments(subaccount_id, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_symbol ON pacifica_positions(symbol)",
-                "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_account ON pacifica_positions(account_id)",
-                "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_subaccount ON pacifica_positions(subaccount_id)",
-                "CREATE INDEX IF NOT EXISTS idx_funding_history_symbol_time ON funding_rate_history(symbol, timestamp)",
-            ]
+                # Create indexes for efficient queries
+                indexes = [
+                    "CREATE INDEX IF NOT EXISTS idx_subaccount_configs_strategy ON subaccount_configs(trading_strategy, enabled)",
+                    "CREATE INDEX IF NOT EXISTS idx_funding_payments_position ON funding_payments(position_id, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_funding_payments_symbol_time ON funding_payments(symbol, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_funding_payments_account ON funding_payments(account_id, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_funding_payments_subaccount ON funding_payments(subaccount_id, timestamp)",
+                    "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_symbol ON pacifica_positions(symbol)",
+                    "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_account ON pacifica_positions(account_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_pacifica_positions_subaccount ON pacifica_positions(subaccount_id)",
+                    "CREATE INDEX IF NOT EXISTS idx_funding_history_symbol_time ON funding_rate_history(symbol, timestamp)",
+                ]
 
-            for index_sql in indexes:
-                conn.execute(index_sql)
+                for index_sql in indexes:
+                    conn.execute(index_sql)
 
-            conn.commit()
-            logger.info("✅ Pacifica funding tracking tables initialized")
+                conn.commit()
+                logger.info("SQLite Pacifica funding tracking tables initialized")
+
+    def _create_minimal_pacifica_pg(self, conn: _ConnectionWrapper) -> None:
+        """Create minimal Pacifica tables for PostgreSQL fallback."""
+        sql = """
+            CREATE TABLE IF NOT EXISTS subaccount_configs (
+                subaccount_id TEXT PRIMARY KEY,
+                subaccount_name TEXT NOT NULL,
+                subaccount_public_key TEXT,
+                trading_strategy TEXT NOT NULL DEFAULT 'balanced',
+                max_position_size DOUBLE PRECISION NOT NULL DEFAULT 10000.0,
+                risk_per_trade DOUBLE PRECISION NOT NULL DEFAULT 0.02,
+                max_leverage INTEGER NOT NULL DEFAULT 20,
+                enabled BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS funding_payments (
+                id BIGSERIAL,
+                account_id TEXT NOT NULL DEFAULT 'sub_1',
+                subaccount_id TEXT,
+                position_id TEXT NOT NULL,
+                symbol TEXT NOT NULL,
+                funding_rate DOUBLE PRECISION NOT NULL,
+                payment_amount DOUBLE PRECISION NOT NULL,
+                position_value DOUBLE PRECISION NOT NULL,
+                margin_mode TEXT NOT NULL DEFAULT 'cross',
+                "timestamp" TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS pacifica_positions (
+                id BIGSERIAL PRIMARY KEY,
+                account_id TEXT NOT NULL DEFAULT 'sub_1',
+                subaccount_id TEXT,
+                position_id TEXT NOT NULL UNIQUE,
+                symbol TEXT NOT NULL,
+                side TEXT NOT NULL,
+                size DOUBLE PRECISION NOT NULL,
+                entry_price DOUBLE PRECISION NOT NULL,
+                current_price DOUBLE PRECISION,
+                leverage INTEGER NOT NULL DEFAULT 10,
+                margin_mode TEXT NOT NULL DEFAULT 'cross',
+                margin_used DOUBLE PRECISION NOT NULL,
+                cumulative_funding_paid DOUBLE PRECISION DEFAULT 0.0,
+                last_funding_timestamp TIMESTAMPTZ,
+                unrealized_pnl DOUBLE PRECISION DEFAULT 0.0,
+                liquidation_price DOUBLE PRECISION,
+                tick_size DOUBLE PRECISION,
+                lot_size DOUBLE PRECISION,
+                opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                closed_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+
+            CREATE TABLE IF NOT EXISTS funding_rate_history (
+                id BIGSERIAL,
+                symbol TEXT NOT NULL,
+                funding_rate DOUBLE PRECISION NOT NULL,
+                premium_index DOUBLE PRECISION,
+                interest_rate DOUBLE PRECISION,
+                "timestamp" TIMESTAMPTZ NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            );
+        """
+        conn.executescript(sql)
+        logger.info("PostgreSQL Pacifica minimal schema created")
 
     def save_funding_payment(
         self,

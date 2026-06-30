@@ -61,7 +61,36 @@ class Config:
 
     def __init__(self) -> None:
         """Initialize configuration from environment variables."""
+        # ---- Database backend selection ----
+        # "sqlite" (default) or "postgres"
+        self.database_backend: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
         self.database_path: str = os.getenv("DATABASE_PATH", "trading_bot.db")
+
+        # ---- PostgreSQL connection parameters ----
+        self.pg_host: str = os.getenv("PG_HOST", "localhost")
+        try:
+            self.pg_port: int = int(os.getenv("PG_PORT", "5432"))
+        except ValueError:
+            self.pg_port = 5432
+        self.pg_database: str = os.getenv("PG_DATABASE", "trading_bot")
+        self.pg_user: str = os.getenv("PG_USER", "postgres")
+        self.pg_password: str = os.getenv("PG_PASSWORD", "")
+        self.pg_schema: str = os.getenv("PG_SCHEMA", "public")
+
+        # ---- PostgreSQL connection pool settings ----
+        try:
+            self.pg_pool_min: int = int(os.getenv("PG_POOL_MIN", "2"))
+        except ValueError:
+            self.pg_pool_min = 2
+        try:
+            self.pg_pool_max: int = int(os.getenv("PG_POOL_MAX", "10"))
+        except ValueError:
+            self.pg_pool_max = 10
+        try:
+            self.pg_pool_timeout: int = int(os.getenv("PG_POOL_TIMEOUT", "30"))
+        except ValueError:
+            self.pg_pool_timeout = 30
+
         self.pacifica_private_key: Optional[str] = os.getenv("AGENT_WALLET_PRIVATE_KEY")
         self.pacifica_public_key: Optional[str] = os.getenv("ACCOUNT_PUBLIC_KEY")
 
@@ -212,8 +241,42 @@ class Config:
         else:
             return "https://api.pacifica.network"
 
+    @property
+    def pg_connection_string(self) -> str:
+        """Return PostgreSQL connection string."""
+        parts = [
+            f"host={self.pg_host}",
+            f"port={self.pg_port}",
+            f"dbname={self.pg_database}",
+            f"user={self.pg_user}",
+        ]
+        if self.pg_password:
+            parts.append(f"password={self.pg_password}")
+        return " ".join(parts)
+
     def validate(self) -> None:
         """Validate that required configuration values are present and valid."""
+        # Validate database backend
+        if self.database_backend not in ("sqlite", "postgres"):
+            raise ValueError(
+                f"DATABASE_BACKEND must be 'sqlite' or 'postgres', got '{self.database_backend}'"
+            )
+
+        # Validate PostgreSQL settings if backend is postgres
+        if self.database_backend == "postgres":
+            if not self.pg_host:
+                raise ValueError("PG_HOST is required when DATABASE_BACKEND=postgres")
+            if not self.pg_database:
+                raise ValueError("PG_DATABASE is required when DATABASE_BACKEND=postgres")
+            if not self.pg_user:
+                raise ValueError("PG_USER is required when DATABASE_BACKEND=postgres")
+            if self.pg_pool_min < 0:
+                raise ValueError("PG_POOL_MIN must be non-negative")
+            if self.pg_pool_max < 1:
+                raise ValueError("PG_POOL_MAX must be at least 1")
+            if self.pg_pool_min > self.pg_pool_max:
+                raise ValueError("PG_POOL_MIN must be <= PG_POOL_MAX")
+
         if not self.pacifica_private_key:
             raise ValueError(
                 "AGENT_WALLET_PRIVATE_KEY environment variable is required"

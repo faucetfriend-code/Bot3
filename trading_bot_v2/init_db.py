@@ -1,8 +1,9 @@
 """
 Initialize the trading bot database.
 
-This script creates the database file and all required tables according to schema.sql.
+This script creates the database and all required tables.
 Safe to run multiple times (uses CREATE TABLE IF NOT EXISTS).
+Supports both SQLite and PostgreSQL backends.
 """
 
 import os
@@ -12,23 +13,27 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from .database import DatabaseManager, DATABASE_PATH, get_db_connection
+from .database import DatabaseManager, DATABASE_PATH, get_db_connection, get_backend
 
 
 def main():
     """Initialize database and verify tables were created."""
+    backend = get_backend()
+
     print("=" * 60)
     print("Trading Bot Database Initialization")
+    print(f"Backend: {backend.upper()}")
     print("=" * 60)
 
-    print(f"\nDatabase path: {DATABASE_PATH}")
+    if backend == "sqlite":
+        print(f"\nDatabase path: {DATABASE_PATH}")
 
-    # Check if database already exists
-    db_exists = os.path.exists(DATABASE_PATH)
-    if db_exists:
-        print(f"[!] Database file already exists")
-    else:
-        print("[*] Creating new database file")
+        # Check if database already exists
+        db_exists = os.path.exists(DATABASE_PATH)
+        if db_exists:
+            print("[!] Database file already exists")
+        else:
+            print("[*] Creating new database file")
 
     # Initialize DatabaseManager (this automatically runs init_database())
     print("\n[*] Initializing DatabaseManager...")
@@ -37,11 +42,18 @@ def main():
     # Verify tables were created
     print("\n[*] Verifying database tables...")
     with get_db_connection() as conn:
-        cursor = conn.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='table'
-            ORDER BY name;
-        """)
+        if backend == "postgres":
+            cursor = conn.execute("""
+                SELECT table_name FROM information_schema.tables
+                WHERE table_schema = 'public'
+                ORDER BY table_name;
+            """)
+        else:
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='table'
+                ORDER BY name;
+            """)
         tables = [row[0] for row in cursor.fetchall()]
 
     print(f"\n[+] Found {len(tables)} tables:")
@@ -50,11 +62,18 @@ def main():
 
     # Verify indexes were created
     with get_db_connection() as conn:
-        cursor = conn.execute("""
-            SELECT name FROM sqlite_master
-            WHERE type='index'
-            ORDER BY name;
-        """)
+        if backend == "postgres":
+            cursor = conn.execute("""
+                SELECT indexname FROM pg_indexes
+                WHERE schemaname = 'public'
+                ORDER BY indexname;
+            """)
+        else:
+            cursor = conn.execute("""
+                SELECT name FROM sqlite_master
+                WHERE type='index'
+                ORDER BY name;
+            """)
         indexes = [row[0] for row in cursor.fetchall()]
 
     print(f"\n[+] Found {len(indexes)} indexes:")
