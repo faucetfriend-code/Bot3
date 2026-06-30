@@ -306,7 +306,7 @@ class MarketRegimeDetector:
         import hashlib
 
         data_str = str(sorted(market_data.items()))
-        return hashlib.md5(data_str.encode()).hexdigest()
+        return hashlib.md5(data_str.encode(), usedforsecurity=False).hexdigest()
 
     def _calculate_volatility_score(
         self, highs: List[float], lows: List[float], closes: List[float]
