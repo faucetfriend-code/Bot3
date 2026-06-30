@@ -66,6 +66,7 @@ from .component_interfaces import (
 )
 from .event_system import get_event_bus, EventType
 from .component_registry import get_component_registry
+from .telegram_alerts import telegram_alerts
 
 
 class TradingBot:
@@ -1121,6 +1122,24 @@ class TradingBot:
         )
         # Note: GRID_EMERGENCY doesn't exist in EventType yet, so commenting out
         # self.event_bus.subscribe(EventType.GRID_EMERGENCY, self._handle_grid_emergency)
+
+        # Telegram alerts: subscribe to key events for notifications
+        if telegram_alerts.enabled:
+            self.event_bus.subscribe(
+                EventType.SIGNAL_EXECUTED, telegram_alerts._handle_event_sync
+            )
+            self.event_bus.subscribe(
+                EventType.RISK_LIMIT_EXCEEDED, telegram_alerts._handle_event_sync
+            )
+            self.event_bus.subscribe(
+                EventType.REGIME_CHANGED, telegram_alerts._handle_event_sync
+            )
+            self.event_bus.subscribe(
+                EventType.COMPONENT_FAILURE, telegram_alerts._handle_event_sync
+            )
+            logger.info("Telegram alert event subscriptions configured")
+        else:
+            logger.info("Telegram alerts disabled - skipping event subscriptions")
 
         logger.info("Event subscriptions configured")
 
