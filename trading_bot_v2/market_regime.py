@@ -1,12 +1,16 @@
 """
 Market Regime Detection Module
 
-Uses ADX and volatility metrics to classify market conditions into 4 regimes:
+Uses ADX and volatility metrics to classify market conditions into 5 regimes:
 - TRENDING_STRONG: ADX > 30 (use MA crossover - trend following not implemented)
 - TRENDING_MODERATE: ADX 25-30 (use MA crossover)
 - RANGING_VOLATILE: ADX ≤ 25, high volatility (use grid trading)
 - RANGING_CALM: ADX ≤ 25, low volatility (use mean reversion)
 - INDECISIVE: Transitional (use liquidation capture)
+
+When the USE_ML_REGIME feature flag is enabled and a trained GMM model is
+available, regime detection uses a Gaussian Mixture Model trained on 6
+statistical features as the primary classifier, with ADX as a fallback.
 """
 
 from enum import Enum
@@ -84,6 +88,11 @@ class MarketRegimeDetector:
         self._last_adx: Dict[str, float] = {}
         self._last_calculated_adx: Optional[float] = None  # Set during detect_regime()
 
+        # ML regime detection (lazy-initialised)
+        self._gmm_detector = None
+        self._use_ml_regime: bool = False
+        self._ml_initialised = False
+
         logger.info(
             f"MarketRegimeDetector initialized: "
             f"ADX trending={adx_trending_threshold}, "
@@ -93,9 +102,69 @@ class MarketRegimeDetector:
             f"cache_ttl={self._cache_ttl_hours}h"
         )
 
+    # ------------------------------------------------------------------
+    # ML regime detection helpers
+    # ------------------------------------------------------------------
+
+    def _initialise_gmm(self) -> bool:
+        """Lazily initialise the GMM regime detector.
+
+        Called on first use of ``detect_regime``.  Returns ``True`` if the
+        GMM detector is ready and a model is loaded.
+        """
+        if self._ml_initialised:
+            return self._gmm_detector is not None and self._gmm_detector.is_model_available()
+
+        self._ml_initialised = True
+
+        try:
+            from .feature_flags import get_feature_flags
+
+            flags = get_feature_flags()
+            self._use_ml_regime = flags.use_ml_regime
+        except Exception as exc:
+            logger.debug(f"Could not read ML regime feature flag: {exc}")
+            self._use_ml_regime = False
+
+        if not self._use_ml_regime:
+            logger.info("ML regime detection is DISABLED (feature flag off)")
+            return False
+
+        try:
+            from .ml.gmm_regime import GMMRegimeDetector
+
+            self._gmm_detector = GMMRegimeDetector()
+            available = self._gmm_detector.is_model_available()
+            if available:
+                logger.info("GMM regime detector: model loaded and ready")
+            else:
+                logger.info(
+                    "GMM regime detector: initialised but no trained model "
+                    "found — will fall back to ADX until model is trained"
+                )
+            return available
+        except ImportError as exc:
+            logger.warning(f"Cannot initialise GMM detector (missing dependency): {exc}")
+            self._use_ml_regime = False
+            return False
+        except Exception as exc:
+            logger.error(f"Failed to initialise GMM detector: {exc}")
+            self._use_ml_regime = False
+            return False
+
+    def get_gmm_detector(self):
+        """Return the GMM regime detector instance, or ``None`` if unavailable."""
+        self._initialise_gmm()
+        return self._gmm_detector
+
     def detect_regime(self, market_data: Dict[str, List[float]]) -> MarketRegime:
         """
         Detect current market regime from market data.
+
+        When ML regime detection is enabled (USE_ML_REGIME=True) and a
+        trained GMM model is available, uses the GMM classifier first.
+        Falls back to ADX-based detection if GMM is unavailable or
+        confidence is below the threshold.
 
         Regime classification (Updated Jan 2026 - loosened for more trades):
         - ADX > 30: TRENDING_STRONG
@@ -138,6 +207,34 @@ class MarketRegimeDetector:
             )
             # Return INDECISIVE instead of raising exception
             return MarketRegime.INDECISIVE
+
+        # --- ML regime detection attempt (when enabled) ---
+        if self._initialise_gmm() and self._gmm_detector is not None:
+            try:
+                from .ml.gmm_regime import GMMRegimeResult
+
+                result = self._gmm_detector.predict(market_data)
+                if not result.used_fallback:
+                    # GMM was confident enough — use its result
+                    logger.info(
+                        f"Regime (GMM): {result.system_regime.value} "
+                        f"(confidence={result.confidence:.3f})"
+                    )
+                    # Still store ADX for downstream callers
+                    try:
+                        self._last_calculated_adx = calculate_adx(
+                            highs, lows, closes, period=self.adx_period
+                        )
+                        self._last_adx["_last"] = self._last_calculated_adx
+                    except Exception:
+                        pass
+                    return result.system_regime
+                # GMM fell back to ADX — continue with ADX detection below
+                logger.debug("GMM confidence below threshold, using ADX fallback")
+            except Exception as exc:
+                logger.warning(f"GMM regime detection failed, using ADX: {exc}")
+
+        # --- ADX-based regime detection (primary or fallback) ---
 
         # Step 1: Calculate ADX
         try:

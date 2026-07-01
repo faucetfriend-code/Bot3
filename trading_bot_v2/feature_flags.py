@@ -37,6 +37,9 @@ class FeatureFlags:
             "ENABLE_WEBSOCKET_ONLY_PRICES", True
         )
 
+        # Phase 3 — ML Features
+        self.use_ml_regime = self._get_bool_env("USE_ML_REGIME", False)
+
         # Legacy Features (for rollback)
         self.enable_legacy_trading_bot = self._get_bool_env(
             "ENABLE_LEGACY_TRADING_BOT", False
@@ -63,6 +66,7 @@ class FeatureFlags:
             "Phase 2 - Event System": self.enable_event_system,
             "Phase 2 - Coordinator Trading Bot": self.enable_coordinator_trading_bot,
             "Phase 2 - WebSocket Only Prices": self.enable_websocket_only_prices,
+            "Phase 3 - ML Regime Detection": self.use_ml_regime,
             "Legacy - Trading Bot": self.enable_legacy_trading_bot,
             "Legacy - REST API Fallback": self.enable_rest_api_fallback,
         }
@@ -112,6 +116,7 @@ class FeatureFlags:
                 "event_system": self.enable_event_system,
                 "coordinator_trading_bot": self.enable_coordinator_trading_bot,
                 "websocket_only_prices": self.enable_websocket_only_prices,
+                "use_ml_regime": self.use_ml_regime,
                 "legacy_trading_bot": self.enable_legacy_trading_bot,
                 "rest_api_fallback": self.enable_rest_api_fallback,
             },

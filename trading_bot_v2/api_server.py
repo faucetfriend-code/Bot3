@@ -1188,6 +1188,28 @@ async def get_activity(limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/strategy-health")
+async def strategy_health():
+    """
+    Get strategy health report.
+
+    Returns correlation matrix, decay alerts, per-strategy Sharpe ratios,
+    win rates, and trade counts from the StrategyMonitor.
+    """
+    try:
+        try:
+            from .strategy_monitor import get_strategy_monitor
+        except ImportError:
+            from strategy_monitor import get_strategy_monitor
+
+        monitor = get_strategy_monitor()
+        report = monitor.get_health_report()
+        return {"success": True, "data": report}
+    except Exception as e:
+        logger.error(f"Error getting strategy health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/positions/sync")
 async def sync_positions():
     """Sync positions from exchange to database."""
