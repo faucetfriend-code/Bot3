@@ -14,7 +14,7 @@ RISK NOTES:
 
 import os
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from ..models import Signal, OrderSide
@@ -73,7 +73,7 @@ class FundingArbStrategy:
             return
 
         # Check cache freshness
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         if self._last_cache_update:
             age = (now - self._last_cache_update).total_seconds()
             if age < self._cache_ttl_seconds:
@@ -328,7 +328,7 @@ class FundingArbStrategy:
             "perp_side": OrderSide.SELL if side == "short_funding" else OrderSide.BUY,
             "size": size,
             "entry_rate": rate,
-            "opened_at": datetime.utcnow()
+            "opened_at": datetime.now(timezone.utc)
         }
         logger.info(f"FundingArb: Registered {symbol} position - {side}, size={size:.2f}")
 
@@ -361,5 +361,5 @@ class FundingArbStrategy:
         return {
             "opportunities": opportunities,
             "active_positions": len(self.active_positions),
-            "cache_age_seconds": (datetime.utcnow() - self._last_cache_update).total_seconds() if self._last_cache_update else None
+            "cache_age_seconds": (datetime.now(timezone.utc) - self._last_cache_update).total_seconds() if self._last_cache_update else None
         }

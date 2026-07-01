@@ -21,7 +21,7 @@ Always use with regime detection and emergency stops.
 
 import os
 from typing import Dict, List, Any, Optional, Tuple
-from datetime import datetime
+from datetime import datetime, timezone
 from loguru import logger
 
 from ..models import Signal, OrderSide
@@ -131,7 +131,7 @@ class GridTradingStrategy:
 
     def _now(self) -> datetime:
         """Return simulated time during backtesting, wall-clock time in live trading."""
-        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
 
     def generate_signals(
         self,
@@ -572,7 +572,7 @@ class GridTradingStrategy:
             "side": side,
             "level": level,
             "entry_price": entry_price,
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
         }
 
         self.active_grids[symbol].append(grid_position)

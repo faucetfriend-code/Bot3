@@ -11,7 +11,7 @@ import csv
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Any, Optional, Set
 from pathlib import Path
 from loguru import logger
@@ -160,7 +160,7 @@ class SignalLogger:
             return {}
 
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "symbol": getattr(signal, 'asset', str(signal)),
             "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
             "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
@@ -230,7 +230,7 @@ class SignalLogger:
         updates = {
             "status": "rejected",
             "rejection_reason": reason,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         merged = self._finalize_signal(signal, updates)
         if merged is not None:
@@ -297,7 +297,7 @@ class SignalLogger:
             "order_id": str(order_id),
             "filled_price": filled_price,
             "filled_quantity": filled_quantity,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if notes:
             updates["notes"] = notes
@@ -353,7 +353,7 @@ class SignalLogger:
         updates = {
             "status": "failed",
             "execution_result": f"ERROR: {error}",
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if notes:
             updates["notes"] = notes
@@ -419,8 +419,6 @@ class SignalLogger:
             return
 
         try:
-            from datetime import datetime
-
             # Defensive: Ensure all keys exist to prevent KeyError
             safe_entry = entry.copy()
             for key in ["symbol", "asset_class", "strategy", "signal_type", "confidence",

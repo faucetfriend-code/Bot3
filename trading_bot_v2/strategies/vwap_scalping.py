@@ -26,7 +26,7 @@ RISK NOTES:
 
 import os
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
@@ -256,7 +256,7 @@ class VWAPScalpingStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
 
     def _check_cooldown(self, symbol: str) -> bool:
         """

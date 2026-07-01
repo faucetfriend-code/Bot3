@@ -18,7 +18,7 @@ Usage:
 
 import threading
 from dataclasses import dataclass, field, asdict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, timezone
 from typing import Dict, List, Optional, Tuple, Any
 
 import numpy as np
@@ -50,7 +50,7 @@ class CorrelationAlert:
     strategy_b: str
     correlation: float
     window_days: int
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -65,7 +65,7 @@ class DecayAlert:
     baseline_sharpe: float
     decay_pct: float
     trade_count: int
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -94,7 +94,7 @@ class HealthReport:
     correlation_matrix: Dict[str, Dict[str, Optional[float]]]
     correlation_alerts: List[CorrelationAlert]
     decay_alerts: List[DecayAlert]
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -251,7 +251,7 @@ class StrategyMonitor:
             pnl_pct: Percentage P&L of the trade (e.g. ``1.5`` for +1.5%).
             timestamp: ISO-8601 timestamp; defaults to ``datetime.utcnow()``.
         """
-        ts = timestamp or datetime.utcnow().isoformat()
+        ts = timestamp or datetime.now(timezone.utc).isoformat()
 
         # Persist to database
         try:
@@ -286,7 +286,7 @@ class StrategyMonitor:
         trades are available for either strategy within the window.
         """
         window = days or self._rolling_days
-        cutoff = datetime.utcnow() - timedelta(days=window)
+        cutoff = datetime.now(timezone.utc) - timedelta(days=window)
         cutoff_str = cutoff.isoformat()
 
         returns_a = self._get_returns_in_window(strategy_a, cutoff_str)
@@ -642,7 +642,7 @@ class StrategyMonitor:
             Dict mapping strategy name to number of returns loaded.
         """
         window = days or self._sharpe_lookback
-        cutoff = (datetime.utcnow() - timedelta(days=window)).isoformat()
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=window)).isoformat()
 
         loaded: Dict[str, int] = {}
         try:

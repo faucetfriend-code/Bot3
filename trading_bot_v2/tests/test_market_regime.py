@@ -67,7 +67,7 @@ class TestMarketRegimeDetector:
         assert regime_detector.adx_moderate == 22.0
         assert regime_detector.volatility_percentile == 75.0
         assert regime_detector._regime_cache == {}
-        assert regime_detector._cache_ttl_hours == 4
+        assert regime_detector._cache_ttl_hours == 1
 
     def test_detect_regime_trending_strong(self, regime_detector, sample_market_data):
         """Test detection of strong trending market (ADX > 28)."""

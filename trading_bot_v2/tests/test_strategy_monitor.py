@@ -8,7 +8,7 @@ database persistence, and EventBus integration.
 import math
 import pytest
 from unittest.mock import patch, MagicMock
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from trading_bot_v2.strategy_monitor import (
     StrategyMonitor,
@@ -207,7 +207,7 @@ class TestStrategyMonitor:
 
     def test_calculate_rolling_correlation_identical(self, monitor):
         """Test correlation of a strategy with itself is 1.0."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(15):
             ts = (now - timedelta(days=30 - i)).isoformat()
             monitor.record_return("strat_a", 1.0 + i * 0.1, timestamp=ts)
@@ -218,7 +218,7 @@ class TestStrategyMonitor:
 
     def test_calculate_rolling_correlation_perfect_positive(self, monitor):
         """Test perfect positive correlation between two identical strategies."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(15):
             ts = (now - timedelta(days=30 - i)).isoformat()
             pnl = 1.0 + i * 0.1
@@ -231,7 +231,7 @@ class TestStrategyMonitor:
 
     def test_calculate_rolling_correlation_perfect_negative(self, monitor):
         """Test perfect negative correlation between inverse strategies."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(15):
             ts = (now - timedelta(days=30 - i)).isoformat()
             pnl = 1.0 + i * 0.1
@@ -244,7 +244,7 @@ class TestStrategyMonitor:
 
     def test_calculate_rolling_correlation_insufficient_data(self, monitor):
         """Test correlation returns None with insufficient data."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Only 5 trades (below MIN_TRADES_FOR_CORRELATION = 10)
         for i in range(5):
             ts = (now - timedelta(days=30 - i)).isoformat()
@@ -256,7 +256,7 @@ class TestStrategyMonitor:
 
     def test_calculate_rolling_correlation_zero_std(self, monitor):
         """Test correlation returns None when one strategy has zero variance."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(15):
             ts = (now - timedelta(days=30 - i)).isoformat()
             monitor.record_return("strat_a", 1.0, timestamp=ts)  # constant
@@ -267,7 +267,7 @@ class TestStrategyMonitor:
 
     def test_get_correlation_matrix(self, monitor):
         """Test full correlation matrix computation."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         strategies = ["a", "b", "c"]
         for strat_idx, strat in enumerate(strategies):
             for i in range(15):
@@ -295,7 +295,7 @@ class TestStrategyMonitor:
 
     def test_detect_decay_no_alert(self, monitor):
         """Test no decay alert when performance is stable."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Consistent positive returns
         for i in range(MIN_TRADES_FOR_SHARPE + 20):
             ts = (now - timedelta(days=90 - i)).isoformat()
@@ -306,7 +306,7 @@ class TestStrategyMonitor:
 
     def test_detect_decay_with_alert(self, monitor):
         """Test decay alert when performance degrades significantly."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # First half: strong positive returns with variation (baseline ~2.5 Sharpe)
         for i in range(60):
             ts = (now - timedelta(days=120 - i)).isoformat()
@@ -323,7 +323,7 @@ class TestStrategyMonitor:
 
     def test_detect_decay_insufficient_data(self, monitor):
         """Test no decay alert with insufficient trade history."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(5):
             ts = (now - timedelta(days=30 - i)).isoformat()
             monitor.record_return("few_trades", 1.0, timestamp=ts)
@@ -347,7 +347,7 @@ class TestStrategyMonitor:
 
     def test_get_health_report_with_data(self, monitor):
         """Test health report with multiple strategies."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(20):
             ts = (now - timedelta(days=30 - i)).isoformat()
             # Varying positive returns so Sharpe is computable
@@ -372,7 +372,7 @@ class TestStrategyMonitor:
 
     def test_get_health_report_correlation_alert(self, monitor):
         """Test health report generates correlation alert for highly correlated strategies."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Create two perfectly correlated strategies
         for i in range(20):
             ts = (now - timedelta(days=30 - i)).isoformat()
@@ -388,7 +388,7 @@ class TestStrategyMonitor:
 
     def test_get_health_report_decay_alert(self, monitor):
         """Test health report includes decay alerts when detected."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # First half: strong positive
         for i in range(60):
             ts = (now - timedelta(days=120 - i)).isoformat()
@@ -409,7 +409,7 @@ class TestStrategyMonitor:
         """Test concurrent record_return calls don't corrupt state."""
         import concurrent.futures
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         def record_batch(strategy: str, count: int) -> None:
             for i in range(count):
@@ -518,7 +518,7 @@ class TestStrategyMonitorDatabase:
 
     def test_correlation_persists_to_db(self, monitor_with_db):
         """Test that correlation snapshots are saved."""
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         for i in range(15):
             ts = (now - timedelta(days=30 - i)).isoformat()
             monitor_with_db.record_return("corr_a", float(i), timestamp=ts)

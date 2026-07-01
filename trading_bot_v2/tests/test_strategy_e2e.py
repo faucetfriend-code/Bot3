@@ -13,7 +13,7 @@ actual indicator thresholds for each strategy.
 
 import math
 import random
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Any, Optional
 from unittest.mock import MagicMock, AsyncMock, patch
 
@@ -1000,7 +1000,7 @@ class TestLiquidationCaptureE2E:
     def test_cooldown_blocks_signal(self):
         """Trade placed recently -> cooldown blocks next signal."""
         strategy = self._make_strategy(min_hours_between_trades=4)
-        strategy.last_trade_time = datetime.utcnow()
+        strategy.last_trade_time = datetime.now(timezone.utc)
 
         data = DataGenerator.liquidation_cascade_down()
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data)
@@ -1024,7 +1024,7 @@ class TestLiquidationCaptureE2E:
         """Session reset allows trading again."""
         strategy = self._make_strategy()
         strategy.session_trades = 2
-        strategy.last_trade_time = datetime.utcnow()
+        strategy.last_trade_time = datetime.now(timezone.utc)
 
         strategy.reset_session()
         assert strategy.session_trades == 0
@@ -1134,7 +1134,7 @@ class TestVWAPScalpingE2E:
     def test_cooldown_blocks_signal(self):
         """Active cooldown -> no signal."""
         strategy = self._make_strategy(cooldown_minutes=10)
-        strategy._last_trade_time["BTC"] = datetime.utcnow()
+        strategy._last_trade_time["BTC"] = datetime.now(timezone.utc)
 
         data = DataGenerator.vwap_long_data()
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data)
@@ -1185,7 +1185,7 @@ class TestFundingArbE2E:
         client = MagicMock()
         client.get_market_data = MagicMock(return_value={
             "funding_rate": rate,
-            "next_funding_time": datetime.utcnow() + timedelta(minutes=30),
+            "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
         })
         client.get_funding_history = MagicMock(return_value=[
             {"funding_rate": rate} for _ in range(8)
@@ -1250,7 +1250,7 @@ class TestFundingArbE2E:
         # Now rate flips negative
         client.get_market_data.return_value = {
             "funding_rate": -0.0005,
-            "next_funding_time": datetime.utcnow() + timedelta(minutes=30),
+            "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
         }
         client.get_funding_history.return_value = [{"funding_rate": -0.0005}] * 8
         # Force cache refresh
@@ -1405,7 +1405,7 @@ class TestMomentumScalpingE2E:
     def test_cooldown_blocks_signal(self):
         """Active cooldown -> no signal."""
         strategy = self._make_strategy(cooldown_minutes=5)
-        strategy.last_trade_time["BTC"] = datetime.utcnow()
+        strategy.last_trade_time["BTC"] = datetime.now(timezone.utc)
 
         data = DataGenerator.momentum_bullish_data()
         multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
@@ -1584,7 +1584,7 @@ class TestOrderBookImbalanceE2E:
     def test_cooldown_blocks_signal(self):
         """Active cooldown -> no signal."""
         strategy = self._make_strategy(cooldown_seconds=60)
-        strategy.last_trade_time["BTC"] = datetime.utcnow()
+        strategy.last_trade_time["BTC"] = datetime.now(timezone.utc)
 
         orderbook = DataGenerator.orderbook_long()
         data_15m = DataGenerator.simple_15m_data()

@@ -18,7 +18,7 @@ RISK NOTES:
 """
 
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from loguru import logger
 
 from ..models import Signal, OrderSide
@@ -201,7 +201,7 @@ class MomentumScalpingStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.utcnow()
+        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
 
     def _check_cooldown(self, symbol: str) -> bool:
         """Check if cooldown period has passed since last trade."""

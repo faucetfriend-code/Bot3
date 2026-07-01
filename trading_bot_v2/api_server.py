@@ -9,7 +9,7 @@ import asyncio
 import logging
 import threading
 from typing import Dict, Any, List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Add path for shared modules (needed for core_logic imports like models, indicators base)
@@ -66,7 +66,7 @@ try:
 
     # Rotate previous current.log if non-empty
     if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
-        _ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         _rotated = _LOG_DIR / f"current_{_ts}.log"
         try:
             _CURRENT_LOG.rename(_rotated)
@@ -642,8 +642,7 @@ class BotIntegration:
                 opened_at = pos[key]
                 break
         if not opened_at:
-            from datetime import datetime
-            opened_at = datetime.utcnow().isoformat()
+            opened_at = datetime.now(timezone.utc).isoformat()
 
         unrealized_pnl = 0.0
         for key in ("unrealized_pnl", "upnl", "floating_pnl"):
@@ -1006,7 +1005,7 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.send_json(
             {
                 "type": "bot_status",
-                "timestamp": datetime.utcnow().isoformat(),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
                 "data": status,
             }
         )
@@ -1035,7 +1034,7 @@ async def broadcast_update(update_type: str, data: Dict[str, Any]):
     """Broadcast real-time updates to all connected WebSocket clients."""
     message = {
         "type": update_type,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         "data": data,
     }
 
