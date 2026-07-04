@@ -1093,6 +1093,20 @@ async def metrics_endpoint():
     )
 
 
+@app.get("/health")
+async def health_endpoint():
+    """Lightweight liveness check for container/orchestrator healthchecks.
+
+    Intentionally dependency-free: it does not call bot_integration or hit
+    the Pacifica API, so it returns 200 even when the trading loop is
+    stopped or the exchange is unreachable.
+    """
+    return {
+        "status": "ok",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 @app.get("/api/trades")
 async def get_trades(limit: int = 100):
     """Get recent trades."""

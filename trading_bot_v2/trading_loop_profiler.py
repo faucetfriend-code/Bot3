@@ -208,41 +208,78 @@ class LatencyStats:
 # Prometheus Integration
 # ============================================================================
 
+# Cache of already-registered collector attributes, keyed by id(registry).
+# Prevents "Duplicated timeseries in CollectorRegistry" when
+# ProfilerPrometheusMetrics is instantiated more than once against the same
+# registry (e.g. the global default REGISTRY in tests).
+_PROFILER_METRICS_CACHE: Dict[int, Dict[str, Any]] = {}
+
 
 class ProfilerPrometheusMetrics:
-    """Prometheus metrics for the trading loop profiler."""
+    """Prometheus metrics for the trading loop profiler.
 
-    def __init__(self) -> None:
-        """Initialize Prometheus metrics. Graceful fallback if unavailable."""
+    Collectors are cached at module level keyed by the target registry so
+    that repeated instantiation (e.g. across tests) reuses the existing
+    collectors instead of raising ``ValueError: Duplicated timeseries`` on
+    the default ``prometheus_client`` REGISTRY.
+    """
+
+    def __init__(self, registry: Optional[Any] = None) -> None:
+        """Initialize Prometheus metrics. Graceful fallback if unavailable.
+
+        Args:
+            registry: Optional prometheus_client CollectorRegistry. Defaults
+                to the global REGISTRY when not provided.
+        """
         try:
-            from prometheus_client import Counter, Gauge, Histogram
+            from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+
+            target_registry = registry if registry is not None else REGISTRY
+            cached = _PROFILER_METRICS_CACHE.get(id(target_registry))
+            if cached is not None:
+                self.__dict__.update(cached)
+                self._available = True
+                return
 
             self.loop_duration = Histogram(
                 "bot_trading_loop_duration_seconds",
                 "Total trading loop iteration duration",
                 buckets=[5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120],
+                registry=target_registry,
             )
             self.loop_iteration = Gauge(
                 "bot_trading_loop_iteration",
                 "Current trading loop iteration number",
+                registry=target_registry,
             )
             self.phase_duration = Histogram(
                 "bot_trading_loop_phase_duration_seconds",
                 "Duration of individual trading loop phases",
                 ["phase"],
                 buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
+                registry=target_registry,
             )
             self.phase_count = Counter(
                 "bot_trading_loop_phase_count_total",
                 "Total phase executions",
                 ["phase"],
+                registry=target_registry,
             )
             self.memory_usage = Gauge(
                 "bot_profiler_memory_bytes",
                 "Process memory usage during profiling",
                 ["measurement"],
+                registry=target_registry,
             )
             self._available = True
+
+            _PROFILER_METRICS_CACHE[id(target_registry)] = {
+                "loop_duration": self.loop_duration,
+                "loop_iteration": self.loop_iteration,
+                "phase_duration": self.phase_duration,
+                "phase_count": self.phase_count,
+                "memory_usage": self.memory_usage,
+            }
         except ImportError:
             logger.debug("prometheus_client not available, profiler metrics disabled")
             self._available = False

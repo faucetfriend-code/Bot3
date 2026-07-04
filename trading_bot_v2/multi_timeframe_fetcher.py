@@ -34,6 +34,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional, Any
 from loguru import logger
 from .pacifica_client import PacificaClient
+from .data_validation import DataValidator
 
 
 class MultiTimeframeFetcher:
@@ -67,6 +68,10 @@ class MultiTimeframeFetcher:
         self.ws_client = ws_client
         self.cache_ttl = cache_ttl_seconds  # Default TTL (used if TF not in TIERED_TTL)
         self.cache: Dict[Tuple[str, str], Tuple[Dict, datetime]] = {}
+
+        # Instantiated once (not per-call) since DataValidator is stateless
+        # per-invocation but construction does I/O-free setup only.
+        self.data_validator = DataValidator()
 
         logger.info(
             f"MultiTimeframeFetcher initialized with tiered TTL (1m:60s, 5m:120s, 15m+:300s), WS client: {ws_client is not None}"
@@ -437,6 +442,101 @@ class MultiTimeframeFetcher:
 
         return True
 
+    def _to_validator_candle(
+        self, candle: Dict, use_abbreviated: bool
+    ) -> Dict[str, Any]:
+        """
+        Normalize a raw candle dict to the field names DataValidator expects.
+
+        Args:
+            candle: Raw candle dictionary (abbreviated or full keys)
+            use_abbreviated: Whether candle uses abbreviated keys (h,l,c,o,v)
+
+        Returns:
+            Dictionary with keys: timestamp, open, high, low, close, volume
+        """
+        if use_abbreviated:
+            return {
+                "timestamp": candle.get("t") or candle.get("timestamp"),
+                "open": candle.get("o"),
+                "high": candle.get("h"),
+                "low": candle.get("l"),
+                "close": candle.get("c"),
+                "volume": candle.get("v"),
+            }
+        return {
+            "timestamp": candle.get("timestamp") or candle.get("t"),
+            "open": candle.get("open"),
+            "high": candle.get("high"),
+            "low": candle.get("low"),
+            "close": candle.get("close"),
+            "volume": candle.get("volume"),
+        }
+
+    def _validate_candles_with_data_validator(
+        self, candles: List[Dict], use_abbreviated: bool
+    ) -> List[Dict]:
+        """
+        Run candles through the richer DataValidator checks and drop bad ones.
+
+        Applies price-spike, duplicate-timestamp, and chronological-ordering
+        checks on top of the basic per-field validation in
+        ``_validate_candle``. This is defense-in-depth: it never raises out
+        of the fetch path, and simply logs and filters offending candles so
+        callers always get a (possibly smaller) list of clean candles.
+
+        Args:
+            candles: Candles that already passed ``_validate_candle``
+            use_abbreviated: Whether candles use abbreviated keys (h,l,c,o,v)
+
+        Returns:
+            Filtered list of candles considered clean by DataValidator
+        """
+        if not candles:
+            return candles
+
+        try:
+            normalized = [
+                self._to_validator_candle(c, use_abbreviated) for c in candles
+            ]
+            result = self.data_validator.validate_candle_batch(normalized)
+
+            if result.is_valid:
+                return candles
+
+            # Identify indices flagged by ERROR/CRITICAL issues that
+            # reference a specific candle so we drop only the bad ones
+            # rather than the whole batch.
+            bad_indices = set()
+            for issue in result.error_issues:
+                for token in issue.message.split():
+                    if token.isdigit():
+                        idx = int(token)
+                        if 0 <= idx < len(candles):
+                            bad_indices.add(idx)
+
+            if bad_indices:
+                logger.warning(
+                    f"DataValidator flagged {len(bad_indices)}/{len(candles)} "
+                    f"candles as invalid ({result.error_count} errors, "
+                    f"{result.warning_count} warnings); dropping them"
+                )
+                return [c for i, c in enumerate(candles) if i not in bad_indices]
+
+            # Errors present but not attributable to a specific index -
+            # log and keep candles as-is rather than discarding good data.
+            logger.warning(
+                f"DataValidator found {result.error_count} error(s) in candle "
+                f"batch that could not be mapped to a specific candle: "
+                f"{[i.message for i in result.error_issues[:3]]}"
+            )
+            return candles
+
+        except Exception as e:
+            # Never let validation errors break the fetch path.
+            logger.debug(f"DataValidator batch check skipped due to error: {e}")
+            return candles
+
     def _safe_float(self, value, default: float = 0.0) -> float:
         """
         Safely convert value to float with fallback.
@@ -498,15 +598,25 @@ class MultiTimeframeFetcher:
 
         use_abbreviated = "h" in sample or "c" in sample or "o" in sample
 
-        # Parse with validation - skip invalid candles
+        # Basic per-field validation - skip structurally invalid candles
+        basic_valid_candles = [
+            c for c in raw_candles if self._validate_candle(c, use_abbreviated)
+        ]
+        invalid_count = len(raw_candles) - len(basic_valid_candles)
+
+        # Richer validation (price spikes, duplicate/out-of-order timestamps,
+        # large price changes) via the shared DataValidator pipeline. This
+        # never raises - on any internal error it falls back to returning
+        # the candles unchanged.
+        valid_candles = self._validate_candles_with_data_validator(
+            basic_valid_candles, use_abbreviated
+        )
+        invalid_count += len(basic_valid_candles) - len(valid_candles)
+
+        # Parse validated candles into OHLCV lists
         parsed = {"high": [], "low": [], "close": [], "open": [], "volume": []}
 
-        invalid_count = 0
-        for candle in raw_candles:
-            if not self._validate_candle(candle, use_abbreviated):
-                invalid_count += 1
-                continue
-
+        for candle in valid_candles:
             if use_abbreviated:
                 parsed["high"].append(self._safe_float(candle.get("h")))
                 parsed["low"].append(self._safe_float(candle.get("l")))

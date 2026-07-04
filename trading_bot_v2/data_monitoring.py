@@ -228,56 +228,99 @@ class HealthReport:
 # Prometheus Metrics Integration
 # ============================================================================
 
+# Cache of already-registered collector attributes, keyed by id(registry).
+# Prevents "Duplicated timeseries in CollectorRegistry" when
+# DataQualityPrometheusMetrics is instantiated more than once against the
+# same registry (e.g. the global default REGISTRY in tests).
+_DATA_QUALITY_METRICS_CACHE: Dict[int, Dict[str, Any]] = {}
+
 
 class DataQualityPrometheusMetrics:
-    """Prometheus metrics for data quality monitoring."""
+    """Prometheus metrics for data quality monitoring.
 
-    def __init__(self) -> None:
-        """Initialize Prometheus metrics. Graceful fallback if unavailable."""
+    Collectors are cached at module level keyed by the target registry so
+    that repeated instantiation (e.g. across tests) reuses the existing
+    collectors instead of raising ``ValueError: Duplicated timeseries`` on
+    the default ``prometheus_client`` REGISTRY.
+    """
+
+    def __init__(self, registry: Optional[Any] = None) -> None:
+        """Initialize Prometheus metrics. Graceful fallback if unavailable.
+
+        Args:
+            registry: Optional prometheus_client CollectorRegistry. Defaults
+                to the global REGISTRY when not provided.
+        """
         try:
-            from prometheus_client import Counter, Gauge, Histogram
+            from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+
+            target_registry = registry if registry is not None else REGISTRY
+            cached = _DATA_QUALITY_METRICS_CACHE.get(id(target_registry))
+            if cached is not None:
+                self.__dict__.update(cached)
+                self._available = True
+                return
 
             self.data_records_total = Counter(
                 "bot_data_records_total",
                 "Total data records ingested",
                 ["table", "symbol"],
+                registry=target_registry,
             )
             self.data_freshness_seconds = Gauge(
                 "bot_data_freshness_seconds",
                 "Data staleness in seconds",
                 ["symbol", "table"],
+                registry=target_registry,
             )
             self.data_quality_score = Gauge(
                 "bot_data_quality_score",
                 "Data quality score (0-1)",
                 ["metric_type"],
+                registry=target_registry,
             )
             self.data_gaps_total = Counter(
                 "bot_data_gaps_total",
                 "Total data gaps detected",
                 ["symbol", "table"],
+                registry=target_registry,
             )
             self.data_anomalies_total = Counter(
                 "bot_data_anomalies_total",
                 "Total data anomalies detected",
                 ["symbol", "anomaly_type"],
+                registry=target_registry,
             )
             self.data_validation_errors_total = Counter(
                 "bot_data_validation_errors_total",
                 "Total validation errors",
                 ["table", "error_code"],
+                registry=target_registry,
             )
             self.data_alerts_total = Counter(
                 "bot_data_alerts_total",
                 "Total data alerts generated",
                 ["severity", "category"],
+                registry=target_registry,
             )
             self.archival_rows_deleted_total = Counter(
                 "bot_archival_rows_deleted_total",
                 "Total rows deleted during archival",
                 ["table"],
+                registry=target_registry,
             )
             self._available = True
+
+            _DATA_QUALITY_METRICS_CACHE[id(target_registry)] = {
+                "data_records_total": self.data_records_total,
+                "data_freshness_seconds": self.data_freshness_seconds,
+                "data_quality_score": self.data_quality_score,
+                "data_gaps_total": self.data_gaps_total,
+                "data_anomalies_total": self.data_anomalies_total,
+                "data_validation_errors_total": self.data_validation_errors_total,
+                "data_alerts_total": self.data_alerts_total,
+                "archival_rows_deleted_total": self.archival_rows_deleted_total,
+            }
         except ImportError:
             logger.debug("prometheus_client not available, metrics disabled")
             self._available = False
