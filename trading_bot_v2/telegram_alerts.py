@@ -330,6 +330,19 @@ class TelegramAlerts:
                     ),
                 )
 
+            elif event.event_type == EventType.POSITION_DISCREPANCY:
+                data = event.data if isinstance(event.data, dict) else {}
+                await self.send_error_alert(
+                    error_type="position_discrepancy",
+                    error_message=data.get(
+                        "message",
+                        f"Position discrepancy detected for "
+                        f"{data.get('symbol', 'unknown')}: "
+                        f"{data.get('discrepancy_count', 0)} discrepancy(ies)",
+                    ),
+                    context=f"Source: {event.source}",
+                )
+
             else:
                 logger.debug(
                     f"Telegram alerts: unhandled event type {event.event_type.value}"

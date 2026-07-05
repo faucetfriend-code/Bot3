@@ -33,6 +33,9 @@ class EventType(Enum):
     CAPITAL_REJECTED = "capital_rejected"
     RISK_LIMIT_EXCEEDED = "risk_limit_exceeded"
 
+    # Reconciliation Events
+    POSITION_DISCREPANCY = "position_discrepancy"
+
     # Grid Events
     GRID_CREATED = "grid_created"
     GRID_EMERGENCY_STOP = "grid_emergency_stop"

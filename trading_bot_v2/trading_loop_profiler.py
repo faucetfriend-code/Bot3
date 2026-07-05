@@ -227,6 +227,16 @@ class ProfilerPrometheusMetrics:
     def __init__(self, registry: Optional[Any] = None) -> None:
         """Initialize Prometheus metrics. Graceful fallback if unavailable.
 
+        When targeting the global default ``REGISTRY`` (either because no
+        registry is passed, or the registry passed in IS the default one),
+        the four trading-loop collectors are reused from the
+        ``trading_bot_v2.metrics`` singleton instead of being recreated,
+        since that module already registers them under the same names.
+        Only the profiler-specific memory gauge is created fresh in that
+        case. When an explicit custom (non-default) registry is passed,
+        all five collectors are created fresh against that registry, as
+        before.
+
         Args:
             registry: Optional prometheus_client CollectorRegistry. Defaults
                 to the global REGISTRY when not provided.
@@ -241,30 +251,43 @@ class ProfilerPrometheusMetrics:
                 self._available = True
                 return
 
-            self.loop_duration = Histogram(
-                "bot_trading_loop_duration_seconds",
-                "Total trading loop iteration duration",
-                buckets=[5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120],
-                registry=target_registry,
-            )
-            self.loop_iteration = Gauge(
-                "bot_trading_loop_iteration",
-                "Current trading loop iteration number",
-                registry=target_registry,
-            )
-            self.phase_duration = Histogram(
-                "bot_trading_loop_phase_duration_seconds",
-                "Duration of individual trading loop phases",
-                ["phase"],
-                buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
-                registry=target_registry,
-            )
-            self.phase_count = Counter(
-                "bot_trading_loop_phase_count_total",
-                "Total phase executions",
-                ["phase"],
-                registry=target_registry,
-            )
+            if target_registry is REGISTRY:
+                # The trading_bot_v2.metrics singleton already registers
+                # these four collectors against the default REGISTRY at
+                # import time. Reuse them instead of re-registering, which
+                # would raise "Duplicated timeseries in CollectorRegistry".
+                from trading_bot_v2.metrics import metrics as metrics_singleton
+
+                self.loop_duration = metrics_singleton.loop_duration
+                self.loop_iteration = metrics_singleton.loop_iteration
+                self.phase_duration = metrics_singleton.loop_phase_duration
+                self.phase_count = metrics_singleton.loop_phase_count
+            else:
+                self.loop_duration = Histogram(
+                    "bot_trading_loop_duration_seconds",
+                    "Total trading loop iteration duration",
+                    buckets=[5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120],
+                    registry=target_registry,
+                )
+                self.loop_iteration = Gauge(
+                    "bot_trading_loop_iteration",
+                    "Current trading loop iteration number",
+                    registry=target_registry,
+                )
+                self.phase_duration = Histogram(
+                    "bot_trading_loop_phase_duration_seconds",
+                    "Duration of individual trading loop phases",
+                    ["phase"],
+                    buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
+                    registry=target_registry,
+                )
+                self.phase_count = Counter(
+                    "bot_trading_loop_phase_count_total",
+                    "Total phase executions",
+                    ["phase"],
+                    registry=target_registry,
+                )
+
             self.memory_usage = Gauge(
                 "bot_profiler_memory_bytes",
                 "Process memory usage during profiling",

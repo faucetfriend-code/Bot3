@@ -12,6 +12,7 @@ test-results/
 *.db-shm
 nul
 signals_log.csv
+backups/
 .claude/worktrees/competent-shirley-9d8d5f/
 .claude/worktrees/gracious-robinson-74ebdd/
 .claude/worktrees/kind-panini-01006e/

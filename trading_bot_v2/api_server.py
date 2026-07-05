@@ -37,6 +37,7 @@ try:
     from .indicators import calculate_rsi, calculate_adx
     from .config import config
     from .pacifica_ws_client import get_ws_client
+    from .backup_scheduler import BackupScheduler
 except ImportError:
     # When running as script: python api_server.py
     from trading_bot import TradingBot
@@ -50,6 +51,7 @@ except ImportError:
     from indicators import calculate_rsi, calculate_adx
     from config import config
     from pacifica_ws_client import get_ws_client
+    from backup_scheduler import BackupScheduler
 
 # Configure logging
 # - Console: stdout (existing behavior)
@@ -150,6 +152,7 @@ class BotIntegration:
         self.ws_client = (
             None  # WebSocket client for market data (starts at server startup)
         )
+        self.backup_scheduler: Optional[BackupScheduler] = None
 
         self._initialized = False
 
@@ -277,6 +280,15 @@ class BotIntegration:
                 logger.warning(
                     "TradingBot skipped - no Pacifica client (API keys required)"
                 )
+
+            # Initialize automated database backup scheduler (H5)
+            try:
+                self.backup_scheduler = BackupScheduler(db=self.database)
+                self.backup_scheduler.start()
+                logger.info("BackupScheduler initialized and started")
+            except Exception as e:
+                logger.error(f"Failed to initialize BackupScheduler: {e}")
+                self.backup_scheduler = None
 
             self._initialized = True
             logger.info("All bot components initialized successfully")
@@ -948,6 +960,9 @@ class BotIntegration:
                 # Cancel any active grids
                 pass
 
+            if self.backup_scheduler:
+                self.backup_scheduler.stop()
+
             if self.database:
                 # Close database connections if needed
                 pass
@@ -1220,6 +1235,31 @@ async def strategy_health():
         return {"success": True, "data": report}
     except Exception as e:
         logger.error(f"Error getting strategy health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/backup")
+async def trigger_backup():
+    """Trigger an immediate database backup (H5 automated backup)."""
+    try:
+        if not bot_integration.backup_scheduler:
+            raise HTTPException(
+                status_code=503, detail="Backup scheduler not available"
+            )
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None, bot_integration.backup_scheduler.run_backup_now
+        )
+
+        if result.success:
+            return {"success": True, "data": {"path": result.path}}
+        else:
+            raise HTTPException(status_code=500, detail=result.error or "Backup failed")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error triggering backup: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

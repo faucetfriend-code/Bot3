@@ -68,6 +68,9 @@ from .event_system import get_event_bus, EventType
 from .component_registry import get_component_registry
 from .telegram_alerts import telegram_alerts
 
+# Import PositionReconciler for H4 position reconciliation
+from .position_reconciler import PositionReconciler
+
 
 class TradingBot:
     """
@@ -216,6 +219,13 @@ class TradingBot:
         self.component_registry = get_component_registry()
         self._register_components()
         self._setup_event_subscriptions()
+
+        # H4: Position reconciliation (coordinator supplies client + db,
+        # reconciler owns the comparison logic - see position_reconciler.py)
+        self.position_reconciler = PositionReconciler(
+            db=self.db, event_bus=self.event_bus
+        )
+        self._last_reconciliation_time = 0.0
 
         logging.info("Trading bot initialized")
 
@@ -525,16 +535,41 @@ class TradingBot:
 
     def _update_positions(self) -> None:
         """
-        Update positions from Pacifica API.
+        Update positions from Pacifica API and reconcile against local DB.
 
-        Syncs positions with database for accurate P&L tracking.
+        Syncs positions with database for accurate P&L tracking. Also fixes
+        the H4 position-drift gap: if the exchange returns an empty list
+        (a successful call reporting zero open positions), any positions
+        still open in the local DB are closed. This must be distinguished
+        from an API call failure (exception), in which case reconciliation
+        is skipped entirely for this iteration to avoid wiping out valid
+        local state on a transient network error.
+
+        A full discrepancy-detecting reconciliation (side/quantity/entry
+        price mismatches, adoption of exchange-only positions) runs on a
+        configurable interval (RECONCILIATION_INTERVAL_SECONDS) via
+        `_maybe_run_full_reconciliation`, since that path is more
+        expensive and less urgent than the stale-position close.
         """
         try:
-            # Get positions from API
+            # Get positions from API. If this raises, we skip reconciliation
+            # entirely this iteration (API failure != "no positions").
             positions = self.client.get_positions()
+        except Exception as e:
+            logging.error(f"Error fetching positions from exchange: {e}")
+            return
 
+        try:
             if not positions:
-                logging.debug("No open positions from Pacifica API")
+                # API call succeeded and reported zero open positions.
+                # Close any open local positions to avoid drift (H4 fix -
+                # previously this branch returned early and NEVER closed
+                # stale local positions).
+                self._close_stale_local_positions(exchange_positions=[])
+                logging.debug(
+                    "No open positions from Pacifica API - stale local "
+                    "positions (if any) have been closed"
+                )
                 return
 
             # Filter to real positions (non-zero quantity)
@@ -608,8 +643,82 @@ class TradingBot:
                     f"(current: ${current_price:.2f}, PnL: ${unrealized_pnl:.2f})"
                 )
 
+            # Cheap drift fix every loop: close any local position that is
+            # no longer present on the exchange (non-empty list case).
+            self._close_stale_local_positions(exchange_positions=positions)
+
+            # Expensive discrepancy-detecting reconciliation runs on interval.
+            self._maybe_run_full_reconciliation(exchange_positions=positions)
+
         except Exception as e:
             logging.error(f"Error updating positions: {e}")
+
+    def _close_stale_local_positions(
+        self, exchange_positions: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Close local DB positions that are no longer present on the exchange.
+
+        This is the cheap, every-loop half of H4 position reconciliation.
+        The exchange is authoritative: if a position exists locally but not
+        on the exchange, it has been closed (manually, by SL/TP, or by
+        liquidation) and must be closed locally too, or it will drift
+        forever (the original bug this fixes).
+
+        Args:
+            exchange_positions: Raw position list from the exchange client
+                (may be empty - that is a valid "no open positions" state).
+        """
+        try:
+            from .position_reconciler import _filter_real_positions
+
+            exchange_map = _filter_real_positions(exchange_positions)
+            db_positions = self.db.get_positions()
+            db_map = _filter_real_positions(db_positions)
+
+            for key, db_pos in db_map.items():
+                if key not in exchange_map:
+                    self.db.close_position(db_pos["symbol"], db_pos["side"])
+                    logger.warning(
+                        f"Closed stale local position {db_pos['symbol']} "
+                        f"{db_pos['side']} (no longer on exchange)"
+                    )
+        except Exception as e:
+            logger.error(f"Error closing stale local positions: {e}")
+
+    def _maybe_run_full_reconciliation(
+        self, exchange_positions: List[Dict[str, Any]]
+    ) -> None:
+        """
+        Run the full discrepancy-detecting reconciliation on an interval.
+
+        Unlike `_close_stale_local_positions` (which runs every loop and
+        only handles the drift bug), this also adopts exchange-only
+        positions and detects/corrects side/quantity/entry-price mismatches,
+        publishing a POSITION_DISCREPANCY event and incrementing metrics
+        for each discrepancy found. Controlled by
+        RECONCILIATION_INTERVAL_SECONDS (default 3600s).
+
+        Args:
+            exchange_positions: Raw position list from the exchange client.
+        """
+        now = time.time()
+        interval = getattr(config, "reconciliation_interval_seconds", 3600)
+        last_run = getattr(self, "_last_reconciliation_time", 0.0)
+
+        if now - last_run < interval:
+            return
+
+        self._last_reconciliation_time = now
+
+        try:
+            db_positions = self.db.get_positions()
+            report = self.position_reconciler.reconcile(
+                exchange_positions=exchange_positions, db_positions=db_positions
+            )
+            logger.info(f"Full position reconciliation report: {report.to_dict()}")
+        except Exception as e:
+            logger.error(f"Error running full position reconciliation: {e}")
 
     def _sync_existing_grids(self) -> None:
         """
@@ -1136,6 +1245,9 @@ class TradingBot:
             )
             self.event_bus.subscribe(
                 EventType.COMPONENT_FAILURE, telegram_alerts._handle_event_sync
+            )
+            self.event_bus.subscribe(
+                EventType.POSITION_DISCREPANCY, telegram_alerts._handle_event_sync
             )
             logger.info("Telegram alert event subscriptions configured")
         else:

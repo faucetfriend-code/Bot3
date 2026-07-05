@@ -233,6 +233,34 @@ class Config:
         # Single-strategy filter: empty = all strategies, "MomentumScalping" = only that one
         self.backtest_strategy: str = os.getenv("BACKTEST_STRATEGY", "")
 
+        # ---- Position reconciliation (H4) ----
+        try:
+            self.reconciliation_interval_seconds: int = int(
+                os.getenv("RECONCILIATION_INTERVAL_SECONDS", "3600")
+            )
+        except ValueError:
+            self.reconciliation_interval_seconds = 3600
+
+        # ---- Automated database backup (H5) ----
+        self.backup_enabled: bool = os.getenv("BACKUP_ENABLED", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        try:
+            self.backup_interval_hours: float = float(
+                os.getenv("BACKUP_INTERVAL_HOURS", "24")
+            )
+        except ValueError:
+            self.backup_interval_hours = 24.0
+        self.backup_dir: str = os.getenv("BACKUP_DIR", "./backups")
+        try:
+            self.backup_retention_days: int = int(
+                os.getenv("BACKUP_RETENTION_DAYS", "30")
+            )
+        except ValueError:
+            self.backup_retention_days = 30
+
     @property
     def pacifica_base_url(self) -> str:
         """Return the base URL for Pacifica API based on testnet/mainnet setting."""

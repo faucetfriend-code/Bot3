@@ -241,6 +241,38 @@ class TradingMetrics:
             ['event_type'],
         )
 
+        # =====================================================================
+        # Position Reconciliation Metrics (Plan H4)
+        # =====================================================================
+        self.reconciliation_runs_total = Counter(
+            'bot_reconciliation_runs_total',
+            'Total position reconciliation runs executed',
+        )
+
+        self.reconciliation_discrepancies_total = Counter(
+            'bot_reconciliation_discrepancies_total',
+            'Total position discrepancies detected during reconciliation',
+            ['discrepancy_type'],
+        )
+
+        self.reconciliation_last_run_timestamp = Gauge(
+            'bot_reconciliation_last_run_timestamp',
+            'Unix timestamp of the last position reconciliation run',
+        )
+
+        # =====================================================================
+        # Database Backup Metrics (Plan H5)
+        # =====================================================================
+        self.backup_last_success_timestamp = Gauge(
+            'bot_backup_last_success_timestamp',
+            'Unix timestamp of the last successful database backup',
+        )
+
+        self.backup_failures_total = Counter(
+            'bot_backup_failures_total',
+            'Total number of failed database backup attempts',
+        )
+
         # Initialize start time
         self._start_time = time.time()
 
@@ -531,6 +563,40 @@ class TradingMetrics:
             event_type: Event type name
         """
         self.events_processed.labels(event_type=event_type).inc()
+
+    # =====================================================================
+    # Position Reconciliation Methods (Plan H4)
+    # =====================================================================
+
+    def record_reconciliation_run(self) -> None:
+        """Record that a position reconciliation run executed."""
+        self.reconciliation_runs_total.inc()
+        self.reconciliation_last_run_timestamp.set(time.time())
+
+    def record_reconciliation_discrepancy(self, discrepancy_type: str) -> None:
+        """
+        Record a detected position discrepancy.
+
+        Args:
+            discrepancy_type: Discrepancy category (e.g., 'missing_local',
+                'missing_exchange', 'side_mismatch', 'quantity_mismatch',
+                'entry_price_mismatch')
+        """
+        self.reconciliation_discrepancies_total.labels(
+            discrepancy_type=discrepancy_type
+        ).inc()
+
+    # =====================================================================
+    # Database Backup Methods (Plan H5)
+    # =====================================================================
+
+    def record_backup_success(self) -> None:
+        """Record a successful database backup."""
+        self.backup_last_success_timestamp.set(time.time())
+
+    def record_backup_failure(self) -> None:
+        """Record a failed database backup attempt."""
+        self.backup_failures_total.inc()
 
     def get_metrics(self) -> bytes:
         """
