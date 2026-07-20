@@ -34,6 +34,17 @@ class GridState(Enum):
     CLOSED = "closed"
 
 
+# Single source of truth for the regimes in which a grid may KEEP RUNNING.
+# Grid trading is a RANGING strategy (see CLAUDE.md regime table). INDECISIVE
+# (ADX 20-25 transition band) is tolerated as a buffer so grids are not
+# churned on every border flicker; new grids are still only CREATED in
+# ranging regimes (StrategyManager Step 2.25 + _handle_grid_signals).
+# Grids are unwound when a TRENDING_* regime is confirmed.
+GRID_ALLOWED_REGIMES = frozenset(
+    {"ranging_calm", "ranging_volatile", "indecisive"}
+)
+
+
 @dataclass
 class GridFill:
     """Represents a single fill on a grid order."""
@@ -189,10 +200,22 @@ class GridLifecycleManager:
                 else:
                     return False
 
-            # Repair missing metadata with exchange data or defaults
+            # Repair missing metadata with exchange data or defaults.
+            # Spacing from exchange orders is RELATIVE (fraction of price);
+            # grid_spacing must be stored as a DOLLAR offset.
             if "missing_grid_spacing" in issues:
-                spacing = self._calculate_spacing_from_exchange_orders(symbol)
-                grid_data["grid_spacing"] = spacing if spacing else 0.004
+                spacing_rel = self._calculate_spacing_from_exchange_orders(symbol)
+                center_ref = (
+                    grid_data.get("center_price")
+                    or grid_data.get("initial_center")
+                    or 0
+                )
+                if spacing_rel and center_ref:
+                    grid_data["grid_spacing"] = spacing_rel * center_ref
+                elif center_ref:
+                    grid_data["grid_spacing"] = 0.004 * center_ref
+                else:
+                    grid_data["grid_spacing"] = 0.004
 
             if "missing_num_levels" in issues:
                 levels = self._count_levels_from_exchange_orders(symbol)
@@ -385,7 +408,14 @@ class GridLifecycleManager:
             if not center_price:
                 return False
 
-            grid_spacing = self._calculate_spacing_from_exchange_orders(symbol)
+            # _calculate_spacing_from_exchange_orders returns a RELATIVE step
+            # (fraction of price); grid_spacing is consumed as a DOLLAR offset
+            # by _replenish_order, so convert here.
+            spacing_rel = self._calculate_spacing_from_exchange_orders(symbol)
+            if spacing_rel and spacing_rel > 0:
+                grid_spacing = spacing_rel * center_price
+            else:
+                grid_spacing = 0.004 * center_price  # 0.4% default, in dollars
             num_levels = len(all_orders)
             total_capital = self._estimate_capital_from_exchange_orders(symbol) or 0
 
@@ -405,7 +435,7 @@ class GridLifecycleManager:
                 "emergency_stop": emergency_stop,  # FIX: was 0 — unprotected on re-adoption
                 "regime_on_creation": "unknown_readopted",
                 "atr_at_creation": 0,
-                "grid_spacing": grid_spacing or 0.004,
+                "grid_spacing": grid_spacing,
                 "num_levels": num_levels,
                 "orders_placed": num_levels,
                 "center_price": center_price,
@@ -452,7 +482,14 @@ class GridLifecycleManager:
                     logger.warning(f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}")
 
                     if "invalid_spacing" in issues:
-                        grid_data["grid_spacing"] = 0.004
+                        center_ref = (
+                            grid_data.get("center_price")
+                            or grid_data.get("initial_center")
+                            or 0
+                        )
+                        grid_data["grid_spacing"] = (
+                            0.004 * center_ref if center_ref else 0.004
+                        )
                         if self.db:
                             self.save_grid_state(symbol)
                 else:
@@ -869,6 +906,43 @@ class GridLifecycleManager:
     # REGIME HANDLING
     # =========================
 
+    def handle_regime_change(
+        self,
+        symbol: str,
+        new_regime,
+        market_data: Dict[str, List] = None,
+    ) -> bool:
+        """
+        Entry point for REGIME_CHANGED events (wired in trading_bot.py).
+
+        If the confirmed new regime is outside GRID_ALLOWED_REGIMES and an
+        ACTIVE grid exists for the symbol, the grid is unwound via
+        on_regime_disallowed (partial unwind keeps trend-aligned positions
+        when enabled, otherwise full exit).
+
+        Args:
+            symbol: Trading symbol from the event.
+            new_regime: New regime (MarketRegime enum or its value string).
+            market_data: Optional 4h OHLCV data for trend-direction detection
+                during partial unwind.
+
+        Returns:
+            True if a grid unwind was triggered, False otherwise.
+        """
+        regime_str = str(getattr(new_regime, "value", new_regime)).lower()
+        if regime_str in GRID_ALLOWED_REGIMES:
+            return False
+
+        grid = self._grids.get(symbol)
+        if grid is None or grid.get("state") != GridState.ACTIVE:
+            return False
+
+        logger.warning(
+            f"Regime change to {regime_str} disallows grid for {symbol} - unwinding"
+        )
+        self.on_regime_disallowed(symbol, market_data)
+        return True
+
     def on_regime_disallowed(self, symbol: str, market_data: Dict[str, List] = None):
         """
         Called when market regime transitions OUT of allowed grid regimes.
@@ -982,8 +1056,15 @@ class GridLifecycleManager:
                 if qty <= 0:
                     continue
 
-                side = pos.get("side")
-                close_side = "sell" if side == "bid" else "buy"
+                # Pacifica reports position sides as lowercase "long"/"short".
+                # Normalize defensively (older code paths used "bid"/"ask");
+                # the previous check (side == "bid") sent "buy" for LONG
+                # positions, DOUBLING them instead of closing.
+                raw_side = str(pos.get("side", "")).lower()
+                if "long" in raw_side or "bid" in raw_side or "buy" in raw_side:
+                    close_side = "sell"
+                else:
+                    close_side = "buy"
 
                 self.client.place_order(symbol, close_side, qty, "market")
                 logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
@@ -1340,12 +1421,19 @@ class GridLifecycleManager:
                 fee = float(trade.get("fee", 0))
                 order_id = str(trade.get("order_id", ""))
 
-                # Parse timestamp
+                # Parse timestamp - ALWAYS timezone-aware UTC. Mixing naive
+                # and aware datetimes makes the FIFO sort in
+                # _calculate_round_trips raise TypeError, silently breaking
+                # round-trip P&L matching.
                 ts = trade.get("timestamp") or trade.get("created_at")
                 if isinstance(ts, (int, float)):
-                    timestamp = datetime.fromtimestamp(ts / 1000 if ts > 1e12 else ts)
+                    timestamp = datetime.fromtimestamp(
+                        ts / 1000 if ts > 1e12 else ts, tz=timezone.utc
+                    )
                 elif isinstance(ts, str):
                     timestamp = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if timestamp.tzinfo is None:
+                        timestamp = timestamp.replace(tzinfo=timezone.utc)
                 else:
                     timestamp = datetime.now(timezone.utc)
 
@@ -1401,6 +1489,27 @@ class GridLifecycleManager:
 
         return new_fills
 
+    @staticmethod
+    def _round_decimals_for_price(price: float) -> tuple:
+        """
+        Return (tick_decimals, lot_decimals) for a given price magnitude.
+
+        Mirrors TradingBot._calculate_grid_levels so replenished counter
+        orders land on the same price/quantity granularity as the original
+        grid levels.
+
+        Args:
+            price: Reference price for the symbol.
+
+        Returns:
+            Tuple of (tick_decimals, lot_decimals).
+        """
+        if price >= 100:
+            return 2, 4
+        if price >= 1:
+            return 3, 2
+        return 5, 1
+
     def _replenish_order(self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float):
         """
         Place a counter order when a grid order is filled.
@@ -1424,6 +1533,17 @@ class GridLifecycleManager:
             logger.warning(f"No valid grid spacing for {symbol}, cannot replenish")
             return
 
+        # SANITY: spacing is a DOLLAR offset. A spacing above 20% of the fill
+        # price indicates corrupted state (e.g. legacy rows that stored a
+        # relative fraction, or unit mix-ups) - skip rather than place a wild
+        # order far from market.
+        if fill_price > 0 and spacing / fill_price > 0.20:
+            logger.error(
+                f"Grid spacing {spacing} looks invalid for {symbol} "
+                f"(> 20% of fill price {fill_price}) - skipping replenish"
+            )
+            return
+
         try:
             # Determine counter order parameters
             if filled_side == "BUY":
@@ -1435,15 +1555,26 @@ class GridLifecycleManager:
                 counter_side = "buy"
                 counter_price = fill_price - spacing
 
-            # Round price to appropriate tick size
-            tick_size = 1.0 if "BTC" in symbol else 0.01
-            counter_price = round(counter_price / tick_size) * tick_size
+            # Round price/quantity with the SAME price-magnitude heuristic
+            # used when the grid levels were originally placed
+            # (TradingBot._calculate_grid_levels). The previous hardcoded
+            # 0.01 tick collapsed sub-cent ladders on low-priced symbols.
+            tick_decimals, lot_decimals = self._round_decimals_for_price(
+                fill_price
+            )
+            counter_price = round(counter_price, tick_decimals)
 
-            # Use same quantity as filled order
-            lot_size = 0.00001 if "BTC" in symbol else 0.0001
-            counter_quantity = round(int(fill_quantity / lot_size) * lot_size, 5)
+            if counter_price <= 0:
+                logger.warning(
+                    f"Counter price non-positive for {symbol}: {counter_price}"
+                )
+                return
 
-            if counter_quantity < lot_size:
+            # Use same quantity as filled order (rounded to lot size)
+            counter_quantity = round(fill_quantity, lot_decimals)
+            min_lot = 10 ** (-lot_decimals)
+
+            if counter_quantity < min_lot:
                 logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity}")
                 return
 
@@ -1937,9 +2068,9 @@ class GridLifecycleManager:
                         if current_regime:
                             current_regime_str = current_regime.value
 
-                            # Grid trading only valid in RANGING regimes
-                            allowed_regimes = ["ranging_volatile", "ranging_calm"]
-                            if current_regime_str not in allowed_regimes:
+                            # Grid may only keep running in allowed regimes
+                            # (single source of truth: GRID_ALLOWED_REGIMES)
+                            if current_regime_str not in GRID_ALLOWED_REGIMES:
                                 logger.warning(
                                     f"⚠️ Grid {symbol} created in {regime_on_creation}, "
                                     f"but current regime is {current_regime_str} - CLOSING"

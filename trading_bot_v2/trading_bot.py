@@ -869,7 +869,11 @@ class TradingBot:
                 return
 
             center_price = (max(buy_prices) + min(sell_prices)) / 2
-            grid_spacing = (min(sell_prices) - max(buy_prices)) / center_price if center_price > 0 else 0
+            # DOLLAR spacing (grid_spacing is consumed as a dollar offset by
+            # _replenish_order). The gap between the highest bid and lowest
+            # ask straddles the center, i.e. about TWO grid steps.
+            gap = min(sell_prices) - max(buy_prices)
+            grid_spacing = gap / 2 if gap > 0 else 0
 
             # Estimate capital from order sizes
             total_capital = sum(
@@ -1263,6 +1267,16 @@ class TradingBot:
         # Note: GRID_EMERGENCY doesn't exist in EventType yet, so commenting out
         # self.event_bus.subscribe(EventType.GRID_EMERGENCY, self._handle_grid_emergency)
 
+        # Grid regime unwind: when a confirmed regime change leaves the
+        # grid-allowed set (ranging/indecisive), unwind the symbol's active
+        # grid (cancel orders, partial/full position exit). Without this
+        # subscription nothing ever calls on_regime_disallowed and grid
+        # orders are orphaned on the exchange after every regime flip.
+        self.event_bus.subscribe(
+            EventType.REGIME_CHANGED, self._handle_regime_changed_for_grids
+        )
+        logger.info("Grid lifecycle subscribed to REGIME_CHANGED")
+
         # Telegram alerts: subscribe to key events for notifications
         if telegram_alerts.enabled:
             self.event_bus.subscribe(
@@ -1618,16 +1632,60 @@ class TradingBot:
                     notes=f"Capital allocated: ${capital_allocated:.2f}",
                 )
 
-                # Register grid with GridLifecycleManager for monitoring
+                # Register grid with GridLifecycleManager for monitoring.
+                # Emergency stop MUST sit BELOW the lowest buy level: the old
+                # value (signal.stop_loss = entry - 2*ATR) landed INSIDE the
+                # grid and force-exited healthy grids on normal oscillation.
+                # Convention matches re-adoption: lowest_buy * (1 - stop_pct).
+                emergency_stop_pct = float(
+                    os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
+                )
+                center_price = (
+                    result.get("center_price") or signal.entry_price
+                )
+                lowest_buy_price = result.get("lowest_buy_price") or 0
+                if lowest_buy_price > 0:
+                    emergency_stop_price = lowest_buy_price * (
+                        1.0 - emergency_stop_pct
+                    )
+                else:
+                    emergency_stop_price = center_price * (
+                        1.0 - emergency_stop_pct
+                    )
+
+                # Record the actual market regime (not signal.market_state,
+                # which is always "RANGE" for grid signals).
+                regime_str = None
+                regime_detector = getattr(self, "market_regime", None)
+                if regime_detector is not None:
+                    try:
+                        current_regime = regime_detector.get_current_regime(
+                            symbol
+                        )
+                        if current_regime is not None:
+                            regime_str = current_regime.value
+                    except Exception as e:
+                        logger.debug(
+                            f"Could not resolve regime for grid registration: {e}"
+                        )
+                if not regime_str:
+                    regime_str = (
+                        signal.market_state.name
+                        if hasattr(signal.market_state, "name")
+                        else str(signal.market_state)
+                    )
+
                 self.grid_lifecycle.register_new_grid(
                     symbol=symbol,
                     grid_capital=capital_allocated,
-                    emergency_stop_price=signal.stop_loss,
-                    regime=signal.market_state.name if hasattr(signal.market_state, 'name') else str(signal.market_state),
-                    atr=0,  # ATR not stored in signal, grid manager will recalculate if needed
-                    spacing=signal.spacing or 0,
-                    num_levels=signal.grid_levels or 10,
-                    center_price=signal.entry_price,
+                    emergency_stop_price=emergency_stop_price,
+                    regime=regime_str,
+                    atr=(signal.indicators or {}).get("atr", 0),
+                    spacing=result.get("grid_spacing") or signal.spacing or 0,
+                    num_levels=result.get("num_levels")
+                    or signal.grid_levels
+                    or 10,
+                    center_price=center_price,
                 )
                 logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
 
@@ -1752,14 +1810,25 @@ class TradingBot:
                 except Exception as e:
                     logger.error(f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}")
 
-            # Return results
+            # Return results, including the grid geometry actually used so the
+            # caller can register the grid with real values (spacing drives
+            # fill replenishment; lowest buy drives the emergency stop).
             success = len(buy_order_ids) > 0 or len(sell_order_ids) > 0
+            lowest_buy_price = min(
+                (level["price"] for level in grid_levels["buy_levels"]), default=0
+            )
             return {
                 "success": success,
                 "buy_orders": len(buy_order_ids),
                 "sell_orders": len(sell_order_ids),
                 "buy_order_ids": buy_order_ids,
                 "sell_order_ids": sell_order_ids,
+                "grid_spacing": grid_levels.get("grid_spacing", 0),
+                "center_price": grid_levels.get("current_price", 0),
+                "lowest_buy_price": lowest_buy_price,
+                "num_levels": (
+                    len(grid_levels["buy_levels"]) + len(grid_levels["sell_levels"])
+                ),
             }
 
         except Exception as e:
@@ -1925,6 +1994,53 @@ class TradingBot:
     def _handle_risk_limit_exceeded(self, event):
         """Handle RISK_LIMIT_EXCEEDED event."""
         logger.warning(f"Risk limit exceeded event: {event}")
+
+    def _handle_regime_changed_for_grids(self, event):
+        """
+        Handle REGIME_CHANGED: unwind active grids when the new regime
+        disallows grid trading.
+
+        Delegates the allowed-regime decision and the unwind itself to
+        GridLifecycleManager.handle_regime_change. Fetches 4h market data so
+        the partial unwind can keep trend-aligned positions; falls back to a
+        full exit inside the lifecycle manager when data is unavailable.
+
+        Args:
+            event: Event whose data contains symbol and new_regime.
+        """
+        try:
+            data = event.data if hasattr(event, "data") else {}
+            symbol = data.get("symbol") if isinstance(data, dict) else None
+            new_regime = data.get("new_regime") if isinstance(data, dict) else None
+
+            if not symbol or not new_regime:
+                return
+            if not self.grid_lifecycle:
+                return
+
+            market_data = None
+            try:
+                fetched = self.multi_tf_fetcher.get_candles_multi_tf(
+                    symbol, timeframes=["4h"]
+                )
+                market_data = (fetched or {}).get("4h")
+            except Exception as e:
+                logger.warning(
+                    f"Could not fetch 4h data for grid unwind of {symbol}: {e}"
+                )
+
+            unwound = self.grid_lifecycle.handle_regime_change(
+                symbol, new_regime, market_data
+            )
+            if unwound:
+                logger.warning(
+                    f"Grid unwind executed for {symbol} after regime change "
+                    f"to {new_regime}"
+                )
+        except Exception as e:
+            logger.error(
+                f"Error handling REGIME_CHANGED for grids: {e}", exc_info=True
+            )
 
     def _handle_grid_emergency(self, event):
         """Handle GRID_EMERGENCY event."""

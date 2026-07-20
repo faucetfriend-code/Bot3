@@ -449,6 +449,13 @@ class GridTradingStrategy:
                 "active_grids": len(active_grids),
             },
             notes=f"Grid BUY level {next_level}, spacing ${grid_spacing:.4f}, ADX {adx:.1f}",
+            # Grid geometry MUST travel with the signal: execution reads
+            # signal.spacing (dollar spacing) and signal.grid_levels to place
+            # the ladder and to register the grid for fill replenishment.
+            # Without these, the lifecycle manager gets spacing=0 and can
+            # never place counter orders after fills.
+            grid_levels=self.grid_levels,
+            spacing=grid_spacing,
         )
 
         return signal
@@ -530,6 +537,9 @@ class GridTradingStrategy:
                 "active_grids": len(active_grids),
             },
             notes=f"Grid SELL level {next_level}, spacing ${grid_spacing:.4f}, ADX {adx:.1f}",
+            # Grid geometry MUST travel with the signal (see BUY signal note).
+            grid_levels=self.grid_levels,
+            spacing=grid_spacing,
         )
 
         return signal
