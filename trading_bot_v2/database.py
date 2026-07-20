@@ -1345,6 +1345,10 @@ def _init_sqlite_database():
             "ALTER TABLE positions ADD COLUMN funding_pnl REAL DEFAULT 0",
             "ALTER TABLE positions ADD COLUMN exit_price REAL",
             "ALTER TABLE trades ADD COLUMN regime TEXT",
+            # Executing exchange tag (multi-exchange support). Rows written
+            # before this column existed are NULL and are treated as
+            # 'pacifica' at query time via COALESCE (see history.TradeStore).
+            "ALTER TABLE trades ADD COLUMN exchange TEXT",
         ]
 
         for alter_sql in alter_statements:
@@ -1559,8 +1563,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (account_id, symbol, asset_class, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status, regime)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime, exchange)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     account_id,
@@ -1577,6 +1581,7 @@ class DatabaseManager:
                     trade_data.get("strategy"),
                     trade_data.get("status", "open"),
                     trade_data.get("regime"),
+                    trade_data.get("exchange"),
                 ),
             )
             conn.commit()
@@ -1601,8 +1606,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (account_id, symbol, asset_class, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status, regime)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime, exchange)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1620,6 +1625,7 @@ class DatabaseManager:
                         trade.get("strategy"),
                         trade.get("status", "open"),
                         trade.get("regime"),
+                        trade.get("exchange"),
                     )
                     for trade in trades_data
                 ],
@@ -2251,33 +2257,18 @@ class DatabaseManager:
     def get_closed_trades_for_weights(self) -> List[Dict[str, Any]]:
         """Fetch closed trades with the fields adaptive weighting needs.
 
+        DEPRECATED: thin delegate kept for backward compatibility.  New
+        code should use ``history.TradeStore.get_closed_trades`` (which
+        this method now wraps and which returns a superset of fields,
+        including the exchange tag).
+
         Returns:
-            List of dicts with strategy, regime, pnl, entry_price,
+            List of dicts including strategy, regime, pnl, entry_price,
             quantity, entry_time, exit_time for all closed trades.
         """
-        with get_db_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT strategy, regime, pnl, entry_price, quantity,
-                       entry_time, exit_time
-                FROM trades
-                WHERE status = 'closed'
-                """
-            )
-            rows = cursor.fetchall()
+        from .history import TradeStore
 
-        return [
-            {
-                "strategy": row[0],
-                "regime": row[1],
-                "pnl": row[2],
-                "entry_price": row[3],
-                "quantity": row[4],
-                "entry_time": row[5],
-                "exit_time": row[6],
-            }
-            for row in rows
-        ]
+        return TradeStore(db=self).get_closed_trades()
 
     def get_open_trades(
         self, symbol: Optional[str] = None
@@ -2323,10 +2314,28 @@ class DatabaseManager:
         ]
 
     def get_trades(
-        self, limit: int = 100, status: Optional[str] = None
+        self,
+        limit: int = 100,
+        status: Optional[str] = None,
+        exchange: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
-        """Get recent trades with caching."""
+        """Get recent trades with caching.
+
+        Delegates the query to ``history.TradeStore.get_recent_trades``
+        (single owner of trade-history SQL); rows now include an
+        ``exchange`` field (legacy NULL rows read as 'pacifica').
+
+        Args:
+            limit: Max rows to return.
+            status: Optional status filter ('open'/'closed'/...).
+            exchange: Optional exchange filter.
+
+        Returns:
+            List of trade dicts ordered by entry_time descending.
+        """
         cache_key = f"trades_{status or 'all'}_{limit}"
+        if exchange:
+            cache_key += f"_{exchange}"
 
         # Try cache first for small requests
         if limit <= 20:
@@ -2334,38 +2343,17 @@ class DatabaseManager:
             if cached:
                 return cached
 
-        with get_db_connection() as conn:
-            if status:
-                cursor = conn.execute(
-                    """
-                    SELECT
-                        id, symbol, asset_class, side, quantity, entry_price, exit_price,
-                        pnl, entry_time, exit_time, 'trade' as type, status
-                    FROM trades
-                    WHERE status = ?
-                    ORDER BY entry_time DESC LIMIT ?
-                """,
-                    (status, limit),
-                )
-            else:
-                cursor = conn.execute(
-                    """
-                    SELECT
-                        id, symbol, asset_class, side, quantity, entry_price, exit_price,
-                        pnl, entry_time, exit_time, 'trade' as type, status
-                    FROM trades
-                    ORDER BY entry_time DESC LIMIT ?
-                """,
-                    (limit,),
-                )
+        from .history import TradeStore
 
-            result = [dict(row) for row in cursor.fetchall()]
+        result = TradeStore(db=self).get_recent_trades(
+            limit=limit, status=status, exchange=exchange
+        )
 
-            # Cache result for small requests
-            if limit <= 20:
-                _data_cache.set(cache_key, result, ttl=30)  # Cache for 30 seconds
+        # Cache result for small requests
+        if limit <= 20:
+            _data_cache.set(cache_key, result, ttl=30)  # Cache for 30 seconds
 
-            return result
+        return result
 
     def save_position(self, position_data: Dict[str, Any]) -> Optional[int]:
         """Save or update a position."""
@@ -3186,8 +3174,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (symbol, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status, regime)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime, exchange)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     trade_data["symbol"],
@@ -3202,6 +3190,7 @@ class DatabaseManager:
                     trade_data.get("strategy"),
                     trade_data.get("status", "open"),
                     trade_data.get("regime"),
+                    trade_data.get("exchange"),
                 ),
             )
             await db.commit()

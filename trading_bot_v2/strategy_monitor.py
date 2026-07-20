@@ -26,6 +26,8 @@ from loguru import logger
 
 from trading_bot_v2.database import get_db_connection, is_postgres
 from trading_bot_v2.event_system import Event, EventType, get_event_bus
+from trading_bot_v2.history import TradeStore
+from trading_bot_v2.history import metrics as history_metrics
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,9 @@ class StrategyMonitor:
         # In-memory cache of returns keyed by strategy name.
         # Each value is a list of (timestamp_str, pnl_pct) tuples, newest last.
         self._returns_cache: Dict[str, List[Tuple[str, float]]] = {}
+
+        # Single owner of trade-history access (regime attribution).
+        self._trade_store = TradeStore()
 
         # Register with EventBus
         self._subscribe_to_events()
@@ -516,11 +521,13 @@ class StrategyMonitor:
 
         return report.to_dict()
 
-    def get_regime_attribution(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    def get_regime_attribution(
+        self, exchange: Optional[str] = None
+    ) -> Dict[str, Dict[str, Dict[str, Any]]]:
         """
         Compute per-(strategy, regime) performance from closed trades.
 
-        Reads closed trades from the trades table and groups them by
+        Reads closed trades via ``history.TradeStore`` and groups them by
         strategy and the regime tag recorded at trade creation. Trades
         without a regime tag are grouped under "UNTAGGED" so tagging
         coverage stays visible.
@@ -528,32 +535,38 @@ class StrategyMonitor:
         Per-trade pnl_pct is derived as pnl / (entry_price * quantity) * 100
         (0.0 when the notional is non-positive).
 
+        Args:
+            exchange: Optional exchange filter (e.g. "pacifica"); default
+                includes trades from all exchanges.
+
         Returns:
             JSON-serialisable dict keyed strategy -> regime -> stats, where
             stats contains trade_count, win_rate, profit_factor, avg_pnl_pct,
             and total_pnl_pct.
         """
         try:
-            with get_db_connection() as conn:
-                cursor = conn.execute(
-                    "SELECT strategy, regime, pnl, entry_price, quantity "
-                    "FROM trades WHERE status = 'closed'"
-                )
-                rows = cursor.fetchall()
+            trades = self._trade_store.get_closed_trades(exchange=exchange)
         except Exception as exc:
             logger.warning(f"Regime attribution query failed: {exc}")
             return {}
 
         # strategy -> regime -> list of pnl_pct
         grouped: Dict[str, Dict[str, List[float]]] = {}
-        for strategy, regime, pnl, entry_price, quantity in rows:
+        for trade in trades:
+            strategy = trade.get("strategy")
+            regime = trade.get("regime")
             strat_key = str(strategy) if strategy else "UNKNOWN"
             regime_key = str(regime) if regime else "UNTAGGED"
+            pnl = trade.get("pnl")
             try:
                 pnl_val = float(pnl) if pnl is not None else 0.0
-                notional = float(entry_price or 0.0) * float(quantity or 0.0)
+                notional = float(trade.get("entry_price") or 0.0) * float(
+                    trade.get("quantity") or 0.0
+                )
             except (TypeError, ValueError):
                 continue
+            # Non-positive notional counts as 0.0 so tagging coverage
+            # stays visible.
             pnl_pct = (pnl_val / notional) * 100.0 if notional > 0 else 0.0
             grouped.setdefault(strat_key, {}).setdefault(regime_key, []).append(
                 pnl_pct
@@ -635,43 +648,23 @@ class StrategyMonitor:
         """
         Compute profit factor (gross profit / gross loss) from pnl_pct values.
 
-        Returns ``None`` when there are no trades or no losing trades (an
-        undefined/infinite profit factor is not JSON-serialisable), and
-        ``0.0`` when there are losses but no winning trades.
+        Thin wrapper over :func:`trading_bot_v2.history.metrics.profit_factor`
+        (single source of truth): ``None`` when there are no trades or no
+        losing trades, ``0.0`` when there are losses but no winning trades.
         """
-        if not returns:
-            return None
-        gross_profit = sum(r for r in returns if r > 0)
-        gross_loss = abs(sum(r for r in returns if r < 0))
-        if gross_loss == 0:
-            return None
-        if gross_profit == 0:
-            return 0.0
-        return gross_profit / gross_loss
+        return history_metrics.profit_factor(returns)
 
     def _compute_max_drawdown_pct(self, returns: List[float]) -> float:
         """
         Compute maximum drawdown from a time-ordered list of pnl_pct values.
 
-        Compounds an equity curve starting at 100.0 (``eq *= 1 + r / 100``
-        per return), tracks the running peak, and returns the largest
-        peak-to-trough decline as a positive percentage.  Returns ``0.0``
-        for an empty list.
+        Thin wrapper over
+        :func:`trading_bot_v2.history.metrics.max_drawdown_pct`: compounds
+        an equity curve starting at 100.0 and returns the largest
+        peak-to-trough decline as a positive percentage (``0.0`` for an
+        empty list).
         """
-        if not returns:
-            return 0.0
-        equity = 100.0
-        peak = equity
-        max_dd = 0.0
-        for r in returns:
-            equity *= 1.0 + r / 100.0
-            if equity > peak:
-                peak = equity
-            if peak > 0:
-                dd = (peak - equity) / peak
-                if dd > max_dd:
-                    max_dd = dd
-        return max_dd * 100.0
+        return history_metrics.max_drawdown_pct(returns)
 
     def _save_correlation(
         self,

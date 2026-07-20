@@ -45,6 +45,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
+from .history import metrics as history_metrics
+
 
 def _env_float(name: str, default: float) -> float:
     """Read a float from the environment, falling back to default on error."""
@@ -115,6 +117,9 @@ class AdaptiveWeightManager:
             save_adaptive_weight_snapshot(rows). When None, the manager
             stays neutral (all multipliers 1.0) - this keeps unit tests
             and backtests hermetic; the live bot wires the real db in.
+        trade_store: Optional history.TradeStore used to fetch closed
+            trades (preferred source; the db fallback is kept for
+            legacy/duck-typed wiring). Requires db for snapshots.
         enabled: Override for ENABLE_ADAPTIVE_WEIGHTS (default env/true).
         halflife_days: Override for ADAPTIVE_WEIGHT_HALFLIFE_DAYS.
         min_trades: Override for ADAPTIVE_WEIGHT_MIN_TRADES.
@@ -130,6 +135,7 @@ class AdaptiveWeightManager:
     def __init__(
         self,
         db: Optional[Any] = None,
+        trade_store: Optional[Any] = None,
         enabled: Optional[bool] = None,
         halflife_days: Optional[float] = None,
         min_trades: Optional[int] = None,
@@ -139,6 +145,7 @@ class AdaptiveWeightManager:
         max_mult: Optional[float] = None,
     ):
         self.db = db
+        self.trade_store = trade_store
         self.enabled = (
             enabled
             if enabled is not None
@@ -211,7 +218,7 @@ class AdaptiveWeightManager:
         Returns:
             Multiplier in [min_mult, max_mult], or exactly 1.0 (neutral).
         """
-        if not self.enabled or self.db is None:
+        if not self.enabled or (self.db is None and self.trade_store is None):
             return 1.0
         try:
             self._maybe_refresh()
@@ -232,7 +239,7 @@ class AdaptiveWeightManager:
             True if a recompute ran, False if the cache was still fresh
             or the manager is disabled / has no db.
         """
-        if not self.enabled or self.db is None:
+        if not self.enabled or (self.db is None and self.trade_store is None):
             return False
         with self._lock:
             if not force and not self._is_stale_locked():
@@ -309,7 +316,7 @@ class AdaptiveWeightManager:
 
     def _recompute_locked(self) -> None:
         """Recompute all cell multipliers and persist a snapshot."""
-        trades = self.db.get_closed_trades_for_weights()
+        trades = self._fetch_closed_trades()
         now = self._now()
 
         # (regime_key, strategy_key) -> list of (pnl_pct, age_days)
@@ -319,16 +326,12 @@ class AdaptiveWeightManager:
             strategy_key = _normalize_strategy(trade.get("strategy"))
             if not regime_key or not strategy_key:
                 continue
-            try:
-                pnl = float(trade.get("pnl") or 0.0)
-                notional = float(trade.get("entry_price") or 0.0) * float(
-                    trade.get("quantity") or 0.0
-                )
-            except (TypeError, ValueError):
+            pnl_pct = history_metrics.trade_pnl_pct(
+                trade.get("pnl"), trade.get("entry_price"), trade.get("quantity")
+            )
+            if pnl_pct is None:
+                # Unparseable values or non-positive notional: skip.
                 continue
-            if notional <= 0:
-                continue
-            pnl_pct = (pnl / notional) * 100.0
             age_days = self._trade_age_days(trade, now)
             grouped.setdefault((regime_key, strategy_key), []).append(
                 (pnl_pct, age_days)
@@ -338,14 +341,10 @@ class AdaptiveWeightManager:
         cells: Dict[Tuple[str, str], Dict[str, Any]] = {}
         for key, samples in grouped.items():
             trade_count = len(samples)
-            lifetime = sum(p for p, _ in samples) / trade_count
-            weight_sum = 0.0
-            weighted_pnl = 0.0
-            for pnl_pct, age_days in samples:
-                w = 0.5 ** (age_days / self.halflife_days)
-                weight_sum += w
-                weighted_pnl += pnl_pct * w
-            recent = weighted_pnl / weight_sum if weight_sum > 0 else lifetime
+            lifetime = history_metrics.expectancy([p for p, _ in samples])
+            recent = history_metrics.recency_weighted_expectancy(
+                samples, self.halflife_days
+            )
 
             if trade_count < self.min_trades:
                 mult = 1.0  # Evidence gate: fall back to static weights
@@ -375,6 +374,12 @@ class AdaptiveWeightManager:
         )
 
         self._persist_snapshot(computed_at)
+
+    def _fetch_closed_trades(self) -> List[Dict[str, Any]]:
+        """Fetch closed trades from the TradeStore (db legacy fallback)."""
+        if self.trade_store is not None:
+            return self.trade_store.get_closed_trades()
+        return self.db.get_closed_trades_for_weights()
 
     def _score_to_multiplier(self, score: float) -> float:
         """Map a blended expectancy score (pnl-pct) to a clamped multiplier.
@@ -413,7 +418,7 @@ class AdaptiveWeightManager:
 
     def _persist_snapshot(self, computed_at: str) -> None:
         """Save the freshly computed cells to the adaptive_weights table."""
-        if not self._cells:
+        if not self._cells or self.db is None:
             return
         rows = [
             {

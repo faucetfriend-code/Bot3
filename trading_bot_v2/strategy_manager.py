@@ -198,8 +198,12 @@ class StrategyManager:
         # _combine_signals). Neutral (all 1.0) when no db is wired.
         try:
             from .adaptive_weights import AdaptiveWeightManager
+            from .history import TradeStore
 
-            self.adaptive_weights = AdaptiveWeightManager(db=db)
+            self.adaptive_weights = AdaptiveWeightManager(
+                db=db,
+                trade_store=TradeStore(db=db) if db is not None else None,
+            )
         except Exception as e:
             logger.warning(f"AdaptiveWeightManager unavailable: {e}")
             self.adaptive_weights = None

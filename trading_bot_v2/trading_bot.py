@@ -34,6 +34,7 @@ from .exchanges import get_exchange_client
 
 # Import other modules
 from .database import DatabaseManager
+from .history import TradeStore
 from .pacifica_client import PacificaClient, PacificaEnvironment
 from .strategy_manager import StrategyManager
 from .multi_timeframe_fetcher import MultiTimeframeFetcher
@@ -145,6 +146,10 @@ class TradingBot:
             self.db = DatabaseManager()
         else:
             self.db = db
+
+        # Trade recording/querying facade; tags trades with the active
+        # exchange name (EXCHANGE env, default pacifica) automatically.
+        self.trade_store = TradeStore(db=self.db)
 
         # Initialize signal logger (CSV auto-save + database + memory)
         self.signal_logger = SignalLogger(db_manager=self.db)
@@ -2548,9 +2553,10 @@ class TradingBot:
             }
 
             # Save as special "GRID" position, tagged with the current
-            # confirmed regime for per-regime attribution.
+            # confirmed regime for per-regime attribution.  Recorded via
+            # TradeStore so the active exchange name is tagged as well.
             current_regime = self.market_regime.get_current_regime(symbol)
-            self.db.save_trade(
+            self.trade_store.record_trade(
                 {
                     "symbol": symbol,
                     "strategy": "GRID_TRADING",

@@ -526,13 +526,21 @@ class BotIntegration:
 
         return positions
 
-    def get_trades(self, limit: int = 100) -> List[Dict]:
-        """Get recent trades."""
+    def get_trades(
+        self, limit: int = 100, exchange: Optional[str] = None
+    ) -> List[Dict]:
+        """Get recent trades (TradeStore-backed via database.get_trades).
+
+        Args:
+            limit: Max rows to return.
+            exchange: Optional exchange filter; legacy untagged rows
+                match 'pacifica'.
+        """
         trades = []
 
         try:
             if self.database:
-                trades = self.database.get_trades(limit=limit)
+                trades = self.database.get_trades(limit=limit, exchange=exchange)
 
             # Also try to get recent trades from Pacifica API
             if self.pacifica_client:
@@ -1146,10 +1154,10 @@ async def health_endpoint():
 
 
 @app.get("/api/trades")
-async def get_trades(limit: int = 100):
-    """Get recent trades."""
+async def get_trades(limit: int = 100, exchange: Optional[str] = None):
+    """Get recent trades, optionally filtered by executing exchange."""
     try:
-        trades = bot_integration.get_trades(limit=limit)
+        trades = bot_integration.get_trades(limit=limit, exchange=exchange)
         return {"success": True, "data": trades}
     except Exception as e:
         logger.error(f"Error getting trades: {e}")
@@ -1335,8 +1343,12 @@ async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
 
 
 @app.get("/api/strategies/regime-attribution")
-async def strategies_regime_attribution():
-    """Get per-(strategy, regime) performance attribution from closed trades."""
+async def strategies_regime_attribution(exchange: Optional[str] = None):
+    """Get per-(strategy, regime) performance attribution from closed trades.
+
+    Optional ``exchange`` query param restricts attribution to trades
+    executed on that exchange (default: all exchanges).
+    """
     try:
         try:
             from .strategy_monitor import get_strategy_monitor
@@ -1344,7 +1356,10 @@ async def strategies_regime_attribution():
             from strategy_monitor import get_strategy_monitor
 
         monitor = get_strategy_monitor()
-        return {"success": True, "data": monitor.get_regime_attribution()}
+        return {
+            "success": True,
+            "data": monitor.get_regime_attribution(exchange=exchange),
+        }
     except Exception as e:
         logger.error(f"Error getting regime attribution: {e}")
         raise HTTPException(status_code=500, detail=str(e))

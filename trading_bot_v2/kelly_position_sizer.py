@@ -15,6 +15,7 @@ from loguru import logger
 from .models import Signal
 from .config import StrategyType
 from .database import DatabaseManager
+from .history import TradeStore
 
 
 class KellyPositionSizer:
@@ -30,6 +31,7 @@ class KellyPositionSizer:
         db: DatabaseManager,
         kelly_fraction: float = 0.5,
         min_trades: int = 50,
+        trade_store: Optional[TradeStore] = None,
     ):
         """
         Initialize Kelly position sizer.
@@ -38,8 +40,11 @@ class KellyPositionSizer:
             db: Database instance to query trade history
             kelly_fraction: Fraction of Kelly to use (0.5 = half Kelly, safer)
             min_trades: Minimum trades needed before using Kelly (default: 50)
+            trade_store: Optional history.TradeStore used for trade-history
+                queries; constructed over ``db`` when omitted.
         """
         self.db = db
+        self.trade_store = trade_store or TradeStore(db=db)
         self.kelly_fraction = kelly_fraction
         self.min_trades = min_trades
 
@@ -172,20 +177,10 @@ class KellyPositionSizer:
             Dict with win_rate, avg_win, avg_loss, total_trades
         """
         try:
-            # Query last 50 trades for this strategy
-            with self.db._connection_pool.get_connection() as conn:
-                cursor = conn.execute(
-                    """
-                    SELECT pnl, entry_price, exit_price, quantity, side
-                    FROM trades
-                    WHERE account_id = ? AND strategy = ? AND status = 'closed'
-                    ORDER BY exit_time DESC
-                    LIMIT 50
-                    """,
-                    (account_id, strategy.value),
-                )
-
-                trades = cursor.fetchall()
+            # Query last 50 closed trades for this strategy via TradeStore
+            trades = self.trade_store.get_closed_trades(
+                strategy=strategy.value, account_id=account_id, limit=50
+            )
 
             if not trades:
                 logger.debug(f"No closed trades found for {strategy.value}")
@@ -201,7 +196,7 @@ class KellyPositionSizer:
             losses = []
 
             for trade in trades:
-                pnl = trade[0]  # pnl column
+                pnl = trade["pnl"]
                 if pnl > 0:
                     wins.append(pnl)
                 elif pnl < 0:
