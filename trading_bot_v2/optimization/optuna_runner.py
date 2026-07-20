@@ -17,6 +17,7 @@ Usage:
     best_params = runner.get_best_params("mean_reversion")
 """
 
+import math
 import os
 from pathlib import Path
 from typing import Dict, Any, Optional, List
@@ -301,7 +302,80 @@ class OptunaRunner:
                 "(all pruned or failed)"
             )
 
+        # P5: record how many configurations this study tried so the
+        # Deflated Sharpe Ratio can discount for search size later.
+        try:
+            self._record_trial_registry(study, strategy, regime, objective)
+        except Exception as e:
+            logger.warning(f"Trial registry recording failed: {e}")
+
         return study
+
+    def _record_trial_registry(
+        self,
+        study: "optuna.Study",
+        strategy: str,
+        regime: Optional[str],
+        objective: str,
+    ) -> None:
+        """Record this study's trial count in the trial_registry (P5).
+
+        Counts COMPLETE + PRUNED trials (both explored a configuration;
+        FAIL/RUNNING/WAITING did not produce a scored config). When the
+        objective is sharpe_ratio, also stores the sample variance
+        (ddof=1) of the completed trials' objective values as an
+        sr-variance proxy for DSR benchmarks; for other objectives the
+        variance column stays NULL.
+
+        Note: the stored variance is a proxy - objective values carry
+        the adapter's drawdown/trade-count penalties and (for full-run
+        backtests) annualization, so downstream DSR consumers using
+        non-annualized per-trade Sharpe should prefer their own trial
+        values when available.
+
+        Args:
+            study: The finished Optuna study.
+            strategy: Snake_case strategy key.
+            regime: Normalized regime value, or None.
+            objective: Canonical objective name.
+        """
+        from ..database import DatabaseManager
+
+        state = optuna.trial.TrialState
+        completed = [t for t in study.trials if t.state == state.COMPLETE]
+        pruned = [t for t in study.trials if t.state == state.PRUNED]
+        n_trials = len(completed) + len(pruned)
+        if n_trials == 0:
+            return
+
+        sr_variance: Optional[float] = None
+        if objective == "sharpe_ratio":
+            values = [
+                t.value
+                for t in completed
+                if t.value is not None and math.isfinite(t.value)
+            ]
+            if len(values) >= 2:
+                mean_v = sum(values) / len(values)
+                sr_variance = sum((v - mean_v) ** 2 for v in values) / (
+                    len(values) - 1
+                )
+
+        row_id = DatabaseManager().save_trial_registry_entry(
+            strategy=strategy,
+            regime=regime,
+            scope="optuna_study",
+            n_trials=n_trials,
+            sr_variance=sr_variance,
+            source=study.study_name,
+        )
+        logger.info(
+            f"Trial registry: recorded {n_trials} trials "
+            f"(completed={len(completed)}, pruned={len(pruned)}) "
+            f"for {strategy}"
+            + (f"/{regime}" if regime else "")
+            + f" as row {row_id}"
+        )
 
     def _objective(
         self,

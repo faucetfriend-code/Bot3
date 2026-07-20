@@ -710,6 +710,17 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        CREATE TABLE IF NOT EXISTS trial_registry (
+            id BIGSERIAL PRIMARY KEY,
+            strategy TEXT NOT NULL,
+            regime TEXT,
+            scope TEXT NOT NULL,
+            n_trials INTEGER NOT NULL,
+            sr_variance DOUBLE PRECISION,
+            source TEXT,
+            recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
         CREATE TABLE IF NOT EXISTS grid_state (
             id BIGSERIAL PRIMARY KEY,
             symbol TEXT NOT NULL UNIQUE,
@@ -1298,6 +1309,27 @@ def _init_sqlite_database():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_regime_param_overlays_lookup "
             "ON regime_param_overlays(strategy, regime, active)"
+        )
+
+        # Trial-count registry (P5 validation stack). Every optimization
+        # run (Optuna study, sweep, manual grid) records how many
+        # parameter configurations were tried so the Deflated Sharpe
+        # Ratio can discount reported performance for search size.
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS trial_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy TEXT NOT NULL,
+                    regime TEXT,
+                    scope TEXT NOT NULL,
+                    n_trials INTEGER NOT NULL,
+                    sr_variance REAL,
+                    source TEXT,
+                    recorded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trial_registry_strategy "
+            "ON trial_registry(strategy, regime)"
         )
 
         # Add account_id columns to existing tables if they don't exist
@@ -2041,6 +2073,176 @@ class DatabaseManager:
             f"Exported {len(overlays)} active regime overlay(s) to {path}"
         )
         return path
+
+    def save_trial_registry_entry(
+        self,
+        strategy: str,
+        n_trials: int,
+        scope: str = "manual",
+        regime: Optional[str] = None,
+        sr_variance: Optional[float] = None,
+        source: Optional[str] = None,
+    ) -> Optional[int]:
+        """Record an optimization run in the trial registry (P5).
+
+        The registry is the source of the N used by the Deflated Sharpe
+        Ratio: every batch of parameter configurations tried against a
+        strategy must leave a row here, otherwise DSR reporting will
+        understate the search size.
+
+        Args:
+            strategy: Snake_case strategy key (e.g. "mean_reversion").
+            n_trials: Number of configurations tried (completed +
+                pruned trials for an Optuna study).
+            scope: Where the trials came from ("optuna_study", "sweep",
+                "manual").
+            regime: Optional regime the trials were conditioned on.
+            sr_variance: Variance of the trials' Sharpe-like objective
+                values, when the objective was a Sharpe proxy (NULL
+                otherwise).
+            source: Study name / CLI invocation for traceability.
+
+        Returns:
+            Row id of the inserted entry, or None on Postgres.
+        """
+        recorded_at = datetime.now().isoformat()
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO trial_registry
+                    (strategy, regime, scope, n_trials, sr_variance,
+                     source, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    strategy,
+                    regime,
+                    scope,
+                    int(n_trials),
+                    sr_variance,
+                    source,
+                    recorded_at,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    def get_trial_registry(
+        self,
+        strategy: Optional[str] = None,
+        regime: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch trial registry rows, newest first.
+
+        Args:
+            strategy: Optional snake_case strategy filter.
+            regime: Optional regime filter (exact match; regime-agnostic
+                rows have regime NULL and are NOT returned when a
+                regime filter is set).
+
+        Returns:
+            List of dicts with id, strategy, regime, scope, n_trials,
+            sr_variance, source, recorded_at.
+        """
+        query = (
+            "SELECT id, strategy, regime, scope, n_trials, sr_variance, "
+            "source, recorded_at FROM trial_registry"
+        )
+        clauses: List[str] = []
+        params: List[Any] = []
+        if strategy:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if regime:
+            clauses.append("regime = ?")
+            params.append(regime)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY recorded_at DESC, id DESC"
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params) if params else None)
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "strategy": row[1],
+                "regime": row[2],
+                "scope": row[3],
+                "n_trials": row[4],
+                "sr_variance": row[5],
+                "source": row[6],
+                "recorded_at": str(row[7]) if row[7] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def get_total_trials(
+        self, strategy: str, regime: Optional[str] = None
+    ) -> int:
+        """Total configurations tried against a strategy (DSR's N).
+
+        When a regime is given, regime-agnostic rows (regime NULL) are
+        counted too: trials run without regime conditioning still
+        explored the strategy's parameter space.
+
+        Args:
+            strategy: Snake_case strategy key.
+            regime: Optional regime to narrow to.
+
+        Returns:
+            Sum of n_trials across matching registry rows (0 when the
+            strategy has no recorded trials).
+        """
+        query = (
+            "SELECT COALESCE(SUM(n_trials), 0) FROM trial_registry "
+            "WHERE strategy = ?"
+        )
+        params: List[Any] = [strategy]
+        if regime:
+            query += " AND (regime = ? OR regime IS NULL)"
+            params.append(regime)
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            row = cursor.fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def get_trial_sr_variance(
+        self, strategy: str, regime: Optional[str] = None
+    ) -> Optional[float]:
+        """N-trials-weighted mean of recorded trial Sharpe variances.
+
+        Used as the var_sharpe input to the Deflated Sharpe Ratio when
+        the raw trial values are no longer at hand. Rows with NULL
+        sr_variance (non-Sharpe objectives) are ignored.
+
+        Args:
+            strategy: Snake_case strategy key.
+            regime: Optional regime to narrow to (NULL-regime rows
+                included, mirroring get_total_trials).
+
+        Returns:
+            Weighted mean variance, or None when no row recorded one.
+        """
+        query = (
+            "SELECT n_trials, sr_variance FROM trial_registry "
+            "WHERE strategy = ? AND sr_variance IS NOT NULL"
+        )
+        params: List[Any] = [strategy]
+        if regime:
+            query += " AND (regime = ? OR regime IS NULL)"
+            params.append(regime)
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        total_n = sum(int(r[0]) for r in rows)
+        if total_n <= 0:
+            return None
+        return sum(int(r[0]) * float(r[1]) for r in rows) / total_n
 
     def get_closed_trades_for_weights(self) -> List[Dict[str, Any]]:
         """Fetch closed trades with the fields adaptive weighting needs.

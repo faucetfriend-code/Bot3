@@ -143,3 +143,20 @@ Both can be true: the screenshot's backtest is inflated **and** the trader makes
 ---
 
 *Research provenance note: web-sourced claims in Part 1.2–1.3 were extracted by a fan-out research run on 2026-07-19; the adversarial verification phase failed on session rate limits (all 25 verifier panels errored), so those claims carry the [WEB-UNVERIFIED] label. Sources: tradingview.com Pine Script strategy docs, TradingView Bar Magnifier release post, PineCoders non-standard-chart FAQ, crosstrade.io repainting guide, portfoliooptimizationbook.com ch. 8.3. Academic fetches (SSRN/arXiv/Concretum) did not complete; [LIT] items are cited from model knowledge and should be pulled directly if used for anything load-bearing.*
+
+---
+
+## Validation policy (P5, standing house rules)
+
+Adopted 2026-07-20. These rules apply to EVERY strategy (existing and future), not just ORB. The implementation lives in `trading_bot_v2/validation/` (statistics + gate), the trial registry in `database.py` (`trial_registry` table), and the walk-forward optimizer in `trading_bot_v2/backtesting/walk_forward.py`.
+
+1. **Ex-ante hypothesis before tuning.** Write down what edge the strategy is supposed to capture and why, BEFORE running any parameter search. If the hypothesis cannot be stated, the strategy is curve-fitting by construction.
+2. **Every optimization records its trial count.** This is automatic: `OptunaRunner.optimize()` writes a row to the `trial_registry` table (strategy, regime, scope, n_trials = completed + pruned, variance of trial objective values when the objective is a Sharpe proxy, study name). The registry's `get_total_trials(strategy)` is the N used to deflate reported Sharpe ratios. Manual/sweep experiments that explore configurations outside Optuna must record themselves too (`DatabaseManager.save_trial_registry_entry(scope="manual")`).
+3. **Out-of-sample only via walk-forward test windows.** Performance claims come from the aggregate OOS series produced by `python -m trading_bot_v2.backtesting.walk_forward --strategy X ...`: each window optimizes on its train slice and is evaluated on the untouched test slice. Full-period in-sample backtests are for debugging, never for promotion decisions.
+4. **Gate thresholds** (env-tunable, defaults in parentheses; endpoint `GET /api/validation/gate-policy`, CLI `python -m trading_bot_v2.validation.gate`):
+   - minimum closed trades per symbol: GATE_MIN_TRADES (30)
+   - pooled profit factor: > GATE_MIN_PF (1.3)
+   - PSR >= GATE_MIN_PSR (0.95), or DSR >= GATE_MIN_PSR when the registry knows N
+   - cross-symbol consistency: positive expectancy on >= 2 symbols
+5. **Testnet paper period before size.** A strategy that clears the gate runs on testnet paper for its observation period before any capital-at-risk sizing; live results must not degrade materially from the OOS backtest before size is added.
+6. **What DSR means.** The Deflated Sharpe Ratio (Bailey & Lopez de Prado 2014) re-tests the observed Sharpe against the Sharpe that the BEST of N skill-less configurations would show purely from selection. DSR >= 0.95 means less than 5% probability that the result is a fluke of the search size. A high raw Sharpe with a failing DSR is exactly the signature of an overfit search.

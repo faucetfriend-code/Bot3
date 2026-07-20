@@ -36,10 +36,14 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
-# Force UTF-8 on Windows terminals
-if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+def _force_utf8_stdout() -> None:
+    """Force UTF-8 on Windows terminals (CLI only - importing this
+    module must not replace sys.stdout, or pytest capture breaks)."""
+    if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
+        import io
+        sys.stdout = io.TextIOWrapper(
+            sys.stdout.buffer, encoding="utf-8", errors="replace"
+        )
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -99,6 +103,12 @@ try:
     if report:
         br.save_html(report)
 
+    trade_returns = [
+        t.get("pnl", 0) / capital
+        for t in br.trade_log
+        if t.get("pnl", 0) != 0
+    ]
+
     out = {
         "ok": True,
         "total_return_pct": br.total_return_pct,
@@ -112,6 +122,7 @@ try:
         "total_fees":       br.total_fees,
         "final_equity":     br.final_equity,
         "calmar":           br.calmar_ratio,
+        "trade_returns":    trade_returns,
     }
 except Exception as exc:
     out = {"ok": False, "error": str(exc)}
@@ -139,6 +150,11 @@ class StrategyResult:
         self.total_fees        = 0.0
         self.final_equity      = 0.0
         self.calmar            = 0.0
+        # P5 validation fields (filled by apply_validation_stats)
+        self.trade_returns: List[float] = []
+        self.psr: Optional[float] = None
+        self.dsr: Optional[float] = None
+        self.n_trials: int = 0
 
 
 def run_single_strategy(
@@ -190,6 +206,7 @@ def run_single_strategy(
         r.total_fees       = data["total_fees"]
         r.final_equity     = data["final_equity"]
         r.calmar           = data["calmar"]
+        r.trade_returns    = data.get("trade_returns", [])
 
     except subprocess.TimeoutExpired:
         r.error = "timed out (>300 s)"
@@ -198,6 +215,55 @@ def run_single_strategy(
 
     r.elapsed_sec = time.time() - t0
     return r
+
+
+# ---------------------------------------------------------------------------
+# P5 validation stats (PSR / DSR via trial registry)
+# ---------------------------------------------------------------------------
+def apply_validation_stats(results: List[StrategyResult]) -> None:
+    """Fill PSR/DSR/n_trials on each result (P5 validation stack).
+
+    PSR is computed from the run's closed-trade return series. The
+    trial count N comes from the trial_registry (get_total_trials);
+    when N > 1 a DSR is computed as well, using the registry's recorded
+    trial-Sharpe variance when available (1/(n-1) fallback otherwise).
+
+    Any failure (missing DB, no registry rows) degrades gracefully:
+    the affected fields simply stay at their defaults.
+    """
+    from trading_bot_v2.validation.statistics import (
+        deflated_sharpe_ratio,
+        probabilistic_sharpe_ratio,
+    )
+
+    try:
+        from trading_bot_v2.database import DatabaseManager
+        from trading_bot_v2.regime_param_overlay import resolve_strategy_key
+        db = DatabaseManager()
+    except Exception:
+        db = None
+
+    for r in results:
+        if not r.ok or not r.trade_returns:
+            continue
+        psr = probabilistic_sharpe_ratio(r.trade_returns)
+        r.psr = psr.value
+
+        if db is None:
+            continue
+        try:
+            key = resolve_strategy_key(r.name) or r.name
+            r.n_trials = db.get_total_trials(key)
+            if r.n_trials > 1:
+                sr_var = db.get_trial_sr_variance(key)
+                dsr = deflated_sharpe_ratio(
+                    r.trade_returns,
+                    n_trials=r.n_trials,
+                    var_sharpe_across_trials=sr_var,
+                )
+                r.dsr = dsr.value
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +276,7 @@ _COLS = {
     "MaxDD":       7,
     "WinRate":     8,
     "ProfFactor": 11,
+    "PSR":         6,
     "Calmar":      7,
     "Closed":      7,
     "Fees":        8,
@@ -252,6 +319,12 @@ def _row(r: StrategyResult) -> str:
         s = ("inf" if v >= 999999 else f"{v:.2f}").ljust(_COLS["ProfFactor"])
         return green(s) if v >= 1.0 else red(s)
 
+    def psr(v):
+        if v is None:
+            return dim("--".ljust(_COLS["PSR"]))
+        s = f"{v:.3f}".ljust(_COLS["PSR"])
+        return green(s) if v >= 0.95 else yellow(s) if v >= 0.5 else red(s)
+
     calmar = ("--" if r.calmar == 0 else f"{r.calmar:.2f}").ljust(_COLS["Calmar"])
     fees   = f"${r.total_fees:.2f}".ljust(_COLS["Fees"])
     closed = str(r.closed_trades).ljust(_COLS["Closed"])
@@ -263,6 +336,7 @@ def _row(r: StrategyResult) -> str:
         dd(r.max_dd_pct),
         wr(r.win_rate_pct),
         pf(r.profit_factor),
+        psr(r.psr),
         calmar,
         closed,
         fees,
@@ -285,13 +359,25 @@ def _verdict(r: StrategyResult) -> str:
     else:
         tag = red("LOSING")
     pf_str = "inf" if pf >= 999999 else f"{pf:.2f}"
-    return f"  -> {tag}  PF {pf_str}  WR {wr:.1f}%  return {ret:+.2f}%  ({r.closed_trades} closed)"
+    line = f"  -> {tag}  PF {pf_str}  WR {wr:.1f}%  return {ret:+.2f}%  ({r.closed_trades} closed)"
+
+    # P5 validation verdict: DSR when the trial registry knows N,
+    # UNVALIDATED when nothing was ever recorded for this strategy.
+    if r.n_trials <= 0:
+        line += "  " + yellow("UNVALIDATED (N trials unknown)")
+    elif r.dsr is not None:
+        if r.dsr >= 0.95:
+            line += "  " + green(f"DSR-PASS ({r.dsr:.3f}, N={r.n_trials})")
+        else:
+            line += "  " + red(f"DSR-FAIL ({r.dsr:.3f}, N={r.n_trials})")
+    return line
 
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 def main():
+    _force_utf8_stdout()
     from trading_bot_v2.config import config as cfg
 
     parser = argparse.ArgumentParser(
@@ -379,6 +465,9 @@ def main():
 
         print(f"  {status}", flush=True)
 
+    # ---- P5 validation stats (PSR / DSR from trial registry) ---------------
+    apply_validation_stats(results)
+
     # ---- summary table -----------------------------------------------------
     print()
     print(bold(f"  === Results: {symbol}  {start} -> {end} ==="))
@@ -402,6 +491,20 @@ def main():
     print()
     for r in with_trades + without_trades:
         print(f"  {r.name.ljust(24)}{_verdict(r)}")
+
+    # ---- per-strategy DSR lines (only when the registry knows N) -----------
+    validated = [r for r in with_trades if r.n_trials > 1 and r.dsr is not None]
+    if validated:
+        print()
+        print(bold("  Deflated Sharpe (trial registry)"))
+        print()
+        for r in validated:
+            tag = green("PASS") if r.dsr >= 0.95 else red("FAIL")
+            psr_str = f"{r.psr:.3f}" if r.psr is not None else "--"
+            print(
+                f"  {r.name.ljust(24)}DSR {r.dsr:.3f} [{tag}]  "
+                f"PSR {psr_str}  N={r.n_trials} trials recorded"
+            )
 
     # ---- aggregate summary -------------------------------------------------
     print()

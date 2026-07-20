@@ -1909,6 +1909,35 @@ async def get_signals_csv_path():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/validation/gate-policy")
+async def get_validation_gate_policy():
+    """Return the standing P5 validation gate policy parameters.
+
+    Documentation endpoint only - reads env-configured thresholds
+    (GATE_MIN_TRADES, GATE_MIN_PF, GATE_MIN_PSR), no heavy compute.
+    """
+    try:
+        from .validation.gate import load_gate_policy
+
+        return {
+            "success": True,
+            "policy": load_gate_policy(),
+            "description": {
+                "min_closed_trades": "Minimum closed trades per symbol",
+                "min_profit_factor": "Pooled profit factor must exceed this",
+                "min_psr": "PSR (or DSR when trial count known) must "
+                           "meet this confidence",
+                "min_consistent_symbols": "Symbols with positive "
+                                          "expectancy required",
+            },
+            "note": "DSR >= 0.95 means <5% probability the result is a "
+                    "fluke of the search size. See "
+                    "trading_bot_v2/validation/gate.py",
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/debug/key-config")
 async def check_key_configuration():
     """Debug endpoint to check Pacifica API key configuration."""
