@@ -38,6 +38,7 @@ try:
     from .config import config
     from .pacifica_ws_client import get_ws_client
     from .backup_scheduler import BackupScheduler
+    from .exchanges import get_exchange_client
 except ImportError:
     # When running as script: python api_server.py
     from trading_bot import TradingBot
@@ -52,6 +53,13 @@ except ImportError:
     from config import config
     from pacifica_ws_client import get_ws_client
     from backup_scheduler import BackupScheduler
+
+    try:
+        from exchanges import get_exchange_client
+    except ImportError:
+        # Script mode cannot resolve the package-relative exchanges
+        # package; fall back to direct PacificaClient construction.
+        get_exchange_client = None
 
 # Configure logging
 # - Console: stdout (existing behavior)
@@ -142,6 +150,7 @@ class BotIntegration:
 
         # Initialize real components
         self.database: Optional[DatabaseManager] = None
+        self.exchange = None  # ExchangeClient adapter (set in initialize)
         self.pacifica_client: Optional[PacificaClient] = None
         self.trading_bot: Optional[TradingBot] = None
         self.strategy_manager: Optional[StrategyManager] = None
@@ -168,13 +177,27 @@ class BotIntegration:
             self.database = DatabaseManager()
             logger.info("DatabaseManager initialized")
 
-            # Initialize Pacifica client with API keys from config
+            # Initialize exchange client with API keys from config.
+            # Construction is routed through the exchange adapter factory
+            # (EXCHANGE env var selects the adapter, default "pacifica");
+            # self.pacifica_client stays bound to the underlying native
+            # REST client for the legacy call sites below.
             if not config.pacifica_private_key or not config.pacifica_public_key:
                 logger.warning(
                     "Pacifica API keys not configured - some features will be unavailable"
                 )
+                self.exchange = None
                 self.pacifica_client = None
+            elif get_exchange_client is not None:
+                self.exchange = get_exchange_client()
+                self.pacifica_client = self.exchange.rest_client
+                logger.info(
+                    "Exchange client initialized via adapter factory "
+                    f"({type(self.exchange).__name__})"
+                )
             else:
+                # Script-mode fallback (exchanges package unavailable)
+                self.exchange = None
                 self.pacifica_client = PacificaClient(
                     agent_wallet_private_key=config.pacifica_private_key,
                     account_public_key=config.pacifica_public_key,

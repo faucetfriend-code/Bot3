@@ -26,8 +26,11 @@ except ImportError:
 from .config import config
 
 # Import core modules
-from .models import Signal, OrderSide
+from .models import Signal, OrderSide, OrderType
 from .indicators import calculate_adx, calculate_atr, calculate_bollinger_bands
+
+# Exchange abstraction: adapter factory selected via EXCHANGE env var
+from .exchanges import get_exchange_client
 
 # Import other modules
 from .database import DatabaseManager
@@ -77,6 +80,26 @@ from .telegram_alerts import telegram_alerts
 
 # Import PositionReconciler for H4 position reconciliation
 from .position_reconciler import PositionReconciler
+
+
+def _resolve_exchange(bot):
+    """Return the exchange adapter for a bot-like object.
+
+    Real TradingBot instances expose the ``exchange`` property; some test
+    fixtures bind TradingBot methods onto duck-typed stand-ins (e.g.
+    SimpleNamespace) that only carry ``client``.  For those, wrap the raw
+    client in a fresh adapter via the factory.
+
+    Args:
+        bot: TradingBot instance or duck-typed stand-in with ``client``.
+
+    Returns:
+        ExchangeClient adapter for the bot's current client.
+    """
+    exchange = getattr(bot, "exchange", None)
+    if exchange is None:
+        exchange = get_exchange_client(rest_client=getattr(bot, "client", None))
+    return exchange
 
 
 class TradingBot:
@@ -169,6 +192,14 @@ class TradingBot:
         else:
             self.ws_client = None
 
+        # Exchange adapter facade over the raw client (exchange modularity
+        # refactor).  The factory reads EXCHANGE (default "pacifica"); the
+        # adapter owns all side/amount vocabulary conversion.  self.client
+        # remains the raw native client for legacy call sites.
+        self._exchange = get_exchange_client(
+            rest_client=self.client, ws_client=self.ws_client
+        )
+
         # Initialize multi-timeframe data fetcher with WebSocket support and longer cache
         self.multi_tf_fetcher = MultiTimeframeFetcher(
             self.client,
@@ -259,6 +290,29 @@ class TradingBot:
         self._last_reconciliation_time = 0.0
 
         logging.info("Trading bot initialized")
+
+    @property
+    def exchange(self):
+        """Exchange adapter facade over the CURRENT raw client.
+
+        Resolved dynamically because tests (and some legacy code paths)
+        reassign ``self.client`` after construction; the cached adapter
+        is rebuilt whenever the underlying client identity changes.
+        Instances built without __init__ (test fixtures using __new__)
+        also get a working adapter lazily.
+
+        Returns:
+            ExchangeClient adapter wrapping ``self.client``.
+        """
+        raw = getattr(self, "client", None)
+        cached = getattr(self, "_exchange", None)
+        if cached is not None and cached.rest_client is raw:
+            return cached
+        exchange = get_exchange_client(
+            rest_client=raw, ws_client=getattr(self, "ws_client", None)
+        )
+        self._exchange = exchange
+        return exchange
 
     @property
     def is_running(self) -> bool:
@@ -949,19 +1003,19 @@ class TradingBot:
         try:
             logger.warning(f"🛑 Closing orphaned grid for {symbol} (reason: {reason})")
 
-            # Cancel all orders for this symbol
+            # Cancel all orders for this symbol (via exchange adapter)
+            exchange = _resolve_exchange(self)
             try:
-                result = self.client.cancel_all_orders(symbol=symbol)
+                result = exchange.cancel_all_orders(symbol=symbol)
                 logger.info(f"  ✅ Cancelled all orders for {symbol}: {result}")
             except Exception as e:
                 logger.error(f"  ❌ Failed to cancel orders for {symbol}: {e}")
 
-            # Check if there's an open position for this symbol
-            positions = self.client.get_positions()
-            symbol_positions = [
-                p for p in positions
-                if p.get("symbol") == symbol and float(p.get("quantity", 0)) > 0
-            ]
+            # Check if there's an open position for this symbol.  The
+            # adapter returns normalized positions with qty==0 ghosts
+            # already filtered out.
+            positions = exchange.get_positions()
+            symbol_positions = [p for p in positions if p.symbol == symbol]
 
             if symbol_positions:
                 logger.warning(
@@ -1776,15 +1830,16 @@ class TradingBot:
             # Place grid orders
             buy_order_ids = []
             sell_order_ids = []
+            exchange = _resolve_exchange(self)
 
-            # Place BUY orders
+            # Place BUY orders (normalized vocabulary via exchange adapter)
             for level in grid_levels["buy_levels"]:
                 try:
-                    response = self.client.place_order(
+                    response = exchange.place_order(
                         symbol=symbol,
-                        side="buy",
+                        side=OrderSide.BUY,
                         quantity=level["quantity"],
-                        order_type="limit",
+                        order_type=OrderType.LIMIT,
                         price=level["price"],
                     )
 
@@ -1803,14 +1858,14 @@ class TradingBot:
                 except Exception as e:
                     logger.error(f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}")
 
-            # Place SELL orders
+            # Place SELL orders (normalized vocabulary via exchange adapter)
             for level in grid_levels["sell_levels"]:
                 try:
-                    response = self.client.place_order(
+                    response = exchange.place_order(
                         symbol=symbol,
-                        side="sell",
+                        side=OrderSide.SELL,
                         quantity=level["quantity"],
-                        order_type="limit",
+                        order_type=OrderType.LIMIT,
                         price=level["price"],
                     )
 
@@ -1902,14 +1957,15 @@ class TradingBot:
             
             # Use refined signal for execution
             signal = refined_signal
-            side_str = "buy" if signal.side.name == "BUY" else "sell"
 
-            # Use market order for immediate execution
-            order_response = self.client.place_order(
+            # Use market order for immediate execution.  Routed through the
+            # exchange adapter: normalized OrderSide/OrderType go in, the
+            # adapter owns the exchange-native side/amount conversion.
+            order_response = _resolve_exchange(self).place_order(
                 symbol=symbol,
-                side=side_str,
+                side=signal.side,
                 quantity=quantity,
-                order_type="market",
+                order_type=OrderType.MARKET,
             )
 
             # Debug: log raw API response to diagnose parsing issues
@@ -2119,14 +2175,12 @@ class TradingBot:
             Account balance in USD.
         """
         try:
-            balance = self.client.get_balance()
-            logging.info(f"🔍 Raw balance response: {balance}")
-            
-            # Pacifica returns "balance" or "account_equity" (as strings), not "equity"
-            balance_str = balance.get("balance", balance.get("account_equity", "0"))
-            logging.info(f"🔍 Extracted balance string: '{balance_str}'")
-            
-            equity = float(balance_str) if balance_str else 0.0
+            # Balance read via exchange adapter: the "balance" vs
+            # "account_equity" string extraction now lives in the adapter.
+            balance = _resolve_exchange(self).get_balance()
+            logging.info(f"🔍 Raw balance response: {balance.raw}")
+
+            equity = balance.equity
             logging.info(f"🔍 Final account balance: ${equity:.2f}")
             
             if equity <= 0:
@@ -2145,16 +2199,18 @@ class TradingBot:
             Total exposure in USD.
         """
         try:
-            positions = self.client.get_positions()
+            # Normalized positions from the exchange adapter (ghost
+            # qty==0 entries already filtered, sides normalized).
+            positions = _resolve_exchange(self).get_positions()
             if not positions:
                 return 0.0
 
             total_exposure = 0.0
             for pos in positions:
-                quantity = float(pos.get("quantity", 0))
+                quantity = pos.quantity
                 # Get current price (fallback to entry price if unavailable)
-                symbol = pos.get("symbol")
-                entry_price = float(pos.get("entry_price", 0))
+                symbol = pos.symbol
+                entry_price = pos.entry_price
 
                 current_price = entry_price  # Default to entry price
                 if symbol:
@@ -2230,19 +2286,25 @@ class TradingBot:
             quantity: Position size
         """
         try:
-            # Determine order side (opposite of position side)
-            order_side = "SELL" if side == "LONG" else "BUY"
-
-            logging.critical(
-                f"🚨 EMERGENCY CLOSE: {order_side} {quantity} {symbol} @ MARKET"
+            # Determine order side (opposite of position side).  Uses the
+            # normalized OrderSide enum via the exchange adapter - the old
+            # direct call passed "SELL"/"BUY" + "MARKET", which the native
+            # Pacifica client rejected (order_type mismatch) and would have
+            # side-mangled ("BUY" mapped to "ask").
+            close_side = (
+                OrderSide.SELL if str(side).upper() == "LONG" else OrderSide.BUY
             )
 
-            # Place market order
-            order = self.client.place_order(
+            logging.critical(
+                f"🚨 EMERGENCY CLOSE: {close_side.name} {quantity} {symbol} @ MARKET"
+            )
+
+            # Place market order through the exchange adapter
+            order = _resolve_exchange(self).place_order(
                 symbol=symbol,
-                side=order_side,
+                side=close_side,
                 quantity=quantity,
-                order_type="MARKET",
+                order_type=OrderType.MARKET,
             )
 
             logging.info(f"Emergency close order placed: {order}")
@@ -2627,7 +2689,7 @@ class TradingBot:
             #    cancel_all_orders() is safe to call even if there are no orders.
             for symbol in symbols_affected:
                 try:
-                    result = self.client.cancel_all_orders(symbol=symbol)
+                    result = _resolve_exchange(self).cancel_all_orders(symbol=symbol)
                     logging.info(
                         f"  ✅ Cancelled orders for {symbol} ({strategy_name}): {result}"
                     )

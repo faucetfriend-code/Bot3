@@ -30,6 +30,7 @@ from .strategies.ma_crossover import MACrossoverStrategy
 from .strategies.grid_trading import GridTradingStrategy
 from .strategies.liquidation_capture import LiquidationCaptureStrategy
 from .strategies.vwap_scalping import VWAPScalpingStrategy
+from .exchanges import get_exchange_capabilities
 from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
@@ -344,17 +345,24 @@ class StrategyManager:
             funding_lookback = int(os.getenv("FUNDING_ARB_LOOKBACK_HOURS", "8"))
             funding_min_confidence = float(os.getenv("FUNDING_ARB_MIN_CONFIDENCE", "0.70"))
 
+            # Funding interval comes from the selected exchange's
+            # capabilities (Pacifica: 1h, Blofin: 8h) so the strategy's
+            # rate math scales correctly per exchange.
+            funding_interval_hours = get_exchange_capabilities().funding_interval_hours
+
             self.strategies["FundingArb"] = FundingArbStrategy(
                 min_funding_rate=funding_min_rate,
                 max_allocation_pct=funding_max_alloc,
                 rebalance_threshold=funding_rebalance,
                 lookback_hours=funding_lookback,
                 min_confidence=funding_min_confidence,
-                client=self.client,  # Pass Pacifica client for API calls
+                client=self.client,  # Pass exchange client for API calls
+                funding_interval_hours=funding_interval_hours,
             )
             logger.info(
                 f"Funding Arb strategy enabled: min_rate={funding_min_rate:.4%}, "
-                f"max_alloc={funding_max_alloc:.0%}, rebalance={funding_rebalance:.1%}"
+                f"max_alloc={funding_max_alloc:.0%}, rebalance={funding_rebalance:.1%}, "
+                f"funding_interval={funding_interval_hours}h"
             )
 
         if self.enable_momentum_scalping:

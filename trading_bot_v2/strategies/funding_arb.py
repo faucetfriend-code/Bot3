@@ -36,7 +36,8 @@ class FundingArbStrategy:
         rebalance_threshold: float = 0.02,      # Rebalance if delta > 2%
         lookback_hours: int = 8,                # Hours of funding history to analyze
         min_confidence: float = 0.70,
-        client=None,                            # Pacifica client for API calls
+        client=None,                            # Exchange client for API calls
+        funding_interval_hours: int = 1,        # Funding cycle (Pacifica=1, Blofin=8)
     ):
         self.strategy_type = StrategyType.FUNDING_ARB
         self.min_funding_rate = min_funding_rate
@@ -45,6 +46,15 @@ class FundingArbStrategy:
         self.lookback_hours = lookback_hours
         self.min_confidence = min_confidence
         self.client = client
+
+        # Funding interval awareness (from exchange capabilities).  The
+        # cached rate is PER FUNDING PERIOD; daily/annualized yields scale
+        # by periods-per-day.  Default 1h keeps Pacifica behavior identical
+        # (24 periods/day).
+        if funding_interval_hours <= 0:
+            funding_interval_hours = 1
+        self.funding_interval_hours = funding_interval_hours
+        self.periods_per_day = 24.0 / float(funding_interval_hours)
 
         # Track active arb positions
         self.active_positions: Dict[str, Dict] = {}
@@ -134,9 +144,12 @@ class FundingArbStrategy:
             logger.debug(f"{symbol}: Funding rate unstable (current vs avg signs differ)")
             return None
 
-        # Calculate expected hourly yield
+        # Calculate expected per-period yield, scaled by the exchange's
+        # funding interval (Pacifica: 24 periods/day, Blofin: 3/day).
+        # The "hourly_yield" key name is kept for backward compatibility;
+        # its value is the yield per funding period.
         hourly_yield = abs(current_rate)
-        daily_yield = hourly_yield * 24
+        daily_yield = hourly_yield * self.periods_per_day
         annualized_yield = daily_yield * 365
 
         # Determine direction
@@ -351,7 +364,7 @@ class FundingArbStrategy:
                 opportunities.append({
                     "symbol": symbol,
                     "rate": rate,
-                    "apy": abs(rate) * 24 * 365,
+                    "apy": abs(rate) * self.periods_per_day * 365,
                     "direction": "short" if rate > 0 else "long"
                 })
 
