@@ -1200,6 +1200,10 @@ def _init_sqlite_database():
             "ALTER TABLE grid_states ADD COLUMN last_refresh TIMESTAMP",
             "ALTER TABLE grid_states ADD COLUMN consistency_checked_at TIMESTAMP",
             "ALTER TABLE grid_states ADD COLUMN repair_history TEXT",
+            # JSON list of live grid order IDs (fill attribution). The base
+            # CREATE TABLE already includes this column; the ALTER covers
+            # databases created from an older schema.
+            "ALTER TABLE grid_states ADD COLUMN order_ids TEXT",
         ]
 
         for alter_sql in grid_state_alter_statements:

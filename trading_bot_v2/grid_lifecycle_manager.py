@@ -18,6 +18,7 @@ Sizing MUST come from RiskManager.
 
 from enum import Enum
 from typing import Dict, Any, List, Optional, Set
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from loguru import logger
@@ -112,6 +113,66 @@ class GridLifecycleManager:
 
         # Last time we checked for fills
         self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
+
+    # =========================
+    # ORDER-ID TRACKING HELPERS
+    # =========================
+
+    @staticmethod
+    def _extract_order_id_from_order(order: Dict[str, Any]) -> Optional[str]:
+        """Extract an order ID from an exchange open-orders entry.
+
+        Pacifica open-orders entries expose the ID as "order_id" (some
+        legacy shapes use "id").
+
+        Args:
+            order: Order dict from the exchange open-orders response.
+
+        Returns:
+            Order ID as a string, or None if absent.
+        """
+        order_id = order.get("order_id") or order.get("id")
+        return str(order_id) if order_id else None
+
+    @staticmethod
+    def _extract_order_id_from_response(
+        response: Dict[str, Any],
+    ) -> Optional[str]:
+        """Extract an order ID from a place_order response.
+
+        Pacifica wraps order creation as {"success": bool, "data":
+        {"order_id": ...}}; fall back to top-level keys defensively.
+
+        Args:
+            response: Response dict returned by client.place_order.
+
+        Returns:
+            Order ID as a string, or None if it cannot be determined.
+        """
+        if not isinstance(response, dict):
+            return None
+        data = response.get("data")
+        if isinstance(data, dict):
+            order_id = data.get("order_id") or data.get("id")
+            if order_id:
+                return str(order_id)
+        order_id = response.get("order_id") or response.get("id")
+        return str(order_id) if order_id else None
+
+    def get_tracked_order_ids(self, symbol: str) -> Optional[Set[str]]:
+        """Return the live grid order-ID set for a symbol.
+
+        Args:
+            symbol: Trading symbol.
+
+        Returns:
+            The set of tracked order IDs, or None when the grid does not
+            track IDs (legacy grid) or does not exist.
+        """
+        grid = self._grids.get(symbol)
+        if grid is None:
+            return None
+        return grid.get("order_ids")
 
     # =========================
     # ORPHAN DETECTION & REPAIR
@@ -446,6 +507,18 @@ class GridLifecycleManager:
                 "readopted_at": datetime.now(timezone.utc),
             }
 
+            # Track order IDs from the exchange's open-orders response so
+            # only fills of these orders are attributed to the grid.
+            readopted_ids = {
+                oid
+                for oid in (
+                    self._extract_order_id_from_order(o) for o in all_orders
+                )
+                if oid
+            }
+            if readopted_ids:
+                self._grids[symbol]["order_ids"] = readopted_ids
+
             self._fills[symbol] = []
             self._processed_trades[symbol] = set()
             self._metrics[symbol] = GridMetrics()
@@ -722,6 +795,17 @@ class GridLifecycleManager:
                     )
                     orders_adjusted += 1
 
+                    # Rotate tracked order IDs (old leg is gone, new leg is
+                    # live) so fill attribution survives recentering.
+                    tracked_ids = grid.get("order_ids")
+                    if tracked_ids is not None:
+                        tracked_ids.discard(str(order_id))
+                        replacement_id = self._extract_order_id_from_response(
+                            new_order
+                        )
+                        if replacement_id:
+                            tracked_ids.add(replacement_id)
+
                 except Exception as e:
                     # Cancel succeeded but replace failed = orphan leg.
                     # Log critically so the supervisor sees it; track for caller.
@@ -740,6 +824,11 @@ class GridLifecycleManager:
                         "state":     state,
                         "error":     str(e),
                     })
+
+                    # Cancelled-but-not-replaced legs are no longer live:
+                    # drop them from the tracked ID set.
+                    if cancelled and grid.get("order_ids") is not None:
+                        grid["order_ids"].discard(str(order_id))
 
             # Phase 2: decide how to update grid metadata.
             # If ANY orphan legs (cancel succeeded, replace failed), the grid
@@ -859,6 +948,7 @@ class GridLifecycleManager:
         spacing: float = 0,
         num_levels: int = 10,
         center_price: float = 0,
+        order_ids: Optional[List[str]] = None,
     ):
         """
         Register a grid AFTER emergency stop has been successfully placed.
@@ -873,6 +963,11 @@ class GridLifecycleManager:
             spacing: Grid spacing used
             num_levels: Number of grid levels
             center_price: Initial center price for the grid
+            order_ids: Exchange order IDs of the placed grid orders. When
+                provided, fills are attributed to the grid ONLY if their
+                order ID is in this set (protects against overlay-strategy
+                fills on the same symbol). When None, the grid falls back
+                to legacy attribute-everything behavior.
         """
         if symbol in self._grids:
             raise RuntimeError(f"Grid already active for {symbol}")
@@ -891,6 +986,11 @@ class GridLifecycleManager:
             "created_at": datetime.now(timezone.utc),
             "refresh_count": 0,
         }
+
+        if order_ids is not None:
+            self._grids[symbol]["order_ids"] = {
+                str(oid) for oid in order_ids if oid
+            }
 
         # Initialize exposure tracking at zero
         self.risk_manager.grid_exposure[symbol] = 0.0
@@ -1119,6 +1219,11 @@ class GridLifecycleManager:
             logger.error(f"Order cancel failed for {symbol}: {e}")
             result["errors"].append(f"Order cancel failed: {e}")
             return result  # Fail early - orders must be cancelled
+
+        # No live grid orders remain - clear tracked order IDs.
+        grid_rec = self._grids.get(symbol)
+        if grid_rec is not None and grid_rec.get("order_ids") is not None:
+            grid_rec["order_ids"] = set()
 
         # Get all positions for this symbol
         try:
@@ -1380,6 +1485,13 @@ class GridLifecycleManager:
         """
         Process trades from exchange and record new fills.
 
+        Fill attribution: when the grid tracks order IDs (grid["order_ids"]
+        is a set), only trades whose order_id is in that set are treated as
+        grid fills; everything else on the symbol (overlay strategies such
+        as LiquidationCapture / FundingArb / OrderBookImbalance) is ignored.
+        Legacy grids without tracked IDs keep the old attribute-everything
+        behavior, with a one-time WARNING per grid.
+
         Returns:
             Number of new fills processed
         """
@@ -1392,6 +1504,22 @@ class GridLifecycleManager:
         if symbol not in self._metrics:
             self._metrics[symbol] = GridMetrics()
 
+        grid = self._grids.get(symbol)
+        known_ids = grid.get("order_ids") if grid is not None else None
+
+        if (
+            trades
+            and grid is not None
+            and known_ids is None
+            and not grid.get("order_id_warning_emitted")
+        ):
+            grid["order_id_warning_emitted"] = True
+            logger.warning(
+                f"Grid for {symbol} has no tracked order IDs (legacy grid) - "
+                f"attributing ALL account trades on this symbol to the grid. "
+                f"Overlay-strategy fills may corrupt grid PnL/replenishment."
+            )
+
         new_fills = 0
 
         for trade in trades:
@@ -1401,6 +1529,19 @@ class GridLifecycleManager:
 
             # Skip if already processed
             if trade_id in self._processed_trades[symbol]:
+                continue
+
+            # STRICT ATTRIBUTION: when order IDs are tracked, only fills of
+            # known grid orders belong to the grid. Non-matching fills are
+            # marked processed so they are not re-examined every cycle.
+            fill_order_id = str(trade.get("order_id", ""))
+            if known_ids is not None and fill_order_id not in known_ids:
+                if trade_id:
+                    self._processed_trades[symbol].add(trade_id)
+                logger.debug(
+                    f"Ignoring non-grid fill for {symbol} "
+                    f"(order_id={fill_order_id or 'unknown'}, trade={trade_id})"
+                )
                 continue
 
             # Determine side
@@ -1419,7 +1560,7 @@ class GridLifecycleManager:
                     trade.get("amount") or trade.get("size") or trade.get("quantity", 0)
                 )
                 fee = float(trade.get("fee", 0))
-                order_id = str(trade.get("order_id", ""))
+                order_id = fill_order_id
 
                 # Parse timestamp - ALWAYS timezone-aware UTC. Mixing naive
                 # and aware datetimes makes the FIFO sort in
@@ -1455,6 +1596,11 @@ class GridLifecycleManager:
             self._fills[symbol].append(fill)
             self._processed_trades[symbol].add(trade_id)
             new_fills += 1
+
+            # Filled order is no longer live - rotate it out of the ID set.
+            # Its replacement is registered by _replenish_order below.
+            if known_ids is not None and fill_order_id:
+                known_ids.discard(fill_order_id)
 
             # Update metrics
             metrics = self._metrics[symbol]
@@ -1582,6 +1728,21 @@ class GridLifecycleManager:
             order_result = self.client.place_order(
                 symbol, counter_side, counter_quantity, "limit", counter_price
             )
+
+            # Register the replacement order ID so its future fill is
+            # attributed to the grid (only for ID-tracking grids).
+            if grid.get("order_ids") is not None:
+                new_order_id = self._extract_order_id_from_response(
+                    order_result
+                )
+                if new_order_id:
+                    grid["order_ids"].add(new_order_id)
+                else:
+                    logger.error(
+                        f"Grid replenish for {symbol}: could not extract "
+                        f"order ID from response - the replacement order's "
+                        f"fill will NOT be attributed to the grid"
+                    )
 
             logger.info(
                 f"📊 Grid REPLENISH: {symbol} {counter_side.upper()} {counter_quantity:.6f} @ ${counter_price:.2f} "
@@ -1786,6 +1947,19 @@ class GridLifecycleManager:
                     "sell_orders": len(sell_orders),
                 }
 
+                # Track order IDs from the open-orders response for strict
+                # fill attribution after sync.
+                synced_ids = {
+                    oid
+                    for oid in (
+                        self._extract_order_id_from_order(o)
+                        for o in limit_orders
+                    )
+                    if oid
+                }
+                if synced_ids:
+                    self._grids[symbol]["order_ids"] = synced_ids
+
                 # Initialize metrics
                 self._metrics[symbol] = GridMetrics()
                 self._fills[symbol] = []
@@ -1981,6 +2155,11 @@ class GridLifecycleManager:
                 })
             repair_history = json.dumps(repair_entries[-10:])  # Keep last 10
 
+        # Serialize tracked order IDs (None => legacy grid, stored as NULL)
+        order_ids_json = None
+        if grid.get("order_ids") is not None:
+            order_ids_json = json.dumps(sorted(grid["order_ids"]))
+
         try:
             from .database import get_db_connection
 
@@ -1993,9 +2172,9 @@ class GridLifecycleManager:
                      total_sell_fills, realized_pnl, total_fees,
                      center_price, initial_center, orders_placed, refresh_count,
                      last_refresh, consistency_checked_at, repair_history,
-                     updated_at)
+                     order_ids, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                            ?, ?, ?, ?, ?, ?, ?,
+                            ?, ?, ?, ?, ?, ?, ?, ?,
                             CURRENT_TIMESTAMP)
                 """,
                     (
@@ -2020,6 +2199,7 @@ class GridLifecycleManager:
                         grid.get("last_refresh"),
                         datetime.now(timezone.utc).isoformat(),
                         repair_history,
+                        order_ids_json,
                     ),
                 )
                 conn.commit()
@@ -2052,7 +2232,7 @@ class GridLifecycleManager:
                            atr_at_creation, grid_spacing, num_levels, total_buy_fills,
                            total_sell_fills, realized_pnl, total_fees,
                            center_price, initial_center, orders_placed, refresh_count,
-                           last_refresh, repair_history
+                           last_refresh, repair_history, order_ids
                     FROM grid_states
                     WHERE state = 'active'
                 """)
@@ -2100,6 +2280,19 @@ class GridLifecycleManager:
                         "last_refresh": row[16],
                     }
 
+                    # Restore tracked order IDs (NULL => legacy grid that
+                    # keeps attribute-everything fill behavior)
+                    if row[18]:
+                        try:
+                            self._grids[symbol]["order_ids"] = {
+                                str(oid) for oid in json.loads(row[18])
+                            }
+                        except (ValueError, TypeError) as e:
+                            logger.warning(
+                                f"Could not parse stored order_ids for "
+                                f"{symbol}: {e}"
+                            )
+
                     # Initialize metrics from DB
                     self._metrics[symbol] = GridMetrics(
                         total_buy_fills=row[8],
@@ -2145,6 +2338,12 @@ class GridLifecycleManager:
 
         metrics = self._metrics.get(symbol, GridMetrics())
 
+        # Keep persisted order IDs in sync with fill/replenish rotation so
+        # a restart re-adopts the CURRENT live grid orders.
+        order_ids_json = None
+        if self._grids[symbol].get("order_ids") is not None:
+            order_ids_json = json.dumps(sorted(self._grids[symbol]["order_ids"]))
+
         try:
             from .database import get_db_connection
 
@@ -2153,7 +2352,8 @@ class GridLifecycleManager:
                     """
                     UPDATE grid_states
                     SET total_buy_fills = ?, total_sell_fills = ?,
-                        realized_pnl = ?, total_fees = ?, updated_at = CURRENT_TIMESTAMP
+                        realized_pnl = ?, total_fees = ?, order_ids = ?,
+                        updated_at = CURRENT_TIMESTAMP
                     WHERE symbol = ?
                 """,
                     (
@@ -2161,6 +2361,7 @@ class GridLifecycleManager:
                         metrics.total_sell_fills,
                         metrics.realized_pnl,
                         metrics.total_fees,
+                        order_ids_json,
                         symbol,
                     ),
                 )

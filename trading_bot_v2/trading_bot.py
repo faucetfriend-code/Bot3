@@ -913,6 +913,18 @@ class TradingBot:
                     "readopted": True,  # Flag that this was re-adopted
                 }
 
+                # Populate tracked order IDs from the exchange's open-orders
+                # response so fills are attributed strictly by order ID.
+                readopted_ids = set()
+                for order in all_orders:
+                    oid = order.get("order_id") or order.get("id")
+                    if oid:
+                        readopted_ids.add(str(oid))
+                if readopted_ids:
+                    self.grid_lifecycle._grids[symbol]["order_ids"] = (
+                        readopted_ids
+                    )
+
                 logger.info(
                     f"✅ Re-adopted grid for {symbol}: center=${center_price:.4f}, "
                     f"emergency_stop=${emergency_stop:.4f} "
@@ -1675,6 +1687,12 @@ class TradingBot:
                         else str(signal.market_state)
                     )
 
+                # Order IDs collected at placement time drive strict fill
+                # attribution (overlay strategies trade the same symbols).
+                placed_order_ids = (result.get("buy_order_ids") or []) + (
+                    result.get("sell_order_ids") or []
+                )
+
                 self.grid_lifecycle.register_new_grid(
                     symbol=symbol,
                     grid_capital=capital_allocated,
@@ -1686,6 +1704,7 @@ class TradingBot:
                     or signal.grid_levels
                     or 10,
                     center_price=center_price,
+                    order_ids=placed_order_ids,
                 )
                 logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
 
