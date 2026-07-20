@@ -820,6 +820,19 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        CREATE TABLE IF NOT EXISTS validation_runs (
+            id BIGSERIAL PRIMARY KEY,
+            run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            strategy TEXT NOT NULL,
+            symbols TEXT NOT NULL,
+            window_spec TEXT,
+            chunks_json TEXT,
+            checks_json TEXT,
+            overall TEXT NOT NULL,
+            data_start TEXT,
+            data_end TEXT
+        );
+
         CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             description TEXT,
@@ -1334,6 +1347,29 @@ def _init_sqlite_database():
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_trial_registry_strategy "
             "ON trial_registry(strategy, regime)"
+        )
+
+        # Validation runs (P5 validation stack, standalone runner).
+        # Each row is one gate evaluation of a strategy over a series of
+        # chunked backtest windows, written by
+        # trading_bot_v2.validation.runner (never by the live bot).
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS validation_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    strategy TEXT NOT NULL,
+                    symbols TEXT NOT NULL,
+                    window_spec TEXT,
+                    chunks_json TEXT,
+                    checks_json TEXT,
+                    overall TEXT NOT NULL,
+                    data_start TEXT,
+                    data_end TEXT
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_validation_runs_strategy "
+            "ON validation_runs(strategy, id)"
         )
 
         # Add account_id columns to existing tables if they don't exist
@@ -2253,6 +2289,141 @@ class DatabaseManager:
         if total_n <= 0:
             return None
         return sum(int(r[0]) * float(r[1]) for r in rows) / total_n
+
+    def save_validation_run(
+        self,
+        strategy: str,
+        symbols: str,
+        window_spec: str,
+        chunks_json: str,
+        checks_json: str,
+        overall: str,
+        data_start: Optional[str] = None,
+        data_end: Optional[str] = None,
+    ) -> Optional[int]:
+        """Persist one standalone validation-runner verdict (P5).
+
+        Written only by trading_bot_v2.validation.runner; the live bot
+        and API server read these rows but never write them.
+
+        Args:
+            strategy: Snake_case strategy key (e.g. "mean_reversion").
+            symbols: Comma-separated symbols evaluated.
+            window_spec: Human-readable chunking spec (e.g. "3x2mo").
+            chunks_json: JSON list of per-chunk results.
+            checks_json: JSON list of gate checks (name/passed/value/
+                threshold/detail).
+            overall: "PASS", "FAIL" or "UNKNOWN".
+            data_start: First candle date covered (ISO date).
+            data_end: Last candle date covered (ISO date).
+
+        Returns:
+            Row id of the inserted entry, or None on Postgres.
+        """
+        run_at = datetime.now().isoformat()
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO validation_runs
+                    (run_at, strategy, symbols, window_spec, chunks_json,
+                     checks_json, overall, data_start, data_end)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run_at,
+                    strategy,
+                    symbols,
+                    window_spec,
+                    chunks_json,
+                    checks_json,
+                    overall,
+                    data_start,
+                    data_end,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    @staticmethod
+    def _validation_run_row_to_dict(row: Any) -> Dict[str, Any]:
+        """Map a validation_runs row tuple to a dict (shared helper)."""
+        chunks = None
+        checks = None
+        try:
+            chunks = json.loads(row[5]) if row[5] else None
+        except (ValueError, TypeError):
+            chunks = None
+        try:
+            checks = json.loads(row[6]) if row[6] else None
+        except (ValueError, TypeError):
+            checks = None
+        return {
+            "id": row[0],
+            "run_at": str(row[1]) if row[1] is not None else None,
+            "strategy": row[2],
+            "symbols": row[3],
+            "window_spec": row[4],
+            "chunks": chunks,
+            "checks": checks,
+            "overall": row[7],
+            "data_start": row[8],
+            "data_end": row[9],
+        }
+
+    def get_validation_runs(
+        self,
+        strategy: Optional[str] = None,
+        limit: int = 20,
+    ) -> List[Dict[str, Any]]:
+        """Fetch stored validation runs, newest first.
+
+        Args:
+            strategy: Optional snake_case strategy filter.
+            limit: Maximum rows to return (default 20).
+
+        Returns:
+            List of dicts with id, run_at, strategy, symbols,
+            window_spec, chunks (parsed), checks (parsed), overall,
+            data_start, data_end.
+        """
+        query = (
+            "SELECT id, run_at, strategy, symbols, window_spec, "
+            "chunks_json, checks_json, overall, data_start, data_end "
+            "FROM validation_runs"
+        )
+        params: List[Any] = []
+        if strategy:
+            query += " WHERE strategy = ?"
+            params.append(strategy)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(int(limit))
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+        return [self._validation_run_row_to_dict(row) for row in rows]
+
+    def get_latest_validation_runs(self) -> List[Dict[str, Any]]:
+        """Newest stored validation verdict per strategy (single query).
+
+        Returns:
+            One dict per strategy (same shape as get_validation_runs),
+            ordered by strategy name.
+        """
+        query = (
+            "SELECT v.id, v.run_at, v.strategy, v.symbols, v.window_spec, "
+            "v.chunks_json, v.checks_json, v.overall, v.data_start, "
+            "v.data_end "
+            "FROM validation_runs v "
+            "JOIN (SELECT strategy, MAX(id) AS max_id FROM validation_runs "
+            "GROUP BY strategy) latest "
+            "ON v.id = latest.max_id "
+            "ORDER BY v.strategy"
+        )
+        with get_db_connection() as conn:
+            cursor = conn.execute(query)
+            rows = cursor.fetchall()
+        return [self._validation_run_row_to_dict(row) for row in rows]
 
     def get_closed_trades_for_weights(self) -> List[Dict[str, Any]]:
         """Fetch closed trades with the fields adaptive weighting needs.

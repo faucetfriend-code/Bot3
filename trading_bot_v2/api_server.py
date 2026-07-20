@@ -1976,6 +1976,36 @@ async def get_validation_gate_policy():
         return {"success": False, "error": str(e)}
 
 
+@app.get("/api/validation/runs")
+async def get_validation_runs(
+    strategy: Optional[str] = None, limit: int = 20
+):
+    """Stored validation-runner verdicts, newest first (read-only).
+
+    Rows are written by the standalone validation runner
+    (python -m trading_bot_v2.validation.runner); this endpoint only
+    reads the validation_runs table.
+    """
+    try:
+        db = bot_integration.database or DatabaseManager()
+        limit = max(1, min(int(limit), 200))
+        rows = db.get_validation_runs(strategy=strategy, limit=limit)
+        return {"success": True, "data": rows, "count": len(rows)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@app.get("/api/validation/latest")
+async def get_validation_latest():
+    """Newest stored validation verdict per strategy (read-only)."""
+    try:
+        db = bot_integration.database or DatabaseManager()
+        rows = db.get_latest_validation_runs()
+        return {"success": True, "data": rows, "count": len(rows)}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @app.get("/api/debug/key-config")
 async def check_key_configuration():
     """Debug endpoint to check Pacifica API key configuration."""
