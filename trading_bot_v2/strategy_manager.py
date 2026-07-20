@@ -33,6 +33,7 @@ from .strategies.vwap_scalping import VWAPScalpingStrategy
 from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
+from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
 
 
 class StrategyManager:
@@ -54,9 +55,11 @@ class StrategyManager:
         enable_funding_arb: Optional[bool] = None,
         enable_momentum_scalping: Optional[bool] = None,
         enable_orderbook_imbalance: Optional[bool] = None,
+        enable_session_range_breakout: Optional[bool] = None,
         risk_manager=None,
         client=None,  # Pacifica client for funding arb API calls
         ws_client=None,  # WebSocket client for orderbook data
+        db=None,  # DatabaseManager for adaptive per-regime weights
     ):
         """
         Initialize StrategyManager with enabled strategies.
@@ -72,6 +75,10 @@ class StrategyManager:
             enable_trend_following: Enable Trend Following strategy (env: ENABLE_TREND_FOLLOWING)
             enable_grid_trading: Enable Grid Trading strategy (env: ENABLE_GRID_TRADING)
             enable_liquidation_capture: Enable Liquidation Capture (env: ENABLE_LIQUIDATION_CAPTURE)
+            db: Optional DatabaseManager; when provided, adaptive per-regime
+                strategy weights are computed from closed trades
+                (ENABLE_ADAPTIVE_WEIGHTS). When None, adaptive weights stay
+                neutral (1.0) and static regime weights apply unchanged.
         """
         # Initialize regime detector
         self.regime_detector = regime_detector or MarketRegimeDetector()
@@ -145,16 +152,66 @@ class StrategyManager:
                 "ENABLE_ORDERBOOK_IMBALANCE", True
             )  # Default to True - overlay strategy
         )
+        self.enable_session_range_breakout = (
+            enable_session_range_breakout
+            if enable_session_range_breakout is not None
+            else _get_env_bool(
+                "ENABLE_SESSION_RANGE_BREAKOUT", False
+            )  # Default to False - ships disabled until validated
+        )
         self.risk_manager = risk_manager
         self.client = client  # Store client for funding arb
         self.ws_client = ws_client  # Store websocket client for orderbook
+
+        # Regime-conditional minimum-confidence gate. Signals below
+        # (MIN_SIGNAL_CONFIDENCE_FLOOR + per-regime adjustment) are dropped
+        # after generation, before conflict resolution. Defaults keep the
+        # gate effectively transparent (floor 0.0) except for a small
+        # penalty in choppy regimes.
+        def _get_env_float(var_name: str, default: float) -> float:
+            """Read float from environment variable with fallback."""
+            raw = os.getenv(var_name)
+            if raw is None or raw == "":
+                return default
+            try:
+                return float(raw)
+            except ValueError:
+                logger.warning(
+                    f"Invalid float for {var_name}={raw!r}, using default {default}"
+                )
+                return default
+
+        self.min_signal_confidence_floor = _get_env_float(
+            "MIN_SIGNAL_CONFIDENCE_FLOOR", 0.0
+        )
+        self.regime_confidence_adjustments: Dict[str, float] = {
+            MarketRegime.INDECISIVE.value: _get_env_float(
+                "REGIME_CONF_ADJ_INDECISIVE", 0.05
+            ),
+            MarketRegime.RANGING_VOLATILE.value: _get_env_float(
+                "REGIME_CONF_ADJ_RANGING_VOLATILE", 0.05
+            ),
+        }
+
+        # Adaptive per-regime strategy weights (multiplies static weights in
+        # _combine_signals). Neutral (all 1.0) when no db is wired.
+        try:
+            from .adaptive_weights import AdaptiveWeightManager
+
+            self.adaptive_weights = AdaptiveWeightManager(db=db)
+        except Exception as e:
+            logger.warning(f"AdaptiveWeightManager unavailable: {e}")
+            self.adaptive_weights = None
+        # Last effective weight map per regime (for change-detection logging)
+        self._last_effective_weights: Dict[str, Dict[str, float]] = {}
 
         logger.info(
             f"Strategy enable flags: MeanReversion={self.enable_mean_reversion}, "
             f"MACrossover={self.enable_ma_crossover}, GridTrading={self.enable_grid_trading}, "
             f"LiquidationCapture={self.enable_liquidation_capture}, TrendFollowing={self.enable_trend_following}, "
             f"VWAPScalping={self.enable_vwap_scalping}, FundingArb={self.enable_funding_arb}, "
-            f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}"
+            f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}, "
+            f"SessionRangeBreakout={self.enable_session_range_breakout}"
         )
 
         # Initialize trade cooldown and feedback tracking
@@ -379,6 +436,47 @@ class StrategyManager:
                 f"ATR stop={ob_atr_stop}x, target={ob_atr_target}x"
             )
 
+        if self.enable_session_range_breakout:
+            # Load Session Range Breakout (ORB) parameters from environment
+            def _get_env_orb_bool(var_name: str, default: bool) -> bool:
+                value = os.getenv(var_name, "").lower()
+                if value in ("true", "1", "yes", "on"):
+                    return True
+                elif value in ("false", "0", "no", "off"):
+                    return False
+                return default
+
+            orb_utc_open = _get_env_orb_bool("ORB_ENABLE_UTC_OPEN", True)
+            orb_us_open = _get_env_orb_bool("ORB_ENABLE_US_OPEN", True)
+            orb_range_minutes = int(os.getenv("ORB_RANGE_MINUTES", "30"))
+            orb_entry_window = float(os.getenv("ORB_ENTRY_WINDOW_HOURS", "4"))
+            orb_volume_mult = float(os.getenv("ORB_VOLUME_MULT", "1.5"))
+            orb_min_range_pct = float(os.getenv("ORB_MIN_RANGE_PCT", "0.15"))
+            orb_max_range_pct = float(os.getenv("ORB_MAX_RANGE_PCT", "3.0"))
+            orb_tp_range_mult = float(os.getenv("ORB_TP_RANGE_MULT", "1.5"))
+            orb_time_exit_hours = float(os.getenv("ORB_TIME_EXIT_HOURS", "4"))
+            orb_max_trades = int(os.getenv("ORB_MAX_TRADES_PER_SESSION", "1"))
+            orb_min_rrr = float(os.getenv("ORB_MIN_RRR", "1.2"))
+
+            self.strategies["SessionRangeBreakout"] = SessionRangeBreakoutStrategy(
+                enable_utc_open=orb_utc_open,
+                enable_us_open=orb_us_open,
+                range_minutes=orb_range_minutes,
+                entry_window_hours=orb_entry_window,
+                volume_mult=orb_volume_mult,
+                min_range_pct=orb_min_range_pct,
+                max_range_pct=orb_max_range_pct,
+                tp_range_mult=orb_tp_range_mult,
+                time_exit_hours=orb_time_exit_hours,
+                max_trades_per_session=orb_max_trades,
+                min_rrr=orb_min_rrr,
+            )
+            logger.info(
+                f"Session Range Breakout strategy enabled: range={orb_range_minutes}min, "
+                f"window={orb_entry_window}h, vol_mult={orb_volume_mult}x, "
+                f"tp={orb_tp_range_mult}x range, time_exit={orb_time_exit_hours}h"
+            )
+
         # Simulated time (set by backtest engine for accurate cooldown tracking)
         self._sim_time: Optional[datetime] = None
 
@@ -500,6 +598,7 @@ class StrategyManager:
             "funding_arb": 60,  # 60 min - funding positions held for hours
             "momentum_scalping": 5,  # 5 min cooldown for fast momentum scalping
             "orderbook_imbalance": 0.5,  # 30 sec cooldown - handled internally in seconds
+            "session_range_breakout": 60,  # 60 min - per-session dedup is the real limit
         }
 
         return cooldowns.get(strategy_name, 5)  # Default 5 min (was 10)
@@ -725,6 +824,18 @@ class StrategyManager:
                     f"{symbol}: Added OrderBookImbalance (flow-based overlay strategy, runs in all regimes)"
                 )
 
+            # Step 2.10: Always add SessionRangeBreakout if enabled (time-gated, runs in ALL regimes)
+            if (
+                "SessionRangeBreakout" in self.strategies
+                and "SessionRangeBreakout" not in active_strategy_names
+            ):
+                active_strategy_names = list(active_strategy_names) + [
+                    "SessionRangeBreakout"
+                ]
+                logger.debug(
+                    f"{symbol}: Added SessionRangeBreakout (time-gated ORB overlay, runs in all regimes)"
+                )
+
             if not active_strategy_names:
                 logger.info(f"{symbol}: Regime {regime.value} - no active strategies")
                 return []
@@ -811,6 +922,9 @@ class StrategyManager:
                     logger.error(f"Error in {strategy_name} for {symbol}: {e}")
                     continue
 
+            # Step 3.5: Regime-conditional minimum-confidence gate
+            all_signals = self._apply_regime_confidence_gate(all_signals, regime)
+
             if not all_signals:
                 logger.debug(
                     f"{symbol}: No signals from any strategy in {regime.value} regime"
@@ -847,6 +961,52 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"Error generating signals for {symbol}: {e}")
             return []
+
+    def _apply_regime_confidence_gate(
+        self, signals: List[Signal], regime: MarketRegime
+    ) -> List[Signal]:
+        """
+        Drop signals below the regime-conditional minimum confidence.
+
+        The threshold is MIN_SIGNAL_CONFIDENCE_FLOOR (env, default 0.0)
+        plus a per-regime adjustment (REGIME_CONF_ADJ_INDECISIVE and
+        REGIME_CONF_ADJ_RANGING_VOLATILE, both default 0.05; other regimes
+        0.0). Applied after signal generation and before conflict
+        resolution; each strategy's own minimum-confidence checks still run
+        inside the strategies themselves.
+
+        Args:
+            signals: Generated signals for a symbol.
+            regime: Current market regime.
+
+        Returns:
+            Signals whose confidence meets the threshold (each drop is
+            logged at INFO with strategy, symbol, confidence, threshold).
+        """
+        if not signals:
+            return signals
+
+        regime_key = str(getattr(regime, "value", regime)).lower()
+        adjustment = self.regime_confidence_adjustments.get(regime_key, 0.0)
+        threshold = self.min_signal_confidence_floor + adjustment
+        if threshold <= 0:
+            return signals
+
+        kept: List[Signal] = []
+        for signal in signals:
+            if signal.confidence < threshold:
+                strategy_name = getattr(
+                    signal.strategy, "value", str(signal.strategy)
+                )
+                logger.info(
+                    f"Confidence gate: dropping {strategy_name} {signal.asset} "
+                    f"signal - confidence {signal.confidence:.2%} < threshold "
+                    f"{threshold:.2%} (floor {self.min_signal_confidence_floor:.2%} "
+                    f"+ {regime_key} adj {adjustment:.2%})"
+                )
+            else:
+                kept.append(signal)
+        return kept
 
     def _resolve_signal_conflicts(
         self, signals: List[Signal], regime: MarketRegime
@@ -1064,8 +1224,10 @@ class StrategyManager:
         if len(signals) == 1:
             return signals[0]
 
-        # Get regime-based strategy weights
+        # Get regime-based strategy weights (static base weights scaled by
+        # adaptive per-regime performance multipliers when enabled)
         strategy_weights = self.regime_detector.get_strategy_weights(regime)
+        strategy_weights = self._apply_adaptive_weights(strategy_weights, regime)
 
         # Calculate weighted averages
         total_weight = 0.0
@@ -1142,6 +1304,47 @@ class StrategyManager:
         )
 
         return combined
+
+    def _apply_adaptive_weights(
+        self, static_weights: Dict[str, float], regime: MarketRegime
+    ) -> Dict[str, float]:
+        """
+        Scale static regime weights by adaptive performance multipliers.
+
+        final_weight = static_weight * adaptive_multiplier(regime, strategy).
+        Behind ENABLE_ADAPTIVE_WEIGHTS (default true); neutral when the
+        adaptive manager is missing, disabled, or has no db wired. The
+        effective weight map is logged at DEBUG whenever it changes.
+
+        Args:
+            static_weights: Static strategy -> weight map for the regime.
+            regime: Current market regime.
+
+        Returns:
+            Effective strategy -> weight map (static values on any failure).
+        """
+        manager = self.adaptive_weights
+        if manager is None or not manager.enabled or not static_weights:
+            return static_weights
+
+        try:
+            regime_key = str(getattr(regime, "value", regime)).lower()
+            effective = {
+                name: weight * manager.get_multiplier(regime_key, name)
+                for name, weight in static_weights.items()
+            }
+        except Exception as e:
+            logger.warning(f"Adaptive weight application failed: {e}")
+            return static_weights
+
+        rounded = {name: round(w, 6) for name, w in effective.items()}
+        if self._last_effective_weights.get(regime_key) != rounded:
+            self._last_effective_weights[regime_key] = rounded
+            logger.debug(
+                f"Effective strategy weights changed for {regime_key}: "
+                f"static={static_weights} -> effective={rounded}"
+            )
+        return effective
 
     def _tiebreaker(
         self,
@@ -1246,6 +1449,7 @@ class StrategyManager:
             StrategyType.FUNDING_ARB: "FundingArb",
             StrategyType.MOMENTUM_SCALPING: "MomentumScalping",
             StrategyType.ORDERBOOK_IMBALANCE: "OrderBookImbalance",
+            StrategyType.SESSION_RANGE_BREAKOUT: "SessionRangeBreakout",
         }
         fallback = strategy_type.value if strategy_type.value else str(strategy_type)
         return mapping.get(strategy_type, fallback)
@@ -1275,6 +1479,7 @@ class StrategyManager:
             "FundingArb": StrategyType.FUNDING_ARB,
             "MomentumScalping": StrategyType.MOMENTUM_SCALPING,
             "OrderBookImbalance": StrategyType.ORDERBOOK_IMBALANCE,
+            "SessionRangeBreakout": StrategyType.SESSION_RANGE_BREAKOUT,
         }
 
         result = {}

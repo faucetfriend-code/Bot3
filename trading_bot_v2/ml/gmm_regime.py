@@ -81,6 +81,70 @@ _DEFAULT_REGIME_MAP: Dict[_LatentRegime, MarketRegime] = {
 }
 
 
+def assign_cluster_labels(cluster_means: np.ndarray) -> Dict[int, _LatentRegime]:
+    """Assign latent regime labels to cluster/state indices from their means.
+
+    Shared by the GMM and HMM detectors (both operate on the same
+    standardised 6-feature space, so mean-based heuristics transfer).
+
+    Strategy: rank clusters by their mean feature vectors:
+    - Highest combined volatility/ATR-ratio/BB-width -> VOLATILE
+    - Highest abs(returns) among the rest -> TRENDING
+    - Remaining -> RANGING
+
+    Args:
+        cluster_means: Array of shape ``(n_clusters, n_features)`` with the
+            per-cluster mean feature vectors (standardised units).
+
+    Returns:
+        Mapping from cluster index to :class:`_LatentRegime`.
+    """
+    cluster_means = np.asarray(cluster_means, dtype=np.float64)
+    n_clusters = cluster_means.shape[0]
+
+    if n_clusters == 1:
+        return {0: _LatentRegime.RANGING}
+
+    # Feature indices: 0=vol, 1=ret, 2=skew, 3=atr_ratio, 4=vol_ratio, 5=bb_width
+    vol_scores = cluster_means[:, 0]  # volatility
+    atr_scores = cluster_means[:, 3]  # atr_ratio
+    ret_scores = np.abs(cluster_means[:, 1])  # abs(returns) for trend strength
+    bb_scores = cluster_means[:, 5]  # bb_width
+
+    # Combined "turbulence" score -> highest is VOLATILE
+    turbulence = vol_scores + atr_scores + bb_scores
+    # "Trend" score -> highest is TRENDING. Absolute mean return alone:
+    # the previous "|ret| - vol" formulation let an ultra-calm cluster
+    # (deeply negative standardised vol) outrank the truly directional
+    # cluster, inverting the TRENDING/RANGING labels for the HMM.
+    trendiness = ret_scores
+
+    volatile_cluster = int(np.argmax(turbulence))
+    trending_cluster = int(np.argmax(trendiness))
+
+    mapping: Dict[int, _LatentRegime] = {}
+    mapping[volatile_cluster] = _LatentRegime.VOLATILE
+
+    # If trending == volatile (single-cluster edge case), pick next best
+    if trending_cluster == volatile_cluster and n_clusters > 1:
+        trendiness_copy = trendiness.copy()
+        trendiness_copy[volatile_cluster] = -np.inf
+        trending_cluster = int(np.argmax(trendiness_copy))
+
+    mapping[trending_cluster] = _LatentRegime.TRENDING
+
+    # Remaining clusters -> RANGING
+    for idx in range(n_clusters):
+        if idx not in mapping:
+            mapping[idx] = _LatentRegime.RANGING
+
+    logger.debug(
+        f"Cluster labels assigned: "
+        f"{', '.join(f'c{i}={mapping[i].value}' for i in range(n_clusters))}"
+    )
+    return mapping
+
+
 # ---------------------------------------------------------------------------
 # Regime detection result
 # ---------------------------------------------------------------------------
@@ -172,25 +236,42 @@ class GMMRegimeDetector:
         result = self.predict(market_data)
         return result.system_regime
 
-    def predict(self, market_data: Dict[str, List[float]]) -> GMMRegimeResult:
+    def predict(
+        self,
+        market_data: Dict[str, List[float]],
+        allow_fallback: bool = True,
+    ) -> GMMRegimeResult:
         """Predict regime with full result details (confidence, fallback info).
 
         Args:
             market_data: Dict with keys ``'high'``, ``'low'``, ``'close'``,
                          and optionally ``'volume'``.
+            allow_fallback: When ``True`` (default) low confidence, a missing
+                model, or a prediction error falls back to the ADX detector.
+                When ``False`` (shadow-mode observation) the raw ML result is
+                always returned, and a missing model or prediction error
+                raises instead of silently reverting to ADX.
 
         Returns:
             :class:`GMMRegimeResult` with regime, confidence, and metadata.
+
+        Raises:
+            RuntimeError: If ``allow_fallback`` is ``False`` and no trained
+                model is available.
         """
         # Attempt GMM prediction
         if self._gmm_model is None:
             self._try_load_model()
 
         if self._gmm_model is not None:
+            if not allow_fallback:
+                return self._predict_with_gmm(market_data, allow_fallback=False)
             try:
                 return self._predict_with_gmm(market_data)
             except Exception as exc:
                 logger.warning(f"GMM prediction failed, falling back to ADX: {exc}")
+        elif not allow_fallback:
+            raise RuntimeError("No trained GMM model available for prediction")
 
         # Fallback to ADX
         return self._adx_fallback(market_data)
@@ -240,75 +321,181 @@ class GMMRegimeDetector:
                 closes, highs, lows, volumes
             )
 
-            if len(batch_features) < self.config.n_regimes * 10:
-                logger.warning(
-                    f"Too few feature vectors for reliable training: "
-                    f"{len(batch_features)}"
-                )
-                return False
-
             # Build feature matrix
             X = np.array([f.to_array() for f in batch_features], dtype=np.float64)
 
-            # Handle any NaN/Inf
-            X = np.nan_to_num(X, nan=0.0, posinf=10.0, neginf=-10.0)
-
-            # Standardise features for better GMM convergence
-            self._feature_means = np.mean(X, axis=0)
-            self._feature_stds = np.std(X, axis=0)
-            self._feature_stds[self._feature_stds == 0.0] = 1.0  # avoid div-by-zero
-            X_scaled = (X - self._feature_means) / self._feature_stds
-
-            # Fit GMM
-            from sklearn.mixture import GaussianMixture
-
-            gmm = GaussianMixture(
-                n_components=self.config.n_regimes,
-                covariance_type=self.config.covariance_type,
-                n_init=10,
-                max_iter=300,
-                random_state=42,
-            )
-            gmm.fit(X_scaled)
-
-            # Assign latent regime labels based on cluster characteristics
-            self._cluster_to_latent = self._assign_cluster_labels(gmm, X_scaled)
-
-            self._gmm_model = gmm
-            self._model_version = self._make_version_tag()
-
-            # Compute training statistics
-            labels = gmm.predict(X_scaled)
-            label_counts = {i: int(np.sum(labels == i)) for i in range(self.config.n_regimes)}
-            avg_log_likelihood = float(gmm.score(X_scaled))
-
-            logger.info(
-                f"GMM training complete: {len(batch_features)} samples, "
-                f"log_likelihood={avg_log_likelihood:.4f}, "
-                f"cluster_sizes={label_counts}"
-            )
-
-            # Persist
-            if auto_save:
-                self._model_manager.save_model(
-                    gmm_model=gmm,
-                    config=self.config,
-                    cluster_to_latent=self._cluster_to_latent,
-                    feature_means=self._feature_means,
-                    feature_stds=self._feature_stds,
-                    training_samples=len(batch_features),
-                    log_likelihood=avg_log_likelihood,
-                )
-
-            return True
+            summary = self.train_on_features(X, auto_save=auto_save)
+            return summary is not None
 
         except Exception as exc:
             logger.error(f"GMM training failed: {exc}")
             return False
 
+    def train_on_features(
+        self, X: np.ndarray, auto_save: bool = True
+    ) -> Optional[Dict[str, object]]:
+        """Fit the GMM on a prebuilt feature matrix.
+
+        Used directly by the offline training pipeline, which builds
+        features per symbol and concatenates them (log returns must never
+        span symbol boundaries, so extraction cannot happen on the
+        concatenated closes).
+
+        Args:
+            X: Feature matrix of shape ``(n_samples, 6)`` in raw
+                (unstandardised) feature units.
+            auto_save: If ``True``, persist the model after training.
+
+        Returns:
+            Summary dict with ``version``, ``converged``,
+            ``log_likelihood``, ``cluster_sizes``, ``cluster_to_latent``,
+            and ``cluster_means_raw`` on success; ``None`` on failure.
+        """
+        try:
+            from sklearn.mixture import GaussianMixture
+        except ImportError:
+            logger.error("scikit-learn is not installed. Cannot train GMM.")
+            return None
+
+        X = np.asarray(X, dtype=np.float64)
+        X = np.nan_to_num(X, nan=0.0, posinf=10.0, neginf=-10.0)
+
+        if len(X) < self.config.n_regimes * 10:
+            logger.warning(
+                f"Too few feature vectors for reliable training: {len(X)}"
+            )
+            return None
+
+        # Standardise features for better GMM convergence
+        self._feature_means = np.mean(X, axis=0)
+        self._feature_stds = np.std(X, axis=0)
+        self._feature_stds[self._feature_stds == 0.0] = 1.0  # avoid div-by-zero
+        X_scaled = (X - self._feature_means) / self._feature_stds
+
+        gmm = GaussianMixture(
+            n_components=self.config.n_regimes,
+            covariance_type=self.config.covariance_type,
+            n_init=10,
+            max_iter=300,
+            random_state=42,
+        )
+        gmm.fit(X_scaled)
+
+        # Assign latent regime labels based on cluster characteristics
+        self._cluster_to_latent = assign_cluster_labels(gmm.means_)
+
+        self._gmm_model = gmm
+        self._model_version = self._make_version_tag()
+
+        # Compute training statistics
+        labels = gmm.predict(X_scaled)
+        label_counts = {
+            i: int(np.sum(labels == i)) for i in range(self.config.n_regimes)
+        }
+        avg_log_likelihood = float(gmm.score(X_scaled))
+
+        # Cluster means back in raw feature units for reporting
+        cluster_means_raw = (
+            gmm.means_ * self._feature_stds + self._feature_means
+        )
+
+        logger.info(
+            f"GMM training complete: {len(X)} samples, "
+            f"log_likelihood={avg_log_likelihood:.4f}, "
+            f"cluster_sizes={label_counts}"
+        )
+
+        # Persist
+        if auto_save:
+            self._model_version = self._model_manager.save_model(
+                gmm_model=gmm,
+                config=self.config,
+                cluster_to_latent=self._cluster_to_latent,
+                feature_means=self._feature_means,
+                feature_stds=self._feature_stds,
+                training_samples=len(X),
+                log_likelihood=avg_log_likelihood,
+                model_type="gmm",
+            )
+
+        return {
+            "version": self._model_version,
+            "converged": bool(gmm.converged_),
+            "log_likelihood": avg_log_likelihood,
+            "cluster_sizes": label_counts,
+            "cluster_to_latent": {
+                idx: latent.value
+                for idx, latent in self._cluster_to_latent.items()
+            },
+            "cluster_means_raw": cluster_means_raw,
+        }
+
     def is_model_available(self) -> bool:
         """Check if a trained GMM model is loaded and ready for prediction."""
         return self._gmm_model is not None
+
+    def ensure_model_loaded(self) -> bool:
+        """Load the persisted model if not already loaded.
+
+        Returns:
+            ``True`` when a trained model is loaded and ready.
+        """
+        if self._gmm_model is None:
+            self._try_load_model()
+        return self._gmm_model is not None
+
+    def predict_from_features(self, features: np.ndarray) -> GMMRegimeResult:
+        """Classify from a prebuilt (raw-unit) feature window.
+
+        Offline tooling precomputes features once per series and calls this
+        per bar, avoiding repeated feature extraction. Only the LAST row is
+        classified (single-frame GMM classification); earlier rows are
+        accepted for interface parity with the HMM detector, which filters
+        over the whole window.
+
+        No confidence-threshold fallback and no ADX refinement is applied.
+
+        Args:
+            features: Array of shape ``(n_frames, 6)`` (or ``(6,)``) in raw
+                feature units; the last row is the frame to classify.
+
+        Returns:
+            :class:`GMMRegimeResult` for the final frame.
+
+        Raises:
+            RuntimeError: If no trained model is loaded.
+        """
+        if not self.ensure_model_loaded():
+            raise RuntimeError("No trained GMM model available for prediction")
+
+        X = np.asarray(features, dtype=np.float64)
+        if X.ndim == 1:
+            X = X.reshape(1, -1)
+        X = np.nan_to_num(X[-1:], nan=0.0, posinf=10.0, neginf=-10.0)
+
+        if self._feature_means is not None and self._feature_stds is not None:
+            X = (X - self._feature_means) / self._feature_stds
+
+        probs = self._gmm_model.predict_proba(X)[0]
+        cluster_idx = int(np.argmax(probs))
+        confidence = float(probs[cluster_idx])
+
+        latent = self._cluster_to_latent.get(cluster_idx, _LatentRegime.RANGING)
+        system_regime = _DEFAULT_REGIME_MAP.get(latent, MarketRegime.INDECISIVE)
+
+        prob_dict = {
+            self._cluster_to_latent.get(i, _LatentRegime.RANGING).value: float(
+                probs[i]
+            )
+            for i in range(len(probs))
+        }
+
+        return GMMRegimeResult(
+            system_regime=system_regime,
+            latent_regime=latent,
+            confidence=confidence,
+            probabilities=prob_dict,
+        )
 
     def get_model_info(self) -> Dict[str, object]:
         """Return metadata about the currently loaded model.
@@ -350,7 +537,13 @@ class GMMRegimeDetector:
             ) = result
 
             self._gmm_model = gmm
-            self._config = config
+            # ``self.config`` is the canonical config attribute: predict-time
+            # code (confidence threshold, n_regimes) reads it, so a loaded
+            # model's training-time config must replace the constructor
+            # default here. (Regression: a stray ``self._config`` assignment
+            # used to leave the loaded config silently ignored.)
+            if config is not None:
+                self.config = config
             self._cluster_to_latent = cluster_to_latent
             self._feature_means = feature_means
             self._feature_stds = feature_stds
@@ -362,7 +555,9 @@ class GMMRegimeDetector:
             logger.warning(f"Failed to load persisted GMM model: {exc}")
 
     def _predict_with_gmm(
-        self, market_data: Dict[str, List[float]]
+        self,
+        market_data: Dict[str, List[float]],
+        allow_fallback: bool = True,
     ) -> GMMRegimeResult:
         """Run GMM inference on a single market data snapshot."""
         closes = market_data["close"]
@@ -400,7 +595,7 @@ class GMMRegimeDetector:
         }
 
         # Check confidence threshold
-        if confidence < self.config.confidence_threshold:
+        if allow_fallback and confidence < self.config.confidence_threshold:
             logger.debug(
                 f"GMM confidence {confidence:.3f} < threshold "
                 f"{self.config.confidence_threshold} — using ADX fallback"
@@ -462,58 +657,6 @@ class GMMRegimeDetector:
             return calculate_adx(highs, lows, closes, period=14)
         except Exception:
             return None
-
-    def _assign_cluster_labels(
-        self, gmm, X: np.ndarray
-    ) -> Dict[int, _LatentRegime]:
-        """Assign human-readable latent regime labels to GMM cluster indices.
-
-        Strategy: rank clusters by their mean feature vectors:
-        - Highest volatility/ATR_ratio → VOLATILE
-        - Highest returns (absolute) + lowest BB_width → TRENDING
-        - Remaining → RANGING
-        """
-        cluster_centers = gmm.means_  # shape: (n_clusters, n_features)
-        n_clusters = cluster_centers.shape[0]
-
-        if n_clusters == 1:
-            return {0: _LatentRegime.RANGING}
-
-        # Feature indices: 0=vol, 1=ret, 2=skew, 3=atr_ratio, 4=vol_ratio, 5=bb_width
-        vol_scores = cluster_centers[:, 0]  # volatility
-        atr_scores = cluster_centers[:, 3]  # atr_ratio
-        ret_scores = np.abs(cluster_centers[:, 1])  # abs(returns) for trend strength
-        bb_scores = cluster_centers[:, 5]  # bb_width
-
-        # Combined "turbulence" score → highest is VOLATILE
-        turbulence = vol_scores + atr_scores + bb_scores
-        # Combined "trend" score → highest is TRENDING
-        trendiness = ret_scores - vol_scores  # high returns, low vol = trend
-
-        volatile_cluster = int(np.argmax(turbulence))
-        trending_cluster = int(np.argmax(trendiness))
-
-        mapping: Dict[int, _LatentRegime] = {}
-        mapping[volatile_cluster] = _LatentRegime.VOLATILE
-
-        # If trending == volatile (single-cluster edge case), pick next best
-        if trending_cluster == volatile_cluster and n_clusters > 1:
-            trendiness_copy = trendiness.copy()
-            trendiness_copy[volatile_cluster] = -np.inf
-            trending_cluster = int(np.argmax(trendiness_copy))
-
-        mapping[trending_cluster] = _LatentRegime.TRENDING
-
-        # Remaining clusters → RANGING
-        for idx in range(n_clusters):
-            if idx not in mapping:
-                mapping[idx] = _LatentRegime.RANGING
-
-        logger.debug(
-            f"Cluster labels assigned: "
-            f"{', '.join(f'c{i}={mapping[i].value}' for i in range(n_clusters))}"
-        )
-        return mapping
 
     @staticmethod
     def _make_version_tag() -> str:

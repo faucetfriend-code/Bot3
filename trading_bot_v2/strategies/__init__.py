@@ -8,6 +8,7 @@ from .vwap_scalping import VWAPScalpingStrategy
 from .funding_arb import FundingArbStrategy
 from .momentum_scalping import MomentumScalpingStrategy
 from .orderbook_imbalance import OrderBookImbalanceStrategy
+from .session_range_breakout import SessionRangeBreakoutStrategy
 
 __all__ = [
     "MeanReversionStrategy",
@@ -18,4 +19,5 @@ __all__ = [
     "FundingArbStrategy",
     "MomentumScalpingStrategy",
     "OrderBookImbalanceStrategy",
+    "SessionRangeBreakoutStrategy",
 ]

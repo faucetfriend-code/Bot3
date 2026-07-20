@@ -276,19 +276,39 @@ class TestMarketRegimeDetector:
         assert not regime_detector.is_grid_allowed(MarketRegime.TRENDING_MODERATE)
 
     def test_get_strategy_weights(self, regime_detector):
-        """Test strategy weight allocation by regime (Jan 2026 weights with OrderBookImbalance overlay)."""
+        """Test strategy weight allocation by regime (Jan 2026 weights with OrderBookImbalance + SessionRangeBreakout overlays)."""
         weights_volatile = regime_detector.get_strategy_weights(
             MarketRegime.RANGING_VOLATILE
         )
-        assert weights_volatile == {"GridTrading": 0.8, "OrderBookImbalance": 0.2}
+        assert weights_volatile == {
+            "GridTrading": 0.8,
+            "OrderBookImbalance": 0.2,
+            "SessionRangeBreakout": 0.15,
+        }
 
         weights_calm = regime_detector.get_strategy_weights(MarketRegime.RANGING_CALM)
-        assert weights_calm == {"MeanReversion": 0.6, "GridTrading": 0.2, "OrderBookImbalance": 0.2}
+        assert weights_calm == {
+            "MeanReversion": 0.6,
+            "GridTrading": 0.2,
+            "OrderBookImbalance": 0.2,
+            "SessionRangeBreakout": 0.15,
+        }
 
         weights_trending = regime_detector.get_strategy_weights(
             MarketRegime.TRENDING_STRONG
         )
-        assert weights_trending == {"MACrossover": 0.5, "MomentumScalping": 0.3, "OrderBookImbalance": 0.2}
+        assert weights_trending == {
+            "MACrossover": 0.5,
+            "MomentumScalping": 0.3,
+            "OrderBookImbalance": 0.2,
+            "SessionRangeBreakout": 0.15,
+        }
+
+        # SessionRangeBreakout is a time-gated overlay present in ALL regimes
+        for regime in MarketRegime:
+            assert "SessionRangeBreakout" in regime_detector.get_strategy_weights(
+                regime
+            )
 
     def test_hash_market_data(self, regime_detector, sample_market_data):
         """Test market data hashing for cache invalidation."""

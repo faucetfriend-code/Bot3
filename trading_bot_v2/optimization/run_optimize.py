@@ -31,7 +31,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from loguru import logger
 
-from .optuna_runner import OptunaRunner
+from .optuna_runner import (
+    OptunaRunner,
+    normalize_objective,
+    OBJECTIVE_ALIASES,
+)
 from .search_spaces import list_strategies
 
 
@@ -99,9 +103,31 @@ Examples:
     parser.add_argument(
         "--objective", "-o",
         type=str,
-        choices=["sharpe_ratio", "sortino_ratio", "total_return_pct", "calmar_ratio"],
+        choices=sorted(OBJECTIVE_ALIASES.keys()),
         default="sharpe_ratio",
-        help="Objective metric to optimize (default: sharpe_ratio)",
+        help="Objective metric to optimize (default: sharpe_ratio; "
+             "short forms like 'sharpe' accepted)",
+    )
+
+    # Regime-conditional optimization (P4)
+    parser.add_argument(
+        "--regime",
+        type=str,
+        help="Target regime (e.g. RANGING_CALM). Scores each trial only "
+             "on closed trades whose entry regime matches; trials with "
+             "fewer than REGIME_OPT_MIN_TRADES matching trades are pruned.",
+    )
+    parser.add_argument(
+        "--min-trades",
+        type=int,
+        help="Minimum matching-regime trades per trial before pruning "
+             "(default: env REGIME_OPT_MIN_TRADES or 15)",
+    )
+    parser.add_argument(
+        "--save-overlay",
+        action="store_true",
+        help="After the run, persist the best params as the active "
+             "overlay for (strategy, regime). Requires --regime.",
     )
 
     # Walk-forward options
@@ -207,6 +233,67 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
         logger.add(sys.stderr, level="INFO")
 
 
+def get_best_trial_or_none(study):
+    """Return study.best_trial, or None when no trial completed.
+
+    Optuna raises ValueError from best_trial when every trial was
+    pruned/failed (possible with regime min-trades pruning).
+    """
+    try:
+        return study.best_trial
+    except ValueError:
+        return None
+
+
+def save_overlay_from_study(
+    study,
+    strategy: str,
+    regime: str,
+    objective: str,
+) -> bool:
+    """Persist the best trial of a regime study as the active overlay.
+
+    Args:
+        study: Completed Optuna study.
+        strategy: Snake_case strategy key.
+        regime: Target regime (any accepted form).
+        objective: Objective metric the study optimized (any form).
+
+    Returns:
+        True when an overlay was saved, False when the study had no
+        valid best trial.
+    """
+    from ..database import DatabaseManager
+    from ..regime_param_overlay import normalize_regime_value
+
+    best_trial = get_best_trial_or_none(study)
+    if best_trial is None or not best_trial.params:
+        logger.warning(
+            f"No valid best trial for {strategy}/{regime} - overlay not saved"
+        )
+        return False
+
+    regime_value = normalize_regime_value(regime)
+    trade_count = best_trial.user_attrs.get("regime_trade_count")
+
+    db = DatabaseManager()
+    row_id = db.save_regime_param_overlay(
+        strategy=strategy,
+        regime=regime_value,
+        params=dict(best_trial.params),
+        objective=normalize_objective(objective),
+        objective_value=study.best_value,
+        trade_count=trade_count,
+        study_name=study.study_name,
+    )
+    logger.info(
+        f"Saved overlay id={row_id} for ({strategy}, {regime_value}): "
+        f"value={study.best_value:.4f}, trades={trade_count}, "
+        f"params={best_trial.params}"
+    )
+    return True
+
+
 def print_results_summary(
     study, strategy: str, top_n: int = 10
 ) -> None:
@@ -215,8 +302,9 @@ def print_results_summary(
     print(f"OPTIMIZATION RESULTS: {strategy.upper()}")
     print(f"{'='*60}")
 
-    if study.best_trial is None:
-        print("  No valid trials completed.")
+    if get_best_trial_or_none(study) is None:
+        print("  No valid trials completed (all pruned or failed).")
+        print(f"{'='*60}\n")
         return
 
     print(f"\n  Best Value: {study.best_value:.4f}")
@@ -271,6 +359,12 @@ def run_single_strategy(
     """Run optimization for a single strategy."""
     runner = OptunaRunner(db_path=args.db_path)
 
+    save_overlay = getattr(args, "save_overlay", False)
+    regime = getattr(args, "regime", None)
+    if save_overlay and not regime:
+        logger.error("--save-overlay requires --regime")
+        return None
+
     try:
         study = runner.optimize(
             strategy=strategy,
@@ -286,10 +380,18 @@ def run_single_strategy(
             test_months=args.test_months,
             timeout=args.timeout,
             n_jobs=args.jobs,
+            regime=regime,
+            min_regime_trades=getattr(args, "min_trades", None),
         )
 
         # Print results
         print_results_summary(study, strategy, args.top)
+
+        # Persist best params as the active overlay for (strategy, regime)
+        if save_overlay:
+            save_overlay_from_study(
+                study, strategy, regime, args.objective
+            )
 
         # Export if requested
         if args.export:

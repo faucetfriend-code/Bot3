@@ -573,14 +573,27 @@ class MultiTimeframeFetcher:
                 "low": [...],
                 "close": [...],
                 "open": [...],
-                "volume": [...]
+                "volume": [...],
+                "timestamp": [...]
             }
 
         Note:
             Invalid candles are skipped. If no valid candles are found,
             returns empty lists. Logs warnings for data quality issues.
+            The "timestamp" list carries the raw per-candle timestamp value
+            unchanged (Pacifica REST/WS candles: epoch milliseconds int under
+            "t"/"timestamp"; candles lacking a timestamp yield None). Consumers
+            must handle both epoch-ms ints and ISO-8601 strings since backtest
+            data uses ISO strings.
         """
-        empty_result = {"high": [], "low": [], "close": [], "open": [], "volume": []}
+        empty_result = {
+            "high": [],
+            "low": [],
+            "close": [],
+            "open": [],
+            "volume": [],
+            "timestamp": [],
+        }
 
         if not raw_candles:
             logger.warning("No candles provided to parse")
@@ -613,8 +626,17 @@ class MultiTimeframeFetcher:
         )
         invalid_count += len(basic_valid_candles) - len(valid_candles)
 
-        # Parse validated candles into OHLCV lists
-        parsed = {"high": [], "low": [], "close": [], "open": [], "volume": []}
+        # Parse validated candles into OHLCV lists.
+        # "timestamp" keeps the raw source value (epoch-ms int for Pacifica
+        # REST/WS candles) so downstream consumers see consistent units.
+        parsed = {
+            "high": [],
+            "low": [],
+            "close": [],
+            "open": [],
+            "volume": [],
+            "timestamp": [],
+        }
 
         for candle in valid_candles:
             if use_abbreviated:
@@ -623,12 +645,16 @@ class MultiTimeframeFetcher:
                 parsed["close"].append(self._safe_float(candle.get("c")))
                 parsed["open"].append(self._safe_float(candle.get("o")))
                 parsed["volume"].append(self._safe_float(candle.get("v")))
+                parsed["timestamp"].append(candle.get("t", candle.get("timestamp")))
             else:
                 parsed["high"].append(self._safe_float(candle.get("high")))
                 parsed["low"].append(self._safe_float(candle.get("low")))
                 parsed["close"].append(self._safe_float(candle.get("close")))
                 parsed["open"].append(self._safe_float(candle.get("open")))
                 parsed["volume"].append(self._safe_float(candle.get("volume")))
+                parsed["timestamp"].append(
+                    candle.get("timestamp", candle.get("t"))
+                )
 
         # Log data quality issues
         if invalid_count > 0:

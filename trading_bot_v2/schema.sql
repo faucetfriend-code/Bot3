@@ -305,8 +305,11 @@ CREATE TABLE IF NOT EXISTS grid_levels (
 CREATE TABLE IF NOT EXISTS regime_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     symbol TEXT NOT NULL,
-    regime TEXT NOT NULL,            -- Market regime classification
-    adx_value REAL,                  -- ADX indicator value
+    regime TEXT NOT NULL,            -- Market regime classification (mirrors new_regime)
+    old_regime TEXT,                 -- Regime exited (confirmed transitions)
+    new_regime TEXT,                 -- Regime entered (confirmed transitions)
+    adx REAL,                        -- ADX at transition detection
+    adx_value REAL,                  -- ADX indicator value (legacy alias of adx)
     volatility_score REAL,           -- Volatility percentile
     confidence REAL,                 -- Detection confidence (0-1)
     detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,

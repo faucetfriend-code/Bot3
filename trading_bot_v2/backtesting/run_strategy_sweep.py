@@ -53,6 +53,7 @@ ALL_STRATEGIES: List[str] = [
     "MomentumScalping",
     "FundingArb",
     "OrderBookImbalance",
+    "SessionRangeBreakout",
 ]
 
 # ---------------------------------------------------------------------------

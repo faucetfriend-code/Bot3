@@ -18,7 +18,13 @@ Usage:
 
 from .feature_engineering import FeatureExtractor, MarketFeatures
 from .gmm_regime import GMMConfig, GMMRegimeDetector, GMMRegimeResult
-from .model_manager import ModelManager, ModelMetadata
+from .hmm_regime import HMMConfig, HMMRegimeDetector
+from .model_manager import (
+    ModelManager,
+    ModelMetadata,
+    read_latest_model_type,
+    write_latest_model_type,
+)
 
 __all__ = [
     "FeatureExtractor",
@@ -26,6 +32,10 @@ __all__ = [
     "GMMConfig",
     "GMMRegimeDetector",
     "GMMRegimeResult",
+    "HMMConfig",
+    "HMMRegimeDetector",
     "ModelManager",
     "ModelMetadata",
+    "read_latest_model_type",
+    "write_latest_model_type",
 ]

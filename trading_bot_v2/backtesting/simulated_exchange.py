@@ -46,6 +46,7 @@ class SimulatedPosition:
     unrealised_pnl: float = 0.0
     realised_pnl: float = 0.0
     funding_paid: float = 0.0
+    entry_regime: str = ""  # Confirmed regime at position open (P4)
 
 
 class SimulatedExchange:
@@ -95,6 +96,7 @@ class SimulatedExchange:
         self._current_timestamp: str = ""
         self._order_counter: int = 0
         self._current_strategy: str = ""  # Set by engine before each order for attribution
+        self._current_regime: str = ""    # Set by engine each bar (regime value, P4)
 
         self.trade_log: List[Dict] = []
 
@@ -225,14 +227,24 @@ class SimulatedExchange:
         order.status = "filled"
 
         symbol = order.symbol
-        if order.side == "bid":
-            realised_pnl = self._open_or_add_position(symbol, "long", order.quantity, fill_price)
+        # Regime tagging (P4): closing fills carry the regime that was
+        # confirmed when the position was OPENED, so per-regime analysis
+        # attributes each round-trip to its entry conditions. Opening
+        # fills carry the current regime.
+        prior_pos = self._positions.get(symbol)
+        fill_side = "long" if order.side == "bid" else "short"
+        if prior_pos is not None and prior_pos.side != fill_side:
+            regime_tag = prior_pos.entry_regime or self._current_regime
         else:
-            realised_pnl = self._open_or_add_position(symbol, "short", order.quantity, fill_price)
+            regime_tag = self._current_regime
+
+        realised_pnl = self._open_or_add_position(
+            symbol, fill_side, order.quantity, fill_price
+        )
 
         if order.status == "filled":  # may have been cancelled by balance guard
             self.balance -= fee
-            self._log_trade(order, fill_price, fee, realised_pnl)
+            self._log_trade(order, fill_price, fee, realised_pnl, regime_tag)
 
     def _open_or_add_position(
         self, symbol: str, side: str, qty: float, price: float
@@ -274,7 +286,8 @@ class SimulatedExchange:
                     else:
                         self.balance -= cost
                         self._positions[symbol] = SimulatedPosition(
-                            symbol=symbol, side=side, quantity=remaining, entry_price=price
+                            symbol=symbol, side=side, quantity=remaining,
+                            entry_price=price, entry_regime=self._current_regime,
                         )
             # partial close: existing.quantity already reduced above
 
@@ -304,7 +317,8 @@ class SimulatedExchange:
                 return 0.0
             self.balance -= cost
             self._positions[symbol] = SimulatedPosition(
-                symbol=symbol, side=side, quantity=qty, entry_price=price
+                symbol=symbol, side=side, quantity=qty, entry_price=price,
+                entry_regime=self._current_regime,
             )
 
         return realised_pnl
@@ -382,6 +396,7 @@ class SimulatedExchange:
         fill_price: float,
         fee: float,
         realised_pnl: float = 0.0,
+        regime: str = "",
     ) -> None:
         """
         Fix 2 — PnL tracking:
@@ -392,6 +407,11 @@ class SimulatedExchange:
         Fix 3 — Strategy attribution:
             Records _current_strategy (set by engine before place_order) so
             per-strategy PnL breakdown is possible in reports.
+
+        Regime tagging (P4):
+            Records the regime tag supplied by _fill_order — the regime
+            at position ENTRY for closing fills, the current regime for
+            opening fills. Enables regime-conditional optimization.
         """
         self.trade_log.append({
             "order_id": order.order_id,
@@ -404,4 +424,5 @@ class SimulatedExchange:
             "pnl": round(realised_pnl, 6),
             "balance_after": round(self.balance, 4),
             "strategy": self._current_strategy,
+            "regime": regime,
         })

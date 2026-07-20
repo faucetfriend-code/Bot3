@@ -81,6 +81,8 @@ class StrategyHealth:
     win_rate: float
     avg_pnl_pct: float
     total_pnl_pct: float
+    profit_factor: Optional[float] = None
+    max_drawdown_pct: float = 0.0
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -160,6 +162,7 @@ class StrategyMonitor:
                 "creating tables inline"
             )
             self._create_tables_inline()
+            self._migrate_schema()
             return
 
         try:
@@ -171,6 +174,39 @@ class StrategyMonitor:
             logger.debug("Strategy monitoring schema ensured")
         except Exception as exc:
             logger.error(f"Failed to apply strategy monitoring schema: {exc}")
+
+        self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        """Add columns introduced after the initial schema (idempotent).
+
+        ``CREATE TABLE IF NOT EXISTS`` does not alter pre-existing tables,
+        so newer columns are added via ``ALTER TABLE``.  Duplicate-column
+        errors (SQLite: "duplicate column name", Postgres: "already
+        exists") are expected on re-runs and silently ignored.
+        """
+        alter_statements = [
+            "ALTER TABLE strategy_health_snapshots ADD COLUMN profit_factor REAL",
+            "ALTER TABLE strategy_health_snapshots "
+            "ADD COLUMN max_drawdown_pct REAL",
+        ]
+        try:
+            with get_db_connection() as conn:
+                for alter_sql in alter_statements:
+                    try:
+                        conn.execute(alter_sql)
+                    except Exception as exc:
+                        msg = str(exc).lower()
+                        if (
+                            "duplicate column name" not in msg
+                            and "already exists" not in msg
+                        ):
+                            logger.warning(
+                                f"Failed to add health snapshot column: {exc}"
+                            )
+                conn.commit()
+        except Exception as exc:
+            logger.error(f"Failed to migrate strategy monitoring schema: {exc}")
 
     def _create_tables_inline(self) -> None:
         """Fallback: create tables directly without the SQL file."""
@@ -197,6 +233,8 @@ class StrategyMonitor:
                 trade_count INTEGER,
                 win_rate REAL,
                 avg_pnl_pct REAL,
+                profit_factor REAL,
+                max_drawdown_pct REAL,
                 snapshot_date DATE NOT NULL,
                 UNIQUE(strategy, snapshot_date)
             );
@@ -425,6 +463,8 @@ class StrategyMonitor:
             win_rate = wins / trade_count if trade_count > 0 else 0.0
             avg_pnl = float(np.mean(returns)) if returns else 0.0
             total_pnl = float(np.sum(returns)) if returns else 0.0
+            profit_factor = self._compute_profit_factor(returns)
+            max_dd = self._compute_max_drawdown_pct(returns)
 
             health_map[strat] = StrategyHealth(
                 strategy=strat,
@@ -433,6 +473,10 @@ class StrategyMonitor:
                 win_rate=round(win_rate, 4),
                 avg_pnl_pct=round(avg_pnl, 4),
                 total_pnl_pct=round(total_pnl, 4),
+                profit_factor=(
+                    round(profit_factor, 4) if profit_factor is not None else None
+                ),
+                max_drawdown_pct=round(max_dd, 4),
             )
 
             decay = self.detect_decay(strat)
@@ -471,6 +515,72 @@ class StrategyMonitor:
         self._save_health_snapshot(health_map)
 
         return report.to_dict()
+
+    def get_regime_attribution(self) -> Dict[str, Dict[str, Dict[str, Any]]]:
+        """
+        Compute per-(strategy, regime) performance from closed trades.
+
+        Reads closed trades from the trades table and groups them by
+        strategy and the regime tag recorded at trade creation. Trades
+        without a regime tag are grouped under "UNTAGGED" so tagging
+        coverage stays visible.
+
+        Per-trade pnl_pct is derived as pnl / (entry_price * quantity) * 100
+        (0.0 when the notional is non-positive).
+
+        Returns:
+            JSON-serialisable dict keyed strategy -> regime -> stats, where
+            stats contains trade_count, win_rate, profit_factor, avg_pnl_pct,
+            and total_pnl_pct.
+        """
+        try:
+            with get_db_connection() as conn:
+                cursor = conn.execute(
+                    "SELECT strategy, regime, pnl, entry_price, quantity "
+                    "FROM trades WHERE status = 'closed'"
+                )
+                rows = cursor.fetchall()
+        except Exception as exc:
+            logger.warning(f"Regime attribution query failed: {exc}")
+            return {}
+
+        # strategy -> regime -> list of pnl_pct
+        grouped: Dict[str, Dict[str, List[float]]] = {}
+        for strategy, regime, pnl, entry_price, quantity in rows:
+            strat_key = str(strategy) if strategy else "UNKNOWN"
+            regime_key = str(regime) if regime else "UNTAGGED"
+            try:
+                pnl_val = float(pnl) if pnl is not None else 0.0
+                notional = float(entry_price or 0.0) * float(quantity or 0.0)
+            except (TypeError, ValueError):
+                continue
+            pnl_pct = (pnl_val / notional) * 100.0 if notional > 0 else 0.0
+            grouped.setdefault(strat_key, {}).setdefault(regime_key, []).append(
+                pnl_pct
+            )
+
+        attribution: Dict[str, Dict[str, Dict[str, Any]]] = {}
+        for strat_key, regimes in grouped.items():
+            attribution[strat_key] = {}
+            for regime_key, returns in regimes.items():
+                trade_count = len(returns)
+                wins = sum(1 for r in returns if r > 0)
+                win_rate = wins / trade_count if trade_count > 0 else 0.0
+                profit_factor = self._compute_profit_factor(returns)
+                avg_pnl = float(np.mean(returns)) if returns else 0.0
+                total_pnl = float(np.sum(returns)) if returns else 0.0
+                attribution[strat_key][regime_key] = {
+                    "trade_count": trade_count,
+                    "win_rate": round(win_rate, 4),
+                    "profit_factor": (
+                        round(profit_factor, 4)
+                        if profit_factor is not None
+                        else None
+                    ),
+                    "avg_pnl_pct": round(avg_pnl, 4),
+                    "total_pnl_pct": round(total_pnl, 4),
+                }
+        return attribution
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -521,6 +631,48 @@ class StrategyMonitor:
         mean = float(np.mean(arr))
         return (mean - risk_free_rate) / std
 
+    def _compute_profit_factor(self, returns: List[float]) -> Optional[float]:
+        """
+        Compute profit factor (gross profit / gross loss) from pnl_pct values.
+
+        Returns ``None`` when there are no trades or no losing trades (an
+        undefined/infinite profit factor is not JSON-serialisable), and
+        ``0.0`` when there are losses but no winning trades.
+        """
+        if not returns:
+            return None
+        gross_profit = sum(r for r in returns if r > 0)
+        gross_loss = abs(sum(r for r in returns if r < 0))
+        if gross_loss == 0:
+            return None
+        if gross_profit == 0:
+            return 0.0
+        return gross_profit / gross_loss
+
+    def _compute_max_drawdown_pct(self, returns: List[float]) -> float:
+        """
+        Compute maximum drawdown from a time-ordered list of pnl_pct values.
+
+        Compounds an equity curve starting at 100.0 (``eq *= 1 + r / 100``
+        per return), tracks the running peak, and returns the largest
+        peak-to-trough decline as a positive percentage.  Returns ``0.0``
+        for an empty list.
+        """
+        if not returns:
+            return 0.0
+        equity = 100.0
+        peak = equity
+        max_dd = 0.0
+        for r in returns:
+            equity *= 1.0 + r / 100.0
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                dd = (peak - equity) / peak
+                if dd > max_dd:
+                    max_dd = dd
+        return max_dd * 100.0
+
     def _save_correlation(
         self,
         strategy_a: str,
@@ -553,19 +705,24 @@ class StrategyMonitor:
                         conn.execute(
                             "INSERT INTO strategy_health_snapshots "
                             "(strategy, sharpe_ratio, trade_count, win_rate, "
-                            "avg_pnl_pct, snapshot_date) "
-                            "VALUES (?, ?, ?, ?, ?, ?) "
+                            "avg_pnl_pct, profit_factor, max_drawdown_pct, "
+                            "snapshot_date) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
                             "ON CONFLICT (strategy, snapshot_date) DO UPDATE SET "
                             "sharpe_ratio = EXCLUDED.sharpe_ratio, "
                             "trade_count = EXCLUDED.trade_count, "
                             "win_rate = EXCLUDED.win_rate, "
-                            "avg_pnl_pct = EXCLUDED.avg_pnl_pct",
+                            "avg_pnl_pct = EXCLUDED.avg_pnl_pct, "
+                            "profit_factor = EXCLUDED.profit_factor, "
+                            "max_drawdown_pct = EXCLUDED.max_drawdown_pct",
                             (
                                 strat,
                                 health.sharpe_ratio,
                                 health.trade_count,
                                 health.win_rate,
                                 health.avg_pnl_pct,
+                                health.profit_factor,
+                                health.max_drawdown_pct,
                                 today,
                             ),
                         )
@@ -573,14 +730,17 @@ class StrategyMonitor:
                         conn.execute(
                             "INSERT OR REPLACE INTO strategy_health_snapshots "
                             "(strategy, sharpe_ratio, trade_count, win_rate, "
-                            "avg_pnl_pct, snapshot_date) "
-                            "VALUES (?, ?, ?, ?, ?, ?)",
+                            "avg_pnl_pct, profit_factor, max_drawdown_pct, "
+                            "snapshot_date) "
+                            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                             (
                                 strat,
                                 health.sharpe_ratio,
                                 health.trade_count,
                                 health.win_rate,
                                 health.avg_pnl_pct,
+                                health.profit_factor,
+                                health.max_drawdown_pct,
                                 today,
                             ),
                         )

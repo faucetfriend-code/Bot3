@@ -49,6 +49,13 @@ from .grid_lifecycle_manager import GridLifecycleManager, GridState
 # Import MigratedPositionManager for trend-following management of migrated positions
 from .migrated_position_manager import MigratedPositionManager
 
+# Import RegimePositionReviewer for regime-flip open position review
+from .regime_position_review import RegimePositionReviewer
+
+# Import RegimeParamOverlayManager for per-regime optimized parameter
+# overlays (P4, behind ENABLE_REGIME_PARAM_OVERLAYS - default off)
+from .regime_param_overlay import RegimeParamOverlayManager
+
 # Import ExecutionLayer for precise 1m/5m entry timing
 from .execution_layer import ExecutionLayer
 
@@ -169,8 +176,12 @@ class TradingBot:
             cache_ttl_seconds=300,  # 5 minutes cache (tiered TTL handles 1m/5m)
         )
 
-        # Initialize market regime detector (uses default thresholds)
-        self.market_regime = MarketRegimeDetector()
+        # Initialize market regime detector (uses default thresholds).
+        # Wired with the global event bus + db so confirmed regime
+        # transitions publish REGIME_CHANGED and persist to regime_history.
+        self.market_regime = MarketRegimeDetector(
+            event_bus=get_event_bus(), db=self.db
+        )
 
         # Initialize strategy manager with regime detector
         self.strategy_manager = StrategyManager(
@@ -178,6 +189,7 @@ class TradingBot:
             risk_manager=self.risk_manager,
             client=self.client,  # Pass client for FundingArb API calls
             ws_client=self.ws_client,  # Pass WS client for OrderBookImbalance
+            db=self.db,  # Pass db for adaptive per-regime strategy weights
         )
 
         # Initialize grid lifecycle manager
@@ -196,6 +208,25 @@ class TradingBot:
             client=self.client,
             risk_manager=self.risk_manager,
             regime_detector=self.market_regime,
+            multi_tf_fetcher=self.multi_tf_fetcher,
+        )
+
+        # Initialize regime param overlay manager (P4). Loads active
+        # per-regime optimized parameters and swaps them onto the shared
+        # strategy instances when the reference symbol's confirmed regime
+        # changes. Inert unless ENABLE_REGIME_PARAM_OVERLAYS=true.
+        self.regime_param_overlays = RegimeParamOverlayManager(
+            strategy_manager=self.strategy_manager,
+            db=self.db,
+        )
+
+        # Initialize regime-flip position reviewer (subscribes to
+        # REGIME_CHANGED in _setup_event_subscriptions when enabled)
+        self.regime_position_reviewer = RegimePositionReviewer(
+            db=self.db,
+            client=self.client,
+            regime_detector=self.market_regime,
+            migrated_position_manager=self.migrated_position_manager,
             multi_tf_fetcher=self.multi_tf_fetcher,
         )
 
@@ -1253,6 +1284,29 @@ class TradingBot:
         else:
             logger.info("Telegram alerts disabled - skipping event subscriptions")
 
+        # Regime-flip position review: revisit open non-grid positions when
+        # a symbol's confirmed regime changes (ENABLE_REGIME_POSITION_REVIEW)
+        if self.regime_position_reviewer.enabled:
+            self.event_bus.subscribe(
+                EventType.REGIME_CHANGED,
+                self.regime_position_reviewer.handle_regime_changed,
+            )
+            logger.info("Regime position review subscribed to REGIME_CHANGED")
+        else:
+            logger.info("Regime position review disabled - skipping subscription")
+
+        # Regime param overlays (P4): swap optimized per-regime params
+        # onto the shared strategy instances on confirmed regime changes
+        # of the reference symbol (ENABLE_REGIME_PARAM_OVERLAYS)
+        if self.regime_param_overlays.enabled:
+            self.event_bus.subscribe(
+                EventType.REGIME_CHANGED,
+                self.regime_param_overlays.handle_regime_changed,
+            )
+            logger.info("Regime param overlays subscribed to REGIME_CHANGED")
+        else:
+            logger.info("Regime param overlays disabled - skipping subscription")
+
         logger.info("Event subscriptions configured")
 
     def _handle_signal_generated(self, event):
@@ -1431,11 +1485,22 @@ class TradingBot:
             account_balance = self._get_account_balance()
             current_exposure = self._get_current_exposure()
 
-            # Calculate requested amount based on position size
+            # Calculate requested amount based on position size.
+            # The current confirmed regime scales the size via RiskManager's
+            # per-regime multipliers (None regime -> multiplier 1.0).
+            # getattr-guarded: partially constructed bots (tests) may lack
+            # the regime detector, in which case sizing stays neutral.
+            regime_detector = getattr(self, "market_regime", None)
+            current_regime = (
+                regime_detector.get_current_regime(signal.asset)
+                if regime_detector is not None
+                else None
+            )
             position_size = self.risk_manager.get_position_size(
                 signal=signal,
                 account_balance=account_balance,
                 current_exposure=current_exposure,
+                regime=current_regime,
             )
             requested_amount = position_size * signal.entry_price
 
@@ -2285,19 +2350,22 @@ class TradingBot:
                 "notes": signal.notes,
             }
 
-            # Save as special "GRID" position
+            # Save as special "GRID" position, tagged with the current
+            # confirmed regime for per-regime attribution.
+            current_regime = self.market_regime.get_current_regime(symbol)
             self.db.save_trade(
-                symbol=symbol,
-                strategy="GRID_TRADING",
-                side="GRID",
-                quantity=grid_levels["quantity_per_level"],
-                entry_price=grid_levels["current_price"],
-                stop_loss=signal.stop_loss,
-                take_profit=signal.take_profit,
-                confidence=signal.confidence,
-                quality=signal.quality.name,
-                metadata=metadata,
+                {
+                    "symbol": symbol,
+                    "strategy": "GRID_TRADING",
+                    "side": "GRID",
+                    "quantity": grid_levels["quantity_per_level"],
+                    "entry_price": grid_levels["current_price"],
+                    "entry_time": datetime.now().isoformat(),
+                    "status": "open",
+                    "regime": current_regime.value if current_regime else None,
+                }
             )
+            logging.debug(f"Grid trade metadata (not persisted): {metadata}")
 
             logging.info(f"Grid position saved to database: {symbol}")
 

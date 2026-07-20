@@ -1,0 +1,16 @@
+{
+  "version": "hmm_20260720_102149",
+  "training_date": "2026-07-20T10:21:49.046718+00:00",
+  "training_samples": 6249,
+  "log_likelihood": -5.851569793404592,
+  "n_regimes": 3,
+  "covariance_type": "full",
+  "features": [
+    "volatility",
+    "returns",
+    "skewness",
+    "atr_ratio",
+    "volume_ratio",
+    "bb_width"
+  ]
+}

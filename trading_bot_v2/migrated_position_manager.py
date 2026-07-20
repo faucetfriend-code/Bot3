@@ -21,6 +21,8 @@ This module works in conjunction with:
 - MarketRegimeDetector: Provides trend direction
 """
 
+import os
+import time
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from loguru import logger
@@ -67,6 +69,17 @@ class MigratedPositionManager:
         # Last known ATR per symbol (cached)
         self._atr_cache: Dict[str, Dict[str, Any]] = {}
         self._atr_cache_ttl_seconds = 300  # 5 minute cache
+
+        # Max hold time (hours) per strategy for time-based exits.
+        # Positions tagged with one of these strategies are force-closed
+        # once their age exceeds the limit (reason: "time_exit").
+        try:
+            orb_time_exit_hours = float(os.getenv("ORB_TIME_EXIT_HOURS", "4"))
+        except ValueError:
+            orb_time_exit_hours = 4.0
+        self._max_hold_hours: Dict[str, float] = {
+            "session_range_breakout": orb_time_exit_hours,
+        }
 
         logger.info("MigratedPositionManager initialized")
 
@@ -115,6 +128,12 @@ class MigratedPositionManager:
             results["positions_managed"] += 1
 
             try:
+                # 0. Check time-based exit (strategy max-hold, needs no price)
+                if self._check_time_exit(symbol, pos):
+                    self._close_position(symbol, pos, "time_exit")
+                    results["positions_closed"] += 1
+                    continue
+
                 # Get current price
                 current_price = (current_prices or {}).get(symbol)
                 if not current_price:
@@ -228,6 +247,50 @@ class MigratedPositionManager:
         except Exception as e:
             logger.warning(f"ATR calculation failed for {symbol}: {e}")
             return 0
+
+    def _check_time_exit(self, symbol: str, pos: Dict) -> bool:
+        """
+        Check if a position has exceeded its strategy's max hold time.
+
+        Only positions tagged with a strategy in self._max_hold_hours
+        (currently session_range_breakout) are affected. Position age is
+        derived from the epoch-seconds timestamp the position dict carries
+        ("entry_time" preferred, "migrated_at" fallback - the key written
+        by RiskManager.register_migrated_position). Mirrors the
+        Position.hours_since_entry age calculation in models.py.
+
+        Args:
+            symbol: Trading symbol.
+            pos: Position dict from RiskManager.get_migrated_positions().
+
+        Returns:
+            True if the position should be closed with reason "time_exit".
+        """
+        strategy = pos.get("strategy")
+        if not strategy:
+            return False
+
+        max_hold = self._max_hold_hours.get(str(strategy))
+        if not max_hold:
+            return False
+
+        entry_ts = pos.get("entry_time", pos.get("migrated_at"))
+        if entry_ts is None:
+            return False
+
+        try:
+            hours_held = (time.time() - float(entry_ts)) / 3600.0
+        except (TypeError, ValueError):
+            return False
+
+        if hours_held >= max_hold:
+            logger.warning(
+                f"TIME EXIT for {symbol} {pos.get('side')}: held "
+                f"{hours_held:.1f}h >= {max_hold}h max ({strategy}) - closing"
+            )
+            return True
+
+        return False
 
     def _check_trend_reversal(
         self, symbol: str, pos: Dict, market_data: Dict = None
@@ -382,6 +445,48 @@ class MigratedPositionManager:
                 return True
 
         return False
+
+    def arm_trailing_stop(
+        self,
+        symbol: str,
+        pos: Dict,
+        current_price: float,
+        market_data: Dict = None,
+    ) -> bool:
+        """
+        Public wrapper to arm/tighten a trailing stop for a position.
+
+        Used by the regime-flip position review to put a profitable but
+        regime-misaligned position under the standard trailing mechanism
+        (2x ATR, only-moves-favorably) without closing it.
+
+        Args:
+            symbol: Trading symbol.
+            pos: Position dict with 'side' ('long'/'short'), 'qty',
+                'entry_price'.
+            current_price: Current market price.
+            market_data: Optional 4h market data for ATR calculation.
+
+        Returns:
+            True if the stop was set or tightened.
+        """
+        return self._update_trailing_stop(symbol, pos, current_price, market_data)
+
+    def close_position(self, symbol: str, pos: Dict, reason: str) -> None:
+        """
+        Public wrapper to close a position through the standard close path.
+
+        Places a market close order, unregisters RiskManager tracking, and
+        cleans up trailing/TP state - identical to trailing_stop /
+        trend_reversal exits. Used by the regime-flip position review with
+        reason "regime_exit".
+
+        Args:
+            symbol: Trading symbol.
+            pos: Position dict with 'side' and 'qty'.
+            reason: Exit reason recorded with the close.
+        """
+        self._close_position(symbol, pos, reason)
 
     def _check_take_profit(
         self, symbol: str, pos: Dict, current_price: float, market_data: Dict = None

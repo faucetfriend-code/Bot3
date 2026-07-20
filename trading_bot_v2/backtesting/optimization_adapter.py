@@ -18,6 +18,8 @@ Usage:
     )
 """
 
+import math
+from datetime import datetime
 from typing import Dict, Any, Optional, List
 
 from .engine import BacktestEngine
@@ -115,6 +117,9 @@ class OptimizationAdapter:
             value = result.total_return_pct
         elif objective == "calmar_ratio":
             value = result.calmar_ratio
+        elif objective == "profit_factor":
+            # Cap so a small all-winner sample cannot dominate
+            value = min(result.profit_factor, 10.0)
         else:
             raise ValueError(f"Unknown objective: {objective}")
 
@@ -257,6 +262,152 @@ class OptimizationAdapter:
             test_start = test_start + timedelta(days=test_months * 30)
 
         return results
+
+    def get_regime_trades(
+        self, result: BacktestResult, regime: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Filter closed trades whose entry regime matches the target.
+
+        Args:
+            result: BacktestResult with a regime-tagged trade_log
+            regime: Target regime (enum value or name, case-insensitive)
+
+        Returns:
+            List of closed-trade dicts (pnl != 0) tagged with the regime
+        """
+        target = str(getattr(regime, "value", regime)).strip().lower()
+        return [
+            t
+            for t in result.trade_log
+            if t.get("pnl", 0) != 0
+            and str(t.get("regime", "")).strip().lower() == target
+        ]
+
+    def calculate_objective_from_trades(
+        self,
+        trades: List[Dict[str, Any]],
+        objective: str,
+        initial_capital: float,
+        start: str,
+        end: str,
+        penalty_factor: float = 0.5,
+    ) -> float:
+        """
+        Compute an objective value from a subset of closed trades.
+
+        Used for regime-conditional optimization, where full-run metrics
+        (equity-curve Sharpe etc.) cannot be reused because they mix
+        trades from all regimes. Metrics here are trade-based:
+
+        - sharpe_ratio / sortino_ratio: mean/std of per-trade returns,
+          annualised by the subset's trade frequency over the window
+        - total_return_pct: sum(pnl) / initial_capital * 100
+        - calmar_ratio: annualised return over max drawdown of the
+          subset's cumulative-PnL curve
+        - profit_factor: gross profit / gross loss, capped at 10
+
+        The existing drawdown (>20%) and negative-return penalties are
+        applied on the subset; the low-trade-count penalty is replaced
+        by min-trades pruning in the runner.
+
+        Args:
+            trades: Closed-trade dicts carrying "pnl"
+            objective: Metric name (canonical long form)
+            initial_capital: Starting capital of the backtest
+            start: Window start date (ISO)
+            end: Window end date (ISO)
+            penalty_factor: Penalty per excess drawdown percent
+
+        Returns:
+            Objective value (higher is better)
+
+        Raises:
+            ValueError: If trades is empty or objective unknown
+        """
+        if not trades:
+            raise ValueError("Cannot compute objective from empty trade list")
+
+        pnls = [float(t.get("pnl", 0)) for t in trades]
+        n = len(pnls)
+        total_pnl = sum(pnls)
+        total_return_pct = total_pnl / initial_capital * 100
+
+        try:
+            days = (datetime.fromisoformat(end) - datetime.fromisoformat(start)).days
+        except (ValueError, TypeError):
+            days = 365
+        years = max(days, 1) / 365.25
+        trades_per_year = n / years
+        annualised_return_pct = total_return_pct / years
+
+        returns = [p / initial_capital for p in pnls]
+        mean_r = sum(returns) / n
+        std_r = math.sqrt(sum((r - mean_r) ** 2 for r in returns) / n)
+
+        # Max drawdown of the subset's cumulative-PnL equity curve
+        equity = initial_capital
+        peak = initial_capital
+        max_dd = 0.0
+        for p in pnls:
+            equity += p
+            if equity > peak:
+                peak = equity
+            if peak > 0:
+                dd = (peak - equity) / peak
+                if dd > max_dd:
+                    max_dd = dd
+        max_dd_pct = max_dd * 100
+
+        if objective == "sharpe_ratio":
+            value = (
+                mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
+            )
+        elif objective == "sortino_ratio":
+            downside = [r for r in returns if r < 0]
+            if downside:
+                downside_std = math.sqrt(
+                    sum(r**2 for r in downside) / len(downside)
+                )
+                value = (
+                    mean_r / downside_std * math.sqrt(trades_per_year)
+                    if downside_std > 0
+                    else 0.0
+                )
+            else:
+                # No losing trades: fall back to the Sharpe form
+                value = (
+                    mean_r / std_r * math.sqrt(trades_per_year)
+                    if std_r > 0
+                    else 0.0
+                )
+        elif objective == "total_return_pct":
+            value = total_return_pct
+        elif objective == "calmar_ratio":
+            value = (
+                annualised_return_pct / max_dd_pct
+                if max_dd_pct > 0
+                else annualised_return_pct
+            )
+        elif objective == "profit_factor":
+            gross_profit = sum(p for p in pnls if p > 0)
+            gross_loss = abs(sum(p for p in pnls if p < 0))
+            if gross_loss > 0:
+                value = min(gross_profit / gross_loss, 10.0)
+            else:
+                value = 10.0 if gross_profit > 0 else 0.0
+        else:
+            raise ValueError(f"Unknown objective: {objective}")
+
+        # Drawdown penalty (mirror calculate_objective)
+        if max_dd_pct > 20.0:
+            value -= (max_dd_pct - 20.0) * penalty_factor
+
+        # Negative-return penalty (mirror calculate_objective)
+        if total_return_pct < 0:
+            value -= abs(total_return_pct) * 0.2
+
+        return value
 
     def get_best_params(
         self, strategy: str, study: Any

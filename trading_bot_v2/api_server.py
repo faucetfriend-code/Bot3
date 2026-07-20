@@ -1238,6 +1238,151 @@ async def strategy_health():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/regimes/history")
+async def regime_history(symbol: Optional[str] = None, limit: int = 50):
+    """Get recent confirmed regime transitions from regime_history."""
+    try:
+        if not bot_integration.database:
+            raise HTTPException(status_code=503, detail="Database not available")
+        rows = bot_integration.database.get_regime_history(
+            symbol=symbol, limit=limit
+        )
+        return {"success": True, "data": rows}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting regime history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/regimes/current")
+async def regimes_current():
+    """Get the current confirmed regime per symbol with time-in-regime."""
+    try:
+        detector = None
+        bot = bot_integration.trading_bot
+        if bot and getattr(bot, "strategy_manager", None):
+            detector = getattr(bot.strategy_manager, "regime_detector", None)
+        if detector is None:
+            detector = bot_integration.regime_detector
+        if detector is None:
+            raise HTTPException(
+                status_code=503, detail="Regime detector not available"
+            )
+        return {"success": True, "data": detector.get_regime_snapshot()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting current regimes: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/regimes/shadow")
+async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
+    """Get recent ML shadow-mode observations with an agreement summary.
+
+    Shadow mode logs the ML regime prediction alongside the authoritative
+    ADX result at each cache refresh (regime_shadow table). The summary
+    reports overall and per-ADX-regime agreement plus the ML regime
+    distribution - the promotion-decision evidence for USE_ML_REGIME.
+    """
+    try:
+        if not bot_integration.database:
+            raise HTTPException(status_code=503, detail="Database not available")
+        try:
+            from .database import summarize_regime_shadow
+        except ImportError:
+            from database import summarize_regime_shadow
+
+        rows = bot_integration.database.get_regime_shadow(
+            symbol=symbol, limit=limit
+        )
+        return {
+            "success": True,
+            "data": {
+                "rows": rows,
+                "summary": summarize_regime_shadow(rows),
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting regime shadow data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/strategies/regime-attribution")
+async def strategies_regime_attribution():
+    """Get per-(strategy, regime) performance attribution from closed trades."""
+    try:
+        try:
+            from .strategy_monitor import get_strategy_monitor
+        except ImportError:
+            from strategy_monitor import get_strategy_monitor
+
+        monitor = get_strategy_monitor()
+        return {"success": True, "data": monitor.get_regime_attribution()}
+    except Exception as e:
+        logger.error(f"Error getting regime attribution: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/weights/adaptive")
+async def adaptive_weights_status():
+    """Get current adaptive strategy weight multipliers and evidence counts."""
+    try:
+        manager = None
+        bot = bot_integration.trading_bot
+        if bot and getattr(bot, "strategy_manager", None):
+            manager = getattr(bot.strategy_manager, "adaptive_weights", None)
+        if manager is None:
+            raise HTTPException(
+                status_code=503, detail="Adaptive weight manager not available"
+            )
+        return {"success": True, "data": manager.get_status()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error getting adaptive weights: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/overlays/regime-params")
+async def regime_param_overlays_status():
+    """Get stored per-regime parameter overlays and runtime application state.
+
+    Returns the active overlays from the regime_param_overlays table,
+    whether runtime application is enabled (ENABLE_REGIME_PARAM_OVERLAYS),
+    and the manager's last-applied state per strategy.
+    """
+    try:
+        manager = None
+        bot = bot_integration.trading_bot
+        if bot:
+            manager = getattr(bot, "regime_param_overlays", None)
+
+        stored = []
+        if bot_integration.database:
+            try:
+                stored = bot_integration.database.get_regime_param_overlays(
+                    active_only=True
+                )
+            except Exception as e:
+                logger.warning(f"Could not read regime param overlays: {e}")
+
+        return {
+            "success": True,
+            "data": {
+                "runtime_enabled": bool(manager and manager.enabled),
+                "active_overlays": stored,
+                "manager": manager.get_status() if manager else None,
+            },
+        }
+    except Exception as e:
+        logger.error(f"Error getting regime param overlays: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/backup")
 async def trigger_backup():
     """Trigger an immediate database backup (H5 automated backup)."""

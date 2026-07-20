@@ -405,6 +405,69 @@ class TestStrategyMonitor:
         # just verify the report structure is valid
         assert isinstance(report["decay_alerts"], list)
 
+    def test_compute_profit_factor_known_sequence(self, monitor):
+        """Test profit factor on a known sequence: 6 profit / 2 loss = 3.0."""
+        pf = monitor._compute_profit_factor([2.0, -1.0, 4.0, -1.0])
+        assert pf is not None
+        assert abs(pf - 3.0) < 1e-9
+
+    def test_compute_profit_factor_no_losses(self, monitor):
+        """Test profit factor is None when there are no losing trades."""
+        assert monitor._compute_profit_factor([1.0, 2.0, 3.0]) is None
+
+    def test_compute_profit_factor_no_wins(self, monitor):
+        """Test profit factor is 0.0 when there are losses but no wins."""
+        assert monitor._compute_profit_factor([-1.0, -2.0]) == 0.0
+
+    def test_compute_profit_factor_no_trades(self, monitor):
+        """Test profit factor is None with no trades."""
+        assert monitor._compute_profit_factor([]) is None
+
+    def test_compute_max_drawdown_known_sequence(self, monitor):
+        """Test max drawdown on a known sequence.
+
+        [+10, -5, -5]: peak 110, trough 110 * 0.95 * 0.95 = 99.275,
+        drawdown = (110 - 99.275) / 110 * 100 = 9.75%.
+        """
+        dd = monitor._compute_max_drawdown_pct([10.0, -5.0, -5.0])
+        assert abs(dd - 9.75) < 1e-6
+
+    def test_compute_max_drawdown_empty(self, monitor):
+        """Test max drawdown is 0.0 for an empty return list."""
+        assert monitor._compute_max_drawdown_pct([]) == 0.0
+
+    def test_compute_max_drawdown_monotonic_gains(self, monitor):
+        """Test max drawdown is 0.0 when equity only rises."""
+        assert monitor._compute_max_drawdown_pct([1.0, 2.0, 3.0]) == 0.0
+
+    def test_health_report_includes_new_metrics(self, monitor):
+        """Test health report entries carry profit_factor and max_drawdown_pct."""
+        now = datetime.now(timezone.utc)
+        seq = [2.0, -1.0, 4.0, -1.0]
+        for i, pnl in enumerate(seq):
+            ts = (now - timedelta(days=len(seq) - i)).isoformat()
+            monitor.record_return("pf_strat", pnl, timestamp=ts)
+
+        report = monitor.get_health_report()
+        health = report["strategies"]["pf_strat"]
+        assert abs(health["profit_factor"] - 3.0) < 1e-6
+        assert health["max_drawdown_pct"] > 0.0
+
+    def test_health_report_profit_factor_none_serialisable(self, monitor):
+        """Test all-winning strategy reports profit_factor as None (not inf)."""
+        import json
+
+        now = datetime.now(timezone.utc)
+        for i in range(5):
+            ts = (now - timedelta(days=5 - i)).isoformat()
+            monitor.record_return("all_wins", 1.0 + i * 0.1, timestamp=ts)
+
+        report = monitor.get_health_report()
+        health = report["strategies"]["all_wins"]
+        assert health["profit_factor"] is None
+        # Whole report must remain JSON-serialisable for FastAPI
+        json.dumps(report)
+
     def test_thread_safety(self, monitor):
         """Test concurrent record_return calls don't corrupt state."""
         import concurrent.futures
@@ -537,6 +600,81 @@ class TestStrategyMonitorDatabase:
             rows = cursor.fetchall()
             assert len(rows) >= 1
             assert abs(float(rows[0][0]) - corr) < 1e-6
+
+
+    def test_health_snapshot_round_trips_new_columns(self, monitor_with_db):
+        """Test snapshot save persists profit_factor and max_drawdown_pct."""
+        now = datetime.now(timezone.utc)
+        seq = [2.0, -1.0, 4.0, -1.0]
+        for i, pnl in enumerate(seq):
+            ts = (now - timedelta(days=len(seq) - i)).isoformat()
+            monitor_with_db.record_return("rt_strat", pnl, timestamp=ts)
+
+        report = monitor_with_db.get_health_report()
+        expected_pf = report["strategies"]["rt_strat"]["profit_factor"]
+        expected_dd = report["strategies"]["rt_strat"]["max_drawdown_pct"]
+        assert expected_pf is not None
+        assert expected_dd > 0.0
+
+        import trading_bot_v2.database as db_mod
+
+        with db_mod.get_db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT profit_factor, max_drawdown_pct "
+                "FROM strategy_health_snapshots WHERE strategy = ?",
+                ("rt_strat",),
+            )
+            rows = cursor.fetchall()
+            assert len(rows) == 1
+            assert abs(float(rows[0][0]) - expected_pf) < 1e-6
+            assert abs(float(rows[0][1]) - expected_dd) < 1e-6
+
+    def test_schema_migration_idempotent(self, monitor_with_db):
+        """Test ensure-schema is a no-op when the new columns already exist."""
+        # Schema was ensured once at construction; run it twice more.
+        monitor_with_db._ensure_schema()
+        monitor_with_db._ensure_schema()
+
+        import trading_bot_v2.database as db_mod
+
+        with db_mod.get_db_connection() as conn:
+            cursor = conn.execute(
+                "PRAGMA table_info(strategy_health_snapshots)"
+            )
+            columns = [row[1] for row in cursor.fetchall()]
+
+        assert columns.count("profit_factor") == 1
+        assert columns.count("max_drawdown_pct") == 1
+
+    def test_migration_adds_columns_to_legacy_table(self, monitor_with_db):
+        """Test migration adds new columns to a pre-existing legacy table."""
+        import trading_bot_v2.database as db_mod
+
+        with db_mod.get_db_connection() as conn:
+            conn.execute("DROP TABLE strategy_health_snapshots")
+            conn.execute(
+                "CREATE TABLE strategy_health_snapshots ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "strategy TEXT NOT NULL, "
+                "sharpe_ratio REAL, "
+                "trade_count INTEGER, "
+                "win_rate REAL, "
+                "avg_pnl_pct REAL, "
+                "snapshot_date DATE NOT NULL, "
+                "UNIQUE(strategy, snapshot_date))"
+            )
+            conn.commit()
+
+        monitor_with_db._ensure_schema()
+
+        with db_mod.get_db_connection() as conn:
+            cursor = conn.execute(
+                "PRAGMA table_info(strategy_health_snapshots)"
+            )
+            columns = [row[1] for row in cursor.fetchall()]
+
+        assert "profit_factor" in columns
+        assert "max_drawdown_pct" in columns
 
 
 class TestStrategyMonitorEventBus:

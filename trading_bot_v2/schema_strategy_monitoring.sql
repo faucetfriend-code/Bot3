@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS strategy_health_snapshots (
     trade_count INTEGER,
     win_rate REAL,
     avg_pnl_pct REAL,
+    profit_factor REAL,
+    max_drawdown_pct REAL,
     snapshot_date DATE NOT NULL,
     UNIQUE(strategy, snapshot_date)
 );

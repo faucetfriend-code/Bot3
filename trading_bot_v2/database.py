@@ -660,6 +660,56 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
             UNIQUE (account_id, metric_date)
         );
 
+        CREATE TABLE IF NOT EXISTS regime_history (
+            id BIGSERIAL,
+            symbol TEXT NOT NULL,
+            regime TEXT NOT NULL,
+            old_regime TEXT,
+            new_regime TEXT,
+            adx DOUBLE PRECISION,
+            adx_value DOUBLE PRECISION,
+            volatility_score DOUBLE PRECISION,
+            confidence DOUBLE PRECISION,
+            detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            duration_minutes INTEGER
+        );
+
+        CREATE TABLE IF NOT EXISTS regime_shadow (
+            id BIGSERIAL PRIMARY KEY,
+            detected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            symbol TEXT NOT NULL,
+            adx_regime TEXT NOT NULL,
+            ml_regime TEXT NOT NULL,
+            ml_confidence DOUBLE PRECISION,
+            ml_model_type TEXT,
+            agree INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS adaptive_weights (
+            id BIGSERIAL PRIMARY KEY,
+            computed_at TIMESTAMPTZ NOT NULL,
+            regime TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            trade_count INTEGER NOT NULL DEFAULT 0,
+            recent_expectancy DOUBLE PRECISION,
+            lifetime_expectancy DOUBLE PRECISION,
+            multiplier DOUBLE PRECISION NOT NULL DEFAULT 1.0,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS regime_param_overlays (
+            id BIGSERIAL PRIMARY KEY,
+            strategy TEXT NOT NULL,
+            regime TEXT NOT NULL,
+            params_json TEXT NOT NULL,
+            objective TEXT,
+            objective_value DOUBLE PRECISION,
+            trade_count INTEGER,
+            study_name TEXT,
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
         CREATE TABLE IF NOT EXISTS grid_state (
             id BIGSERIAL PRIMARY KEY,
             symbol TEXT NOT NULL UNIQUE,
@@ -1148,6 +1198,108 @@ def _init_sqlite_database():
                 if "duplicate column name" not in str(e).lower():
                     logger.warning(f"Failed to add grid state column: {e}")
 
+        # Regime transition history (P0 regime observability).
+        # schema.sql already ships a snapshot-style regime_history table
+        # (regime, adx_value, confidence, duration_minutes); this CREATE is a
+        # superset fallback for installs without schema.sql, and the ALTERs
+        # below upgrade the legacy shape with transition columns.
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS regime_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    regime TEXT NOT NULL,
+                    old_regime TEXT,
+                    new_regime TEXT,
+                    adx REAL,
+                    adx_value REAL,
+                    volatility_score REAL,
+                    confidence REAL,
+                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    duration_minutes INTEGER
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_regime_history_symbol_time "
+            "ON regime_history(symbol, detected_at)"
+        )
+
+        regime_history_alter_statements = [
+            "ALTER TABLE regime_history ADD COLUMN old_regime TEXT",
+            "ALTER TABLE regime_history ADD COLUMN new_regime TEXT",
+            "ALTER TABLE regime_history ADD COLUMN adx REAL",
+        ]
+        for alter_sql in regime_history_alter_statements:
+            try:
+                conn.execute(alter_sql)
+            except Exception as e:
+                err = str(e).lower()
+                if "duplicate column name" not in err and "already exists" not in err:
+                    logger.warning(f"Failed to add regime_history column: {e}")
+
+        # ML regime shadow-mode observations (P3): one row per regime cache
+        # refresh comparing the authoritative ADX result against the ML
+        # detector's prediction. Observability only - never read by the
+        # trading path.
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS regime_shadow (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    detected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    symbol TEXT NOT NULL,
+                    adx_regime TEXT NOT NULL,
+                    ml_regime TEXT NOT NULL,
+                    ml_confidence REAL,
+                    ml_model_type TEXT,
+                    agree INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_regime_shadow_symbol_time "
+            "ON regime_shadow(symbol, detected_at)"
+        )
+
+        # Adaptive per-regime strategy weight snapshots (observability for
+        # AdaptiveWeightManager recomputes - see adaptive_weights.py).
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS adaptive_weights (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    computed_at TIMESTAMP NOT NULL,
+                    regime TEXT NOT NULL,
+                    strategy TEXT NOT NULL,
+                    trade_count INTEGER NOT NULL DEFAULT 0,
+                    recent_expectancy REAL,
+                    lifetime_expectancy REAL,
+                    multiplier REAL NOT NULL DEFAULT 1.0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_adaptive_weights_computed "
+            "ON adaptive_weights(computed_at)"
+        )
+
+        # Per-regime optimized parameter overlays (P4). One ACTIVE row per
+        # (strategy, regime); saving a new overlay deactivates the previous
+        # one so history is preserved. Runtime application is gated by
+        # ENABLE_REGIME_PARAM_OVERLAYS (see regime_param_overlay.py).
+        conn.execute("""
+                CREATE TABLE IF NOT EXISTS regime_param_overlays (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    strategy TEXT NOT NULL,
+                    regime TEXT NOT NULL,
+                    params_json TEXT NOT NULL,
+                    objective TEXT,
+                    objective_value REAL,
+                    trade_count INTEGER,
+                    study_name TEXT,
+                    active INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_regime_param_overlays_lookup "
+            "ON regime_param_overlays(strategy, regime, active)"
+        )
+
         # Add account_id columns to existing tables if they don't exist
         alter_statements = [
             "ALTER TABLE trades ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
@@ -1156,6 +1308,7 @@ def _init_sqlite_database():
             "ALTER TABLE performance_metrics ADD COLUMN account_id TEXT NOT NULL DEFAULT 'sub_1'",
             "ALTER TABLE positions ADD COLUMN funding_pnl REAL DEFAULT 0",
             "ALTER TABLE positions ADD COLUMN exit_price REAL",
+            "ALTER TABLE trades ADD COLUMN regime TEXT",
         ]
 
         for alter_sql in alter_statements:
@@ -1163,7 +1316,9 @@ def _init_sqlite_database():
                 conn.execute(alter_sql)
             except Exception as e:
                 # Column might already exist, ignore error
-                if "duplicate column name" not in str(e).lower():
+                # (SQLite says "duplicate column name", Postgres "already exists")
+                err = str(e).lower()
+                if "duplicate column name" not in err and "already exists" not in err:
                     logger.warning(f"Failed to add column: {e}")
 
         # Create indexes for account_id columns
@@ -1208,6 +1363,59 @@ def _init_sqlite_database():
 
         conn.commit()
     logger.info("SQLite database initialized successfully with performance indexes")
+
+
+def summarize_regime_shadow(
+    rows: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Summarise ML shadow-mode observations.
+
+    Pure function over rows shaped like
+    :meth:`DatabaseManager.get_regime_shadow` output; used by the
+    /api/regimes/shadow endpoint and unit-testable without a database.
+
+    Args:
+        rows: Shadow observation dicts (adx_regime, ml_regime, agree, ...).
+
+    Returns:
+        Dict with total observations, overall agreement pct, agreement pct
+        per ADX regime, and the ML regime distribution.
+    """
+    total = len(rows)
+    if total == 0:
+        return {
+            "observations": 0,
+            "agreement_pct": None,
+            "agreement_by_adx_regime": {},
+            "ml_regime_distribution": {},
+        }
+
+    agree_count = sum(1 for r in rows if r.get("agree"))
+
+    by_adx: Dict[str, Dict[str, int]] = {}
+    ml_dist: Dict[str, int] = {}
+    for r in rows:
+        adx_regime = r.get("adx_regime") or "unknown"
+        ml_regime = r.get("ml_regime") or "unknown"
+        bucket = by_adx.setdefault(adx_regime, {"total": 0, "agree": 0})
+        bucket["total"] += 1
+        bucket["agree"] += 1 if r.get("agree") else 0
+        ml_dist[ml_regime] = ml_dist.get(ml_regime, 0) + 1
+
+    return {
+        "observations": total,
+        "agreement_pct": round(100.0 * agree_count / total, 2),
+        "agreement_by_adx_regime": {
+            regime: {
+                "observations": b["total"],
+                "agreement_pct": round(100.0 * b["agree"] / b["total"], 2),
+            }
+            for regime, b in sorted(by_adx.items())
+        },
+        "ml_regime_distribution": {
+            regime: count for regime, count in sorted(ml_dist.items())
+        },
+    }
 
 
 class DatabaseManager:
@@ -1315,8 +1523,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (account_id, symbol, asset_class, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     account_id,
@@ -1332,6 +1540,7 @@ class DatabaseManager:
                     trade_data.get("commission", 0),
                     trade_data.get("strategy"),
                     trade_data.get("status", "open"),
+                    trade_data.get("regime"),
                 ),
             )
             conn.commit()
@@ -1356,8 +1565,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (account_id, symbol, asset_class, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 [
                     (
@@ -1374,6 +1583,7 @@ class DatabaseManager:
                         trade.get("commission", 0),
                         trade.get("strategy"),
                         trade.get("status", "open"),
+                        trade.get("regime"),
                     )
                     for trade in trades_data
                 ],
@@ -1404,6 +1614,507 @@ class DatabaseManager:
                 values.append(trade_id)
                 conn.execute(query, tuple(values))
                 conn.commit()
+
+    def save_regime_transition(
+        self,
+        symbol: str,
+        old_regime: str,
+        new_regime: str,
+        adx: Optional[float] = None,
+        volatility_score: Optional[float] = None,
+        detected_at: Optional[Any] = None,
+    ) -> Optional[int]:
+        """Persist a confirmed regime transition to regime_history.
+
+        Args:
+            symbol: Trading symbol.
+            old_regime: Regime value being exited (e.g. "ranging_calm").
+            new_regime: Newly confirmed regime value.
+            adx: ADX at detection time, if available.
+            volatility_score: Volatility score (0-100) at detection, if
+                available (only computed in ranging classifications).
+            detected_at: Transition timestamp (datetime or ISO string).
+                Defaults to now.
+
+        Returns:
+            Row id of the inserted transition, or None on Postgres.
+        """
+        if detected_at is None:
+            detected_at = datetime.now()
+        if isinstance(detected_at, datetime):
+            detected_at = detected_at.isoformat()
+
+        with get_db_connection() as conn:
+            # "regime" mirrors new_regime and "adx_value" mirrors adx for
+            # compatibility with the legacy snapshot-style table shape.
+            cursor = conn.execute(
+                """
+                INSERT INTO regime_history
+                    (symbol, regime, old_regime, new_regime, adx, adx_value,
+                     volatility_score, detected_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    symbol,
+                    new_regime,
+                    old_regime,
+                    new_regime,
+                    adx,
+                    adx,
+                    volatility_score,
+                    detected_at,
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    def get_regime_history(
+        self, symbol: Optional[str] = None, limit: int = 50
+    ) -> List[Dict[str, Any]]:
+        """Fetch recent regime transitions, newest first.
+
+        Args:
+            symbol: Optional symbol filter.
+            limit: Maximum rows to return (default: 50).
+
+        Returns:
+            List of dicts with id, symbol, old_regime, new_regime, adx,
+            volatility_score, detected_at.
+        """
+        query = (
+            "SELECT id, symbol, old_regime, new_regime, adx, volatility_score, "
+            "detected_at FROM regime_history"
+        )
+        params: List[Any] = []
+        if symbol:
+            query += " WHERE symbol = ?"
+            params.append(symbol)
+        query += " ORDER BY detected_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "symbol": row[1],
+                "old_regime": row[2],
+                "new_regime": row[3],
+                "adx": row[4],
+                "volatility_score": row[5],
+                "detected_at": str(row[6]) if row[6] is not None else None,
+            }
+            for row in rows
+        ]
+
+    def save_regime_shadow(
+        self,
+        symbol: str,
+        adx_regime: str,
+        ml_regime: str,
+        ml_confidence: Optional[float] = None,
+        ml_model_type: Optional[str] = None,
+        agree: Optional[int] = None,
+        detected_at: Optional[Any] = None,
+    ) -> Optional[int]:
+        """Persist an ML shadow-mode regime observation to regime_shadow.
+
+        Args:
+            symbol: Trading symbol.
+            adx_regime: The authoritative ADX regime value.
+            ml_regime: The ML detector's regime value.
+            ml_confidence: ML prediction confidence (0-1), if available.
+            ml_model_type: Which ML model produced the prediction
+                ("gmm" or "hmm").
+            agree: 1 when the two regimes match, 0 otherwise. Computed
+                from the regime values when ``None``.
+            detected_at: Observation timestamp (datetime or ISO string).
+                Defaults to now.
+
+        Returns:
+            Row id of the inserted observation, or None on Postgres.
+        """
+        if detected_at is None:
+            detected_at = datetime.now()
+        if isinstance(detected_at, datetime):
+            detected_at = detected_at.isoformat()
+        if agree is None:
+            agree = int(adx_regime == ml_regime)
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO regime_shadow
+                    (detected_at, symbol, adx_regime, ml_regime,
+                     ml_confidence, ml_model_type, agree)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    detected_at,
+                    symbol,
+                    adx_regime,
+                    ml_regime,
+                    ml_confidence,
+                    ml_model_type,
+                    int(agree),
+                ),
+            )
+            conn.commit()
+            return cursor.lastrowid  # type: ignore
+
+    def get_regime_shadow(
+        self, symbol: Optional[str] = None, limit: int = 200
+    ) -> List[Dict[str, Any]]:
+        """Fetch recent shadow-mode observations, newest first.
+
+        Args:
+            symbol: Optional symbol filter.
+            limit: Maximum rows to return (default: 200).
+
+        Returns:
+            List of dicts with id, detected_at, symbol, adx_regime,
+            ml_regime, ml_confidence, ml_model_type, agree.
+        """
+        query = (
+            "SELECT id, detected_at, symbol, adx_regime, ml_regime, "
+            "ml_confidence, ml_model_type, agree FROM regime_shadow"
+        )
+        params: List[Any] = []
+        if symbol:
+            query += " WHERE symbol = ?"
+            params.append(symbol)
+        query += " ORDER BY detected_at DESC, id DESC LIMIT ?"
+        params.append(limit)
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "detected_at": str(row[1]) if row[1] is not None else None,
+                "symbol": row[2],
+                "adx_regime": row[3],
+                "ml_regime": row[4],
+                "ml_confidence": row[5],
+                "ml_model_type": row[6],
+                "agree": row[7],
+            }
+            for row in rows
+        ]
+
+    def save_adaptive_weight_snapshot(
+        self, rows: List[Dict[str, Any]]
+    ) -> int:
+        """Persist an adaptive weight recompute snapshot.
+
+        Args:
+            rows: List of dicts with computed_at, regime, strategy,
+                trade_count, recent_expectancy, lifetime_expectancy,
+                multiplier (one row per (regime, strategy) cell).
+
+        Returns:
+            Number of rows inserted.
+        """
+        if not rows:
+            return 0
+
+        with get_db_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO adaptive_weights
+                    (computed_at, regime, strategy, trade_count,
+                     recent_expectancy, lifetime_expectancy, multiplier)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        row["computed_at"],
+                        row["regime"],
+                        row["strategy"],
+                        row.get("trade_count", 0),
+                        row.get("recent_expectancy"),
+                        row.get("lifetime_expectancy"),
+                        row.get("multiplier", 1.0),
+                    )
+                    for row in rows
+                ],
+            )
+            conn.commit()
+            return len(rows)
+
+    def get_adaptive_weight_snapshot(self) -> List[Dict[str, Any]]:
+        """Fetch the most recent adaptive weight snapshot.
+
+        Returns:
+            List of dicts (computed_at, regime, strategy, trade_count,
+            recent_expectancy, lifetime_expectancy, multiplier) for the
+            latest computed_at; empty list when no snapshot exists.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT computed_at, regime, strategy, trade_count,
+                       recent_expectancy, lifetime_expectancy, multiplier
+                FROM adaptive_weights
+                WHERE computed_at = (
+                    SELECT MAX(computed_at) FROM adaptive_weights
+                )
+                ORDER BY regime, strategy
+                """
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "computed_at": str(row[0]) if row[0] is not None else None,
+                "regime": row[1],
+                "strategy": row[2],
+                "trade_count": row[3],
+                "recent_expectancy": row[4],
+                "lifetime_expectancy": row[5],
+                "multiplier": row[6],
+            }
+            for row in rows
+        ]
+
+    def save_regime_param_overlay(
+        self,
+        strategy: str,
+        regime: str,
+        params: Dict[str, Any],
+        objective: Optional[str] = None,
+        objective_value: Optional[float] = None,
+        trade_count: Optional[int] = None,
+        study_name: Optional[str] = None,
+    ) -> Optional[int]:
+        """Persist a per-regime parameter overlay (P4).
+
+        Deactivates any previously active overlay for the same
+        (strategy, regime) pair - history rows are kept - then inserts
+        the new overlay as active and writes the JSON export
+        (config/regime_param_overlays.json) through.
+
+        Args:
+            strategy: Snake_case strategy key (e.g. "mean_reversion").
+            regime: Regime value (e.g. "ranging_calm").
+            params: Optimized parameter dict to store as JSON.
+            objective: Objective metric name the overlay was tuned for.
+            objective_value: Best objective value achieved.
+            trade_count: Matching-regime trade count of the best trial.
+            study_name: Optuna study name that produced the overlay.
+
+        Returns:
+            Row id of the inserted overlay, or None on Postgres.
+        """
+        params_json = json.dumps(params, sort_keys=True)
+        created_at = datetime.now().isoformat()
+
+        with get_db_connection() as conn:
+            conn.execute(
+                "UPDATE regime_param_overlays SET active = 0 "
+                "WHERE strategy = ? AND regime = ? AND active = 1",
+                (strategy, regime),
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO regime_param_overlays
+                    (strategy, regime, params_json, objective,
+                     objective_value, trade_count, study_name, active,
+                     created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    strategy,
+                    regime,
+                    params_json,
+                    objective,
+                    objective_value,
+                    trade_count,
+                    study_name,
+                    created_at,
+                ),
+            )
+            conn.commit()
+            row_id = cursor.lastrowid
+
+        try:
+            self.export_regime_param_overlays()
+        except Exception as e:
+            logger.warning(f"Regime overlay JSON export failed: {e}")
+
+        return row_id  # type: ignore
+
+    def get_regime_param_overlays(
+        self,
+        active_only: bool = True,
+        strategy: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """Fetch stored per-regime parameter overlays, newest first.
+
+        Args:
+            active_only: Only return the currently active overlays.
+            strategy: Optional snake_case strategy filter.
+
+        Returns:
+            List of dicts with id, strategy, regime, params (parsed),
+            objective, objective_value, trade_count, study_name, active,
+            created_at.
+        """
+        query = (
+            "SELECT id, strategy, regime, params_json, objective, "
+            "objective_value, trade_count, study_name, active, created_at "
+            "FROM regime_param_overlays"
+        )
+        clauses: List[str] = []
+        params: List[Any] = []
+        if active_only:
+            clauses.append("active = 1")
+        if strategy:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY created_at DESC, id DESC"
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params) if params else None)
+            rows = cursor.fetchall()
+
+        overlays: List[Dict[str, Any]] = []
+        for row in rows:
+            try:
+                parsed = json.loads(row[3]) if row[3] else {}
+            except (TypeError, ValueError):
+                parsed = {}
+            overlays.append(
+                {
+                    "id": row[0],
+                    "strategy": row[1],
+                    "regime": row[2],
+                    "params": parsed,
+                    "objective": row[4],
+                    "objective_value": row[5],
+                    "trade_count": row[6],
+                    "study_name": row[7],
+                    "active": row[8],
+                    "created_at": str(row[9]) if row[9] is not None else None,
+                }
+            )
+        return overlays
+
+    def export_regime_param_overlays(
+        self, path: Optional[str] = None
+    ) -> str:
+        """Write the active overlays to a JSON file for inspection.
+
+        Args:
+            path: Output path (default: env REGIME_OVERLAY_EXPORT_PATH,
+                then config/regime_param_overlays.json at the project
+                root).
+
+        Returns:
+            The path written.
+        """
+        if path is None:
+            path = os.getenv("REGIME_OVERLAY_EXPORT_PATH") or None
+        if path is None:
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.join(
+                project_root, "config", "regime_param_overlays.json"
+            )
+
+        overlays = self.get_regime_param_overlays(active_only=True)
+        payload = {
+            "exported_at": datetime.now().isoformat(),
+            "active_overlays": overlays,
+        }
+
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2, sort_keys=True)
+
+        logger.info(
+            f"Exported {len(overlays)} active regime overlay(s) to {path}"
+        )
+        return path
+
+    def get_closed_trades_for_weights(self) -> List[Dict[str, Any]]:
+        """Fetch closed trades with the fields adaptive weighting needs.
+
+        Returns:
+            List of dicts with strategy, regime, pnl, entry_price,
+            quantity, entry_time, exit_time for all closed trades.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                """
+                SELECT strategy, regime, pnl, entry_price, quantity,
+                       entry_time, exit_time
+                FROM trades
+                WHERE status = 'closed'
+                """
+            )
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "strategy": row[0],
+                "regime": row[1],
+                "pnl": row[2],
+                "entry_price": row[3],
+                "quantity": row[4],
+                "entry_time": row[5],
+                "exit_time": row[6],
+            }
+            for row in rows
+        ]
+
+    def get_open_trades(
+        self, symbol: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Fetch open trades including their owning strategy and regime tag.
+
+        Used by the regime-flip position review to map open positions back
+        to the strategy that opened them.
+
+        Args:
+            symbol: Optional symbol filter.
+
+        Returns:
+            List of dicts with id, symbol, side, quantity, entry_price,
+            strategy, regime, entry_time.
+        """
+        query = (
+            "SELECT id, symbol, side, quantity, entry_price, strategy, "
+            "regime, entry_time FROM trades WHERE status = 'open'"
+        )
+        params: List[Any] = []
+        if symbol:
+            query += " AND symbol = ?"
+            params.append(symbol)
+        query += " ORDER BY entry_time DESC"
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params) if params else None)
+            rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "symbol": row[1],
+                "side": row[2],
+                "quantity": row[3],
+                "entry_price": row[4],
+                "strategy": row[5],
+                "regime": row[6],
+                "entry_time": str(row[7]) if row[7] is not None else None,
+            }
+            for row in rows
+        ]
 
     def get_trades(
         self, limit: int = 100, status: Optional[str] = None
@@ -2269,8 +2980,8 @@ class DatabaseManager:
                 """
                 INSERT INTO trades (symbol, side, quantity, entry_price,
                                   exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  commission, strategy, status, regime)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
                 (
                     trade_data["symbol"],
@@ -2284,6 +2995,7 @@ class DatabaseManager:
                     trade_data.get("commission", 0),
                     trade_data.get("strategy"),
                     trade_data.get("status", "open"),
+                    trade_data.get("regime"),
                 ),
             )
             await db.commit()

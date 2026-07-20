@@ -168,4 +168,18 @@ class PerformanceTracker:
         result.win_rate_pct = len(wins) / max(1, len(closed_trades)) * 100
         result.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
 
+        # Per-regime breakdown (P4): closed trades carry the regime that
+        # was confirmed at position entry (tagged by SimulatedExchange).
+        by_regime: Dict[str, Dict] = {}
+        for t in closed_trades:
+            regime = t.get("regime") or "unknown"
+            cell = by_regime.setdefault(
+                regime, {"closed_trades": 0, "pnl": 0.0, "wins": 0}
+            )
+            cell["closed_trades"] += 1
+            cell["pnl"] += t.get("pnl", 0)
+            if t.get("pnl", 0) > 0:
+                cell["wins"] += 1
+        result.by_regime = by_regime
+
         return result

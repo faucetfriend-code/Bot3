@@ -34,10 +34,60 @@ import pandas as pd
 
 from .search_spaces import get_search_space, suggest_params, list_strategies
 from ..backtesting.optimization_adapter import OptimizationAdapter
+from ..regime_param_overlay import normalize_regime_value
 
 
 # Default database path
 DEFAULT_DB_PATH = "optimization_studies.db"
+
+# Default minimum matching-regime trades before a trial is pruned
+DEFAULT_REGIME_OPT_MIN_TRADES = 15
+
+# Objective aliases (CLI short forms -> canonical metric names)
+OBJECTIVE_ALIASES = {
+    "sharpe": "sharpe_ratio",
+    "sharpe_ratio": "sharpe_ratio",
+    "sortino": "sortino_ratio",
+    "sortino_ratio": "sortino_ratio",
+    "total_return": "total_return_pct",
+    "total_return_pct": "total_return_pct",
+    "calmar": "calmar_ratio",
+    "calmar_ratio": "calmar_ratio",
+    "pf": "profit_factor",
+    "profit_factor": "profit_factor",
+}
+
+
+def normalize_objective(objective: str) -> str:
+    """Normalize an objective name (short or long form) to canonical form.
+
+    Args:
+        objective: Objective name, e.g. "sharpe" or "sharpe_ratio".
+
+    Returns:
+        Canonical metric name, e.g. "sharpe_ratio".
+
+    Raises:
+        ValueError: If the objective is not recognised.
+    """
+    key = str(objective).strip().lower()
+    if key not in OBJECTIVE_ALIASES:
+        raise ValueError(
+            f"Unknown objective: '{objective}'. "
+            f"Available: {sorted(set(OBJECTIVE_ALIASES.values()))}"
+        )
+    return OBJECTIVE_ALIASES[key]
+
+
+def _objective_short_name(objective: str) -> str:
+    """Return the short study-name form of a canonical objective."""
+    return {
+        "sharpe_ratio": "sharpe",
+        "sortino_ratio": "sortino",
+        "total_return_pct": "total_return",
+        "calmar_ratio": "calmar",
+        "profit_factor": "pf",
+    }.get(objective, objective)
 
 
 class OptunaRunner:
@@ -99,6 +149,8 @@ class OptunaRunner:
         test_months: int = 1,
         timeout: Optional[int] = None,
         n_jobs: int = 1,
+        regime: Optional[str] = None,
+        min_regime_trades: Optional[int] = None,
     ) -> optuna.Study:
         """
         Run optimization for a single strategy.
@@ -108,7 +160,8 @@ class OptunaRunner:
             n_trials: Number of optimization trials
             sampler: Sampler type ("tpe" or "random")
             objective: Metric to optimize ("sharpe_ratio", "sortino_ratio",
-                      "total_return_pct", "calmar_ratio")
+                      "total_return_pct", "calmar_ratio", "profit_factor";
+                      short forms like "sharpe" are accepted)
             start: Backtest start date (ISO format, e.g., "2024-01-01")
             end: Backtest end date (ISO format, e.g., "2024-12-31")
             symbol: Trading symbol (uses config default if None)
@@ -118,6 +171,12 @@ class OptunaRunner:
             test_months: Test window for walk-forward
             timeout: Timeout in seconds (None = no limit)
             n_jobs: Number of parallel jobs (-1 for all CPUs)
+            regime: Optional target regime (e.g. "RANGING_CALM"). When
+                set, each trial is scored ONLY on closed trades whose
+                entry regime matches, and trials with fewer than
+                min_regime_trades matching trades are pruned.
+            min_regime_trades: Minimum matching trades per trial before
+                pruning (default: env REGIME_OPT_MIN_TRADES or 15).
 
         Returns:
             Completed Optuna study with results
@@ -131,6 +190,15 @@ class OptunaRunner:
 
         # Get search space
         get_search_space(strategy)
+
+        # Normalize objective and regime
+        objective = normalize_objective(objective)
+        if regime is not None:
+            regime = normalize_regime_value(regime)
+        if min_regime_trades is None:
+            min_regime_trades = int(
+                os.getenv("REGIME_OPT_MIN_TRADES", str(DEFAULT_REGIME_OPT_MIN_TRADES))
+            )
 
         # Set up dates from config if not provided
         from ..config import config as default_config
@@ -154,8 +222,17 @@ class OptunaRunner:
         else:
             raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
 
-        # Create study name
-        study_name = f"{strategy}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        # Create study name. Regime-conditional studies embed the regime
+        # and objective so per-regime studies never collide, e.g.
+        # "mean_reversion_RANGING_CALM_sharpe_20260720_120000".
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if regime is not None:
+            study_name = (
+                f"{strategy}_{regime.upper()}_"
+                f"{_objective_short_name(objective)}_{timestamp}"
+            )
+        else:
+            study_name = f"{strategy}_{timestamp}"
 
         # Create or load study
         study = optuna.create_study(
@@ -169,6 +246,11 @@ class OptunaRunner:
         logger.info(
             f"Starting optimization: strategy={strategy}, trials={n_trials}, "
             f"sampler={sampler}, objective={objective}, walk_forward={walk_forward}"
+            + (
+                f", regime={regime}, min_regime_trades={min_regime_trades}"
+                if regime is not None
+                else ""
+            )
         )
 
         # Define objective function
@@ -184,6 +266,8 @@ class OptunaRunner:
                 walk_forward=walk_forward,
                 train_months=train_months,
                 test_months=test_months,
+                regime=regime,
+                min_regime_trades=min_regime_trades,
             )
 
         # Run optimization
@@ -199,14 +283,23 @@ class OptunaRunner:
             logger.error(f"Optimization failed: {e}")
             raise
 
-        # Log results
-        if study.best_trial:
+        # Log results. best_trial raises ValueError when every trial was
+        # pruned (possible in regime mode with min-trades pruning).
+        try:
+            best_trial = study.best_trial
+        except ValueError:
+            best_trial = None
+
+        if best_trial is not None:
             logger.info(
                 f"Optimization complete: best_value={study.best_value:.4f}, "
                 f"best_params={study.best_params}"
             )
         else:
-            logger.warning("Optimization completed with no valid trials")
+            logger.warning(
+                "Optimization completed with no valid trials "
+                "(all pruned or failed)"
+            )
 
         return study
 
@@ -222,6 +315,8 @@ class OptunaRunner:
         walk_forward: bool,
         train_months: int,
         test_months: int,
+        regime: Optional[str] = None,
+        min_regime_trades: int = DEFAULT_REGIME_OPT_MIN_TRADES,
     ) -> float:
         """
         Optuna objective function for a single trial.
@@ -229,7 +324,7 @@ class OptunaRunner:
         Args:
             trial: Optuna trial object
             strategy: Strategy name
-            objective: Metric to optimize
+            objective: Metric to optimize (canonical form)
             start: Backtest start date
             end: Backtest end date
             symbol: Trading symbol
@@ -237,9 +332,18 @@ class OptunaRunner:
             walk_forward: Enable walk-forward validation
             train_months: Training window size
             test_months: Test window size
+            regime: Optional target regime (normalized value). When set,
+                the objective is computed only on closed trades whose
+                entry regime matches; trials with too few matching trades
+                raise optuna.TrialPruned.
+            min_regime_trades: Pruning threshold for regime mode
 
         Returns:
             Objective value (higher is better)
+
+        Raises:
+            optuna.TrialPruned: In regime mode, when fewer than
+                min_regime_trades matching trades were produced.
         """
         # Suggest parameters
         params = suggest_params(trial, strategy)
@@ -264,11 +368,38 @@ class OptunaRunner:
                 if not results:
                     return float("-inf")
 
-                # Average objective across windows
-                values = [
-                    self.adapter.calculate_objective(r, objective)
-                    for r in results
-                ]
+                if regime is not None:
+                    # Per-window objective on the regime-filtered subset
+                    window_trades = [
+                        (r, self.adapter.get_regime_trades(r, regime))
+                        for r in results
+                    ]
+                    total_matching = sum(len(t) for _, t in window_trades)
+                    trial.set_user_attr("regime_trade_count", total_matching)
+                    if total_matching < min_regime_trades:
+                        raise optuna.TrialPruned(
+                            f"Only {total_matching} {regime} trades "
+                            f"(< {min_regime_trades})"
+                        )
+                    # Windows with no matching trades are excluded from
+                    # the average rather than scored as zero.
+                    values = [
+                        self.adapter.calculate_objective_from_trades(
+                            trades=t,
+                            objective=objective,
+                            initial_capital=initial_capital,
+                            start=r.start,
+                            end=r.end,
+                        )
+                        for r, t in window_trades
+                        if t
+                    ]
+                else:
+                    values = [
+                        self.adapter.calculate_objective(r, objective)
+                        for r in results
+                    ]
+
                 avg_value = sum(values) / len(values)
 
                 # Penalize high variance across windows
@@ -292,8 +423,26 @@ class OptunaRunner:
                     initial_capital=initial_capital,
                 )
 
+                if regime is not None:
+                    trades = self.adapter.get_regime_trades(result, regime)
+                    trial.set_user_attr("regime_trade_count", len(trades))
+                    if len(trades) < min_regime_trades:
+                        raise optuna.TrialPruned(
+                            f"Only {len(trades)} {regime} trades "
+                            f"(< {min_regime_trades})"
+                        )
+                    return self.adapter.calculate_objective_from_trades(
+                        trades=trades,
+                        objective=objective,
+                        initial_capital=initial_capital,
+                        start=start,
+                        end=end,
+                    )
+
                 return self.adapter.calculate_objective(result, objective)
 
+        except optuna.TrialPruned:
+            raise
         except Exception as e:
             logger.warning(f"Trial {trial.number} failed: {e}")
             return float("-inf")
@@ -320,10 +469,16 @@ class OptunaRunner:
             storage=self.storage_url,
         )
 
-        if study.best_trial is None:
+        # best_trial raises ValueError when every trial was pruned/failed
+        try:
+            best_trial = study.best_trial
+        except ValueError:
+            best_trial = None
+
+        if best_trial is None:
             return {}
 
-        return study.best_trial.params
+        return best_trial.params
 
     def get_study_results(
         self, strategy: str, n_trials: Optional[int] = None

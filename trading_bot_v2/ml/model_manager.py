@@ -31,6 +31,45 @@ MODEL_FILE_PREFIX = "gmm_regime"
 MODEL_FILE_SUFFIX = ".joblib"
 METADATA_SUFFIX = ".meta.json"
 
+# Marker file recording which model TYPE ("gmm" / "hmm") was trained most
+# recently. Shadow-mode loading consults this to pick the preferred detector.
+LATEST_MODEL_TYPE_FILE = "LATEST_MODEL"
+
+
+def write_latest_model_type(
+    model_type: str, models_dir: Optional[Path] = None
+) -> None:
+    """Record the most recently trained model type ("gmm" or "hmm").
+
+    Args:
+        model_type: Short model type tag.
+        models_dir: Model directory. Defaults to ``MODELS_DIR``.
+    """
+    directory = models_dir or MODELS_DIR
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / LATEST_MODEL_TYPE_FILE).write_text(
+        model_type.strip(), encoding="utf-8"
+    )
+    logger.debug(f"Latest model type marker updated: {model_type}")
+
+
+def read_latest_model_type(models_dir: Optional[Path] = None) -> Optional[str]:
+    """Read the most recently trained model type marker.
+
+    Args:
+        models_dir: Model directory. Defaults to ``MODELS_DIR``.
+
+    Returns:
+        "gmm", "hmm", or ``None`` when no marker exists.
+    """
+    path = (models_dir or MODELS_DIR) / LATEST_MODEL_TYPE_FILE
+    if not path.exists():
+        return None
+    try:
+        return path.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
 
 # ---------------------------------------------------------------------------
 # Model metadata
@@ -103,16 +142,32 @@ class ModelManager:
             gmm, config, cluster_map, means, stds, version = result
     """
 
-    def __init__(self, models_dir: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        models_dir: Optional[Path] = None,
+        file_prefix: str = MODEL_FILE_PREFIX,
+        latest_marker: str = "LATEST",
+    ) -> None:
         """Initialise the model manager.
 
         Args:
             models_dir: Directory to store model files. Defaults to
                         ``trading_bot_v2/ml/models/``.
+            file_prefix: Filename prefix for artifacts managed by this
+                instance (default ``gmm_regime``; the HMM detector uses
+                ``hmm_regime`` so both model families version independently).
+            latest_marker: Name of this instance's latest-version marker
+                file (default ``LATEST``; the HMM detector uses
+                ``LATEST_HMM``).
         """
-        self.models_dir = models_dir or MODELS_DIR
+        self.models_dir = Path(models_dir) if models_dir else MODELS_DIR
+        self.file_prefix = file_prefix
+        self.latest_marker = latest_marker
         self.models_dir.mkdir(parents=True, exist_ok=True)
-        logger.debug(f"ModelManager initialised: models_dir={self.models_dir}")
+        logger.debug(
+            f"ModelManager initialised: models_dir={self.models_dir}, "
+            f"prefix={self.file_prefix}"
+        )
 
     # ------------------------------------------------------------------
     # Save
@@ -127,17 +182,27 @@ class ModelManager:
         feature_stds: Any,
         training_samples: int,
         log_likelihood: float,
+        model_type: str = "gmm",
+        extra_payload: Optional[Dict[str, Any]] = None,
     ) -> str:
-        """Persist a trained GMM model and its associated metadata.
+        """Persist a trained regime model and its associated metadata.
 
         Args:
-            gmm_model: Trained ``GaussianMixture`` instance.
-            config: :class:`GMMConfig` used during training.
-            cluster_to_latent: Mapping from cluster index to latent regime.
+            gmm_model: Trained model instance (``GaussianMixture`` for the
+                GMM detector, ``GaussianHMM`` for the HMM detector; the
+                payload key keeps its historical name for compatibility).
+            config: Detector config used during training (``GMMConfig`` or
+                ``HMMConfig``; must expose ``n_regimes`` and
+                ``covariance_type``).
+            cluster_to_latent: Mapping from cluster/state index to latent
+                regime.
             feature_means: Training feature means for standardisation.
             feature_stds: Training feature stds for standardisation.
             training_samples: Number of samples used for training.
             log_likelihood: Average log-likelihood on training data.
+            model_type: Short type tag baked into the version ("gmm"/"hmm").
+            extra_payload: Optional additional payload entries (e.g. the
+                learned transition matrix for reporting).
 
         Returns:
             The version tag assigned to this model.
@@ -147,7 +212,9 @@ class ModelManager:
         """
         from datetime import datetime, timezone
 
-        version = datetime.now(timezone.utc).strftime("gmm_%Y%m%d_%H%M%S")
+        version = datetime.now(timezone.utc).strftime(
+            f"{model_type}_%Y%m%d_%H%M%S"
+        )
 
         # Build the model payload
         payload = {
@@ -157,10 +224,13 @@ class ModelManager:
             "feature_means": feature_means,
             "feature_stds": feature_stds,
             "version": version,
+            "model_type": model_type,
         }
+        if extra_payload:
+            payload.update(extra_payload)
 
         # Write model file
-        model_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{MODEL_FILE_SUFFIX}"
+        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
         joblib.dump(payload, model_path, compress=3)
         logger.info(f"GMM model saved: {model_path}")
 
@@ -181,13 +251,14 @@ class ModelManager:
                 "bb_width",
             ],
         )
-        meta_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{METADATA_SUFFIX}"
+        meta_path = self.models_dir / f"{self.file_prefix}_{version}{METADATA_SUFFIX}"
         with open(meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata.to_dict(), f, indent=2)
         logger.debug(f"Model metadata saved: {meta_path}")
 
-        # Write latest symlink/file
+        # Write latest symlink/file + global "most recently trained" marker
         self._write_latest(version)
+        write_latest_model_type(model_type, self.models_dir)
 
         # Prune old models
         self._prune_old_models(keep=5)
@@ -218,7 +289,7 @@ class ModelManager:
             logger.debug("No model version found")
             return None
 
-        model_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{MODEL_FILE_SUFFIX}"
+        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
 
         if not model_path.exists():
             logger.warning(f"Model file not found: {model_path}")
@@ -262,7 +333,7 @@ class ModelManager:
         if version is None:
             return None
 
-        meta_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{METADATA_SUFFIX}"
+        meta_path = self.models_dir / f"{self.file_prefix}_{version}{METADATA_SUFFIX}"
 
         if not meta_path.exists():
             return None
@@ -282,9 +353,9 @@ class ModelManager:
             Sorted list of version strings.
         """
         versions: List[str] = []
-        for path in self.models_dir.glob(f"{MODEL_FILE_PREFIX}_*{MODEL_FILE_SUFFIX}"):
+        for path in self.models_dir.glob(f"{self.file_prefix}_*{MODEL_FILE_SUFFIX}"):
             name = path.stem  # e.g. gmm_20260630_120000
-            version = name.replace(f"{MODEL_FILE_PREFIX}_", "")
+            version = name.replace(f"{self.file_prefix}_", "")
             if version:
                 versions.append(version)
 
@@ -300,8 +371,8 @@ class ModelManager:
         Returns:
             ``True`` if deleted, ``False`` if not found.
         """
-        model_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{MODEL_FILE_SUFFIX}"
-        meta_path = self.models_dir / f"{MODEL_FILE_PREFIX}_{version}{METADATA_SUFFIX}"
+        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        meta_path = self.models_dir / f"{self.file_prefix}_{version}{METADATA_SUFFIX}"
 
         deleted = False
         if model_path.exists():
@@ -322,14 +393,14 @@ class ModelManager:
 
     def _write_latest(self, version: str) -> None:
         """Write the latest version marker file."""
-        latest_path = self.models_dir / "LATEST"
+        latest_path = self.models_dir / self.latest_marker
         with open(latest_path, "w", encoding="utf-8") as f:
             f.write(version)
         logger.debug(f"Latest model marker updated: {version}")
 
     def _read_latest(self) -> Optional[str]:
         """Read the latest version marker file."""
-        latest_path = self.models_dir / "LATEST"
+        latest_path = self.models_dir / self.latest_marker
         if not latest_path.exists():
             return None
         try:

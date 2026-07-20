@@ -5,6 +5,7 @@ Single source of truth for all risk calculations and validations.
 Eliminates duplicate risk logic across trading_bot.py, position sizing, and validation.
 """
 
+import os
 import time
 from enum import Enum
 from typing import Dict, Any, Optional, List, TYPE_CHECKING
@@ -12,6 +13,29 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from .pacifica_client import PacificaClient
+
+
+def _env_float(name: str, default: float) -> float:
+    """Read a float from the environment, falling back to default on error."""
+    raw = os.getenv(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        logger.warning(f"Invalid float for {name}={raw!r}, using default {default}")
+        return default
+
+
+# Per-regime position size multipliers (env-overridable defaults).
+# Keys match MarketRegime enum values (lowercase).
+REGIME_SIZE_MULT_DEFAULTS: Dict[str, float] = {
+    "trending_strong": 1.0,
+    "trending_moderate": 0.85,
+    "ranging_volatile": 0.6,
+    "ranging_calm": 0.85,
+    "indecisive": 0.4,
+}
 
 # Type hints for grid exposure tracking
 GridExposure = Dict[str, float]
@@ -83,6 +107,12 @@ class RiskManager:
         self._margin_cache_timestamp: float = 0.0
         self._margin_cache_ttl: int = 30  # 30 seconds cache TTL
 
+        # Regime-conditional size multipliers (env REGIME_SIZE_MULT_<REGIME>)
+        self.regime_size_multipliers: Dict[str, float] = {
+            regime: _env_float(f"REGIME_SIZE_MULT_{regime.upper()}", default)
+            for regime, default in REGIME_SIZE_MULT_DEFAULTS.items()
+        }
+
         logger.info(
             f"RiskManager initialized (AUTHORITATIVE MODE): max_risk={max_portfolio_risk_pct * 100}%, "
             f"max_exposure={max_portfolio_exposure_pct * 100}%, "
@@ -90,16 +120,55 @@ class RiskManager:
             f"mm_buffer={maintenance_margin_buffer_pct * 100}%"
         )
 
+    def get_regime_size_multiplier(self, regime: Any = None) -> float:
+        """
+        Return the position size multiplier for a market regime.
+
+        Args:
+            regime: MarketRegime enum, regime value string (e.g.
+                "trending_strong"), or None.
+
+        Returns:
+            Configured multiplier for the regime; 1.0 for None or unknown
+            regimes (fully backward compatible).
+        """
+        if regime is None:
+            return 1.0
+        regime_key = str(getattr(regime, "value", regime)).lower()
+        multiplier = self.regime_size_multipliers.get(regime_key)
+        if multiplier is None:
+            logger.debug(
+                f"No size multiplier configured for regime '{regime_key}', using 1.0"
+            )
+            return 1.0
+        return multiplier
+
     def get_position_size(
-        self, signal: Any, account_balance: float, current_exposure: float
+        self,
+        signal: Any,
+        account_balance: float,
+        current_exposure: float,
+        regime: Any = None,
     ) -> float:
         """
         Calculate position quantity based on signal and risk profile.
+
+        Regime-conditional sizing: when a regime is supplied, the final
+        quantity is scaled by the per-regime multiplier (env
+        REGIME_SIZE_MULT_*; e.g. INDECISIVE defaults to 0.4x). The
+        multiplier is applied AFTER all other sizing math (risk profile,
+        stop distance, exposure caps) so RiskManager remains the single
+        sizing authority - any upstream Kelly/confidence sizing feeds into
+        the same final scaling. Overlay and time-gated strategies receive
+        the same regime multiplier as regime-mapped strategies. Passing
+        regime=None keeps legacy behavior (multiplier 1.0).
 
         Args:
             signal: Signal object with risk_profile and entry_price attributes
             account_balance: Current account balance
             current_exposure: Current portfolio exposure
+            regime: Optional current confirmed MarketRegime (enum or value
+                string) used for regime-conditional size scaling.
 
         Returns:
             Position quantity (number of contracts/shares)
@@ -160,11 +229,17 @@ class RiskManager:
         else:
             quantity = 1.0  # Fallback minimum
 
+        # Regime-conditional scaling (applied after all other sizing math,
+        # before the hard minimum quantity floor)
+        regime_multiplier = self.get_regime_size_multiplier(regime)
+        quantity *= regime_multiplier
+
         # Ensure minimum quantity
         quantity = max(quantity, 1.0)
 
         logger.debug(
-            f"Position sizing: notional=${notional_size:.2f}, quantity={quantity:.4f} @ ${signal.entry_price:.2f}"
+            f"Position sizing: notional=${notional_size:.2f}, quantity={quantity:.4f} "
+            f"@ ${signal.entry_price:.2f} (regime_mult={regime_multiplier:.2f})"
         )
 
         return quantity

@@ -29,6 +29,11 @@ from typing import Dict, List, Optional
 from loguru import logger
 
 from ..models import OrderSide, StrategyType
+from ..regime_param_overlay import (
+    DISPLAY_TO_STRATEGY_KEY,
+    apply_params_to_strategy,
+    resolve_strategy_display_name,
+)
 from ..strategy_manager import StrategyManager
 from ..risk_manager import RiskManager
 from .data_loader import BacktestDataLoader
@@ -56,6 +61,10 @@ class BacktestEngine:
         self._hedge_mode: bool = False
         self._min_hold_candles: int = 6
         self._position_open_candle: Dict[str, int] = {}
+        # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
+        # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
+        self._position_time_exit: Dict[str, Dict] = {}
+        self._sim_dt: Optional[datetime] = None
 
     def run(
         self,
@@ -73,6 +82,8 @@ class BacktestEngine:
         self._hedge_mode = getattr(self.cfg, "backtest_hedge_mode", False)
         self._min_hold_candles = getattr(self.cfg, "backtest_min_hold_candles", 6)
         self._position_open_candle = {}
+        self._position_time_exit = {}
+        self._sim_dt = None
 
         logger.info(
             f"Starting backtest: {symbol} | {start} -> {end} | capital={initial_capital} | "
@@ -94,6 +105,16 @@ class BacktestEngine:
         # Build strategy enable kwargs for single-strategy mode
         strategy_kwargs: Dict = {}
         if strategy_filter:
+            # Accept both display ("MeanReversion") and optimization
+            # snake_case ("mean_reversion") strategy identifiers.
+            resolved_filter = resolve_strategy_display_name(strategy_filter)
+            if resolved_filter is not None:
+                strategy_filter = resolved_filter
+            else:
+                logger.warning(
+                    f"Unknown strategy_filter '{strategy_filter}' - "
+                    f"no strategy will match"
+                )
             _all_strategy_flags = {
                 "MeanReversion": "enable_mean_reversion",
                 "MACrossover": "enable_ma_crossover",
@@ -103,6 +124,7 @@ class BacktestEngine:
                 "MomentumScalping": "enable_momentum_scalping",
                 "FundingArb": "enable_funding_arb",
                 "OrderBookImbalance": "enable_orderbook_imbalance",
+                "SessionRangeBreakout": "enable_session_range_breakout",
             }
             for name, flag in _all_strategy_flags.items():
                 strategy_kwargs[flag] = (name == strategy_filter)
@@ -113,6 +135,28 @@ class BacktestEngine:
             client=exchange,
             **strategy_kwargs,
         )
+
+        # Apply per-strategy optimization parameter overrides carried on
+        # the config proxy (set by OptimizationAdapter as
+        # ``_optimization_params_<strategy>``). Only whitelisted params
+        # (search-space keys) are ever set on the strategy instances.
+        for _display_name, _strategy_obj in strategy_manager.strategies.items():
+            _strategy_key = DISPLAY_TO_STRATEGY_KEY.get(_display_name)
+            if not _strategy_key:
+                continue
+            _params = getattr(
+                self.cfg, f"_optimization_params_{_strategy_key}", None
+            )
+            if _params:
+                _applied = apply_params_to_strategy(
+                    _strategy_obj, _strategy_key, _params
+                )
+                if _applied:
+                    logger.info(
+                        f"Backtest param overrides applied to "
+                        f"{_display_name}: {_applied}"
+                    )
+
         performance = PerformanceTracker(initial_capital=initial_capital)
         cost_model = CostModel(
             slippage_pct=self.cfg.backtest_slippage_pct,
@@ -171,7 +215,21 @@ class BacktestEngine:
                 sim_dt = datetime.fromisoformat(ts)
             except (ValueError, TypeError):
                 sim_dt = None
+            self._sim_dt = sim_dt
             strategy_manager.set_sim_time(sim_dt)
+
+            # Drive the regime detector's injectable clock with simulated
+            # time so its cache TTL / dwell / confirmation logic follows
+            # candle time instead of wall-clock (otherwise the regime
+            # would be computed once and served from cache for the whole
+            # replay). Uses the same injection point as
+            # analysis/regime_stability.py.
+            if sim_dt is not None:
+                strategy_manager.regime_detector._clock = lambda dt=sim_dt: dt
+
+            # --- Time-based exits (signals carrying time_exit_hours) ---
+            if sim_dt is not None and self._position_time_exit:
+                self._apply_time_exits(exchange, sim_dt)
 
             # --- Generate signals ---
             try:
@@ -184,6 +242,14 @@ class BacktestEngine:
             except Exception as e:
                 logger.debug(f"Signal generation skipped at {ts}: {e}")
                 signals = []
+
+            # Expose the confirmed regime to the exchange so every fill
+            # is regime-tagged (reuses the cache populated during signal
+            # generation - no recomputation).
+            regime_obj = strategy_manager.regime_detector.get_current_regime(
+                symbol
+            )
+            exchange._current_regime = getattr(regime_obj, "value", "") or ""
 
             # --- Execute signals ---
             for signal in signals:
@@ -300,6 +366,7 @@ class BacktestEngine:
                 )
             # Closing trades need no SL/TP — the position is being exited
             self._position_open_candle.pop(signal.asset, None)
+            self._position_time_exit.pop(signal.asset, None)
             return True
 
         # --- Opening a new position ---
@@ -335,6 +402,15 @@ class BacktestEngine:
         # Track when this position was opened (for min_hold_candles)
         self._position_open_candle[signal.asset] = candle_idx
 
+        # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
+        time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
+        if time_exit_hours and self._sim_dt is not None:
+            self._position_time_exit[signal.asset] = {
+                "open_ts": self._sim_dt,
+                "hours": float(time_exit_hours),
+                "strategy": signal.strategy.value,
+            }
+
         # Place exit orders. Grid signals use stop-only (the opposing grid limit
         # order acts as TP when price reaches it). All other strategies get both.
         is_grid = signal.strategy == StrategyType.GRID_TRADING
@@ -368,6 +444,48 @@ class BacktestEngine:
         return True
 
     # ------------------------------------------------------------------
+    # Time-based exits
+    # ------------------------------------------------------------------
+
+    def _apply_time_exits(self, exchange: SimulatedExchange, sim_dt: datetime) -> None:
+        """
+        Close open positions whose originating signal set a max hold time.
+
+        Signals that carry indicators["time_exit_hours"] (e.g.
+        SessionRangeBreakout) are tracked in _position_time_exit at open.
+        Once the position's age exceeds its limit it is closed at the
+        current bar close via a market order (reason: time_exit). SL/TP
+        orders are cancelled automatically by the exchange's OCO cleanup
+        when the position fully closes.
+        """
+        for symbol in list(self._position_time_exit.keys()):
+            info = self._position_time_exit[symbol]
+            pos = exchange._positions.get(symbol)
+            if pos is None:
+                # Already closed by SL/TP - drop stale tracking
+                del self._position_time_exit[symbol]
+                continue
+
+            age_hours = (sim_dt - info["open_ts"]).total_seconds() / 3600.0
+            if age_hours < info["hours"]:
+                continue
+
+            close_side = "ask" if pos.side == "long" else "bid"
+            exchange._current_strategy = info.get("strategy", "")
+            exchange.place_order(
+                symbol=symbol,
+                side=close_side,
+                quantity=str(pos.quantity),
+                order_type="market",
+            )
+            del self._position_time_exit[symbol]
+            self._position_open_candle.pop(symbol, None)
+            logger.debug(
+                f"time_exit: closed {symbol} {pos.side} after {age_hours:.1f}h "
+                f"(limit {info['hours']}h)"
+            )
+
+    # ------------------------------------------------------------------
     # Data helpers
     # ------------------------------------------------------------------
 
@@ -377,9 +495,14 @@ class BacktestEngine:
 
     @staticmethod
     def _history(candles: Dict, up_to: int, lookback: int) -> Dict:
-        """Return a slice of candles up to and including up_to index."""
+        """Return a slice of candles up to and including up_to index.
+
+        Includes the "timestamp" list (ISO-8601 strings from the data loader)
+        so time-aware strategies (e.g. SessionRangeBreakout) can locate
+        session windows within the slice.
+        """
         start = max(0, up_to - lookback + 1)
-        return {k: candles[k][start: up_to + 1] for k in candles if k != "timestamp"}
+        return {k: candles[k][start: up_to + 1] for k in candles}
 
     @staticmethod
     def _nearest_idx(idx_map: Dict, ts: str, fallback_5m_idx: int, ratio: int) -> int:
