@@ -58,6 +58,7 @@ ALL_STRATEGIES: List[str] = [
     "FundingArb",
     "OrderBookImbalance",
     "SessionRangeBreakout",
+    "CalendarFlow",
 ]
 
 # ---------------------------------------------------------------------------

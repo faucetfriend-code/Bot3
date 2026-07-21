@@ -34,6 +34,7 @@ class StrategyType(str, Enum):
     MOMENTUM_SCALPING = "momentum_scalping"
     ORDERBOOK_IMBALANCE = "orderbook_imbalance"
     SESSION_RANGE_BREAKOUT = "session_range_breakout"
+    CALENDAR_FLOW = "calendar_flow"
 
 
 class AssetClass(str, Enum):

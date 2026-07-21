@@ -125,6 +125,7 @@ class BacktestEngine:
                 "FundingArb": "enable_funding_arb",
                 "OrderBookImbalance": "enable_orderbook_imbalance",
                 "SessionRangeBreakout": "enable_session_range_breakout",
+                "CalendarFlow": "enable_calendar_flow",
             }
             for name, flag in _all_strategy_flags.items():
                 strategy_kwargs[flag] = (name == strategy_filter)

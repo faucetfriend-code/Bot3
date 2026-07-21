@@ -9,6 +9,7 @@ from .funding_arb import FundingArbStrategy
 from .momentum_scalping import MomentumScalpingStrategy
 from .orderbook_imbalance import OrderBookImbalanceStrategy
 from .session_range_breakout import SessionRangeBreakoutStrategy
+from .calendar_flow import CalendarFlowStrategy
 
 __all__ = [
     "MeanReversionStrategy",
@@ -20,4 +21,5 @@ __all__ = [
     "MomentumScalpingStrategy",
     "OrderBookImbalanceStrategy",
     "SessionRangeBreakoutStrategy",
+    "CalendarFlowStrategy",
 ]

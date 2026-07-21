@@ -62,6 +62,7 @@ STRATEGY_ENV_FLAGS: Dict[str, Tuple[str, bool]] = {
     "momentum_scalping": ("ENABLE_MOMENTUM_SCALPING", True),
     "orderbook_imbalance": ("ENABLE_ORDERBOOK_IMBALANCE", True),
     "session_range_breakout": ("ENABLE_SESSION_RANGE_BREAKOUT", False),
+    "calendar_flow": ("ENABLE_CALENDAR_FLOW", False),
 }
 
 DEFAULT_SYMBOLS = "SUI-USDC,BTC-USDC"

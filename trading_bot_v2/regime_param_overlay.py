@@ -53,6 +53,7 @@ STRATEGY_KEY_TO_DISPLAY: Dict[str, str] = {
     "momentum_scalping": "MomentumScalping",
     "orderbook_imbalance": "OrderBookImbalance",
     "session_range_breakout": "SessionRangeBreakout",
+    "calendar_flow": "CalendarFlow",
 }
 
 DISPLAY_TO_STRATEGY_KEY: Dict[str, str] = {

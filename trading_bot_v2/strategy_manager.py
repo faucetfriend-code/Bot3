@@ -35,6 +35,7 @@ from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
 from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
+from .strategies.calendar_flow import CalendarFlowStrategy
 
 
 class StrategyManager:
@@ -57,6 +58,7 @@ class StrategyManager:
         enable_momentum_scalping: Optional[bool] = None,
         enable_orderbook_imbalance: Optional[bool] = None,
         enable_session_range_breakout: Optional[bool] = None,
+        enable_calendar_flow: Optional[bool] = None,
         risk_manager=None,
         client=None,  # Pacifica client for funding arb API calls
         ws_client=None,  # WebSocket client for orderbook data
@@ -160,6 +162,13 @@ class StrategyManager:
                 "ENABLE_SESSION_RANGE_BREAKOUT", False
             )  # Default to False - ships disabled until validated
         )
+        self.enable_calendar_flow = (
+            enable_calendar_flow
+            if enable_calendar_flow is not None
+            else _get_env_bool(
+                "ENABLE_CALENDAR_FLOW", False
+            )  # Default to False - ships disabled until validated
+        )
         self.risk_manager = risk_manager
         self.client = client  # Store client for funding arb
         self.ws_client = ws_client  # Store websocket client for orderbook
@@ -216,7 +225,8 @@ class StrategyManager:
             f"LiquidationCapture={self.enable_liquidation_capture}, TrendFollowing={self.enable_trend_following}, "
             f"VWAPScalping={self.enable_vwap_scalping}, FundingArb={self.enable_funding_arb}, "
             f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}, "
-            f"SessionRangeBreakout={self.enable_session_range_breakout}"
+            f"SessionRangeBreakout={self.enable_session_range_breakout}, "
+            f"CalendarFlow={self.enable_calendar_flow}"
         )
 
         # Initialize trade cooldown and feedback tracking
@@ -489,6 +499,42 @@ class StrategyManager:
                 f"tp={orb_tp_range_mult}x range, time_exit={orb_time_exit_hours}h"
             )
 
+        if self.enable_calendar_flow:
+            # Load Calendar Flow (turn-of-the-month) parameters from environment
+            def _get_env_calflow_bool(var_name: str, default: bool) -> bool:
+                value = os.getenv(var_name, "").lower()
+                if value in ("true", "1", "yes", "on"):
+                    return True
+                elif value in ("false", "0", "no", "off"):
+                    return False
+                return default
+
+            calflow_long_entry = int(os.getenv("CALFLOW_LONG_ENTRY_DAY", "-2"))
+            calflow_long_exit = int(os.getenv("CALFLOW_LONG_EXIT_DAY", "3"))
+            calflow_enable_short = _get_env_calflow_bool(
+                "CALFLOW_ENABLE_SHORT", False
+            )
+            calflow_short_entry = int(os.getenv("CALFLOW_SHORT_ENTRY_DOM", "10"))
+            calflow_short_exit = int(os.getenv("CALFLOW_SHORT_EXIT_DOM", "15"))
+            calflow_atr_stop = float(os.getenv("CALFLOW_ATR_STOP_MULT", "3.0"))
+            calflow_confidence = float(os.getenv("CALFLOW_CONFIDENCE", "0.6"))
+
+            self.strategies["CalendarFlow"] = CalendarFlowStrategy(
+                long_entry_day=calflow_long_entry,
+                long_exit_day=calflow_long_exit,
+                enable_short=calflow_enable_short,
+                short_entry_dom=calflow_short_entry,
+                short_exit_dom=calflow_short_exit,
+                atr_stop_mult=calflow_atr_stop,
+                confidence=calflow_confidence,
+            )
+            logger.info(
+                f"Calendar Flow strategy enabled: long window "
+                f"[{calflow_long_entry:+d}, {calflow_long_exit:+d}] days around "
+                f"month boundary, short={calflow_enable_short}, "
+                f"stop={calflow_atr_stop}x ATR(14) 4h"
+            )
+
         # Simulated time (set by backtest engine for accurate cooldown tracking)
         self._sim_time: Optional[datetime] = None
 
@@ -611,6 +657,7 @@ class StrategyManager:
             "momentum_scalping": 5,  # 5 min cooldown for fast momentum scalping
             "orderbook_imbalance": 0.5,  # 30 sec cooldown - handled internally in seconds
             "session_range_breakout": 60,  # 60 min - per-session dedup is the real limit
+            "calendar_flow": 1440,  # 24 h - per-window dedup is the real limit
         }
 
         return cooldowns.get(strategy_name, 5)  # Default 5 min (was 10)
@@ -846,6 +893,18 @@ class StrategyManager:
                 ]
                 logger.debug(
                     f"{symbol}: Added SessionRangeBreakout (time-gated ORB overlay, runs in all regimes)"
+                )
+
+            # Step 2.11: Always add CalendarFlow if enabled (calendar-gated, runs in ALL regimes)
+            if (
+                "CalendarFlow" in self.strategies
+                and "CalendarFlow" not in active_strategy_names
+            ):
+                active_strategy_names = list(active_strategy_names) + [
+                    "CalendarFlow"
+                ]
+                logger.debug(
+                    f"{symbol}: Added CalendarFlow (calendar-gated overlay, runs in all regimes)"
                 )
 
             if not active_strategy_names:
@@ -1462,6 +1521,7 @@ class StrategyManager:
             StrategyType.MOMENTUM_SCALPING: "MomentumScalping",
             StrategyType.ORDERBOOK_IMBALANCE: "OrderBookImbalance",
             StrategyType.SESSION_RANGE_BREAKOUT: "SessionRangeBreakout",
+            StrategyType.CALENDAR_FLOW: "CalendarFlow",
         }
         fallback = strategy_type.value if strategy_type.value else str(strategy_type)
         return mapping.get(strategy_type, fallback)
@@ -1492,6 +1552,7 @@ class StrategyManager:
             "MomentumScalping": StrategyType.MOMENTUM_SCALPING,
             "OrderBookImbalance": StrategyType.ORDERBOOK_IMBALANCE,
             "SessionRangeBreakout": StrategyType.SESSION_RANGE_BREAKOUT,
+            "CalendarFlow": StrategyType.CALENDAR_FLOW,
         }
 
         result = {}

@@ -991,28 +991,33 @@ class MarketRegimeDetector:
                 "MomentumScalping": 0.3,  # Fast scalping complements MA
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
+                "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
             },
             MarketRegime.TRENDING_MODERATE: {
                 "MACrossover": 0.4,  # Balanced with momentum
                 "MomentumScalping": 0.4,  # Equal weight in moderate trends
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
+                "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
             },
             MarketRegime.RANGING_VOLATILE: {
                 "GridTrading": 0.8,
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
+                "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
             },
             MarketRegime.RANGING_CALM: {
                 "MeanReversion": 0.6,
                 "GridTrading": 0.2,
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
+                "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
             },
             MarketRegime.INDECISIVE: {
                 "LiquidationCapture": 0.6,  # Conservative approach
                 "OrderBookImbalance": 0.4,  # Flow-based (best in choppy markets)
                 "SessionRangeBreakout": 0.2,  # ORB thrives on post-chop expansion
+                "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
             },
         }
 

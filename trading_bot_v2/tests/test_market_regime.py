@@ -276,7 +276,7 @@ class TestMarketRegimeDetector:
         assert not regime_detector.is_grid_allowed(MarketRegime.TRENDING_MODERATE)
 
     def test_get_strategy_weights(self, regime_detector):
-        """Test strategy weight allocation by regime (Jan 2026 weights with OrderBookImbalance + SessionRangeBreakout overlays)."""
+        """Test strategy weight allocation by regime (Jul 2026 weights with OrderBookImbalance + SessionRangeBreakout + CalendarFlow overlays)."""
         weights_volatile = regime_detector.get_strategy_weights(
             MarketRegime.RANGING_VOLATILE
         )
@@ -284,6 +284,7 @@ class TestMarketRegimeDetector:
             "GridTrading": 0.8,
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
+            "CalendarFlow": 0.1,
         }
 
         weights_calm = regime_detector.get_strategy_weights(MarketRegime.RANGING_CALM)
@@ -292,6 +293,7 @@ class TestMarketRegimeDetector:
             "GridTrading": 0.2,
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
+            "CalendarFlow": 0.1,
         }
 
         weights_trending = regime_detector.get_strategy_weights(
@@ -302,13 +304,14 @@ class TestMarketRegimeDetector:
             "MomentumScalping": 0.3,
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
+            "CalendarFlow": 0.1,
         }
 
-        # SessionRangeBreakout is a time-gated overlay present in ALL regimes
+        # SessionRangeBreakout and CalendarFlow are overlays in ALL regimes
         for regime in MarketRegime:
-            assert "SessionRangeBreakout" in regime_detector.get_strategy_weights(
-                regime
-            )
+            regime_weights = regime_detector.get_strategy_weights(regime)
+            assert "SessionRangeBreakout" in regime_weights
+            assert "CalendarFlow" in regime_weights
 
     def test_hash_market_data(self, regime_detector, sample_market_data):
         """Test market data hashing for cache invalidation."""
