@@ -69,7 +69,7 @@ class TestFactory:
     def test_default_is_singleton(self):
         assert get_exchange_client() is get_exchange_client()
 
-    def test_env_selects_blofin_stub(self, monkeypatch):
+    def test_env_selects_blofin(self, monkeypatch):
         monkeypatch.setenv("EXCHANGE", "blofin")
         exchange = get_exchange_client()
         assert isinstance(exchange, BlofinExchange)
@@ -94,17 +94,26 @@ class TestFactory:
     def test_name_case_insensitive(self):
         assert isinstance(get_exchange_client("PACIFICA"), PacificaExchange)
 
-    def test_blofin_stub_methods_raise_not_implemented(self, monkeypatch):
+    def test_blofin_without_credentials_raises_clear_auth_error(
+        self, monkeypatch
+    ):
+        """Private Blofin calls without keys fail with setup guidance."""
+        from trading_bot_v2.blofin_client import BlofinAuthError, BlofinClient
+
         monkeypatch.setenv("EXCHANGE", "blofin")
-        exchange = get_exchange_client()
-        with pytest.raises(NotImplementedError):
-            exchange.place_order("BTC", OrderSide.BUY, 1.0)
-        with pytest.raises(NotImplementedError):
-            exchange.get_positions()
-        with pytest.raises(NotImplementedError):
-            exchange.get_balance()
-        with pytest.raises(NotImplementedError):
-            exchange.cancel_all_orders()
+        rest = BlofinClient(api_key="", api_secret="", passphrase="", demo=True)
+        exchange = get_exchange_client(rest_client=rest)
+        assert isinstance(exchange, BlofinExchange)
+        for call in (
+            lambda: exchange.place_order("BTC", OrderSide.BUY, 1.0),
+            exchange.get_positions,
+            exchange.get_balance,
+            exchange.cancel_all_orders,
+        ):
+            with pytest.raises(BlofinAuthError) as excinfo:
+                call()
+            assert "BLOFIN_API_KEY" in str(excinfo.value)
+            assert ".env" in str(excinfo.value)
 
 
 # ======================================================================
