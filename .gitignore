@@ -13,6 +13,9 @@ test-results/
 nul
 signals_log.csv
 backups/
+trading_bot_v2/backtesting/data/*.parquet
+trading_bot_v2/optimization/optimization_studies.db
+trading_bot_v2/.kline_cache/
 .claude/worktrees/competent-shirley-9d8d5f/
 .claude/worktrees/gracious-robinson-74ebdd/
 .claude/worktrees/kind-panini-01006e/
