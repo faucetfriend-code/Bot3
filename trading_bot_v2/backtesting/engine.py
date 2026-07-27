@@ -41,6 +41,26 @@ from .simulated_exchange import SimulatedExchange
 from .performance import PerformanceTracker, BacktestResult
 from .cost_model import CostModel
 
+# These overlays depend on live-only surfaces (real L2 orderbook depth,
+# funding-history API) that SimulatedExchange cannot provide, so they can
+# never produce meaningful signals in a backtest. Keys are the snake_case
+# optimization identifiers (see regime_param_overlay.STRATEGY_KEY_TO_DISPLAY).
+NON_BACKTESTABLE_STRATEGIES = frozenset({"orderbook_imbalance", "funding_arb"})
+
+# StrategyManager display name -> constructor enable-flag kwarg.
+STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
+    "MeanReversion": "enable_mean_reversion",
+    "MACrossover": "enable_ma_crossover",
+    "GridTrading": "enable_grid_trading",
+    "LiquidationCapture": "enable_liquidation_capture",
+    "VWAPScalping": "enable_vwap_scalping",
+    "MomentumScalping": "enable_momentum_scalping",
+    "FundingArb": "enable_funding_arb",
+    "OrderBookImbalance": "enable_orderbook_imbalance",
+    "SessionRangeBreakout": "enable_session_range_breakout",
+    "CalendarFlow": "enable_calendar_flow",
+}
+
 
 class BacktestEngine:
     """
@@ -115,21 +135,24 @@ class BacktestEngine:
                     f"Unknown strategy_filter '{strategy_filter}' - "
                     f"no strategy will match"
                 )
-            _all_strategy_flags = {
-                "MeanReversion": "enable_mean_reversion",
-                "MACrossover": "enable_ma_crossover",
-                "GridTrading": "enable_grid_trading",
-                "LiquidationCapture": "enable_liquidation_capture",
-                "VWAPScalping": "enable_vwap_scalping",
-                "MomentumScalping": "enable_momentum_scalping",
-                "FundingArb": "enable_funding_arb",
-                "OrderBookImbalance": "enable_orderbook_imbalance",
-                "SessionRangeBreakout": "enable_session_range_breakout",
-                "CalendarFlow": "enable_calendar_flow",
-            }
-            for name, flag in _all_strategy_flags.items():
+            for name, flag in STRATEGY_ENABLE_FLAGS.items():
                 strategy_kwargs[flag] = (name == strategy_filter)
             logger.info(f"Single-strategy mode: only {strategy_filter} enabled")
+
+        # Force-disable strategies that can never work against the
+        # simulated exchange (see NON_BACKTESTABLE_STRATEGIES).
+        for display_name, flag in STRATEGY_ENABLE_FLAGS.items():
+            strategy_key = DISPLAY_TO_STRATEGY_KEY.get(display_name)
+            if strategy_key not in NON_BACKTESTABLE_STRATEGIES:
+                continue
+            if strategy_kwargs.get(flag, True):
+                logger.warning(
+                    f"SKIPPING {display_name} in backtest mode: not "
+                    f"backtestable (depends on live-only data surfaces - "
+                    f"real L2 orderbook depth / funding-history API - that "
+                    f"SimulatedExchange cannot provide)"
+                )
+            strategy_kwargs[flag] = False
 
         strategy_manager = StrategyManager(
             risk_manager=risk_manager,
@@ -163,6 +186,25 @@ class BacktestEngine:
             slippage_pct=self.cfg.backtest_slippage_pct,
             taker_fee_pct=self.cfg.backtest_taker_fee_pct,
         )
+
+        # --- 1m execution-coverage guard ---
+        # The replay loop always feeds a 1m execution slice to the
+        # strategy pipeline, and _nearest_idx falls back to a positional
+        # guess when a timestamp is missing from the 1m map - which
+        # silently serves wrong-date candles when 1m data does not cover
+        # the window. Refuse to run instead.
+        if not loader.covers("1m", start, end):
+            bounds = loader.coverage_bounds("1m")
+            available = (
+                f"{bounds[0]} .. {bounds[1]}" if bounds else "no 1m data on disk"
+            )
+            raise ValueError(
+                f"1m candle data for {symbol} does not cover the requested "
+                f"backtest window {start} .. {end} "
+                f"(available 1m coverage: {available}). "
+                f"Backfill it with: python -m trading_bot_v2.data_manager "
+                f"--symbols {symbol} --timeframes 1m"
+            )
 
         # --- Load candles ---
         candles = {
@@ -306,7 +348,7 @@ class BacktestEngine:
         Hedge-mode enforcement (Fix 2D):
             When hedge_mode=False (Pacifica default), any signal that opposes an
             open position is dropped. Positions are closed only when their SL or
-            TP order fills — never by a competing strategy signal.
+            TP order fills - never by a competing strategy signal.
 
         Min-hold enforcement (Fix Layer 1):
             When hedge_mode=True, opposing signals are additionally blocked until
@@ -325,9 +367,9 @@ class BacktestEngine:
         if existing_pos:
             signal_side_str = "long" if signal.side == OrderSide.BUY else "short"
             if existing_pos.side == signal_side_str:
-                return False  # Same direction — skip duplicate entry
+                return False  # Same direction - skip duplicate entry
 
-            # Opposing direction — apply hedge_mode and hold_time guards
+            # Opposing direction - apply hedge_mode and hold_time guards
             if not self._hedge_mode:
                 # Hedge mode disabled (Pacifica): skip opposing signals entirely.
                 # Positions are only closed by their SL/TP orders.
@@ -343,7 +385,7 @@ class BacktestEngine:
             if candles_held < self._min_hold_candles:
                 logger.debug(
                     f"Min hold not met for {signal.asset}: "
-                    f"{candles_held}/{self._min_hold_candles} candles — skipping close"
+                    f"{candles_held}/{self._min_hold_candles} candles - skipping close"
                 )
                 return False
 
@@ -365,7 +407,7 @@ class BacktestEngine:
                     quantity=str(close_qty),
                     order_type="market",
                 )
-            # Closing trades need no SL/TP — the position is being exited
+            # Closing trades need no SL/TP - the position is being exited
             self._position_open_candle.pop(signal.asset, None)
             self._position_time_exit.pop(signal.asset, None)
             return True

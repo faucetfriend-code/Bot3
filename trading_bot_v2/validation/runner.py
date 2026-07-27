@@ -462,11 +462,20 @@ def run_once(
     Returns:
         List of per-strategy result dicts (with "row_id" added).
     """
+    from ..backtesting.engine import NON_BACKTESTABLE_STRATEGIES
     from ..database import DatabaseManager
+    from ..regime_param_overlay import resolve_strategy_key
 
     db = DatabaseManager()
     results: List[Dict[str, Any]] = []
     for strategy in strategies:
+        strategy_key = resolve_strategy_key(strategy) or strategy
+        if strategy_key in NON_BACKTESTABLE_STRATEGIES:
+            logger.warning(
+                f"[{strategy_key}] not backtestable (live-only data "
+                f"surfaces), skipping"
+            )
+            continue
         try:
             result = validate_strategy(
                 strategy,

@@ -61,6 +61,23 @@ ALL_STRATEGIES: List[str] = [
     "CalendarFlow",
 ]
 
+
+def _non_backtestable_display_names() -> List[str]:
+    """Display names of strategies the backtest engine cannot drive.
+
+    Derived from backtesting.engine.NON_BACKTESTABLE_STRATEGIES (snake
+    case keys) via the canonical key->display mapping. Imported lazily
+    so the sweep CLI stays cheap to start.
+    """
+    from trading_bot_v2.backtesting.engine import NON_BACKTESTABLE_STRATEGIES
+    from trading_bot_v2.regime_param_overlay import STRATEGY_KEY_TO_DISPLAY
+
+    return [
+        STRATEGY_KEY_TO_DISPLAY[key]
+        for key in sorted(NON_BACKTESTABLE_STRATEGIES)
+        if key in STRATEGY_KEY_TO_DISPLAY
+    ]
+
 # ---------------------------------------------------------------------------
 # ANSI colour helpers
 # ---------------------------------------------------------------------------
@@ -426,7 +443,12 @@ def main():
     start      = args.start
     end        = args.end
     capital    = args.capital
-    strategies = args.strategies
+
+    # Exclude strategies the engine cannot backtest (live-only data
+    # surfaces); they are reported as N/A instead of a zero row.
+    non_backtestable = _non_backtestable_display_names()
+    excluded   = [s for s in args.strategies if s in non_backtestable]
+    strategies = [s for s in args.strategies if s not in non_backtestable]
 
     report_dir: Optional[Path] = None
     if args.save_reports:
@@ -439,6 +461,8 @@ def main():
     print(f"  Period   : {start} -> {end}")
     print(f"  Capital  : ${capital:,.0f}")
     print(f"  Runs     : {len(strategies)} strategies (sequential, isolated subprocesses)")
+    if excluded:
+        print(f"  Excluded : {', '.join(excluded)}  " + dim("(not backtestable)"))
     if report_dir:
         print(f"  Reports  : {report_dir}/")
     print()
@@ -484,6 +508,9 @@ def main():
 
     for r in with_trades + without_trades:
         print("  " + _row(r))
+    for name in excluded:
+        row = f"{name.ljust(_COLS['Strategy'])}  " + dim("N/A (not backtestable)")
+        print("  " + row)
     print("  " + _sep())
 
     # ---- verdicts ----------------------------------------------------------
@@ -492,6 +519,11 @@ def main():
     print()
     for r in with_trades + without_trades:
         print(f"  {r.name.ljust(24)}{_verdict(r)}")
+    for name in excluded:
+        print(
+            f"  {name.ljust(24)}"
+            + dim("  -> N/A (not backtestable: live-only data surfaces)")
+        )
 
     # ---- per-strategy DSR lines (only when the registry knows N) -----------
     validated = [r for r in with_trades if r.n_trials > 1 and r.dsr is not None]

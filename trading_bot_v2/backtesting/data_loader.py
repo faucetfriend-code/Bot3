@@ -15,7 +15,7 @@ Minimum history for regime detection: 29 x 4h candles (4.8 days)
 import os
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
@@ -98,6 +98,53 @@ class BacktestDataLoader:
             "timestamp": df["timestamp"].tolist(),
         }
 
+    def covers(self, timeframe: str, start: str, end: str) -> bool:
+        """Whether local data (plus any allowed auto-download) covers a range.
+
+        Mirrors the coverage logic of get_candles(): the local store is
+        loaded, an auto-download is attempted when permitted, and the
+        resulting frame is checked against [start, end] at its bounds.
+
+        Args:
+            timeframe: Candle timeframe (e.g. "1m").
+            start: Range start (ISO date/datetime string).
+            end: Range end (ISO date/datetime string).
+
+        Returns:
+            True when the store covers [start, end]; False when it does
+            not or when no data can be loaded at all.
+        """
+        try:
+            df = self._load_or_fetch(timeframe, start, end)
+            if not self._covers_range(df, timeframe, start, end):
+                if self._maybe_autodownload(timeframe, start, end):
+                    self._cache.pop(f"{self.symbol}_{timeframe}", None)
+                    df = self._load_or_fetch(timeframe, start, end)
+            return self._covers_range(df, timeframe, start, end)
+        except Exception as e:  # noqa: BLE001 - absent data means "not covered"
+            logger.debug(
+                f"Coverage check failed for {self.symbol} {timeframe}: {e}"
+            )
+            return False
+
+    def coverage_bounds(self, timeframe: str) -> Optional[Tuple[str, str]]:
+        """First and last locally stored candle timestamps for a timeframe.
+
+        Args:
+            timeframe: Candle timeframe (e.g. "1m").
+
+        Returns:
+            (first_timestamp, last_timestamp) ISO strings, or None when
+            no local data exists for the timeframe.
+        """
+        try:
+            df = self._load_or_fetch(timeframe, "2000-01-01", "2000-01-02")
+        except Exception:  # noqa: BLE001 - no data on disk
+            return None
+        if df.empty:
+            return None
+        return str(df["timestamp"].iloc[0]), str(df["timestamp"].iloc[-1])
+
     def _load_or_fetch(self, timeframe: str, start: str, end: str) -> pd.DataFrame:
         cache_key = f"{self.symbol}_{timeframe}"
         if cache_key in self._cache:
@@ -162,6 +209,14 @@ class BacktestDataLoader:
         if not _autodownload_enabled():
             return False
         if timeframe not in _autodownload_timeframes():
+            logger.warning(
+                f"Auto-download SKIPPED for {self.symbol} {timeframe} "
+                f"{start}..{end}: timeframe '{timeframe}' is excluded by "
+                f"DATA_AUTODOWNLOAD_TIMEFRAMES "
+                f"(={','.join(sorted(_autodownload_timeframes()))}). "
+                f"Backfill manually with: python -m trading_bot_v2.data_manager "
+                f"--symbols {self.symbol} --timeframes {timeframe}"
+            )
             return False
         key = (timeframe, start, end)
         if key in self._ensure_attempted:
