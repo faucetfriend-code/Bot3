@@ -144,7 +144,15 @@ SEARCH_SPACES: dict[str, dict] = {
             "rsi_overbought":     "MEAN_REVERSION_RSI_OVERBOUGHT",
             "bb_proximity":       "MEAN_REVERSION_BB_PROXIMITY",
             "atr_stop":           "MEAN_REVERSION_ATR_STOP_MULTIPLIER",
-            "adx_max":            "ADX_TRENDING_THRESHOLD",
+            # adx_max is a per-strategy 5m ADX CEILING filter local to BTV2.
+            # It used to be mapped to ADX_TRENDING_THRESHOLD, which is the
+            # GLOBAL 4h regime-classifier entry threshold - a different
+            # quantity on a different timeframe. That was a silent no-op
+            # while the var was unread; it is wired as of 2026-07-28, so the
+            # mapping would now let this optimizer rewrite the regime
+            # taxonomy for every strategy at once and invalidate every
+            # stored backtest. Namespaced so it cannot.
+            "adx_max":            "_NOTE_btv2_local_adx_max",
             "trailing_atr_mult":  "_NOTE_trailing_not_in_live_bot",
         },
     },
@@ -183,7 +191,9 @@ SEARCH_SPACES: dict[str, dict] = {
             "trailing_atr":   "VWAP_ATR_TRAILING_MULTIPLIER",
             "entry_mode":     "VWAP_ENTRY_MODE",
             "tp_mode":        "VWAP_TP_MODE",
-            "adx_max":        "ADX_TRENDING_THRESHOLD",
+            # See the note on the MeanReversion mapping above: this is a
+            # BTV2-local 5m ADX ceiling, not the global 4h regime threshold.
+            "adx_max":        "_NOTE_btv2_local_adx_max",
             "volume_mult":    "_NOTE_volume_mult_not_direct_env",
             "rsi_max":        "VWAP_RSI_MAX",
             "require_reversal_candle": "VWAP_REQUIRE_REVERSAL_CANDLE",
