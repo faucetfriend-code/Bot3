@@ -13,10 +13,90 @@ Usage:
     # Returns a dict of parameter_name -> (low, high) or categorical choices
 """
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Type alias for search space definitions
 SearchSpace = Dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# Feasibility constraints
+# ---------------------------------------------------------------------------
+#
+# Some strategies derive both stop and target from the SAME ATR value, so
+# their reward/risk ratio is the constant atr_target_mult / atr_stop_mult -
+# it does not depend on market data at all. If that constant falls below the
+# strategy's rrr_meets_minimum threshold, every signal it emits fails
+# Signal.is_valid() and is dropped by StrategyManager. Such a parameter set
+# is not "bad", it is unbacktestable: it produces zero trades no matter what
+# the data does.
+#
+# Maps strategy name -> the minimum reward/risk its signals must clear.
+MIN_RRR_CONSTRAINTS: Dict[str, float] = {
+    "momentum_scalping": 1.5,      # momentum_scalping.py min_rrr default
+    "orderbook_imbalance": 1.5,    # orderbook_imbalance.py hardcoded gate
+}
+
+# Headroom applied to the coupled lower bound in suggest_params. The realised
+# RRR is recomputed from prices at signal time, where float noise turns a
+# nominal 1.5 into 1.4999999999999998 and fails a `>=` gate, so suggestions
+# must sit strictly inside the feasible region rather than on its edge.
+RRR_FEASIBILITY_MARGIN = 1.02
+
+
+class InfeasibleParamsError(ValueError):
+    """Raised when a parameter set can never produce a tradeable signal."""
+
+
+def check_param_feasibility(
+    strategy_name: str, params: Dict[str, Any]
+) -> List[str]:
+    """
+    Check a parameter set for combinations that can never trade.
+
+    Args:
+        strategy_name: Strategy name (e.g. "momentum_scalping")
+        params: Candidate parameter values.
+
+    Returns:
+        List of human-readable reasons. Empty means feasible.
+    """
+    reasons: List[str] = []
+
+    min_rrr = MIN_RRR_CONSTRAINTS.get(strategy_name)
+    if min_rrr is not None:
+        stop = params.get("atr_stop_mult")
+        target = params.get("atr_target_mult")
+        if stop is not None and target is not None:
+            if stop <= 0:
+                reasons.append(f"atr_stop_mult={stop} must be > 0")
+            elif target / stop < min_rrr:
+                reasons.append(
+                    f"atr_target_mult={target:.3f} / atr_stop_mult={stop:.3f} "
+                    f"= RRR {target / stop:.3f} < required {min_rrr:.2f}; "
+                    f"every signal would fail rrr_meets_minimum and be "
+                    f"discarded before execution"
+                )
+
+    return reasons
+
+
+def validate_params(strategy_name: str, params: Dict[str, Any]) -> None:
+    """
+    Raise InfeasibleParamsError if params can never produce a valid signal.
+
+    Args:
+        strategy_name: Strategy name.
+        params: Candidate parameter values.
+
+    Raises:
+        InfeasibleParamsError: With all failing reasons in the message.
+    """
+    reasons = check_param_feasibility(strategy_name, params)
+    if reasons:
+        raise InfeasibleParamsError(
+            f"Infeasible parameters for {strategy_name}: " + "; ".join(reasons)
+        )
 
 
 def get_search_space(strategy_name: str) -> SearchSpace:
@@ -206,6 +286,13 @@ def _momentum_scalping_space() -> SearchSpace:
 
     Focuses on EMA crossover parameters and ATR-based targets.
     Optimized for TRENDING regimes (1h timeframe).
+
+    NOTE: atr_target_mult is coupled to atr_stop_mult by
+    MIN_RRR_CONSTRAINTS["momentum_scalping"] - suggest_params() raises the
+    effective lower bound to atr_stop_mult * min_rrr * RRR_FEASIBILITY_MARGIN
+    so trials cannot land in the region where every signal is discarded
+    (see check_param_feasibility).
+    The declared range below is the union across all stop values.
     """
     return {
         # EMA periods
@@ -214,9 +301,9 @@ def _momentum_scalping_space() -> SearchSpace:
         # RSI filters
         "rsi_lower": (25.0, 40.0),               # RSI floor
         "rsi_upper": (60.0, 75.0),               # RSI ceiling
-        # ATR risk management
+        # ATR risk management (RRR = target/stop is constant, see note above)
         "atr_stop_mult": (1.0, 2.5),             # Stop loss multiplier
-        "atr_target_mult": (2.0, 4.0),           # Take profit multiplier
+        "atr_target_mult": (2.0, 4.5),           # Take profit multiplier
         # Volume
         "volume_threshold": (1.0, 1.8),          # Min volume multiplier
         # Confidence
@@ -239,7 +326,8 @@ def _orderbook_imbalance_space() -> SearchSpace:
         # Detection
         "levels": (5, 20),                           # Price levels to analyze
         "min_order_density": (3, 10),                # Min orders on winning side
-        # ATR risk management
+        # ATR risk management (RRR = target/stop is constant; coupled by
+        # MIN_RRR_CONSTRAINTS["orderbook_imbalance"] in suggest_params)
         "atr_stop_mult": (0.5, 1.0),                 # Tight stop for fast trades
         "atr_target_mult": (1.0, 2.5),               # Quick target
         # Confidence
@@ -345,15 +433,26 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
     This is a convenience function that reads the search space and
     suggests parameters with the correct types.
 
+    For strategies listed in MIN_RRR_CONSTRAINTS the lower bound of
+    atr_target_mult is raised to atr_stop_mult * min_rrr (plus
+    RRR_FEASIBILITY_MARGIN), so no trial is spent on a combination whose
+    signals would all be discarded before execution. The result is checked
+    once more before being returned.
+
     Args:
         trial: Optuna trial object
         strategy_name: Strategy name
 
     Returns:
         Dictionary of suggested parameters
+
+    Raises:
+        InfeasibleParamsError: If the constrained region is empty (the
+            declared search space cannot satisfy the strategy's minimum RRR).
     """
     space = get_search_space(strategy_name)
-    params = {}
+    min_rrr: Optional[float] = MIN_RRR_CONSTRAINTS.get(strategy_name)
+    params: Dict[str, Any] = {}
 
     for param_name, param_range in space.items():
         param_type = get_param_type(strategy_name, param_name)
@@ -361,11 +460,33 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
         if isinstance(param_range, list):
             # Categorical parameter
             params[param_name] = trial.suggest_categorical(param_name, param_range)
-        elif param_type == "int":
-            low, high = param_range
+            continue
+
+        low, high = param_range
+
+        # Couple the take-profit multiplier to the stop multiplier so the
+        # implied (constant) reward/risk always clears the strategy's gate.
+        if (
+            min_rrr is not None
+            and param_name == "atr_target_mult"
+            and params.get("atr_stop_mult", 0) > 0
+        ):
+            feasible_low = (
+                params["atr_stop_mult"] * min_rrr * RRR_FEASIBILITY_MARGIN
+            )
+            if feasible_low > high:
+                raise InfeasibleParamsError(
+                    f"Infeasible parameters for {strategy_name}: "
+                    f"atr_stop_mult={params['atr_stop_mult']:.3f} needs "
+                    f"atr_target_mult >= {feasible_low:.3f} for RRR "
+                    f"{min_rrr:.2f}, but the search space caps it at {high}"
+                )
+            low = max(low, feasible_low)
+
+        if param_type == "int":
             params[param_name] = trial.suggest_int(param_name, int(low), int(high))
         else:
-            low, high = param_range
             params[param_name] = trial.suggest_float(param_name, low, high)
 
+    validate_params(strategy_name, params)
     return params

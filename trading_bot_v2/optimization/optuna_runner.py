@@ -33,7 +33,12 @@ except ImportError:
 
 import pandas as pd
 
-from .search_spaces import get_search_space, suggest_params, list_strategies
+from .search_spaces import (
+    InfeasibleParamsError,
+    get_search_space,
+    suggest_params,
+    list_strategies,
+)
 from ..backtesting.optimization_adapter import OptimizationAdapter
 from ..regime_param_overlay import normalize_regime_value
 
@@ -419,8 +424,15 @@ class OptunaRunner:
             optuna.TrialPruned: In regime mode, when fewer than
                 min_regime_trades matching trades were produced.
         """
-        # Suggest parameters
-        params = suggest_params(trial, strategy)
+        # Suggest parameters. Combinations that could never produce a
+        # tradeable signal (e.g. a constant RRR below the strategy's gate)
+        # are pruned up front with the reason attached, instead of being
+        # backtested into a silent zero-trade result.
+        try:
+            params = suggest_params(trial, strategy)
+        except InfeasibleParamsError as e:
+            logger.debug(f"Trial {trial.number} pruned as infeasible: {e}")
+            raise optuna.TrialPruned(str(e))
 
         # Log trial
         logger.debug(f"Trial {trial.number}: params={params}")

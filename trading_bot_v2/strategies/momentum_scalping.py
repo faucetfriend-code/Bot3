@@ -4,12 +4,28 @@ Momentum Scalping Strategy
 EMA 9/21 crossover strategy operating on the 1h timeframe.
 Captures directional momentum moves in trending conditions.
 
-DESIGN NOTES (updated 2026-05-03):
-- Primary timeframe changed from 5m → 1h (regime-aware walkforward validated)
+DESIGN NOTES (updated 2026-07-28):
+- Primary timeframe changed from 5m -> 1h (regime-aware walkforward validated)
 - Validated 2022-2025 (1h): Sharpe +0.371, ROBUST MC, 29 trades, 58.6% WR
-- Bull-optimised params: EMA 9/21, atr_stop=2.5x, adx_min=30
-- 4h trend gate still used as highest-priority filter
+- Bull-optimised params: EMA 9/21, atr_stop=2.5x
+- 4h trend gate is the only higher-timeframe filter (highest priority)
 - All sizing delegated to RiskManager
+
+RRR NOTE (2026-07-28):
+Stop and target are both pure multiples of the SAME ATR value, so the
+reward/risk ratio is a CONSTANT: rrr = atr_target_mult / atr_stop_mult,
+independent of market data. If that constant sits below min_rrr, every
+signal this strategy emits fails Signal.is_valid() and is dropped by
+StrategyManager - the strategy looks alive but can never trade. __init__
+therefore checks feasibility up front and raises atr_target_mult just past
+min_rrr (see _RRR_REPAIR_MARGIN), logging a warning. The stop multiplier is
+left alone because it is the walkforward-validated parameter; the target
+multiplier was only ever chosen to "keep RRR positive".
+
+NOTE ON adx_min: earlier notes claimed a validated adx_min=30. There is no
+ADX gate in this strategy and no MOMENTUM_ADX_MIN setting - ADX is used
+only by MarketRegimeDetector to decide which regimes run this strategy.
+The claim is removed rather than implemented; do not read it back in.
 
 RISK NOTES:
 - Lower frequency than 5m version; fewer but higher-quality signals
@@ -142,11 +158,19 @@ def calculate_atr(
     return atr
 
 
+# Headroom applied when repairing an infeasible target multiplier. Landing
+# exactly on min_rrr is not enough: the realised RRR is recomputed from
+# prices (reward/risk), and float noise routinely yields 1.4999999999999998
+# for a nominal 1.5, which fails a `>=` gate. 2% keeps the repaired config
+# clearly inside the gate.
+_RRR_REPAIR_MARGIN = 1.02
+
+
 class MomentumScalpingStrategy:
     """
     Fast momentum scalping using EMA crossovers.
 
-    Targets quick 1-3% moves on 5m timeframe with 15m confirmation.
+    Runs on the 1h timeframe with a 4h trend gate (see module docstring).
     Works best in trending markets with clear directional momentum.
     """
 
@@ -167,7 +191,19 @@ class MomentumScalpingStrategy:
         min_confidence: float = 0.55,
         cooldown_minutes: int = 5,  # Match strategy_manager default
         min_atr_pct: float = 0.0,   # Min ATR as % of price (0 = disabled); filters low-vol candles
+        min_rrr: float = 1.5,       # Minimum reward/risk for rrr_meets_minimum
     ):
+        """
+        Initialize MomentumScalpingStrategy.
+
+        Args:
+            min_rrr: Minimum reward/risk required for the signal's
+                rrr_meets_minimum flag. Because stop and target are both
+                multiples of the same ATR, the realised RRR is exactly
+                atr_target_mult / atr_stop_mult. An infeasible pair is
+                repaired here (target raised) rather than producing signals
+                that are silently discarded downstream.
+        """
         self.strategy_type = StrategyType.MOMENTUM_SCALPING
         self.ema_fast = ema_fast
         self.ema_slow = ema_slow
@@ -182,6 +218,26 @@ class MomentumScalpingStrategy:
         self.min_confidence = min_confidence
         self.cooldown_minutes = cooldown_minutes
         self.min_atr_pct = min_atr_pct
+        self.min_rrr = min_rrr
+
+        # Feasibility repair: stop and target are multiples of the same ATR,
+        # so implied_rrr is a constant. If it is below min_rrr the strategy
+        # could never emit a signal that passes Signal.is_valid().
+        if self.atr_stop_mult > 0:
+            implied_rrr = self.atr_target_mult / self.atr_stop_mult
+            if implied_rrr < self.min_rrr:
+                repaired_target = (
+                    self.atr_stop_mult * self.min_rrr * _RRR_REPAIR_MARGIN
+                )
+                logger.warning(
+                    f"MomentumScalping: atr_stop={self.atr_stop_mult}x / "
+                    f"atr_target={self.atr_target_mult}x implies RRR "
+                    f"{implied_rrr:.2f} < min_rrr {self.min_rrr:.2f} - every "
+                    f"signal would be discarded by validation. Raising target "
+                    f"to {repaired_target:.2f}x (stop is the validated "
+                    f"parameter and is left unchanged)."
+                )
+                self.atr_target_mult = repaired_target
 
         # Track last crossover per symbol for entry timing
         self.last_crossover: Dict[str, Dict] = {}
@@ -195,7 +251,8 @@ class MomentumScalpingStrategy:
 
         logger.info(
             f"MomentumScalpingStrategy initialized: EMA {ema_fast}/{ema_slow}, "
-            f"RSI {rsi_lower}-{rsi_upper}, ATR stop={atr_stop_mult}x target={atr_target_mult}x"
+            f"RSI {rsi_lower}-{rsi_upper}, ATR stop={self.atr_stop_mult}x "
+            f"target={self.atr_target_mult}x, min_rrr={self.min_rrr}"
             + (f", min_atr={min_atr_pct:.3%}" if min_atr_pct > 0 else "")
         )
 
@@ -328,26 +385,6 @@ class MomentumScalpingStrategy:
         )
 
         return result
-
-    def _check_higher_tf_alignment(
-        self, tf_15m_closes: List[float], direction: str
-    ) -> bool:
-        """
-        Check if 15m timeframe trend aligns with signal direction.
-        """
-        if len(tf_15m_closes) < self.ema_slow + 5:
-            return True  # Allow if insufficient data
-
-        ema_fast_15m = calculate_ema(tf_15m_closes, self.ema_fast)
-        ema_slow_15m = calculate_ema(tf_15m_closes, self.ema_slow)
-
-        if not ema_fast_15m or not ema_slow_15m:
-            return True
-
-        if direction == "bullish":
-            return ema_fast_15m[-1] > ema_slow_15m[-1]
-        else:
-            return ema_fast_15m[-1] < ema_slow_15m[-1]
 
     def _check_4h_trend_alignment(
         self, closes_4h: List[float], direction: str
@@ -524,7 +561,7 @@ class MomentumScalpingStrategy:
             take_profit=take_profit,
             confidence=confidence,
             quality=TradeQuality.HIGH_CONVICTION if confidence > 0.75 else TradeQuality.STANDARD,
-            timeframe="5m",
+            timeframe="1h",
             market_state=MarketState.TREND,
             notes=(
                 f"Momentum {direction}: EMA {self.ema_fast}/{self.ema_slow} cross, "
@@ -544,7 +581,7 @@ class MomentumScalpingStrategy:
             volume_confirmation=momentum["volume_ok"],
             multi_timeframe_alignment=True,
             support_resistance_valid=True,
-            rrr_meets_minimum=rrr >= 1.5,
+            rrr_meets_minimum=rrr >= self.min_rrr,
             liquidation_buffer_safe=True,
             account_risk_ok=True,
             margin_drawdown_ok=True,

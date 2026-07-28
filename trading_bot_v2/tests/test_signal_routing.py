@@ -583,6 +583,133 @@ class TestStrategyManagerValidation:
 
 
 # ============================================================
+# 6b. TestSignalDiscardAccounting
+# ============================================================
+
+
+class TestSignalDiscardAccounting:
+    """
+    Signals dropped by Signal.is_valid() must be attributed per strategy
+    and per failing flag.
+
+    Regression guard for the MomentumScalping bug: the strategy generated
+    signals normally but 100% failed rrr_meets_minimum, and the drop looked
+    identical to "generated no signals" in the logs.
+    """
+
+    def _make_sm(self, signals, regime=MarketRegime.RANGING_CALM):
+        from trading_bot_v2.strategy_manager import StrategyManager
+
+        detector = MagicMock()
+        detector.detect_regime_cached.return_value = regime
+        detector.get_active_strategies.return_value = ["MeanReversion"]
+        detector.get_strategy_weights.return_value = {"MeanReversion": 1.0}
+
+        sm = StrategyManager(
+            regime_detector=detector,
+            enable_mean_reversion=False,
+            enable_ma_crossover=False,
+            enable_grid_trading=False,
+            enable_liquidation_capture=False,
+            enable_vwap_scalping=False,
+            enable_funding_arb=False,
+            enable_momentum_scalping=False,
+            enable_orderbook_imbalance=False,
+        )
+        fake = MagicMock()
+        fake.generate_signals.return_value = signals
+        sm.strategies["MeanReversion"] = fake
+        return sm
+
+    def test_failed_validity_flags_lists_only_false_flags(self):
+        sig = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        assert sig.failed_validity_flags() == ["rrr_meets_minimum"]
+        assert sig.is_valid() is False
+
+    def test_valid_signal_has_no_failed_flags(self):
+        assert _make_signal(all_flags=True).failed_validity_flags() == []
+
+    def test_single_invalid_signal_is_counted_by_strategy_and_flag(self):
+        bad = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        sm = self._make_sm([bad])
+
+        result = sm.generate_signals_for_market(
+            "SUI-PERP", _valid_multi_tf_data(), 100.0
+        )
+
+        assert result == []
+        stats = sm.get_signal_discard_stats()
+        assert "mean_reversion" in stats
+        entry = stats["mean_reversion"]
+        assert entry["generated"] == 1
+        assert entry["discarded"] == 1
+        assert entry["discard_rate"] == 1.0
+        assert entry["failed_flags"] == {"rrr_meets_minimum": 1}
+
+    def test_valid_signal_records_no_discard(self):
+        good = _make_signal(all_flags=True)
+        sm = self._make_sm([good])
+
+        result = sm.generate_signals_for_market(
+            "SUI-PERP", _valid_multi_tf_data(), 100.0
+        )
+
+        assert len(result) == 1
+        stats = sm.get_signal_discard_stats()
+        assert stats["mean_reversion"]["generated"] == 1
+        assert stats["mean_reversion"]["discarded"] == 0
+        assert stats["mean_reversion"]["discard_rate"] == 0.0
+
+    def test_multiple_invalid_signals_are_counted(self):
+        bad_a = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        bad_b = _make_signal(
+            all_flags=True, side=OrderSide.SELL, volume_confirmation=False
+        )
+        sm = self._make_sm([bad_a, bad_b])
+
+        result = sm.generate_signals_for_market(
+            "SUI-PERP", _valid_multi_tf_data(), 100.0
+        )
+
+        assert result == []
+        entry = sm.get_signal_discard_stats()["mean_reversion"]
+        assert entry["generated"] == 2
+        assert entry["discarded"] >= 1
+        assert sum(entry["failed_flags"].values()) >= 1
+
+    def test_discard_counts_accumulate_across_cycles(self):
+        bad = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        sm = self._make_sm([bad])
+
+        for _ in range(3):
+            sm.generate_signals_for_market("SUI-PERP", _valid_multi_tf_data(), 100.0)
+
+        entry = sm.get_signal_discard_stats()["mean_reversion"]
+        assert entry["generated"] == 3
+        assert entry["discarded"] == 3
+        assert entry["failed_flags"]["rrr_meets_minimum"] == 3
+
+    def test_reset_clears_counters(self):
+        bad = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        sm = self._make_sm([bad])
+        sm.generate_signals_for_market("SUI-PERP", _valid_multi_tf_data(), 100.0)
+
+        sm.reset_signal_discard_stats()
+        assert sm.get_signal_discard_stats() == {}
+
+    def test_summary_returns_same_stats(self):
+        bad = _make_signal(all_flags=True, rrr_meets_minimum=False)
+        sm = self._make_sm([bad])
+        sm.generate_signals_for_market("SUI-PERP", _valid_multi_tf_data(), 100.0)
+
+        assert sm.log_signal_discard_summary() == sm.get_signal_discard_stats()
+
+    def test_summary_on_empty_manager(self):
+        sm = self._make_sm([])
+        assert sm.log_signal_discard_summary() == {}
+
+
+# ============================================================
 # 7. TestStrategyManagerRegimeRouting (8 tests)
 # ============================================================
 

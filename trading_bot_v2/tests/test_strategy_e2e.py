@@ -1449,6 +1449,168 @@ class TestMomentumScalpingE2E:
 
 
 # ===========================================================================
+# 7b. Momentum Scalping - configuration integrity
+# ===========================================================================
+
+class TestMomentumScalpingConfigIntegrity:
+    """
+    Momentum's RRR is the CONSTANT atr_target_mult / atr_stop_mult, so a bad
+    pair makes every signal fail rrr_meets_minimum and get dropped by
+    StrategyManager - the strategy looks alive but can never trade.
+
+    TestMomentumScalpingE2E above uses hand-picked params and never calls
+    is_valid(), which is exactly why the 2.5x/3.0x shipped pair (RRR 1.20 vs
+    a 1.5 gate) went unnoticed. These tests exercise the real configured
+    construction path and assert emitted signals actually validate.
+    """
+
+    # The values shipped in .env at the time of the fix.
+    SHIPPED_ENV = {
+        "ENABLE_MOMENTUM_SCALPING": "true",
+        "MOMENTUM_EMA_FAST": "9",
+        "MOMENTUM_EMA_SLOW": "21",
+        "MOMENTUM_RSI_PERIOD": "14",
+        "MOMENTUM_RSI_OVERSOLD": "25",
+        "MOMENTUM_RSI_OVERBOUGHT": "75",
+        "MOMENTUM_MACD_FAST": "12",
+        "MOMENTUM_MACD_SLOW": "26",
+        "MOMENTUM_MACD_SIGNAL": "9",
+        "MOMENTUM_ATR_PERIOD": "14",
+        "MOMENTUM_ATR_STOP_MULTIPLIER": "2.5",
+        "MOMENTUM_ATR_TARGET_MULTIPLIER": "3.0",
+        "MOMENTUM_MIN_CONFIDENCE": "0.65",
+        "MOMENTUM_COOLDOWN_MINUTES": "20",
+        "MOMENTUM_VOLUME_MULTIPLIER": "1.5",
+        "MOMENTUM_MIN_ATR_PCT": "0.0",
+    }
+
+    def _build_from_env(self, monkeypatch, **overrides):
+        """Build the strategy exactly the way StrategyManager does."""
+        from trading_bot_v2.strategy_manager import StrategyManager
+
+        monkeypatch.delenv("MOMENTUM_MIN_RRR", raising=False)
+        env = dict(self.SHIPPED_ENV)
+        env.update(overrides)
+        for key, value in env.items():
+            monkeypatch.setenv(key, value)
+
+        sm = StrategyManager(
+            enable_mean_reversion=False,
+            enable_ma_crossover=False,
+            enable_trend_following=False,
+            enable_grid_trading=False,
+            enable_liquidation_capture=False,
+            enable_vwap_scalping=False,
+            enable_funding_arb=False,
+            enable_momentum_scalping=True,
+            enable_orderbook_imbalance=False,
+            enable_session_range_breakout=False,
+            enable_calendar_flow=False,
+        )
+        return sm.strategies["MomentumScalping"]
+
+    # -- The arithmetic vs the gate (the actual bug) --
+
+    def test_rrr_is_constant_and_clears_the_gate(self):
+        """Implied RRR = target/stop must be >= min_rrr after construction."""
+        for stop, target in [(2.5, 3.0), (1.5, 2.5), (2.0, 3.0), (1.0, 1.0)]:
+            strategy = MomentumScalpingStrategy(
+                atr_stop_mult=stop, atr_target_mult=target
+            )
+            implied = strategy.atr_target_mult / strategy.atr_stop_mult
+            assert implied >= strategy.min_rrr, (
+                f"stop={stop} target={target} -> RRR {implied:.3f} "
+                f"below min_rrr {strategy.min_rrr}"
+            )
+
+    def test_infeasible_pair_is_repaired_by_raising_target(self):
+        """2.5x/3.0x is RRR 1.20; target is raised, stop is left alone."""
+        strategy = MomentumScalpingStrategy(atr_stop_mult=2.5, atr_target_mult=3.0)
+        assert strategy.atr_stop_mult == 2.5
+        assert strategy.atr_target_mult > 3.0
+        # Strictly inside the gate, not sitting on it (float noise in the
+        # price-derived RRR would otherwise fail a boundary-exact config).
+        assert strategy.atr_target_mult / strategy.atr_stop_mult > 1.5
+
+    def test_feasible_pair_is_untouched(self):
+        """Code defaults 1.5x/2.5x (RRR 1.667) already clear the gate."""
+        strategy = MomentumScalpingStrategy(atr_stop_mult=1.5, atr_target_mult=2.5)
+        assert strategy.atr_stop_mult == 1.5
+        assert strategy.atr_target_mult == 2.5
+
+    def test_min_rrr_is_configurable(self):
+        """A lower min_rrr keeps a 1.20 pair as authored (ORB uses 1.2)."""
+        strategy = MomentumScalpingStrategy(
+            atr_stop_mult=2.5, atr_target_mult=3.0, min_rrr=1.2
+        )
+        assert strategy.atr_target_mult == 3.0
+        assert strategy.min_rrr == 1.2
+
+    def test_signal_rrr_flag_follows_min_rrr(self):
+        """rrr_meets_minimum is driven by self.min_rrr, not a hardcoded 1.5."""
+        strategy = MomentumScalpingStrategy(
+            atr_stop_mult=1.5,
+            atr_target_mult=2.5,
+            min_rrr=3.0,          # Higher than the authored 1.667 pair
+            volume_threshold=1.0,
+            min_confidence=0.10,
+            cooldown_minutes=0,
+        )
+        # Repair lifted the target to satisfy the (higher) gate.
+        assert strategy.atr_target_mult > 4.5
+
+        data = DataGenerator.momentum_bullish_data()
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
+        signals = strategy.generate_signals("BTC", multi_tf, data["close"][-1])
+
+        assert len(signals) == 1
+        assert signals[0].rrr_meets_minimum is True
+
+    # -- The configured construction path end to end --
+
+    def test_configured_strategy_emits_valid_signals(self, monkeypatch):
+        """
+        Built from the shipped env values, the emitted signal must pass
+        Signal.is_valid(). Before the fix this was False on 100% of signals.
+        """
+        strategy = self._build_from_env(monkeypatch)
+        data = DataGenerator.momentum_bullish_data()
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
+
+        signals = strategy.generate_signals("BTC", multi_tf, data["close"][-1])
+
+        assert len(signals) == 1, "shipped config generated no signal at all"
+        sig = signals[0]
+        assert sig.rrr_meets_minimum is True
+        assert sig.failed_validity_flags() == []
+        assert sig.is_valid() is True
+
+    def test_configured_strategy_bearish_signal_is_valid(self, monkeypatch):
+        strategy = self._build_from_env(monkeypatch)
+        data = DataGenerator.momentum_bearish_data()
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
+
+        signals = strategy.generate_signals("BTC", multi_tf, data["close"][-1])
+
+        assert len(signals) == 1
+        assert signals[0].is_valid() is True
+
+    def test_env_min_rrr_is_honoured(self, monkeypatch):
+        strategy = self._build_from_env(monkeypatch, MOMENTUM_MIN_RRR="2.0")
+        assert strategy.min_rrr == 2.0
+        assert strategy.atr_target_mult / strategy.atr_stop_mult > 2.0
+
+    def test_signal_timeframe_matches_actual_primary(self, monkeypatch):
+        """Signal metadata must say 1h - the strategy reads multi_tf["1h"]."""
+        strategy = self._build_from_env(monkeypatch)
+        data = DataGenerator.momentum_bullish_data()
+        multi_tf = DataGenerator.build_multi_tf_data(data_1h=data)
+
+        signals = strategy.generate_signals("BTC", multi_tf, data["close"][-1])
+        assert signals[0].timeframe == "1h"
+
+
+# ===========================================================================
 # 8. Order Book Imbalance E2E
 # ===========================================================================
 

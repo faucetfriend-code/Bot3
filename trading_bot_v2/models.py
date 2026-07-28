@@ -454,6 +454,21 @@ class MarketData:
         return self.body_size / total_range if total_range > 0 else 0
 
 
+# Names of the boolean flags Signal.is_valid() requires, in check order.
+# Single source of truth for both is_valid() and failed_validity_flags(),
+# so discard accounting can never drift from the actual gate.
+SIGNAL_VALIDITY_FLAGS: Tuple[str, ...] = (
+    "volume_confirmation",
+    "multi_timeframe_alignment",
+    "support_resistance_valid",
+    "rrr_meets_minimum",
+    "liquidation_buffer_safe",
+    "account_risk_ok",
+    "margin_drawdown_ok",
+    "forbidden_conditions_clear",
+)
+
+
 @dataclass
 class Signal:
     """
@@ -512,22 +527,23 @@ class Signal:
         """Stop distance as percentage."""
         return abs(self.entry_price - self.stop_loss) / self.entry_price
 
+    def failed_validity_flags(self) -> List[str]:
+        """
+        Return the names of the validity flags that are False.
+
+        Empty list means the signal passes is_valid(). Used by callers that
+        drop invalid signals so the rejection reason can be attributed
+        instead of disappearing silently.
+        """
+        return [name for name in SIGNAL_VALIDITY_FLAGS if not getattr(self, name, False)]
+
     def is_valid(self) -> bool:
         """
         Check if signal meets all qualification criteria.
 
         Based on Section III.B - All conditions must be met.
         """
-        return (
-            self.volume_confirmation
-            and self.multi_timeframe_alignment
-            and self.support_resistance_valid
-            and self.rrr_meets_minimum
-            and self.liquidation_buffer_safe
-            and self.account_risk_ok
-            and self.margin_drawdown_ok
-            and self.forbidden_conditions_clear
-        )
+        return not self.failed_validity_flags()
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""
