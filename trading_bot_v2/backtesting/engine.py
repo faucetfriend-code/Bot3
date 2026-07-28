@@ -24,6 +24,7 @@ Usage:
     result.save_html("backtest_result.html")
 """
 
+from bisect import bisect_left, bisect_right
 from datetime import datetime
 from typing import Dict, List, Optional
 from loguru import logger
@@ -206,15 +207,38 @@ class BacktestEngine:
                 f"--symbols {symbol} --timeframes 1m"
             )
 
-        # --- Load candles ---
+        # --- Load candles (with a pre-window warmup prefix) ---
+        # Every timeframe is loaded from `start - warmup` so the first
+        # replayed bar already sees a full `lookback`-candle history slice,
+        # instead of ramping up from 1 candle inside the requested window.
+        lookback = max(1, int(getattr(self.cfg, "backtest_history_lookback", 60) or 60))
+        warmup = int(getattr(self.cfg, "backtest_warmup_candles", 0) or 0) or lookback
+        logger.info(
+            f"History lookback: {lookback} candles/timeframe | "
+            f"warmup prefix: {warmup} candles/timeframe"
+        )
+
         candles = {
-            tf: loader.get_candles(tf, start, end)
+            tf: loader.get_candles(tf, start, end, warmup_candles=warmup)
             for tf in ("1m", "5m", "15m", "1h", "4h")
         }
 
         timestamps_5m = candles["5m"]["timestamp"]
-        total = len(timestamps_5m)
-        logger.info(f"Loaded {total} 5m candles for replay")
+        # Sorted string views of each timeframe's timestamps, for the
+        # as-of index lookup in _nearest_idx.
+        sorted_ts = {
+            tf: [str(t) for t in candles[tf]["timestamp"]]
+            for tf in ("1m", "15m", "1h", "4h")
+        }
+
+        # First 5m index inside the requested window - everything before it
+        # is warmup and is only ever read through _history().
+        replay_start = self._first_index_at_or_after(timestamps_5m, start)
+        total = len(timestamps_5m) - replay_start
+        logger.info(
+            f"Loaded {len(timestamps_5m)} 5m candles "
+            f"({replay_start} warmup + {total} replayed)"
+        )
 
         # Build reverse-lookup: 5m timestamp -> index in each higher timeframe
         idx_map = {
@@ -223,30 +247,29 @@ class BacktestEngine:
         }
 
         # --- Replay loop (one 5m candle at a time) ---
-        last_4h_idx = None
-
-        for i, ts in enumerate(timestamps_5m):
+        for i in range(replay_start, len(timestamps_5m)):
+            ts = timestamps_5m[i]
             # Advance the simulated exchange price to this candle's close
             candle_5m = self._candle_at(candles["5m"], i)
             exchange.advance(candle_5m, ts)
 
             # --- Build multi-timeframe bundles ---
-            i_15m = self._nearest_idx(idx_map["15m"], ts, i, 3)
-            i_1h  = self._nearest_idx(idx_map["1h"],  ts, i, 12)
-            i_4h  = self._nearest_idx(idx_map["4h"],  ts, i, 48)
-            i_1m  = self._nearest_idx(idx_map["1m"],  ts, i, 1)
+            i_15m = self._nearest_idx(idx_map["15m"], sorted_ts["15m"], ts)
+            i_1h  = self._nearest_idx(idx_map["1h"],  sorted_ts["1h"],  ts)
+            i_4h  = self._nearest_idx(idx_map["4h"],  sorted_ts["4h"],  ts)
+            i_1m  = self._nearest_idx(idx_map["1m"],  sorted_ts["1m"],  ts)
 
             # Regime / structure timeframes (required by StrategyManager)
             multi_tf_data = {
-                "15m": self._history(candles["15m"], i_15m, 60),
-                "1h":  self._history(candles["1h"],  i_1h,  60),
-                "4h":  self._history(candles["4h"],  i_4h,  60),
+                "15m": self._history(candles["15m"], i_15m, lookback),
+                "1h":  self._history(candles["1h"],  i_1h,  lookback),
+                "4h":  self._history(candles["4h"],  i_4h,  lookback),
             }
 
             # Execution timeframes (optional, for precise entry)
             execution_tf_data = {
-                "5m": self._history(candles["5m"], i, 60),
-                "1m": self._history(candles["1m"], i_1m, 60),
+                "5m": self._history(candles["5m"], i, lookback),
+                "1m": self._history(candles["1m"], i_1m, lookback),
             }
 
             # Skip until we have enough 4h history for regime detection (29 candles)
@@ -548,9 +571,23 @@ class BacktestEngine:
         return {k: candles[k][start: up_to + 1] for k in candles}
 
     @staticmethod
-    def _nearest_idx(idx_map: Dict, ts: str, fallback_5m_idx: int, ratio: int) -> int:
-        """Return the most recent higher-TF index at or before ts."""
+    def _nearest_idx(idx_map: Dict, sorted_ts: List[str], ts) -> int:
+        """Return the most recent higher-TF index at or before ts.
+
+        Exact hit first (the common case, since higher-TF bars land on 5m
+        boundaries), otherwise an as-of lookup over the timeframe's sorted
+        timestamps. Timestamps are canonical "%Y-%m-%dT%H:%M:%S" strings, so
+        lexicographic order matches chronological order.
+
+        A positional estimate (5m_index // ratio) is deliberately not used:
+        it breaks as soon as the series carry a warmup prefix or contain
+        gaps, and silently serves candles from the wrong date.
+        """
         if ts in idx_map:
             return idx_map[ts]
-        # Approximate: 5m_idx / ratio (e.g., 5m->1h is /12)
-        return max(0, fallback_5m_idx // ratio)
+        return max(0, bisect_right(sorted_ts, str(ts)) - 1)
+
+    @staticmethod
+    def _first_index_at_or_after(timestamps: List, boundary: str) -> int:
+        """Index of the first timestamp at or after boundary (len if none)."""
+        return bisect_left([str(t) for t in timestamps], str(boundary))

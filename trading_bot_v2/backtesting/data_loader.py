@@ -75,19 +75,31 @@ class BacktestDataLoader:
         timeframe: str,
         start: str,
         end: str,
+        warmup_candles: int = 0,
     ) -> Dict[str, List]:
         """
         Returns candles in the same format as MultiTimeframeFetcher.
 
+        Args:
+            timeframe: Candle timeframe (e.g. "4h").
+            start: Window start (ISO date/datetime string).
+            end: Window end (ISO date/datetime string).
+            warmup_candles: Extra candles to load *before* ``start`` so that
+                indicators and rolling-history slices are already saturated on
+                the first replayed bar. The returned series therefore begins
+                at ``start - warmup_candles * timeframe``; callers that must
+                replay only [start, end] have to skip the prefix themselves.
+
         Returns dict with keys: open, high, low, close, volume, timestamp
         Each value is a list ordered oldest -> newest.
         """
-        df = self._load_or_fetch(timeframe, start, end)
-        if not self._covers_range(df, timeframe, start, end):
-            if self._maybe_autodownload(timeframe, start, end):
+        load_start = self.shift_start(start, timeframe, warmup_candles)
+        df = self._load_or_fetch(timeframe, load_start, end)
+        if not self._covers_range(df, timeframe, load_start, end):
+            if self._maybe_autodownload(timeframe, load_start, end):
                 self._cache.pop(f"{self.symbol}_{timeframe}", None)
-                df = self._load_or_fetch(timeframe, start, end)
-        mask = (df["timestamp"] >= start) & (df["timestamp"] <= end)
+                df = self._load_or_fetch(timeframe, load_start, end)
+        mask = (df["timestamp"] >= load_start) & (df["timestamp"] <= end)
         df = df[mask].copy()
         return {
             "open": df["open"].tolist(),
@@ -97,6 +109,36 @@ class BacktestDataLoader:
             "volume": df["volume"].tolist(),
             "timestamp": df["timestamp"].tolist(),
         }
+
+    @staticmethod
+    def shift_start(start: str, timeframe: str, candles: int) -> str:
+        """Move a window start back by N candles of a timeframe.
+
+        Args:
+            start: Window start (ISO date/datetime string).
+            timeframe: Candle timeframe (e.g. "4h").
+            candles: Number of candles to reach back. Zero or negative
+                returns ``start`` unchanged.
+
+        Returns:
+            Canonical "%Y-%m-%dT%H:%M:%S" timestamp string, or ``start``
+            unchanged when it cannot be parsed.
+        """
+        if candles <= 0:
+            return start
+        try:
+            from ..data_manager import CANONICAL_TS_FORMAT, TF_MINUTES, _parse_dt
+
+            shifted = _parse_dt(start) - timedelta(
+                minutes=TF_MINUTES.get(timeframe, 5) * candles
+            )
+            return shifted.strftime(CANONICAL_TS_FORMAT)
+        except (ValueError, TypeError, ImportError):
+            logger.warning(
+                f"Could not apply {candles}-candle {timeframe} warmup to "
+                f"start='{start}' - using the unshifted start"
+            )
+            return start
 
     def covers(self, timeframe: str, start: str, end: str) -> bool:
         """Whether local data (plus any allowed auto-download) covers a range.

@@ -2,11 +2,18 @@
 MA Crossover Strategy (Trend Following)
 
 Strategy Logic:
-- BUY Signal: 50 MA crosses above 200 MA (Golden Cross)
-- SELL Signal: 50 MA crosses below 200 MA (Death Cross)
+- BUY Signal: fast MA crosses above slow MA (Golden Cross)
+- SELL Signal: fast MA crosses below slow MA (Death Cross)
 - Confirmation: Rising volume on crossover, MACD alignment
 - Entry: Wait for pullback after crossover (not immediate)
 - Stop Loss: Below recent swing low (long) or swing high (short)
+
+MA periods are configurable (MA_CROSSOVER_FAST_PERIOD /
+MA_CROSSOVER_SLOW_PERIOD). Code defaults are 20/50; the shipped .env
+runs the validated 10/30 pair. The classic 50/200 pair needs at least
+201 candles of 4h history, which is more than the 60-candle window the
+backtest engine supplies by default - raise BACKTEST_HISTORY_LOOKBACK
+before configuring long MAs (see _validate_data).
 
 Best For: TRENDING_STRONG regime (ADX > 25)
 
@@ -28,7 +35,7 @@ class MACrossoverStrategy:
     """
     Moving Average Crossover strategy for trend following.
 
-    Uses 50/200 MA crossovers with pullback entry logic.
+    Uses fast/slow MA crossovers with pullback entry logic.
 
     Parameters can be configured via environment variables:
     - MA_CROSSOVER_FAST_PERIOD (default: 20)
@@ -43,6 +50,11 @@ class MACrossoverStrategy:
     - MA_CROSSOVER_ATR_STOP_MULTIPLIER (default: 2.5)
     - MA_CROSSOVER_MIN_CONFIDENCE (default: 0.50)
     """
+
+    # Entry window, in 4h bars after the crossover bar, during which a
+    # pullback (long) or rally (short) is accepted.
+    MIN_ENTRY_BARS = 1
+    MAX_ENTRY_BARS = 5
 
     def __init__(
         self,
@@ -63,8 +75,8 @@ class MACrossoverStrategy:
         Parameters are read from environment variables if not explicitly passed.
 
         Args:
-            fast_ma_period: Fast MA period (env: MA_CROSSOVER_FAST_PERIOD, default: 50)
-            slow_ma_period: Slow MA period (env: MA_CROSSOVER_SLOW_PERIOD, default: 200)
+            fast_ma_period: Fast MA period (env: MA_CROSSOVER_FAST_PERIOD, default: 20)
+            slow_ma_period: Slow MA period (env: MA_CROSSOVER_SLOW_PERIOD, default: 50)
             pullback_range: Acceptable pullback range for entry (env: MA_CROSSOVER_PULLBACK_MIN/MAX, default: 2-4%)
             volume_confirmation_threshold: Volume multiplier (env: MA_CROSSOVER_VOLUME_THRESHOLD, default: 1.2x)
             macd_fast: MACD fast period (default: 12)
@@ -113,8 +125,22 @@ class MACrossoverStrategy:
             else float(os.getenv("MA_CROSSOVER_MIN_CONFIDENCE", "0.50"))
         )  # Loosened from 0.65
 
-        # Track crossover state
-        self.last_crossover = {}  # {symbol: {"type": "golden/death", "candle_index": int}}
+        # Track crossover state.
+        #
+        # The crossover bar MUST be identified by something invariant under a
+        # rolling window: every caller hands this strategy a fixed-length
+        # window (backtest engine: 60 candles, live fetcher: up to 250), so an
+        # absolute list index into that window is a moving target. Storing
+        # ``len(closes) - 1`` made "bars since crossover" collapse to a
+        # constant 0 once the window saturated, which silently disabled every
+        # entry forever. Store the crossover bar's timestamp instead, plus a
+        # monotonic per-symbol bar counter for callers that supply no
+        # timestamps.
+        # {symbol: {"type": "golden"/"death", "bar_ts": Any, "bar_seq": int, ...}}
+        self.last_crossover = {}
+
+        # {symbol: (last_bar_signature, bar_seq)} - see _observe_bar()
+        self._bar_state: Dict[str, Tuple[Any, int]] = {}
 
         logger.info(
             f"MACrossoverStrategy initialized: "
@@ -150,10 +176,13 @@ class MACrossoverStrategy:
 
             data_4h = multi_tf_data["4h"]
 
-            # Validate data
-            if not self._validate_data(data_4h):
-                logger.warning(f"Invalid 4h data for {symbol}")
+            # Validate data (logs the specific shortfall itself)
+            if not self._validate_data(data_4h, symbol=symbol):
                 return []
+
+            # Note which 4h bar this window ends on, so crossover age can be
+            # measured even when the caller supplies no timestamps.
+            current_bar_seq = self._observe_bar(symbol, data_4h)
 
             # Calculate MAs on 4h timeframe
             closes = data_4h["close"]
@@ -196,10 +225,13 @@ class MACrossoverStrategy:
             )
 
             if crossover_type:
-                # Store crossover for pullback tracking
+                # Store crossover for pullback tracking. Keyed on the bar's
+                # timestamp (window-position independent) with the bar counter
+                # as a fallback.
                 self.last_crossover[symbol] = {
                     "type": crossover_type,
-                    "candle_index": len(closes) - 1,
+                    "bar_ts": self._latest_timestamp(data_4h),
+                    "bar_seq": current_bar_seq,
                     "fast_ma": fast_ma,
                     "slow_ma": slow_ma,
                 }
@@ -208,12 +240,27 @@ class MACrossoverStrategy:
             # Check if we should enter on pullback
             if symbol in self.last_crossover:
                 crossover_info = self.last_crossover[symbol]
-                candles_since_crossover = (
-                    len(closes) - 1 - crossover_info["candle_index"]
+                candles_since_crossover = self._bars_since_crossover(
+                    data_4h, crossover_info, current_bar_seq
+                )
+
+                if (
+                    candles_since_crossover is None
+                    or candles_since_crossover > self.MAX_ENTRY_BARS
+                ):
+                    # Entry window closed (or the crossover bar has scrolled
+                    # out of the supplied history) - stop tracking it.
+                    self.last_crossover.pop(symbol, None)
+                    return []
+
+                logger.debug(
+                    f"{symbol} {crossover_info['type']} crossover is "
+                    f"{candles_since_crossover} bar(s) old "
+                    f"(entry window {self.MIN_ENTRY_BARS}-{self.MAX_ENTRY_BARS})"
                 )
 
                 # Wait 1-5 candles after crossover for pullback
-                if 1 <= candles_since_crossover <= 5:
+                if self.MIN_ENTRY_BARS <= candles_since_crossover <= self.MAX_ENTRY_BARS:
                     if crossover_info["type"] == "golden":
                         # Golden cross - check for LONG entry on pullback
                         pullback_pct = (fast_ma - current_price) / fast_ma
@@ -275,18 +322,144 @@ class MACrossoverStrategy:
             logger.error(f"Error generating MA crossover signal for {symbol}: {e}")
             return []
 
-    def _validate_data(self, data: Dict[str, List[float]]) -> bool:
-        """Validate that data has required fields and sufficient length."""
+    def required_history(self) -> int:
+        """Minimum number of 4h candles this configuration needs."""
+        return max(self.slow_ma_period + 1, self.macd_slow + self.macd_signal)
+
+    def _validate_data(self, data: Dict[str, List[float]], symbol: str = "") -> bool:
+        """Validate that data has required fields and sufficient length.
+
+        Logs loudly on failure: a silent ``return []`` here is
+        indistinguishable from "no setup found", and a slow MA longer than
+        the caller's history window disables the strategy permanently.
+
+        Args:
+            data: 4h OHLCV bundle.
+            symbol: Symbol name, for log context.
+
+        Returns:
+            True when the bundle can drive signal generation.
+        """
         required_keys = ["high", "low", "close"]
-        min_length = max(self.slow_ma_period + 1, self.macd_slow + self.macd_signal)
+        min_length = self.required_history()
+        label = symbol or "<unknown symbol>"
 
         for key in required_keys:
             if key not in data:
+                logger.warning(
+                    f"MACrossover {label}: 4h bundle is missing the '{key}' "
+                    f"series - no signals can be generated"
+                )
                 return False
             if len(data[key]) < min_length:
+                logger.warning(
+                    f"MACrossover {label}: insufficient 4h history - '{key}' has "
+                    f"{len(data[key])} candles but {min_length} are required "
+                    f"(slow_ma_period={self.slow_ma_period}, "
+                    f"macd={self.macd_slow}+{self.macd_signal}). "
+                    f"This disables the strategy entirely: raise the caller's "
+                    f"history lookback (BACKTEST_HISTORY_LOOKBACK in backtests, "
+                    f"lookback_candles live) or lower MA_CROSSOVER_SLOW_PERIOD."
+                )
                 return False
 
         return True
+
+    # ------------------------------------------------------------------
+    # Rolling-window-safe bar tracking
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _latest_timestamp(data: Dict[str, List[Any]]) -> Optional[Any]:
+        """Timestamp of the newest candle in a bundle, if one is present.
+
+        Backtest bundles carry ISO-8601 strings, live bundles carry epoch
+        milliseconds; both are used only for equality comparison, so the raw
+        value is kept as-is.
+        """
+        timestamps = data.get("timestamp") or []
+        if not timestamps:
+            return None
+        return timestamps[-1]
+
+    def _observe_bar(self, symbol: str, data: Dict[str, List[Any]]) -> int:
+        """Return a monotonic counter of distinct 4h bars seen for a symbol.
+
+        Callers invoke generate_signals far more often than the 4h bar
+        advances (the backtest engine replays 5m candles, so the same 4h
+        bundle arrives 48 times). The counter only advances when the newest
+        candle actually changes, giving a window-length-independent measure
+        of elapsed bars for callers that supply no timestamps.
+
+        Args:
+            symbol: Trading symbol.
+            data: 4h OHLCV bundle.
+
+        Returns:
+            Current bar sequence number for the symbol.
+        """
+        signature = self._bar_signature(data)
+        previous_signature, seq = self._bar_state.get(symbol, (None, -1))
+        if signature != previous_signature:
+            seq += 1
+            self._bar_state[symbol] = (signature, seq)
+        return seq
+
+    @staticmethod
+    def _bar_signature(data: Dict[str, List[Any]]) -> Any:
+        """Identity of the newest candle in a bundle, independent of index."""
+        latest_ts = MACrossoverStrategy._latest_timestamp(data)
+        if latest_ts is not None:
+            return ("ts", latest_ts)
+        closes = data.get("close") or []
+        highs = data.get("high") or []
+        lows = data.get("low") or []
+        return (
+            "ohlc",
+            closes[-1] if closes else None,
+            highs[-1] if highs else None,
+            lows[-1] if lows else None,
+        )
+
+    def _bars_since_crossover(
+        self,
+        data: Dict[str, List[Any]],
+        crossover_info: Dict[str, Any],
+        current_bar_seq: int,
+    ) -> Optional[int]:
+        """Bars elapsed since the stored crossover.
+
+        Locates the crossover bar by timestamp inside the supplied window, so
+        the answer stays correct once the caller's fixed-length rolling window
+        saturates. Falls back to the per-symbol bar counter when the bundle
+        carries no timestamps.
+
+        Args:
+            data: 4h OHLCV bundle.
+            crossover_info: Entry from ``self.last_crossover``.
+            current_bar_seq: Value returned by ``_observe_bar`` this call.
+
+        Returns:
+            Number of 4h bars since the crossover bar, or None when the
+            crossover bar is no longer present in the supplied history (it
+            has scrolled out, so it is far older than the entry window).
+        """
+        timestamps = data.get("timestamp") or []
+        crossover_ts = crossover_info.get("bar_ts")
+
+        if timestamps and crossover_ts is not None:
+            # Search from the newest end: the offset from the end IS the
+            # number of bars elapsed, and duplicated timestamps in a
+            # malformed feed resolve to the most recent occurrence.
+            for offset, candidate in enumerate(reversed(timestamps)):
+                if candidate == crossover_ts:
+                    return offset
+            return None  # crossover bar has scrolled out of the window
+
+        crossover_seq = crossover_info.get("bar_seq")
+        if crossover_seq is None:
+            return None
+        return current_bar_seq - crossover_seq
 
     def _detect_crossover(
         self, fast_ma: float, slow_ma: float, fast_ma_prev: float, slow_ma_prev: float

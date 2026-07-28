@@ -234,6 +234,17 @@ class Config:
         self.backtest_min_hold_candles: int = int(os.getenv("BACKTEST_MIN_HOLD_CANDLES", "6"))
         # Single-strategy filter: empty = all strategies, "MomentumScalping" = only that one
         self.backtest_strategy: str = os.getenv("BACKTEST_STRATEGY", "")
+        # Candles of rolling history handed to strategies per timeframe.
+        # Must exceed the longest indicator lookback in play (e.g. a 200-period
+        # slow MA needs 201) or that strategy silently generates nothing.
+        self.backtest_history_lookback: int = int(
+            os.getenv("BACKTEST_HISTORY_LOOKBACK", "60")
+        )
+        # Candles loaded before the window start so the first replayed bar
+        # already has a full history slice. 0 = mirror the history lookback.
+        self.backtest_warmup_candles: int = int(
+            os.getenv("BACKTEST_WARMUP_CANDLES", "0")
+        )
 
         # ---- Position reconciliation (H4) ----
         try:

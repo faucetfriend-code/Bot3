@@ -63,7 +63,7 @@ Bot3/
     models.py                # Signal, OrderSide, Trade dataclasses
     strategies/
       mean_reversion.py      # RSI + BB (RANGING_CALM)
-      ma_crossover.py        # 50/200 MA cross (TRENDING_STRONG, stateful)
+      ma_crossover.py        # Fast/slow MA cross (TRENDING_STRONG, stateful; .env runs 10/30)
       grid_trading.py        # ATR-spaced grid (RANGING_VOLATILE)
       liquidation_capture.py # Cascade detection (ALL regimes, overlay)
       vwap_scalping.py       # VWAP deviation (RANGING regimes)
@@ -181,6 +181,11 @@ Key variables:
 - `CIRCUIT_BREAKER_LOSS_PCT=0.10` - 10% portfolio loss stop
 - `KELLY_FRACTION=0.5` / `KELLY_MIN_TRADES=50`
 - `LOG_LEVEL=INFO`
+- `BACKTEST_HISTORY_LOOKBACK=60` - Candles of rolling history the backtest engine
+  hands each strategy per timeframe. Must exceed the longest indicator lookback
+  in play (a 200-period slow MA needs 201) or that strategy generates nothing.
+- `BACKTEST_WARMUP_CANDLES=0` - Candles loaded before the window start so bar 1
+  of the replay already has a full history slice. 0 = mirror the lookback.
 
 ## Troubleshooting
 
