@@ -13,7 +13,8 @@ Usage:
     # Returns a dict of parameter_name -> (low, high) or categorical choices
 """
 
-from typing import Dict, Any, List, Optional
+import os
+from typing import Dict, Any, List, Optional, Tuple
 
 # Type alias for search space definitions
 SearchSpace = Dict[str, Any]
@@ -42,6 +43,70 @@ MIN_RRR_CONSTRAINTS: Dict[str, float] = {
 # nominal 1.5 into 1.4999999999999998 and fails a `>=` gate, so suggestions
 # must sit strictly inside the feasible region rather than on its edge.
 RRR_FEASIBILITY_MARGIN = 1.02
+
+
+# Pairs of parameters where the first MUST stay strictly below the second,
+# because the interval between them is a gate the strategy has to pass
+# through. An inverted or collapsed pair is not "bad tuning" - it makes the
+# gate unreachable, so the strategy runs and emits nothing.
+#
+# Maps strategy name -> tuple of (lower_param, upper_param, consequence).
+ORDERED_PAIR_CONSTRAINTS: Dict[str, Tuple[Tuple[str, str, str], ...]] = {
+    "ma_crossover": (
+        (
+            "fast_ma_period",
+            "slow_ma_period",
+            "a fast MA at or above the slow MA can never cross it, so no "
+            "crossover is ever detected",
+        ),
+        (
+            "pullback_range_min",
+            "pullback_range_max",
+            "the accepted pullback/rally band would be empty, so no "
+            "detected crossover could ever convert into an entry",
+        ),
+        (
+            "min_entry_bars",
+            "max_entry_bars",
+            "the post-crossover entry window would be empty, so every "
+            "crossover expires unused",
+        ),
+    ),
+}
+
+
+# Strategies whose longest indicator lookback is a searched parameter, and
+# whose _validate_data() refuses to run when the caller's rolling history
+# window is shorter than it. The backtest engine hands each strategy
+# BACKTEST_HISTORY_LOOKBACK candles per timeframe (default 60), so a slow
+# MA at or above that budget disables the strategy for the whole trial.
+#
+# Maps strategy name -> (param_name, extra_candles_needed).
+HISTORY_BUDGET_CONSTRAINTS: Dict[str, Tuple[str, int]] = {
+    # required_history() = max(slow_ma_period + 1, macd_slow + macd_signal)
+    "ma_crossover": ("slow_ma_period", 1),
+}
+
+# Fallback when BACKTEST_HISTORY_LOOKBACK is unset - mirrors the same
+# default used by backtesting/engine.py.
+DEFAULT_HISTORY_LOOKBACK = 60
+
+
+def get_history_lookback() -> int:
+    """Return the rolling history budget the backtest engine will supply.
+
+    Read at call time (not import time) so a caller that adjusts
+    BACKTEST_HISTORY_LOOKBACK before optimizing gets the matching bound.
+
+    Returns:
+        Candles per timeframe handed to each strategy, minimum 1.
+    """
+    raw = os.getenv("BACKTEST_HISTORY_LOOKBACK")
+    try:
+        value = int(raw) if raw else DEFAULT_HISTORY_LOOKBACK
+    except ValueError:
+        value = DEFAULT_HISTORY_LOOKBACK
+    return max(1, value)
 
 
 class InfeasibleParamsError(ValueError):
@@ -76,6 +141,33 @@ def check_param_feasibility(
                     f"= RRR {target / stop:.3f} < required {min_rrr:.2f}; "
                     f"every signal would fail rrr_meets_minimum and be "
                     f"discarded before execution"
+                )
+
+    for lower_name, upper_name, consequence in ORDERED_PAIR_CONSTRAINTS.get(
+        strategy_name, ()
+    ):
+        lower = params.get(lower_name)
+        upper = params.get(upper_name)
+        if lower is None or upper is None:
+            continue
+        if lower >= upper:
+            reasons.append(
+                f"{lower_name}={lower} must be < {upper_name}={upper}; "
+                f"otherwise {consequence}"
+            )
+
+    budget = HISTORY_BUDGET_CONSTRAINTS.get(strategy_name)
+    if budget is not None:
+        param_name, extra = budget
+        value = params.get(param_name)
+        if value is not None:
+            lookback = get_history_lookback()
+            if value + extra > lookback:
+                reasons.append(
+                    f"{param_name}={value} needs {value + extra} candles of "
+                    f"history but the engine supplies only {lookback} "
+                    f"(BACKTEST_HISTORY_LOOKBACK); _validate_data would "
+                    f"reject every bar and the strategy would emit nothing"
                 )
 
     return reasons
@@ -178,20 +270,59 @@ def _ma_crossover_space() -> SearchSpace:
     """
     MA Crossover Strategy search space.
 
-    Focuses on MA periods and pullback parameters.
-    Optimized for TRENDING regimes.
+    Optimized for TRENDING regimes. Ordered by measured leverage, from a
+    signal-funnel run over SUI-USDC 2024-06-01..2024-09-01 (285 raw
+    signals -> 3 closed trades):
+
+        validity_dropped    181 (63.5% of raw)  validity:volume_confirmation
+        execution_blocked   101 (35.4% of raw)  exec:same_direction_skip
+
+    So volume_threshold - not the entry window, as previously assumed -
+    is the binding constraint, and its range is widened BELOW 1.0 so the
+    optimizer can weaken or effectively disable the gate. It also feeds
+    the confidence score (volume_ratio / volume_threshold), so lowering
+    it relieves min_confidence at the same time.
+
+    COUPLED DIMENSIONS (enforced in suggest_params / check_param_feasibility,
+    see ORDERED_PAIR_CONSTRAINTS and HISTORY_BUDGET_CONSTRAINTS):
+    - fast_ma_period < slow_ma_period, else no crossover is ever detected.
+    - pullback_range_min < pullback_range_max, else the entry band is empty.
+    - slow_ma_period + 1 <= BACKTEST_HISTORY_LOOKBACK, else _validate_data
+      rejects every bar. The declared upper bound of 55 already respects
+      the default 60-candle budget; the feasibility check catches a
+      lowered lookback.
+
+    min_entry_bars is deliberately NOT searched. Pinned at the strategy
+    default of 1, it means "no entry on the crossover bar itself", which
+    is the point of the pullback model; making it a free dimension mostly
+    buys ways to skip the best bars. max_entry_bars IS searched: at 4h
+    resolution the default 5 is only a 20-hour window.
     """
     return {
-        # Moving average periods
-        "fast_ma_period": (10, 30),             # Fast MA length
-        "slow_ma_period": (40, 80),             # Slow MA length
-        # Pullback entry
-        "pullback_range_min": (0.005, 0.02),    # Minimum pullback % (0.5-2%)
-        "pullback_range_max": (0.02, 0.05),     # Maximum pullback % (2-5%)
-        # Volume confirmation
-        "volume_threshold": (1.0, 2.0),         # Volume multiplier for confirmation
-        # Stop loss
-        "atr_stop_multiplier": (1.5, 3.5),     # ATR multiplier for stop
+        # --- Binding constraint (funnel-confirmed) ---
+        # .env runs 1.2. Below 1.0 the gate accepts below-average volume;
+        # 0.5 is effectively off.
+        "volume_threshold": (0.5, 1.8),
+        # --- Entry window, in 4h bars after the crossover bar ---
+        # 1 = same 20h band as today's default at the low end,
+        # 24 = four days of patience.
+        "max_entry_bars": (1, 24),
+        # --- Pullback entry band (fraction of the fast MA) ---
+        # .env runs 0.00-0.10. min < max is enforced.
+        "pullback_range_min": (0.0, 0.04),
+        "pullback_range_max": (0.01, 0.12),
+        # --- Moving average periods (fast < slow enforced) ---
+        # .env runs 10/30. slow caps at 55 to stay inside the engine's
+        # 60-candle 4h history budget (a 40-80 range, as declared before,
+        # spent most of its mass on configurations that emit nothing).
+        "fast_ma_period": (5, 25),
+        "slow_ma_period": (20, 55),
+        # --- Risk ---
+        "atr_stop_multiplier": (1.5, 3.5),      # ATR multiplier for stop
+        # --- Confidence gate ---
+        # Strategy default is 0.50; the score is
+        # 0.3*volume + 0.4*macd + 0.3*pullback, which rarely clears 0.6.
+        "min_confidence": (0.20, 0.60),
     }
 
 
@@ -351,10 +482,12 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
     "ma_crossover": {
         "fast_ma_period": "int",
         "slow_ma_period": "int",
+        "max_entry_bars": "int",
         "pullback_range_min": "float",
         "pullback_range_max": "float",
         "volume_threshold": "float",
         "atr_stop_multiplier": "float",
+        "min_confidence": "float",
     },
     "grid_trading": {
         "grid_levels": "int",
@@ -411,6 +544,44 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
 }
 
 
+# Minimum separation imposed between the two halves of an ordered pair of
+# CONTINUOUS parameters. Sampling max exactly equal to min would leave a
+# razor-thin band that no real price ever lands inside; 0.2% keeps the
+# pullback band meaningful. Integer pairs simply use a gap of 1.
+ORDERED_PAIR_FLOAT_GAP = 0.002
+
+
+def _ordered_pair_floor(
+    strategy_name: str,
+    param_name: str,
+    param_type: str,
+    sampled: Dict[str, Any],
+) -> Optional[float]:
+    """Lowest value an upper-half parameter may take, given its partner.
+
+    Args:
+        strategy_name: Strategy name.
+        param_name: The parameter about to be suggested.
+        param_type: "int" or "float".
+        sampled: Parameters already suggested in this trial.
+
+    Returns:
+        The coupled lower bound, or None when the parameter is not the
+        upper half of a constraint (or its partner is not in the space).
+    """
+    for lower_name, upper_name, _ in ORDERED_PAIR_CONSTRAINTS.get(
+        strategy_name, ()
+    ):
+        if upper_name != param_name:
+            continue
+        lower_value = sampled.get(lower_name)
+        if lower_value is None:
+            continue
+        gap = 1 if param_type == "int" else ORDERED_PAIR_FLOAT_GAP
+        return lower_value + gap
+    return None
+
+
 def get_param_type(strategy_name: str, param_name: str) -> str:
     """
     Get the Optuna suggestion type for a parameter.
@@ -439,6 +610,17 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
     signals would all be discarded before execution. The result is checked
     once more before being returned.
 
+    Two more couplings are applied the same way:
+
+    - ORDERED_PAIR_CONSTRAINTS raises the lower bound of the upper half of
+      a pair (e.g. slow_ma_period > fast_ma_period), so an inverted pair -
+      which would make a gate unreachable - is never sampled.
+    - HISTORY_BUDGET_CONSTRAINTS lowers the upper bound of the longest
+      indicator lookback to the engine's rolling history budget.
+
+    Both rely on the search space's dict ordering: the lower half of every
+    pair is declared before its upper half.
+
     Args:
         trial: Optuna trial object
         strategy_name: Strategy name
@@ -448,7 +630,8 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
 
     Raises:
         InfeasibleParamsError: If the constrained region is empty (the
-            declared search space cannot satisfy the strategy's minimum RRR).
+            declared search space cannot satisfy the strategy's minimum
+            RRR, an ordered pair, or the history budget).
     """
     space = get_search_space(strategy_name)
     min_rrr: Optional[float] = MIN_RRR_CONSTRAINTS.get(strategy_name)
@@ -482,6 +665,37 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
                     f"{min_rrr:.2f}, but the search space caps it at {high}"
                 )
             low = max(low, feasible_low)
+
+        # Keep the upper half of an ordered pair strictly above its
+        # partner (fast/slow MA, pullback band edges, entry window).
+        pair_low = _ordered_pair_floor(
+            strategy_name, param_name, param_type, params
+        )
+        if pair_low is not None:
+            if pair_low > high:
+                raise InfeasibleParamsError(
+                    f"Infeasible parameters for {strategy_name}: "
+                    f"{param_name} must exceed its already-sampled "
+                    f"partner (>= {pair_low}), but the search space caps "
+                    f"it at {high}"
+                )
+            low = max(low, pair_low)
+
+        # Cap the longest indicator lookback at the engine's rolling
+        # history budget - beyond it the strategy validates away every bar.
+        budget = HISTORY_BUDGET_CONSTRAINTS.get(strategy_name)
+        if budget is not None and budget[0] == param_name:
+            lookback = get_history_lookback()
+            budget_high = lookback - budget[1]
+            if budget_high < low:
+                raise InfeasibleParamsError(
+                    f"Infeasible parameters for {strategy_name}: "
+                    f"{param_name} needs to be <= {budget_high} to fit the "
+                    f"{lookback}-candle history budget "
+                    f"(BACKTEST_HISTORY_LOOKBACK), but its lower bound is "
+                    f"{low}. Raise BACKTEST_HISTORY_LOOKBACK."
+                )
+            high = min(high, budget_high)
 
         if param_type == "int":
             params[param_name] = trial.suggest_int(param_name, int(low), int(high))

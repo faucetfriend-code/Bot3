@@ -15,7 +15,20 @@ runs the validated 10/30 pair. The classic 50/200 pair needs at least
 backtest engine supplies by default - raise BACKTEST_HISTORY_LOOKBACK
 before configuring long MAs (see _validate_data).
 
+The entry window (MA_CROSSOVER_MIN_ENTRY_BARS /
+MA_CROSSOVER_MAX_ENTRY_BARS) is configurable too - see
+validate_entry_window() for the guard applied to bad values.
+
 Best For: TRENDING_STRONG regime (ADX > 25)
+
+VALIDATION NOTE (2026-07-28):
+The "Sharpe +0.696 / 45 trades / 64.4% WR" figures quoted in .env come
+from BTV2/results/regime_aware_ma_crossover_4h_2018-01-01_2025-01-01.json,
+produced by the SEPARATE BTV2 harness (BTV2/strategies.py::run_ma_crossover),
+which walks one continuous index over a whole fold and is therefore immune
+to the rolling-window regression fixed in 4be716b. The numbers are real but
+they measure a DIFFERENT implementation - they are not evidence about this
+class. Do not treat them as validation of this file.
 
 Based on Strategy Review Document: Trend Following MA Crossover
 """
@@ -29,6 +42,80 @@ from loguru import logger
 from ..models import Signal, OrderSide
 from ..indicators import calculate_sma, calculate_macd, calculate_atr
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
+
+
+# ---------------------------------------------------------------------------
+# Entry-window defaults
+# ---------------------------------------------------------------------------
+# Bars after the crossover bar during which a pullback (long) or rally
+# (short) is accepted. At 4h resolution the default 1-5 band is a 20-hour
+# window. Mirrored by the optimizer search space in
+# optimization/search_spaces.py::_ma_crossover_space().
+DEFAULT_MIN_ENTRY_BARS = 1
+DEFAULT_MAX_ENTRY_BARS = 5
+
+
+def validate_entry_window(
+    min_bars: int, max_bars: int
+) -> Tuple[int, int]:
+    """
+    Validate the (min, max) entry-window pair, falling back on nonsense.
+
+    An inverted or negative window does not degrade the strategy, it
+    disables it: generate_signals() only builds a signal while
+    ``min_entry_bars <= bars_since_crossover <= max_entry_bars``, so an
+    empty band means every detected crossover expires unused and the
+    strategy silently emits nothing forever.
+
+    Falling back to the validated defaults (instead of raising) matches
+    how the rest of the codebase handles bad config - see
+    validate_sd_entry_threshold() in strategies/vwap_scalping.py and the
+    min_rrr repair in strategies/momentum_scalping.py - and avoids taking
+    a running bot down over a single tuning parameter.
+
+    Args:
+        min_bars: Configured lower edge of the entry window, in 4h bars.
+        max_bars: Configured upper edge of the entry window, in 4h bars.
+
+    Returns:
+        The pair unchanged when it is usable, else
+        (DEFAULT_MIN_ENTRY_BARS, DEFAULT_MAX_ENTRY_BARS).
+    """
+    if min_bars >= 0 and max_bars >= min_bars:
+        return min_bars, max_bars
+
+    logger.warning(
+        f"MA_CROSSOVER entry window ({min_bars}, {max_bars}) is invalid "
+        f"(need min >= 0 and max >= min). An empty or negative window "
+        f"means every crossover expires before it can be entered and the "
+        f"strategy produces ZERO signals. Falling back to "
+        f"({DEFAULT_MIN_ENTRY_BARS}, {DEFAULT_MAX_ENTRY_BARS}). Fix "
+        f"MA_CROSSOVER_MIN_ENTRY_BARS / MA_CROSSOVER_MAX_ENTRY_BARS "
+        f"in .env."
+    )
+    return DEFAULT_MIN_ENTRY_BARS, DEFAULT_MAX_ENTRY_BARS
+
+
+def _env_int(var_name: str, default: int) -> int:
+    """Read an int from the environment, warning and falling back on junk.
+
+    Args:
+        var_name: Environment variable name.
+        default: Value used when unset or unparseable.
+
+    Returns:
+        The parsed int, or the default.
+    """
+    raw = os.getenv(var_name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(
+            f"Invalid int for {var_name}={raw!r}, using default {default}"
+        )
+        return default
 
 
 class MACrossoverStrategy:
@@ -49,12 +136,16 @@ class MACrossoverStrategy:
     - MA_CROSSOVER_ATR_PERIOD (default: 14)
     - MA_CROSSOVER_ATR_STOP_MULTIPLIER (default: 2.5)
     - MA_CROSSOVER_MIN_CONFIDENCE (default: 0.50)
+    - MA_CROSSOVER_MIN_ENTRY_BARS (default: 1)
+    - MA_CROSSOVER_MAX_ENTRY_BARS (default: 5)
     """
 
     # Entry window, in 4h bars after the crossover bar, during which a
-    # pullback (long) or rally (short) is accepted.
-    MIN_ENTRY_BARS = 1
-    MAX_ENTRY_BARS = 5
+    # pullback (long) or rally (short) is accepted. These remain the
+    # defaults; the live values are the per-instance min_entry_bars /
+    # max_entry_bars, which the optimizer search space can tune.
+    MIN_ENTRY_BARS = DEFAULT_MIN_ENTRY_BARS
+    MAX_ENTRY_BARS = DEFAULT_MAX_ENTRY_BARS
 
     def __init__(
         self,
@@ -68,6 +159,8 @@ class MACrossoverStrategy:
         atr_period: Optional[int] = None,
         atr_stop_multiplier: Optional[float] = None,
         min_confidence: Optional[float] = None,
+        min_entry_bars: Optional[int] = None,
+        max_entry_bars: Optional[int] = None,
     ):
         """
         Initialize MA Crossover Strategy.
@@ -85,6 +178,13 @@ class MACrossoverStrategy:
             atr_period: ATR period for stop loss (default: 14)
             atr_stop_multiplier: ATR multiplier for stop (env: MA_CROSSOVER_ATR_STOP_MULTIPLIER, default: 2.5)
             min_confidence: Minimum confidence (env: MA_CROSSOVER_MIN_CONFIDENCE, default: 0.50)
+            min_entry_bars: First 4h bar after the crossover on which an
+                entry is accepted (env: MA_CROSSOVER_MIN_ENTRY_BARS,
+                default: 1)
+            max_entry_bars: Last 4h bar after the crossover on which an
+                entry is accepted (env: MA_CROSSOVER_MAX_ENTRY_BARS,
+                default: 5). The pair is validated together - see
+                validate_entry_window().
         """
         # Read from environment with reasonable defaults
         self.fast_ma_period = (
@@ -125,6 +225,22 @@ class MACrossoverStrategy:
             else float(os.getenv("MA_CROSSOVER_MIN_CONFIDENCE", "0.50"))
         )  # Loosened from 0.65
 
+        # Entry window. Read as a pair and validated as a pair, because
+        # an inverted band silently disables every entry.
+        raw_min_entry = (
+            min_entry_bars
+            if min_entry_bars is not None
+            else _env_int("MA_CROSSOVER_MIN_ENTRY_BARS", self.MIN_ENTRY_BARS)
+        )
+        raw_max_entry = (
+            max_entry_bars
+            if max_entry_bars is not None
+            else _env_int("MA_CROSSOVER_MAX_ENTRY_BARS", self.MAX_ENTRY_BARS)
+        )
+        self.min_entry_bars, self.max_entry_bars = validate_entry_window(
+            int(raw_min_entry), int(raw_max_entry)
+        )
+
         # Track crossover state.
         #
         # The crossover bar MUST be identified by something invariant under a
@@ -146,9 +262,40 @@ class MACrossoverStrategy:
             f"MACrossoverStrategy initialized: "
             f"MA {self.fast_ma_period}/{self.slow_ma_period}, "
             f"pullback {self.pullback_range[0]:.1%}-{self.pullback_range[1]:.1%}, "
+            f"entry window {self.min_entry_bars}-{self.max_entry_bars} bars, "
+            f"volume>={self.volume_threshold}x, "
             f"ATR stop={self.atr_stop_multiplier}x, "
             f"min_confidence={self.min_confidence}"
         )
+
+    # ------------------------------------------------------------------
+    # Pullback band accessors
+    # ------------------------------------------------------------------
+    #
+    # The band is stored as a tuple, but the optimizer addresses its two
+    # edges as separate scalar parameters (pullback_range_min /
+    # pullback_range_max in the search space). regime_param_overlay's
+    # apply_params_to_strategy() only sets attributes that already exist
+    # on the instance, so without these properties both edges were
+    # silently skipped and every sampled pullback band was a no-op.
+
+    @property
+    def pullback_range_min(self) -> float:
+        """Lower edge of the accepted pullback/rally band."""
+        return self.pullback_range[0]
+
+    @pullback_range_min.setter
+    def pullback_range_min(self, value: float) -> None:
+        self.pullback_range = (float(value), self.pullback_range[1])
+
+    @property
+    def pullback_range_max(self) -> float:
+        """Upper edge of the accepted pullback/rally band."""
+        return self.pullback_range[1]
+
+    @pullback_range_max.setter
+    def pullback_range_max(self, value: float) -> None:
+        self.pullback_range = (self.pullback_range[0], float(value))
 
     def generate_signals(
         self,
@@ -246,7 +393,7 @@ class MACrossoverStrategy:
 
                 if (
                     candles_since_crossover is None
-                    or candles_since_crossover > self.MAX_ENTRY_BARS
+                    or candles_since_crossover > self.max_entry_bars
                 ):
                     # Entry window closed (or the crossover bar has scrolled
                     # out of the supplied history) - stop tracking it.
@@ -256,11 +403,15 @@ class MACrossoverStrategy:
                 logger.debug(
                     f"{symbol} {crossover_info['type']} crossover is "
                     f"{candles_since_crossover} bar(s) old "
-                    f"(entry window {self.MIN_ENTRY_BARS}-{self.MAX_ENTRY_BARS})"
+                    f"(entry window {self.min_entry_bars}-{self.max_entry_bars})"
                 )
 
-                # Wait 1-5 candles after crossover for pullback
-                if self.MIN_ENTRY_BARS <= candles_since_crossover <= self.MAX_ENTRY_BARS:
+                # Enter only inside the configured post-crossover window
+                if (
+                    self.min_entry_bars
+                    <= candles_since_crossover
+                    <= self.max_entry_bars
+                ):
                     if crossover_info["type"] == "golden":
                         # Golden cross - check for LONG entry on pullback
                         pullback_pct = (fast_ma - current_price) / fast_ma

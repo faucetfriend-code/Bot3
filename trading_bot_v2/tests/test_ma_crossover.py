@@ -21,7 +21,12 @@ import pytest
 
 from trading_bot_v2.backtesting.engine import BacktestEngine
 from trading_bot_v2.models import OrderSide
-from trading_bot_v2.strategies.ma_crossover import MACrossoverStrategy
+from trading_bot_v2.strategies.ma_crossover import (
+    DEFAULT_MAX_ENTRY_BARS,
+    DEFAULT_MIN_ENTRY_BARS,
+    MACrossoverStrategy,
+    validate_entry_window,
+)
 
 # The lookback the backtest engine slices 4h history to by default.
 ENGINE_LOOKBACK = 60
@@ -159,6 +164,126 @@ def _permissive_strategy() -> MACrossoverStrategy:
         pullback_range=(0.0, 0.30),
         min_confidence=0.0,
     )
+
+
+class TestConfigurableEntryWindow:
+    """The post-crossover entry window is tunable, and guarded.
+
+    At 4h resolution the shipped 1-5 band is only 20 hours, which is a
+    plausible reason crossovers expire unentered - so it must be
+    reachable from config and from the optimizer, without changing the
+    default behaviour.
+    """
+
+    def test_defaults_are_unchanged(self, monkeypatch):
+        """Absent config, the window is still the class constants."""
+        monkeypatch.delenv("MA_CROSSOVER_MIN_ENTRY_BARS", raising=False)
+        monkeypatch.delenv("MA_CROSSOVER_MAX_ENTRY_BARS", raising=False)
+        strategy = MACrossoverStrategy()
+        assert strategy.min_entry_bars == MACrossoverStrategy.MIN_ENTRY_BARS
+        assert strategy.max_entry_bars == MACrossoverStrategy.MAX_ENTRY_BARS
+        assert (strategy.min_entry_bars, strategy.max_entry_bars) == (1, 5)
+
+    def test_constructor_params_win(self, monkeypatch):
+        """Explicit arguments override the environment."""
+        monkeypatch.setenv("MA_CROSSOVER_MIN_ENTRY_BARS", "3")
+        monkeypatch.setenv("MA_CROSSOVER_MAX_ENTRY_BARS", "9")
+        strategy = MACrossoverStrategy(min_entry_bars=2, max_entry_bars=18)
+        assert (strategy.min_entry_bars, strategy.max_entry_bars) == (2, 18)
+
+    def test_env_is_read(self, monkeypatch):
+        """Env keys configure the window when no argument is passed."""
+        monkeypatch.setenv("MA_CROSSOVER_MIN_ENTRY_BARS", "0")
+        monkeypatch.setenv("MA_CROSSOVER_MAX_ENTRY_BARS", "12")
+        strategy = MACrossoverStrategy()
+        assert (strategy.min_entry_bars, strategy.max_entry_bars) == (0, 12)
+
+    @pytest.mark.parametrize(
+        "min_bars,max_bars", [(5, 1), (-1, 5), (-3, -1)]
+    )
+    def test_invalid_pairs_fall_back(self, min_bars, max_bars):
+        """An empty/negative window falls back instead of disabling entries."""
+        strategy = MACrossoverStrategy(
+            min_entry_bars=min_bars, max_entry_bars=max_bars
+        )
+        assert (strategy.min_entry_bars, strategy.max_entry_bars) == (
+            DEFAULT_MIN_ENTRY_BARS,
+            DEFAULT_MAX_ENTRY_BARS,
+        )
+
+    def test_validate_entry_window_accepts_degenerate_single_bar(self):
+        """min == max is a legal one-bar window, not an error."""
+        assert validate_entry_window(3, 3) == (3, 3)
+
+    def test_unparseable_env_falls_back(self, monkeypatch):
+        """Junk in the env warns and uses the default, never crashes."""
+        monkeypatch.setenv("MA_CROSSOVER_MAX_ENTRY_BARS", "not-a-number")
+        strategy = MACrossoverStrategy()
+        assert strategy.max_entry_bars == DEFAULT_MAX_ENTRY_BARS
+
+    def test_a_wider_window_admits_a_later_entry(self):
+        """The window actually gates entries, so widening it can only help.
+
+        The default 1-5 band is compared against a wide one on the same
+        series; the wide band must not see FEWER signals.
+        """
+        series = _golden_cross_series()
+        narrow = MACrossoverStrategy(
+            fast_ma_period=FAST_MA,
+            slow_ma_period=SLOW_MA,
+            pullback_range=(0.0, 0.30),
+            min_confidence=0.0,
+            min_entry_bars=1,
+            max_entry_bars=1,
+        )
+        wide = MACrossoverStrategy(
+            fast_ma_period=FAST_MA,
+            slow_ma_period=SLOW_MA,
+            pullback_range=(0.0, 0.30),
+            min_confidence=0.0,
+            min_entry_bars=1,
+            max_entry_bars=20,
+        )
+        narrow_signals, _ = _replay(narrow, series)
+        wide_signals, _ = _replay(wide, series)
+        assert len(wide_signals) >= len(narrow_signals)
+
+    def test_pullback_edges_are_settable_attributes(self):
+        """The optimizer addresses the band as two scalars.
+
+        regime_param_overlay.apply_params_to_strategy only sets
+        attributes that already exist, so without these properties every
+        sampled pullback band was silently discarded.
+        """
+        strategy = MACrossoverStrategy(pullback_range=(0.01, 0.05))
+        assert strategy.pullback_range_min == 0.01
+        assert strategy.pullback_range_max == 0.05
+
+        strategy.pullback_range_min = 0.0
+        strategy.pullback_range_max = 0.10
+        assert strategy.pullback_range == (0.0, 0.10)
+
+    def test_whole_search_space_applies_to_the_instance(self):
+        """Every declared search-space key must reach the strategy."""
+        from trading_bot_v2.optimization.search_spaces import get_search_space
+        from trading_bot_v2.regime_param_overlay import (
+            apply_params_to_strategy,
+        )
+
+        space = get_search_space("ma_crossover")
+        sample = {
+            name: (bounds[0] + bounds[1]) / 2 for name, bounds in space.items()
+        }
+        sample["fast_ma_period"] = 8
+        sample["slow_ma_period"] = 34
+        sample["max_entry_bars"] = 12
+        applied = apply_params_to_strategy(
+            MACrossoverStrategy(), "ma_crossover", sample
+        )
+        assert set(applied) == set(space), (
+            f"search-space keys never reached the strategy: "
+            f"{sorted(set(space) - set(applied))}"
+        )
 
 
 class TestRollingWindowCrossoverTracking:

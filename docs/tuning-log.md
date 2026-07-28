@@ -559,7 +559,100 @@ SUI was tested across all strategies. Results:
 
 ## MA Crossover
 
-**Status: Active — 0 trades in backtest**
+**Status: Active — emits signals since 4be716b, converts almost none. Volume
+gate is the binding constraint. Sweep tooling landed 2026-07-28.**
+
+### 2026-07-28 — The volume gate, not the regime, is why this strategy is flat
+
+Supersedes the "Root Cause / Conclusion" further down this section, which is
+**wrong** and should not be read as current. That entry concluded "0 trades is
+due to regime distribution, not parameter issues" and "no code fixes needed".
+Both claims were made while the strategy was structurally incapable of emitting
+any signal (see 4be716b: the crossover bar was keyed on an absolute list index
+into a fixed-length rolling window, so "bars since crossover" collapsed to a
+constant 0 and the 1-5 bar entry window never opened). Zero trades was a bug,
+not a market observation.
+
+With the signal funnel (`trading_bot_v2/diagnostics/`) now instrumenting the
+pipeline, the real attrition on SUI-USDC 2024-01-01..2024-04-01 is:
+
+| Config | Invoked bars | Raw signals | Where they died | Closed trades |
+|---|---|---|---|---|
+| `.env` values (volume 1.2, entry window 1-5, pullback 0-10%) | 13,596 | 183 | **183 = 100% at `validity:volume_confirmation`** | 0 |
+| volume 0.5, entry window 1-24, min_conf 0.20 | 13,596 | 540 | 535 at execution (`exec:same_direction_skip` 411, `exec:hedge_mode_block` 124) | 5 |
+
+Two conclusions:
+
+1. **The regime is not the problem.** 45,324 of 78,624 evaluated bars across
+   BTC/ETH/SUI in Q1 2024 were `trending_strong`. The strategy was selected and
+   invoked constantly.
+2. **`MA_CROSSOVER_VOLUME_THRESHOLD=1.2` is the gate that kills it.** It
+   requires the crossover bar to carry 1.2x the 20-bar average volume, which
+   essentially never coincides with a 1-5 bar pullback. Lowering it converts
+   signals immediately. The *next* constraint after volume is execution-side
+   (`same_direction_skip`), not the strategy at all.
+
+### The .env "walkforward validated" claim is real but off-target
+
+`.env` carries: *"Regime-aware walkforward validated at 4h timeframe
+(2018-2025): Sharpe +0.696, ROBUST MC (P(Loss)=0%), 45 trades, 64.4% WR, +135%
+total return"*.
+
+Traced to `BTV2/results/regime_aware_ma_crossover_4h_2018-01-01_2025-01-01.json`
+(sharpe 0.6962583, win_rate_pct 64.444, n_trades 45, total_return_pct 135.085,
+mc verdict ROBUST), produced by `BTV2/regime_aware_validation.py` calling
+`BTV2/strategies.py::run_ma_crossover`.
+
+That is a **different implementation**. BTV2 walks one continuous index over a
+whole fold (`if 0 < (i - last_golden_bar) <= 5`), so it never had the
+rolling-window bug. `trading_bot_v2/strategies/ma_crossover.py` has carried that
+bug since its first commit (a03a75f, 2026-02-10) until 4be716b (2026-07-28), and
+`backtesting/engine.py::_history` feeds a fixed-length window, so no in-repo
+walkforward could ever have reproduced 45 trades.
+
+Verdict: **not fabricated** (sibling artifacts from the same BTV2 campaign
+include losers - grid_trading Sharpe -0.294, sl_fade_mr Sharpe -8.08 - which is
+what a real batch run looks like), but **not transferable**: it is not evidence
+about this codebase's strategy, and the .env comment reads as if it were. One
+caveat on the "ROBUST MC" part: `BTV2/strategies.py::monte_carlo_validate`
+permutes trade *order* on a fixed trade set, and cumulative return is invariant
+under reordering, so P(Loss)=0% there is close to tautological.
+
+### Running the parameter sweep
+
+The entry point is the existing optimizer CLI with `--chunked`:
+
+```bash
+python -m trading_bot_v2.optimization.run_optimize \
+    --strategy ma_crossover --chunked \
+    --symbols BTC-USDC,ETH-USDC,SUI-USDC \
+    --windows 3 --window-months 1 --end 2024-04-01 \
+    --trials 60 --objective sharpe
+```
+
+- Scores every trial across all (symbol x window) chunks, reports **per-symbol**
+  results so cross-symbol consistency (a real gate check) stays visible.
+- A trial that lands 0 trades prints its funnel and names the binding gate.
+- Every study writes an N into `trial_registry`, which is what
+  `validation/gate.py` needs for a deflated Sharpe instead of PSR-only grading.
+
+Search space (`optimization/search_spaces.py::_ma_crossover_space`), in priority
+order: `volume_threshold` (0.5-1.8, deliberately reaching below 1.0),
+`max_entry_bars` (1-24), `pullback_range_min/max` (0-0.04 / 0.01-0.12, min < max
+enforced), `fast_ma_period` (5-25) / `slow_ma_period` (20-55, fast < slow
+enforced), `atr_stop_multiplier` (1.5-3.5), `min_confidence` (0.20-0.60).
+`min_entry_bars` is pinned at 1.
+
+**Data caveat — the window anchor needs `--end`.** Window resolution intersects
+*5m* coverage, but this strategy reads only *4h*. The 4h stores have holes 5m
+coverage cannot see: SUI-USDC 4h is missing 2024-04 through 2024-11 entirely,
+and 1m execution data (which the engine hard-requires) ends 2025-01-01 for
+BTC/ETH and starts 2024-01-01 for SUI. The only period all three symbols cover
+on every needed timeframe is **2024-01-01..2024-04-01**, hence `--end
+2024-04-01` above. Without it the anchor lands at 2025-01-01 and SUI silently
+contributes zero bars; the CLI now prints a `WARNING: ... contributed 0 bars`
+line when that happens. Backfilling SUI 4h and extending 1m past 2025-01-01
+would widen the sweep basis considerably.
 
 ### What the strategy does
 Trades pullbacks after a 20/50 EMA crossover on 4h data.
@@ -584,7 +677,7 @@ Pullback range widened (min 0.02→0.01, max 0.04→0.06) to catch more entries.
 | BTC-USDC | 0 | Regime issue - no trending in 2024 |
 | ETH-USDC | 0 | Regime issue - no trending in 2024 |
 
-### Root Cause
+### Root Cause (SUPERSEDED 2026-07-28 — see top of this section)
 **MACrossover 0 trades is due to regime distribution, not parameter issues.**
 
 - The strategy requires TRENDING_STRONG or TRENDING_MODERATE regime (ADX > 25-30)
@@ -592,7 +685,7 @@ Pullback range widened (min 0.02→0.01, max 0.04→0.06) to catch more entries.
 - This is consistent with historical data — 2024 was largely a ranging year for crypto
 - Tried loosening parameters (confidence, pullback, volume) — still 0 trades
 
-### Conclusion
+### Conclusion (SUPERSEDED 2026-07-28 — see top of this section)
 **No code fixes needed.** MACrossover will work in trending markets. For backtesting
 purposes, this strategy cannot be validated in 2024 data without live market conditions.
 

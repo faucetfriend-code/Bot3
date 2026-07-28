@@ -125,14 +125,81 @@ class TestSearchSpaces:
         assert space["atr_stop_multiplier"] == (1.5, 3.0)
 
     def test_ma_crossover_space_ranges(self):
-        """Test specific parameter ranges for MA Crossover."""
+        """Test specific parameter ranges for MA Crossover.
+
+        The fast < slow invariant is enforced by the ordered-pair
+        coupling in suggest_params, not by declaring disjoint ranges, so
+        the declared bands are allowed to overlap. What must hold is that
+        each band is well-formed and that slow_ma_period stays inside the
+        engine's default 60-candle history budget (a slow MA above ~59
+        makes _validate_data reject every bar).
+        """
         space = get_search_space("ma_crossover")
 
         fast_low, fast_high = space["fast_ma_period"]
         slow_low, slow_high = space["slow_ma_period"]
 
-        # Fast should be < Slow
-        assert fast_high < slow_low
+        assert fast_low < fast_high
+        assert slow_low < slow_high
+        # A feasible region must exist at all.
+        assert fast_low < slow_high
+        # History budget: required_history() = slow_ma_period + 1 <= 60.
+        assert slow_high + 1 <= 60
+
+        # The funnel-confirmed binding constraint must be searchable
+        # below 1.0 (i.e. the volume gate can be weakened).
+        vol_low, vol_high = space["volume_threshold"]
+        assert vol_low < 1.0 < vol_high
+
+        # The entry window is tunable, and min_entry_bars stays pinned.
+        assert "max_entry_bars" in space
+        assert "min_entry_bars" not in space
+        assert "min_confidence" in space
+
+    def test_ma_crossover_pairs_are_ordered(self):
+        """Sampled MA crossover params always satisfy their orderings."""
+        import optuna
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+        def objective(trial):
+            params = suggest_params(trial, "ma_crossover")
+            assert params["fast_ma_period"] < params["slow_ma_period"]
+            assert params["pullback_range_min"] < params["pullback_range_max"]
+            assert params["slow_ma_period"] + 1 <= 60
+            assert check_param_feasibility("ma_crossover", params) == []
+            return 0.0
+
+        study = optuna.create_study()
+        study.optimize(objective, n_trials=40)
+        assert len(study.trials) == 40
+
+    def test_ma_crossover_inverted_pairs_are_infeasible(self):
+        """An inverted pair is reported as infeasible, not merely bad."""
+        reasons = check_param_feasibility(
+            "ma_crossover",
+            {"fast_ma_period": 30, "slow_ma_period": 20},
+        )
+        assert any("fast_ma_period" in r for r in reasons)
+
+        reasons = check_param_feasibility(
+            "ma_crossover",
+            {"pullback_range_min": 0.05, "pullback_range_max": 0.02},
+        )
+        assert any("pullback_range_min" in r for r in reasons)
+
+    def test_ma_crossover_history_budget_is_enforced(self, monkeypatch):
+        """A slow MA beyond the engine's history budget is infeasible."""
+        monkeypatch.setenv("BACKTEST_HISTORY_LOOKBACK", "30")
+        reasons = check_param_feasibility(
+            "ma_crossover", {"slow_ma_period": 50}
+        )
+        assert any("BACKTEST_HISTORY_LOOKBACK" in r for r in reasons)
+
+        monkeypatch.setenv("BACKTEST_HISTORY_LOOKBACK", "60")
+        assert check_param_feasibility(
+            "ma_crossover", {"slow_ma_period": 50}
+        ) == []
 
 
 # ---------------------------------------------------------------------------
@@ -431,6 +498,148 @@ class TestOptunaRunner:
                 os.unlink(db_path)
             except PermissionError:
                 pass  # Windows may keep file locked
+
+
+# ---------------------------------------------------------------------------
+# Chunked cross-symbol sweep
+# ---------------------------------------------------------------------------
+
+
+class TestChunkedSweep:
+    """The chunked sweep must evaluate every (symbol, window) chunk and
+    keep the per-symbol picture, because cross-symbol consistency is a
+    real gate check that aggregation would hide.
+    """
+
+    @staticmethod
+    def _result(symbol, trades, sharpe, ret):
+        from trading_bot_v2.backtesting.performance import BacktestResult
+
+        return BacktestResult(
+            symbol=symbol,
+            start="2024-01-01",
+            end="2024-02-01",
+            initial_capital=10000.0,
+            final_equity=10000.0 + ret * 100,
+            sharpe_ratio=sharpe,
+            total_return_pct=ret,
+            max_drawdown_pct=5.0,
+            closed_trades=trades,
+        )
+
+    def _run(self, per_symbol_spec, n_trials=2):
+        """Run a sweep with a stubbed adapter and stubbed windows."""
+        windows = [("2024-01-01", "2024-02-01"), ("2024-02-01", "2024-03-01")]
+        symbols = list(per_symbol_spec)
+
+        mock_adapter = MagicMock()
+
+        def run_backtest(**kwargs):
+            trades, sharpe, ret = per_symbol_spec[kwargs["symbol"]]
+            return self._result(kwargs["symbol"], trades, sharpe, ret)
+
+        mock_adapter.run_backtest.side_effect = run_backtest
+        mock_adapter.calculate_objective.side_effect = (
+            lambda result, objective: result.sharpe_ratio
+        )
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+
+        try:
+            runner = OptunaRunner(db_path=db_path)
+            runner.adapter = mock_adapter
+            with patch(
+                "trading_bot_v2.validation.runner.resolve_chunk_windows",
+                return_value={
+                    "symbols": symbols,
+                    "windows": windows,
+                    "data_start": "2024-01-01",
+                    "data_end": "2024-03-01",
+                },
+            ), patch.object(runner, "_record_trial_registry"):
+                study = runner.optimize_chunked(
+                    strategy="ma_crossover",
+                    symbols=symbols,
+                    n_trials=n_trials,
+                    sampler="random",
+                )
+            return study, mock_adapter, len(windows)
+        finally:
+            import gc
+
+            gc.collect()
+            try:
+                os.unlink(db_path)
+            except PermissionError:
+                pass
+
+    def test_every_symbol_window_pair_is_backtested(self):
+        spec = {
+            "BTC-USDC": (12, 0.8, 6.0),
+            "ETH-USDC": (9, 0.4, 3.0),
+            "SUI-USDC": (15, 1.6, 12.0),
+        }
+        study, adapter, n_windows = self._run(spec, n_trials=2)
+        assert adapter.run_backtest.call_count == 2 * len(spec) * n_windows
+
+    def test_per_symbol_breakdown_is_recorded(self):
+        spec = {
+            "BTC-USDC": (12, 0.8, 6.0),
+            "ETH-USDC": (9, -0.5, -3.0),
+            "SUI-USDC": (15, 1.6, 12.0),
+        }
+        study, _, n_windows = self._run(spec, n_trials=1)
+        attrs = study.trials[0].user_attrs
+        per_symbol = attrs["per_symbol"]
+
+        assert set(per_symbol) == set(spec)
+        assert per_symbol["BTC-USDC"]["trades"] == 12 * n_windows
+        assert per_symbol["SUI-USDC"]["objective"] == pytest.approx(1.6)
+        # The losing symbol must stay visible, not be averaged away.
+        assert per_symbol["ETH-USDC"]["objective"] < 0
+        assert attrs["traded_symbols"] == 3
+        assert attrs["profitable_symbols"] == 2
+        assert attrs["total_trades"] == (12 + 9 + 15) * n_windows
+
+    def test_a_traded_sweep_scores_above_the_zero_trade_bands(self):
+        from trading_bot_v2.diagnostics.outcomes import TRADED_SCORE_FLOOR
+
+        spec = {"BTC-USDC": (10, 0.9, 5.0), "SUI-USDC": (10, 1.1, 7.0)}
+        study, _, _ = self._run(spec, n_trials=1)
+        assert study.trials[0].value >= TRADED_SCORE_FLOOR
+        assert study.trials[0].user_attrs["outcome"] == "traded"
+
+    def test_a_zero_trade_sweep_names_the_binding_stage(self):
+        """A trial that lands 0 trades must say which gate killed it."""
+        from trading_bot_v2.diagnostics.outcomes import TRADED_SCORE_FLOOR
+
+        spec = {"BTC-USDC": (0, 0.0, 0.0), "SUI-USDC": (0, 0.0, 0.0)}
+        study, _, _ = self._run(spec, n_trials=1)
+        attrs = study.trials[0].user_attrs
+        assert attrs["outcome"] != "traded"
+        assert "binding_stage" in attrs
+        # Below the TRADED floor by construction: a reserved band.
+        assert study.trials[0].value < TRADED_SCORE_FLOOR
+
+    def test_unknown_strategy_is_rejected(self):
+        runner_cls = OptunaRunner
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = f.name
+        try:
+            runner = runner_cls(db_path=db_path)
+            with pytest.raises(ValueError, match="Unknown strategy"):
+                runner.optimize_chunked(
+                    strategy="nope", symbols=["BTC-USDC"], n_trials=1
+                )
+        finally:
+            import gc
+
+            gc.collect()
+            try:
+                os.unlink(db_path)
+            except PermissionError:
+                pass
 
 
 # ---------------------------------------------------------------------------
