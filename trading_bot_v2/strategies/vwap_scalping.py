@@ -8,15 +8,40 @@ TIMEFRAME HIERARCHY (Multi-TF Execution Model):
 - TIMING (1m): ExecutionLayer handles precise entry
 
 Strategy Logic:
-- VWAP calculated as cumulative (price * volume) / cumulative volume
+- VWAP calculated as ROLLING CUMULATIVE (price * volume) / cumulative volume
+  over the supplied 15m window (no daily session anchor - see CONFIG NOTES)
 - Standard deviation bands at 1SD, 2SD, 3SD levels
-- BUY Signal: Price deviates >1.8 SD below VWAP + MACD histogram < 0 (sellers exhausted, enter at extreme)
-- SELL Signal: Price deviates >1.8 SD above VWAP + MACD histogram > 0 (buyers exhausted, enter at extreme)
+- BUY Signal: Price deviates below VWAP by at least sd_entry_threshold SD
+  + MACD histogram < 0 (sellers exhausted, enter at extreme)
+- SELL Signal: Price deviates above VWAP by at least sd_entry_threshold SD
+  + MACD histogram > 0 (buyers exhausted, enter at extreme)
 - Stop Loss: Beyond nearest SD band or 1.5x ATR
 - Take Profit: Return to VWAP (mean reversion target)
 
 Best For: ALL regimes (overlay strategy, strongest in RANGING_*)
 Expected Performance: 55-68% win rate, 1.4-2.1 profit factor
+
+CONFIG NOTES:
+- sd_entry_threshold MUST stay inside [SD_ENTRY_THRESHOLD_MIN,
+  SD_ENTRY_THRESHOLD_MAX]. Because the VWAP here is rolling cumulative rather
+  than daily-session-anchored, E[|price - vwap| / sigma] is approximately 1.0
+  and the empirical maximum over six months of BTC/ETH/SUI data is ~4.0.
+  A threshold at or above ~4 is therefore unreachable and silently produces
+  zero signals forever. Out-of-range values are rejected at construction time
+  by validate_sd_entry_threshold().
+- Several VWAP_* environment variables are NOT read by this strategy (see
+  UNSUPPORTED_ENV_VARS). They are leftovers from the standalone BTV2 tuning
+  harness, which used a different entry model; setting them has no effect.
+- rsi_oversold / rsi_overbought are accepted and stored (the optimizer search
+  space tunes them) but do NOT gate entries today - RSI only annotates the
+  signal notes. Treat them as reserved, not active filters.
+
+VALIDATION HISTORY:
+- Regime-aware walkforward validation failed on all 7 OOS years; the strategy
+  was negative in 6/7 years at 15m with no ROBUST MC verdict. Those runs are
+  NOT authoritative for the current code, because the threshold in use at the
+  time (4.037) made the entry gate unreachable, so the runs measured a
+  strategy that never traded. Re-validate before trusting live.
 
 RISK NOTES:
 - Delta-neutral reduces directional risk but not basis risk
@@ -39,6 +64,96 @@ from ..indicators import (
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
 
 
+# ---------------------------------------------------------------------------
+# Configuration bounds for sd_entry_threshold
+# ---------------------------------------------------------------------------
+# These mirror the optimizer search space in
+# trading_bot_v2/optimization/search_spaces.py::_vwap_scalping_space().
+# Keep the two in sync - test_vwap_config_guard asserts they match.
+SD_ENTRY_THRESHOLD_MIN = 1.0
+SD_ENTRY_THRESHOLD_MAX = 3.0
+
+# Interim default, pending re-optimization inside the bounds above.
+# The previously shipped value of 4.037 was tuned in the standalone BTV2
+# harness, which uses a DAILY SESSION-ANCHORED VWAP whose sigma resets at
+# 00:00 UTC, so 4-sigma excursions are routine early in a session. This
+# strategy uses a rolling cumulative VWAP where the deviation distribution is
+# far tighter (mean ~1.0 SD, max ~4.0 SD over six months of 5m data), so
+# 4.037 was unreachable and the entry gate never fired.
+DEFAULT_SD_ENTRY_THRESHOLD = 2.0
+
+# VWAP_* environment variables this strategy does not read. They are leftovers
+# from the BTV2 tuning harness (a different entry model) and have no effect
+# here. Warned about at construction so a stale .env cannot silently mislead.
+UNSUPPORTED_ENV_VARS = (
+    "VWAP_ATR_TARGET_MULTIPLIER",
+    "VWAP_ATR_TRAILING_MULTIPLIER",
+    "VWAP_RSI_MAX",
+    "VWAP_ENTRY_MODE",
+    "VWAP_TP_MODE",
+    "VWAP_USE_HTF_EMA",
+    "VWAP_HTF_ADX_MAX",
+    "VWAP_USE_HTF_VWAP",
+    "VWAP_USE_SESSION_FILTER",
+    "VWAP_REQUIRE_REVERSAL_CANDLE",
+    "VWAP_USE_STOCH_FILTER",
+)
+
+
+def validate_sd_entry_threshold(value: float) -> float:
+    """
+    Validate an sd_entry_threshold against the supported range.
+
+    An out-of-range threshold does not degrade the strategy, it disables it:
+    generate_signals() returns early whenever the observed deviation is below
+    the threshold, and a threshold above SD_ENTRY_THRESHOLD_MAX is unreachable
+    for a rolling cumulative VWAP. That failure mode is silent, so warn loudly
+    and fall back to the validated default rather than never trade.
+
+    Falling back to the default (instead of raising) matches how the rest of
+    the codebase handles bad config - see the _get_env_float helpers in
+    strategy_manager.py, market_regime.py and risk_manager.py - and avoids
+    taking a running bot down over a single tuning parameter.
+
+    Args:
+        value: Configured threshold, in standard deviations.
+
+    Returns:
+        The value if it is inside the supported range, else
+        DEFAULT_SD_ENTRY_THRESHOLD.
+    """
+    if SD_ENTRY_THRESHOLD_MIN <= value <= SD_ENTRY_THRESHOLD_MAX:
+        return value
+
+    logger.warning(
+        f"VWAP_SD_ENTRY_THRESHOLD={value} is outside the supported range "
+        f"[{SD_ENTRY_THRESHOLD_MIN}, {SD_ENTRY_THRESHOLD_MAX}] used by the "
+        f"optimizer search space. Values above the upper bound are unreachable "
+        f"for this strategy's rolling cumulative VWAP (observed max deviation "
+        f"is ~4.0 SD) and produce ZERO signals. Falling back to "
+        f"{DEFAULT_SD_ENTRY_THRESHOLD}. Fix VWAP_SD_ENTRY_THRESHOLD in .env."
+    )
+    return DEFAULT_SD_ENTRY_THRESHOLD
+
+
+def warn_unsupported_env_vars() -> List[str]:
+    """
+    Warn about VWAP_* environment variables that are set but never read.
+
+    Returns:
+        The names of the unread variables that are currently set.
+    """
+    ignored = [name for name in UNSUPPORTED_ENV_VARS if os.getenv(name)]
+    if ignored:
+        logger.warning(
+            "VWAP scalping: these environment variables are set but NOT read "
+            f"by this strategy and have no effect: {', '.join(ignored)}. "
+            "They are leftovers from the BTV2 tuning harness; remove them "
+            "from .env to avoid confusion."
+        )
+    return ignored
+
+
 class VWAPScalpingStrategy:
     """
     VWAP Scalping strategy using Volume-Weighted Average Price with SD bands.
@@ -48,7 +163,8 @@ class VWAPScalpingStrategy:
 
     Parameters can be configured via environment variables:
     - VWAP_ATR_PERIOD (default: 14)
-    - VWAP_SD_ENTRY_THRESHOLD (default: 1.8)
+    - VWAP_SD_ENTRY_THRESHOLD (default: 2.0, must be within
+      [SD_ENTRY_THRESHOLD_MIN, SD_ENTRY_THRESHOLD_MAX])
     - VWAP_ATR_STOP_MULTIPLIER (default: 1.5)
     - VWAP_MACD_FAST (default: 12)
     - VWAP_MACD_SLOW (default: 26)
@@ -82,14 +198,17 @@ class VWAPScalpingStrategy:
 
         Args:
             atr_period: ATR period for stop loss calculation (default: 14)
-            sd_entry_threshold: Minimum SD deviation to trigger entry (default: 1.8)
+            sd_entry_threshold: Minimum SD deviation to trigger entry
+                (default: 2.0). Rejected and replaced by the default when
+                outside [SD_ENTRY_THRESHOLD_MIN, SD_ENTRY_THRESHOLD_MAX].
             atr_stop_multiplier: ATR multiplier for stop loss (default: 1.5)
             macd_fast: MACD fast period (default: 12)
             macd_slow: MACD slow period (default: 26)
             macd_signal: MACD signal period (default: 9)
             rsi_period: RSI calculation period (default: 14)
-            rsi_oversold: RSI threshold for BUY gate (default: 35.0)
-            rsi_overbought: RSI threshold for SELL gate (default: 65.0)
+            rsi_oversold: RESERVED (default: 35.0). Stored and exposed to the
+                optimizer search space, but does NOT gate entries today.
+            rsi_overbought: RESERVED (default: 65.0). Same as rsi_oversold.
             min_confidence: Minimum confidence threshold (default: 0.62)
             cooldown_minutes: Cooldown between trades per symbol (default: 8)
             sd_multipliers: SD band multipliers to compute (default: [1.0, 2.0, 3.0])
@@ -102,10 +221,16 @@ class VWAPScalpingStrategy:
             if atr_period is not None
             else int(os.getenv("VWAP_ATR_PERIOD", "14"))
         )
-        self.sd_entry_threshold = (
+        # Validated at construction: an unreachable threshold silently
+        # disables the strategy, so it must never be accepted quietly.
+        self.sd_entry_threshold = validate_sd_entry_threshold(
             sd_entry_threshold
             if sd_entry_threshold is not None
-            else float(os.getenv("VWAP_SD_ENTRY_THRESHOLD", "1.8"))
+            else float(
+                os.getenv(
+                    "VWAP_SD_ENTRY_THRESHOLD", str(DEFAULT_SD_ENTRY_THRESHOLD)
+                )
+            )
         )
         self.atr_stop_multiplier = (
             atr_stop_multiplier
@@ -132,6 +257,10 @@ class VWAPScalpingStrategy:
             if rsi_period is not None
             else int(os.getenv("VWAP_RSI_PERIOD", "14"))
         )
+        # RESERVED: stored so the optimizer search space stays intact, but
+        # neither value gates entries in generate_signals() - RSI is only
+        # reported in the signal notes. See CONFIG NOTES in the module
+        # docstring before assuming these filter anything.
         self.rsi_oversold = (
             rsi_oversold
             if rsi_oversold is not None
@@ -170,6 +299,9 @@ class VWAPScalpingStrategy:
             f"min_confidence={self.min_confidence}, "
             f"cooldown={self.cooldown_minutes}min"
         )
+
+        # Surface stale .env knobs that this strategy never reads.
+        warn_unsupported_env_vars()
 
     def _calculate_vwap_and_bands(
         self, highs: List[float], lows: List[float], closes: List[float], volumes: List[float]

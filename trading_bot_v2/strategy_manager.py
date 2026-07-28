@@ -29,7 +29,10 @@ from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.ma_crossover import MACrossoverStrategy
 from .strategies.grid_trading import GridTradingStrategy
 from .strategies.liquidation_capture import LiquidationCaptureStrategy
-from .strategies.vwap_scalping import VWAPScalpingStrategy
+from .strategies.vwap_scalping import (
+    VWAPScalpingStrategy,
+    DEFAULT_SD_ENTRY_THRESHOLD as VWAP_DEFAULT_SD_ENTRY_THRESHOLD,
+)
 from .exchanges import get_exchange_capabilities
 from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
@@ -324,7 +327,14 @@ class StrategyManager:
         if self.enable_vwap_scalping:
             # Load VWAP Scalping parameters from environment
             vwap_atr_period = int(os.getenv("VWAP_ATR_PERIOD", "14"))
-            vwap_sd_threshold = float(os.getenv("VWAP_SD_ENTRY_THRESHOLD", "1.8"))
+            # The strategy re-validates this against its supported range and
+            # falls back to the default if it is unreachable, so the effective
+            # value is read back off the instance below rather than logged raw.
+            vwap_sd_threshold = float(
+                os.getenv(
+                    "VWAP_SD_ENTRY_THRESHOLD", str(VWAP_DEFAULT_SD_ENTRY_THRESHOLD)
+                )
+            )
             vwap_atr_stop_mult = float(os.getenv("VWAP_ATR_STOP_MULTIPLIER", "1.5"))
             vwap_macd_fast = int(os.getenv("VWAP_MACD_FAST", "12"))
             vwap_macd_slow = int(os.getenv("VWAP_MACD_SLOW", "26"))
@@ -346,8 +356,10 @@ class StrategyManager:
                 cooldown_minutes=vwap_cooldown,
                 sd_multipliers=vwap_sd_multipliers,
             )
+            effective_sd_threshold = self.strategies["VWAPScalping"].sd_entry_threshold
             logger.info(
-                f"VWAP Scalping strategy enabled: SD threshold={vwap_sd_threshold}, "
+                f"VWAP Scalping strategy enabled: SD threshold="
+                f"{effective_sd_threshold} (configured {vwap_sd_threshold}), "
                 f"ATR stop={vwap_atr_stop_mult}x, min_confidence={vwap_min_confidence:.0%}"
             )
 

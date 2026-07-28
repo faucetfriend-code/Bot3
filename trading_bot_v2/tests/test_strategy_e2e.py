@@ -1038,6 +1038,10 @@ class TestLiquidationCaptureE2E:
 class TestVWAPScalpingE2E:
 
     def _make_strategy(self, **kwargs):
+        # NOTE: sd_entry_threshold is hardcoded here, so these tests say
+        # nothing about whether the SHIPPED .env value is reachable. That
+        # gap let VWAP_SD_ENTRY_THRESHOLD=4.037 (unreachable) go unnoticed.
+        # test_vwap_config_guard.py covers the configured value.
         defaults = dict(
             atr_period=14,
             sd_entry_threshold=1.5,
