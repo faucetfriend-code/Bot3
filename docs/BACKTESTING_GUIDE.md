@@ -586,6 +586,55 @@ Useful flags: `--sampler tpe|random`, `--objective` (default `sharpe_ratio`),
 
 Studies persist in `trading_bot_v2/optimization/optimization_studies.db` (untracked).
 
+### The chunked sweep is a walk-forward (`--chunked`)
+
+`--chunked` does **not** fit and score on the same data. It cuts the same chunk window
+series the validation runner uses (`resolve_chunk_windows`) and runs a **rolling-origin
+walk-forward** over it: with windows W1..WN oldest→newest, fold *i* runs a full chunked
+Optuna study on the preceding window(s) and grades the winning parameters on Wi — data
+no trial ever saw.
+
+```bash
+# 3 x 2-month windows on 3 symbols -> 2 folds, 40 trials each
+python -m trading_bot_v2.optimization --strategy ma_crossover --chunked \
+    --symbols BTC-USDC,ETH-USDC,SUI-USDC \
+    --windows 3 --window-months 2 --trials 40
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--windows` / `--window-months` | `3` / `2` | The chunk series to cut folds from |
+| `--train-windows` | `1` | Chunk windows per training set (needs `--windows` > this) |
+| `--anchored` | off | Expanding training set instead of rolling |
+| `--trials` | `100` | Trials **per fold** (total = trials x folds) |
+| `--in-sample-only` | off | **Legacy**: fit and score on the same windows |
+
+`--trials` is per fold, so a 3-window run costs `trials x folds x symbols` backtests.
+Fewer, shorter windows means faster feedback — that is the point of the chunking.
+
+The report prints in-sample beside out-of-sample on one banded scale, then:
+
+```
+  IN-SAMPLE vs OUT-OF-SAMPLE (same banded scale)
+    In-sample  (optimized on) :     1.800
+    OUT-OF-SAMPLE  (HEADLINE)  :    -1.200
+    Overfit gap (IS - OOS)    :     3.000
+    VERDICT: OVERFIT - positive in sample, non-positive out of sample.
+```
+
+**The headline number is out-of-sample.** A large `Overfit gap` is the overfitting
+signal. A winner that produces no trades out of sample is banded and diagnosed by the
+signal funnel (`OOS outcome:` / `OOS funnel:` lines), not scored as zero.
+
+Every fold records its trial count in `trial_registry`, and the report reads that back
+and deflates the Sharpe for it (`DSR ... N=<total>`), so the search cost is charged
+against the result. The same out-of-sample series is then run through the standing
+4-check promotion gate and printed.
+
+`--in-sample-only` reproduces the pre-2026-07-28 behaviour. It logs a warning because
+the result is unfalsifiable: with 60 trials over 3 symbols some parameter set looks
+excellent by chance, and nothing separates that from an edge.
+
 ### Banded trial scoring
 
 Zero-trade trials are no longer scored as flat zero or negative infinity. Each trial is

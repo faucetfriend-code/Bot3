@@ -19,8 +19,9 @@ Usage:
 
 import math
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 from loguru import logger
 
@@ -48,8 +49,14 @@ from ..diagnostics.funnel import (
     STAGE_STRATEGY_INVOKED,
     SignalFunnel,
 )
-from ..diagnostics.outcomes import TrialOutcome, score_for_outcome, suggest_fix
+from ..diagnostics.outcomes import (
+    TRADED_SCORE_FLOOR,
+    TrialOutcome,
+    score_for_outcome,
+    suggest_fix,
+)
 from ..regime_param_overlay import normalize_regime_value
+from ..validation.statistics import closed_trade_returns
 
 
 # Default database path
@@ -158,6 +165,119 @@ def _funnel_for_result(result: Any) -> SignalFunnel:
         funnel.set_stage(STAGE_ORDERS_PLACED, closed)
         funnel.set_stage(STAGE_CLOSED_TRADES, closed)
     return funnel
+
+
+def classify_and_score(
+    funnel: SignalFunnel,
+    objective_value: float,
+    traded_override: bool = False,
+) -> Tuple[TrialOutcome, float]:
+    """Map a funnel + raw objective onto the banded score scale.
+
+    Shared by in-sample trial scoring and out-of-sample evaluation so
+    both live on ONE scale. Comparing a raw out-of-sample Sharpe with a
+    banded in-sample trial value would make the overfitting gap
+    meaningless, and an out-of-sample run that never traded would look
+    like "0.0" instead of naming the gate that blocked it.
+
+    Args:
+        funnel: Merged signal funnel of the run(s).
+        objective_value: The raw objective the adapter computed.
+        traded_override: Direct evidence of closed trades the funnel may
+            not carry (regime mode scores a filtered trade subset).
+
+    Returns:
+        (outcome, banded score).
+    """
+    if traded_override:
+        outcome = TrialOutcome.TRADED
+    else:
+        outcome = TrialOutcome.from_diagnosis(funnel.diagnose())
+    if outcome is TrialOutcome.TRADED:
+        return outcome, score_for_outcome(
+            outcome, objective_value=objective_value
+        )
+    return outcome, score_for_outcome(outcome, progress=funnel.progress())
+
+
+def traded_trial_values(trials: List[Any]) -> List[float]:
+    """Objective values of trials that actually traded.
+
+    Zero-trade trials carry reserved band scores (-100, -200, -300,
+    -400), which are POSITIONS ON A RANK SCALE, not Sharpe estimates.
+    Feeding them to a variance estimator inflates it by orders of
+    magnitude, which inflates the DSR's expected-max-Sharpe benchmark,
+    which makes the gate unpassable for reasons that have nothing to do
+    with the search. Only values at or above TRADED_SCORE_FLOOR are real
+    objectives.
+
+    Args:
+        trials: Optuna trials (or stubs exposing value/user_attrs).
+
+    Returns:
+        Finite objective values of the traded trials.
+    """
+    values: List[float] = []
+    for trial in trials:
+        value = getattr(trial, "value", None)
+        if value is None or not math.isfinite(value):
+            continue
+        if value < TRADED_SCORE_FLOOR:
+            continue
+        values.append(float(value))
+    return values
+
+
+def _sample_variance(values: List[float]) -> Optional[float]:
+    """Sample variance (ddof=1) of a value list, or None below n=2."""
+    if len(values) < 2:
+        return None
+    mean_v = sum(values) / len(values)
+    return sum((v - mean_v) ** 2 for v in values) / (len(values) - 1)
+
+
+@dataclass
+class ChunkEvaluation:
+    """One parameter set evaluated over a (symbol, window) chunk grid.
+
+    Attributes:
+        value: Aggregate objective (mean across chunks, penalized for
+            dispersion) - the raw, unbanded number.
+        mean_objective: Plain mean across chunks, before the penalty.
+        dispersion: Standard deviation of the per-chunk objectives.
+        outcome: Funnel-derived outcome of the whole grid.
+        banded_value: ``value`` mapped onto the banded score scale, so
+            it is directly comparable with an Optuna trial value.
+        funnel: Merged signal funnel across every chunk.
+        per_symbol: Per-symbol rollup (trades, invoked, raw_signals,
+            objective, return_pct).
+        symbol_returns: Per-symbol pooled per-trade fractional returns.
+        chunks: Per-chunk log rows (symbol, start, end, trades, value).
+        total_trades: Closed trades across the grid.
+        traded_symbols: Symbols with at least one closed trade.
+        profitable_symbols: Symbols with a positive mean objective.
+    """
+
+    value: float
+    mean_objective: float
+    dispersion: float
+    outcome: TrialOutcome
+    banded_value: float
+    funnel: SignalFunnel
+    per_symbol: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    symbol_returns: Dict[str, List[float]] = field(default_factory=dict)
+    chunks: List[Dict[str, Any]] = field(default_factory=list)
+    total_trades: int = 0
+    traded_symbols: int = 0
+    profitable_symbols: int = 0
+
+    @property
+    def returns(self) -> List[float]:
+        """Pooled per-trade fractional returns across every symbol."""
+        pooled: List[float] = []
+        for values in self.symbol_returns.values():
+            pooled.extend(values)
+        return pooled
 
 
 def _assert_scoring_schema(study: Any) -> None:
@@ -490,6 +610,9 @@ class OptunaRunner:
         timeout: Optional[int] = None,
         data_dir: Optional[str] = None,
         end: Optional[str] = None,
+        windows: Optional[List[Tuple[str, str]]] = None,
+        study_suffix: str = "",
+        record_registry: bool = True,
     ) -> "optuna.Study":
         """Optimize a strategy over chunked windows and multiple symbols.
 
@@ -524,6 +647,18 @@ class OptunaRunner:
                 actually reads - 5m coverage cannot see a hole in the 4h
                 store, and the affected symbol would silently contribute
                 zero bars.
+            windows: Explicit (start, end) window series. When given,
+                window resolution is skipped entirely and the symbols
+                are used as supplied. This is the hook the chunked
+                walk-forward uses to train a fold on its TRAIN windows
+                only - a test window must never reach a training study.
+            study_suffix: Appended to the generated study name, so the
+                per-fold studies of one walk-forward run stay distinct
+                and individually inspectable with diagnostics.explain.
+            record_registry: Write this study's trial count to the
+                trial_registry. Leave True: the deflation path reads it,
+                and the walk-forward records every fold so the gate's N
+                covers every configuration explored.
 
         Returns:
             The completed Optuna study.
@@ -533,8 +668,6 @@ class OptunaRunner:
                 exist for the requested symbols.
             RuntimeError: If most trials crash (see _FailRateGuard).
         """
-        from ..validation.runner import resolve_chunk_windows
-
         available = list_strategies()
         if strategy not in available:
             raise ValueError(
@@ -543,24 +676,30 @@ class OptunaRunner:
         get_search_space(strategy)
         objective = normalize_objective(objective)
 
-        resolved = resolve_chunk_windows(
-            symbols,
-            window_months,
-            n_windows,
-            data_dir=data_dir,
-            label=f"{strategy}/sweep",
-            anchor_end=end,
-        )
-        if resolved.get("reason"):
-            raise ValueError(
-                f"Cannot sweep {strategy}: {resolved['reason']} "
-                f"(symbols={','.join(symbols)})"
+        if windows:
+            sweep_symbols: List[str] = list(symbols)
+            sweep_windows: List[Any] = [tuple(w) for w in windows]
+        else:
+            from ..validation.runner import resolve_chunk_windows
+
+            resolved = resolve_chunk_windows(
+                symbols,
+                window_months,
+                n_windows,
+                data_dir=data_dir,
+                label=f"{strategy}/sweep",
+                anchor_end=end,
             )
-        sweep_symbols: List[str] = resolved["symbols"]
-        windows: List[Any] = resolved["windows"]
+            if resolved.get("reason"):
+                raise ValueError(
+                    f"Cannot sweep {strategy}: {resolved['reason']} "
+                    f"(symbols={','.join(symbols)})"
+                )
+            sweep_symbols = resolved["symbols"]
+            sweep_windows = resolved["windows"]
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        study_name = f"{strategy}_chunked_{timestamp}"
+        study_name = f"{strategy}_chunked_{timestamp}{study_suffix}"
         study = optuna.create_study(
             study_name=study_name,
             storage=self.storage_url,
@@ -570,16 +709,16 @@ class OptunaRunner:
         )
         _assert_scoring_schema(study)
         study.set_user_attr("sweep_symbols", sweep_symbols)
-        study.set_user_attr("sweep_windows", windows)
+        study.set_user_attr("sweep_windows", sweep_windows)
         study.set_user_attr("sweep_objective", objective)
 
         logger.info(
             f"Chunked sweep: strategy={strategy}, trials={n_trials}, "
             f"symbols={','.join(sweep_symbols)}, "
-            f"windows={n_windows}x{window_months}mo "
-            f"({windows[0][0]} .. {windows[-1][1]}), "
+            f"windows={len(sweep_windows)}x{window_months}mo "
+            f"({sweep_windows[0][0]} .. {sweep_windows[-1][1]}), "
             f"objective={objective} -> "
-            f"{len(sweep_symbols) * len(windows)} backtests/trial"
+            f"{len(sweep_symbols) * len(sweep_windows)} backtests/trial"
         )
 
         def objective_fn(trial: "optuna.Trial") -> float:
@@ -588,7 +727,7 @@ class OptunaRunner:
                 strategy=strategy,
                 objective=objective,
                 symbols=sweep_symbols,
-                windows=windows,
+                windows=sweep_windows,
                 initial_capital=initial_capital,
             )
 
@@ -607,10 +746,11 @@ class OptunaRunner:
             raise
         abort.raise_if_aborted()
 
-        try:
-            self._record_trial_registry(study, strategy, None, objective)
-        except Exception as e:
-            logger.warning(f"Trial registry recording failed: {e}")
+        if record_registry:
+            try:
+                self._record_trial_registry(study, strategy, None, objective)
+            except Exception as e:
+                logger.warning(f"Trial registry recording failed: {e}")
 
         return study
 
@@ -668,6 +808,143 @@ class OptunaRunner:
             logger.debug(f"Trial {trial.number} pruned as infeasible: {e}")
             raise optuna.TrialPruned(str(e))
 
+    def evaluate_param_set(
+        self,
+        strategy: str,
+        params: Dict[str, Any],
+        symbols: List[str],
+        windows: List[Any],
+        objective: str,
+        initial_capital: float = 10000.0,
+        label: Optional[str] = None,
+    ) -> ChunkEvaluation:
+        """Evaluate ONE parameter set over a (symbol, window) chunk grid.
+
+        This is the single scoring path used both for in-sample trials
+        and for out-of-sample evaluation of a fold's winner. Sharing it
+        is the point: an in-sample number and an out-of-sample number
+        computed by different code would not be comparable, and the
+        overfitting gap between them is the headline signal.
+
+        Args:
+            strategy: Strategy name (snake_case).
+            params: Strategy parameters to apply.
+            symbols: Trading pairs to evaluate.
+            windows: (start, end) ISO date pairs.
+            objective: Canonical objective name.
+            initial_capital: Starting capital per chunk backtest.
+            label: Funnel label (default: "<strategy>/chunks").
+
+        Returns:
+            A ChunkEvaluation with the aggregate value, the banded
+            score, the merged funnel and the per-symbol breakdown.
+
+        Raises:
+            RuntimeError: When the grid produced no backtests at all.
+        """
+        funnel = SignalFunnel(label=label or f"{strategy}/chunks")
+        chunk_values: List[float] = []
+        per_symbol: Dict[str, Dict[str, Any]] = {}
+        symbol_returns: Dict[str, List[float]] = {}
+        chunk_log: List[Dict[str, Any]] = []
+
+        for symbol in symbols:
+            values: List[float] = []
+            pooled: List[float] = []
+            trades = 0
+            invoked = 0
+            raw_signals = 0
+            return_pct = 0.0
+            for start, end in windows:
+                result = self.adapter.run_backtest(
+                    strategy=strategy,
+                    params=params,
+                    start=start,
+                    end=end,
+                    symbol=symbol,
+                    initial_capital=initial_capital,
+                )
+                chunk_funnel = _funnel_for_result(result)
+                funnel.merge(chunk_funnel)
+                value = self.adapter.calculate_objective(result, objective)
+                values.append(value)
+                chunk_values.append(value)
+                closed = int(getattr(result, "closed_trades", 0) or 0)
+                trades += closed
+                invoked += chunk_funnel.get(STAGE_STRATEGY_INVOKED)
+                raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
+                return_pct += float(
+                    getattr(result, "total_return_pct", 0.0) or 0.0
+                )
+                pooled.extend(
+                    closed_trade_returns(
+                        getattr(result, "trade_log", None) or [],
+                        initial_capital,
+                    )
+                )
+                chunk_log.append(
+                    {
+                        "symbol": symbol,
+                        "start": start,
+                        "end": end,
+                        "trades": closed,
+                        "value": round(value, 6),
+                    }
+                )
+            # invoked / raw are carried per symbol so a symbol that
+            # contributed NO BARS AT ALL (a hole in the timeframe the
+            # strategy reads, which 5m-based window resolution cannot
+            # see) is distinguishable from one that ran and found
+            # nothing.
+            per_symbol[symbol] = {
+                "trades": trades,
+                "invoked": invoked,
+                "raw_signals": raw_signals,
+                "objective": round(sum(values) / len(values), 6),
+                "return_pct": round(return_pct, 4),
+            }
+            symbol_returns[symbol] = pooled
+
+        if not chunk_values:
+            raise RuntimeError(
+                f"chunked evaluation produced no backtests for {strategy} "
+                f"(symbols={symbols}, windows={windows})"
+            )
+
+        mean_value = sum(chunk_values) / len(chunk_values)
+        std_dev = 0.0
+        value = mean_value
+        # Penalize dispersion across chunks, mirroring the walk-forward
+        # branch: a parameter set that only works in one window/symbol
+        # should not outrank a steadier one at the same mean.
+        if len(chunk_values) > 1:
+            variance = sum(
+                (v - mean_value) ** 2 for v in chunk_values
+            ) / len(chunk_values)
+            std_dev = variance ** 0.5
+            if std_dev > 1.0:
+                value -= (std_dev - 1.0) * 0.2
+
+        outcome, banded = classify_and_score(funnel, value)
+        return ChunkEvaluation(
+            value=value,
+            mean_objective=mean_value,
+            dispersion=std_dev,
+            outcome=outcome,
+            banded_value=banded,
+            funnel=funnel,
+            per_symbol=per_symbol,
+            symbol_returns=symbol_returns,
+            chunks=chunk_log,
+            total_trades=sum(s["trades"] for s in per_symbol.values()),
+            traded_symbols=sum(
+                1 for s in per_symbol.values() if s["trades"] > 0
+            ),
+            profitable_symbols=sum(
+                1 for s in per_symbol.values() if s["objective"] > 0
+            ),
+        )
+
     def _chunked_objective(
         self,
         trial: "optuna.Trial",
@@ -699,92 +976,27 @@ class OptunaRunner:
         params = self._suggest_or_prune(trial, strategy)
         logger.debug(f"Trial {trial.number}: params={params}")
 
-        funnel = SignalFunnel(label=f"{strategy}/sweep")
-        chunk_values: List[float] = []
-        per_symbol: Dict[str, Dict[str, Any]] = {}
-        chunk_log: List[Dict[str, Any]] = []
-
-        for symbol in symbols:
-            values: List[float] = []
-            trades = 0
-            invoked = 0
-            raw_signals = 0
-            return_pct = 0.0
-            for start, end in windows:
-                result = self.adapter.run_backtest(
-                    strategy=strategy,
-                    params=params,
-                    start=start,
-                    end=end,
-                    symbol=symbol,
-                    initial_capital=initial_capital,
-                )
-                chunk_funnel = _funnel_for_result(result)
-                funnel.merge(chunk_funnel)
-                value = self.adapter.calculate_objective(result, objective)
-                values.append(value)
-                chunk_values.append(value)
-                closed = int(getattr(result, "closed_trades", 0) or 0)
-                trades += closed
-                invoked += chunk_funnel.get(STAGE_STRATEGY_INVOKED)
-                raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
-                return_pct += float(
-                    getattr(result, "total_return_pct", 0.0) or 0.0
-                )
-                chunk_log.append(
-                    {
-                        "symbol": symbol,
-                        "start": start,
-                        "end": end,
-                        "trades": closed,
-                        "value": round(value, 6),
-                    }
-                )
-            # invoked / raw are carried per symbol so a symbol that
-            # contributed NO BARS AT ALL (a hole in the timeframe the
-            # strategy reads, which 5m-based window resolution cannot
-            # see) is distinguishable from one that ran and found
-            # nothing.
-            per_symbol[symbol] = {
-                "trades": trades,
-                "invoked": invoked,
-                "raw_signals": raw_signals,
-                "objective": round(sum(values) / len(values), 6),
-                "return_pct": round(return_pct, 4),
-            }
-
-        if not chunk_values:
-            raise RuntimeError(
-                f"chunked sweep produced no backtests for {strategy} "
-                f"(symbols={symbols}, windows={windows})"
-            )
-
-        avg_value = sum(chunk_values) / len(chunk_values)
-        # Penalize dispersion across chunks, mirroring the walk-forward
-        # branch: a parameter set that only works in one window/symbol
-        # should not outrank a steadier one at the same mean.
-        if len(chunk_values) > 1:
-            variance = sum(
-                (v - avg_value) ** 2 for v in chunk_values
-            ) / len(chunk_values)
-            std_dev = variance ** 0.5
-            if std_dev > 1.0:
-                avg_value -= (std_dev - 1.0) * 0.2
-
-        total_trades = sum(s["trades"] for s in per_symbol.values())
-        traded_symbols = sum(
-            1 for s in per_symbol.values() if s["trades"] > 0
+        evaluation = self.evaluate_param_set(
+            strategy=strategy,
+            params=params,
+            symbols=symbols,
+            windows=windows,
+            objective=objective,
+            initial_capital=initial_capital,
+            label=f"{strategy}/sweep",
         )
-        profitable_symbols = sum(
-            1 for s in per_symbol.values() if s["objective"] > 0
-        )
-        trial.set_user_attr("per_symbol", per_symbol)
-        trial.set_user_attr("chunks", chunk_log)
-        trial.set_user_attr("total_trades", total_trades)
-        trial.set_user_attr("traded_symbols", traded_symbols)
-        trial.set_user_attr("profitable_symbols", profitable_symbols)
 
-        return self._score_trial(trial, funnel, avg_value, params)
+        trial.set_user_attr("per_symbol", evaluation.per_symbol)
+        trial.set_user_attr("chunks", evaluation.chunks)
+        trial.set_user_attr("total_trades", evaluation.total_trades)
+        trial.set_user_attr("traded_symbols", evaluation.traded_symbols)
+        trial.set_user_attr(
+            "profitable_symbols", evaluation.profitable_symbols
+        )
+
+        return self._score_trial(
+            trial, evaluation.funnel, evaluation.value, params
+        )
 
     def _record_trial_registry(
         self,
@@ -807,9 +1019,10 @@ class OptunaRunner:
         pre-check.
 
         When the objective is sharpe_ratio, also stores the sample variance
-        (ddof=1) of the completed trials' objective values as an
+        (ddof=1) of the TRADED completed trials' objective values as an
         sr-variance proxy for DSR benchmarks; for other objectives the
-        variance column stays NULL.
+        variance column stays NULL. Zero-trade trials are excluded: their
+        values are reserved rank bands, not Sharpe estimates.
 
         Note: the stored variance is a proxy - objective values carry
         the adapter's drawdown/trade-count penalties and (for full-run
@@ -843,16 +1056,12 @@ class OptunaRunner:
 
         sr_variance: Optional[float] = None
         if objective == "sharpe_ratio":
-            values = [
-                t.value
-                for t in completed
-                if t.value is not None and math.isfinite(t.value)
-            ]
-            if len(values) >= 2:
-                mean_v = sum(values) / len(values)
-                sr_variance = sum((v - mean_v) ** 2 for v in values) / (
-                    len(values) - 1
-                )
+            # Only trials that TRADED carry a real objective. Zero-trade
+            # trials carry reserved band scores (-100 .. -400); mixing
+            # them in produced variances in the thousands, an absurd
+            # expected-max-Sharpe benchmark, and a DSR pinned at 0 for
+            # reasons unrelated to the search.
+            sr_variance = _sample_variance(traded_trial_values(completed))
 
         row_id = DatabaseManager().save_trial_registry_entry(
             strategy=strategy,
@@ -1086,15 +1295,9 @@ class OptunaRunner:
             The trial value to report to Optuna.
         """
         payload = funnel.to_dict()
-        if traded_override:
-            outcome = TrialOutcome.TRADED
-        else:
-            outcome = TrialOutcome.from_diagnosis(funnel.diagnose())
-
-        if outcome is TrialOutcome.TRADED:
-            value = score_for_outcome(outcome, objective_value=objective_value)
-        else:
-            value = score_for_outcome(outcome, progress=funnel.progress())
+        outcome, value = classify_and_score(
+            funnel, objective_value, traded_override=traded_override
+        )
 
         fix = suggest_fix(payload, params)
         trial.set_user_attr("outcome", outcome.value)

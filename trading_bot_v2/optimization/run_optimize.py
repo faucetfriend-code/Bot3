@@ -15,11 +15,20 @@ Usage:
     python -m trading_bot_v2.optimization.run_optimize --strategy ma_crossover --walk-forward
 
     # CHUNKED CROSS-SYMBOL SWEEP (house style: several short windows, not
-    # one long run; per-symbol results reported, never averaged away)
+    # one long run; per-symbol results reported, never averaged away).
+    # Runs a rolling-origin walk-forward over the window series: each
+    # fold optimizes on its train window(s) and the winner is graded on
+    # the next window, which no trial ever saw. The HEADLINE number is
+    # out-of-sample, and the in-sample/out-of-sample gap is reported.
     python -m trading_bot_v2.optimization.run_optimize \\
         --strategy ma_crossover --chunked \\
         --symbols BTC-USDC,ETH-USDC,SUI-USDC \\
         --windows 3 --window-months 2 --trials 40
+
+    # Legacy: fit AND score on the same windows. Unfalsifiable - kept
+    # only for reproducing older runs.
+    python -m trading_bot_v2.optimization.run_optimize \\
+        --strategy ma_crossover --chunked --in-sample-only ...
 
     # Export results
     python -m trading_bot_v2.optimization.run_optimize --strategy grid_trading --export results.csv
@@ -147,10 +156,33 @@ Examples:
     parser.add_argument(
         "--chunked",
         action="store_true",
-        help="Score every trial across a SERIES of short windows and "
-             "several symbols (house style) instead of one long "
-             "single-symbol backtest. Uses the same window series as "
-             "the validation runner and reports per-symbol results.",
+        help="Rolling-origin walk-forward across a SERIES of short "
+             "windows and several symbols (house style). Each fold "
+             "optimizes on its train window(s) and the winner is graded "
+             "on the next, held-out window. Headline number is "
+             "out-of-sample; the in-sample/out-of-sample gap is "
+             "reported as the overfitting signal.",
+    )
+    parser.add_argument(
+        "--train-windows",
+        type=int,
+        default=1,
+        help="Chunk windows per training set for --chunked (default: 1). "
+             "Needs --windows > --train-windows to make a fold.",
+    )
+    parser.add_argument(
+        "--anchored",
+        action="store_true",
+        help="Expanding training set for --chunked (every window before "
+             "the test one) instead of the rolling fixed-length one.",
+    )
+    parser.add_argument(
+        "--in-sample-only",
+        action="store_true",
+        help="LEGACY: with --chunked, fit and score on the same windows. "
+             "The result is unfalsifiable - nothing separates a real "
+             "edge from the luckiest of N draws. Kept only to reproduce "
+             "older runs.",
     )
     parser.add_argument(
         "--symbols",
@@ -222,7 +254,9 @@ Examples:
     parser.add_argument(
         "--export", "-e",
         type=str,
-        help="Export results to CSV file",
+        help="Export trial results to a CSV file (single-strategy and "
+             "--chunked --in-sample-only runs; the walk-forward path "
+             "prints its fold table instead)",
     )
     parser.add_argument(
         "--top",
@@ -541,6 +575,50 @@ def print_studies_list(studies: list) -> None:
     print(f"{'='*60}\n")
 
 
+def run_chunked_walk_forward_cli(
+    args: argparse.Namespace, strategy: str, runner: OptunaRunner
+) -> Optional[object]:
+    """Run the chunked rolling-origin walk-forward sweep and print it.
+
+    Args:
+        args: Parsed CLI arguments.
+        strategy: Snake_case strategy key.
+        runner: The OptunaRunner to reuse across folds.
+
+    Returns:
+        The ChunkedWalkForwardReport, or None when the run could not be
+        set up (too few windows, no data).
+    """
+    from ..backtesting.walk_forward import (
+        print_chunked_walk_forward_report,
+        run_chunked_walk_forward,
+    )
+
+    symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+    try:
+        report = run_chunked_walk_forward(
+            strategy=strategy,
+            symbols=symbols,
+            n_trials=args.trials,
+            sampler=args.sampler,
+            objective=args.objective,
+            window_months=args.window_months,
+            n_windows=args.windows,
+            train_windows=getattr(args, "train_windows", 1),
+            anchored=getattr(args, "anchored", False),
+            initial_capital=args.capital,
+            timeout=args.timeout,
+            end=args.end,
+            runner=runner,
+        )
+    except ValueError as e:
+        logger.error(f"Chunked walk-forward setup failed: {e}")
+        return None
+
+    print_chunked_walk_forward_report(report)
+    return report
+
+
 def run_single_strategy(
     args: argparse.Namespace, strategy: str
 ) -> Optional[object]:
@@ -562,6 +640,15 @@ def run_single_strategy(
             if not symbols:
                 logger.error("--chunked requires at least one --symbols entry")
                 return None
+
+            if not getattr(args, "in_sample_only", False):
+                return run_chunked_walk_forward_cli(args, strategy, runner)
+
+            logger.warning(
+                "--in-sample-only: trials are scored on the SAME windows "
+                "they are fitted on. The best value below is the maximum "
+                "of N draws, not evidence of an edge."
+            )
             study = runner.optimize_chunked(
                 strategy=strategy,
                 symbols=symbols,
@@ -647,7 +734,13 @@ def run_all_strategies(args: argparse.Namespace) -> dict:
     print(f"{'='*60}")
 
     for strategy, study in results.items():
-        if study and study.best_trial:
+        oos = getattr(study, "out_of_sample_objective", None)
+        if oos is not None:
+            # Chunked walk-forward: the headline is out-of-sample.
+            gap = getattr(study, "overfit_gap", None)
+            gap_s = "n/a" if gap is None else f"{gap:.4f}"
+            print(f"  {strategy:<25} OOS: {oos:.4f}  (IS-OOS gap {gap_s})")
+        elif study is not None and get_best_trial_or_none(study) is not None:
             print(f"  {strategy:<25} Best: {study.best_value:.4f}")
         else:
             print(f"  {strategy:<25} Failed")
