@@ -145,11 +145,12 @@ class TestPooledGateAggregation:
         assert result["window_spec"] == "3x2mo"
         # 2 symbols x 3 windows = 6 chunk records
         assert len(result["chunks"]) == 6
-        # Pooled per symbol: 3 chunks x 17 trades = 51 >= 30 min trades
+        # Pooled: 2 symbols x 3 chunks x 17 trades = 102 closed trades,
+        # comfortably over the derived sample-adequacy requirement.
         verdict = result["verdict"]
         by_name = {c.name: c for c in verdict.checks}
-        assert by_name["min_closed_trades"].value == "51"
-        assert by_name["min_closed_trades"].passed
+        assert verdict.n_pooled == 102
+        assert by_name["sample_adequacy"].passed
         assert by_name["profit_factor"].passed
         assert by_name["cross_symbol_consistency"].passed
 
