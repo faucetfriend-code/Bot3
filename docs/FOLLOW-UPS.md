@@ -109,6 +109,46 @@ containing invented API references. The real guide now lives at
 `docs/BACKTESTING_GUIDE.md`. The duplicate is confusable and probably should be
 deleted, but it was left alone pending a decision from the owner.
 
+## 8b. Config bugs surfaced by the provenance audit (2026-07-28)
+
+Found while auditing, reported not fixed. See `docs/PARAMETER-PROVENANCE.md`.
+
+**`api_server.py:281-290` hard-codes five strategy enable flags**, ignoring `.env`
+entirely:
+
+```python
+enable_mean_reversion=True, enable_ma_crossover=True,
+enable_trend_following=False, enable_grid_trading=True,
+enable_liquidation_capture=True,
+```
+
+They currently coincide with `.env`, so nothing diverges today — but setting
+`ENABLE_GRID_TRADING=false` or `ENABLE_MA_CROSSOVER=false` in `.env` would have **no
+effect on the live bot**. This is the config-that-looks-like-it-works failure mode that
+produced three separate silent-strategy bugs already. Fix before relying on any enable
+flag to disable something.
+
+Also from the same audit:
+
+- `GRID_MAX_POSITIONS` is dead config — the manager passes
+  `GRID_MAX_POSITIONS_PER_SYMBOL`.
+- `strategy_manager` env defaults silently override constructor defaults for all 10
+  LiquidationCapture params, grid levels/spacing, and momentum confidence. A caller
+  passing an explicit value can be overridden by an env default it never set.
+- Four parameters (ORB, CalendarFlow) have no env path at all.
+- In BTV2: `test_regime_aware_vwap.py` reads the wrong metric keys, so every Sharpe in
+  `regime_vwap_comparison_2024.csv` is literally `0`; zero-trade folds are averaged in
+  as neutral `sharpe 0.0`; `baseline_sharpe = -0.12` is hardcoded; `optimize_strategy`
+  swallows all exceptions.
+
+## 9. Campaign results live only in an uncommitted database
+
+`validation_runs` and `trial_registry` do not exist in any committed `trading_bot.db` —
+they exist only in the working-copy DB. The 2026-07-28 campaign verdicts are therefore
+not reproducible from a fresh clone, and an agent auditing from a worktree cannot see
+them. Decide whether validation history should be an artifact (exported JSON/CSV
+alongside the DB) rather than living only in a gitignored-in-practice binary.
+
 ## 8. Only 1m has a hard coverage guard
 
 The engine raises a clear error when 1m execution data does not cover the
