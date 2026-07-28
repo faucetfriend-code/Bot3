@@ -26,6 +26,11 @@ from trading_bot_v2.optimization.search_spaces import (
     list_strategies,
     suggest_params,
     get_param_type,
+    check_param_feasibility,
+    validate_params,
+    InfeasibleParamsError,
+    MIN_RRR_CONSTRAINTS,
+    RRR_FEASIBILITY_MARGIN,
     PARAMETER_TYPES,
 )
 from trading_bot_v2.optimization.optuna_runner import OptunaRunner
@@ -128,6 +133,71 @@ class TestSearchSpaces:
 
         # Fast should be < Slow
         assert fast_high < slow_low
+
+
+# ---------------------------------------------------------------------------
+# Feasibility Constraint Tests
+# ---------------------------------------------------------------------------
+
+
+class TestParamFeasibility:
+    """
+    Strategies whose stop and target are multiples of the SAME ATR have a
+    constant RRR. Combinations below the strategy's rrr_meets_minimum gate
+    produce zero trades no matter what the data does, so the optimizer must
+    not spend trials on them.
+    """
+
+    def test_feasible_momentum_params_pass(self):
+        params = {"atr_stop_mult": 2.0, "atr_target_mult": 3.0}  # RRR 1.5
+        assert check_param_feasibility("momentum_scalping", params) == []
+        validate_params("momentum_scalping", params)  # no raise
+
+    def test_infeasible_momentum_params_are_reported(self):
+        params = {"atr_stop_mult": 2.5, "atr_target_mult": 3.0}  # RRR 1.2
+        reasons = check_param_feasibility("momentum_scalping", params)
+        assert len(reasons) == 1
+        assert "rrr_meets_minimum" in reasons[0].lower()
+
+    def test_validate_params_raises_with_reason(self):
+        params = {"atr_stop_mult": 2.5, "atr_target_mult": 3.0}
+        with pytest.raises(InfeasibleParamsError, match="momentum_scalping"):
+            validate_params("momentum_scalping", params)
+
+    def test_zero_stop_is_infeasible(self):
+        params = {"atr_stop_mult": 0.0, "atr_target_mult": 3.0}
+        assert check_param_feasibility("momentum_scalping", params)
+
+    def test_unconstrained_strategy_is_always_feasible(self):
+        params = {"atr_stop_mult": 2.5, "atr_target_mult": 3.0}
+        assert check_param_feasibility("mean_reversion", params) == []
+
+    def test_suggest_params_never_yields_infeasible_rrr(self):
+        """Every suggestion for a constrained strategy must clear its gate."""
+        import optuna
+
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+        for strategy, min_rrr in MIN_RRR_CONSTRAINTS.items():
+            study = optuna.create_study(direction="maximize")
+            for _ in range(40):
+                params = suggest_params(study.ask(), strategy)
+                rrr = params["atr_target_mult"] / params["atr_stop_mult"]
+                assert rrr >= min_rrr, (
+                    f"{strategy} suggested an unbacktestable RRR {rrr:.3f} "
+                    f"(min {min_rrr})"
+                )
+
+    def test_declared_space_can_satisfy_the_constraint(self):
+        """The declared box must not be empty once the coupling is applied."""
+        for strategy, min_rrr in MIN_RRR_CONSTRAINTS.items():
+            space = get_search_space(strategy)
+            stop_low, stop_high = space["atr_stop_mult"]
+            _, target_high = space["atr_target_mult"]
+            assert stop_high * min_rrr * RRR_FEASIBILITY_MARGIN <= target_high, (
+                f"{strategy}: atr_target_mult cap {target_high} cannot reach "
+                f"RRR {min_rrr} at atr_stop_mult={stop_high}"
+            )
+            assert stop_low > 0
 
 
 # ---------------------------------------------------------------------------

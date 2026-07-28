@@ -222,6 +222,24 @@ class StrategyManager:
         # Last effective weight map per regime (for change-detection logging)
         self._last_effective_weights: Dict[str, Dict[str, float]] = {}
 
+        # ------------------------------------------------------------------
+        # Signal discard accounting
+        # ------------------------------------------------------------------
+        # Signals that fail Signal.is_valid() used to be dropped with a bare
+        # warning, which is indistinguishable from "the strategy generated
+        # nothing". MomentumScalping sat at a 100% discard rate for months
+        # because of it. These plain in-memory counters (no I/O in the hot
+        # path) make the rate and the responsible flag visible via
+        # get_signal_discard_stats() / log_signal_discard_summary().
+        self._signal_generated_counts: Dict[str, int] = {}
+        self._signal_discarded_counts: Dict[str, int] = {}
+        self._signal_discard_flags: Dict[str, Dict[str, int]] = {}
+        # Auto-warn every N discards per strategy so a persistent 100%
+        # discard rate surfaces without anyone polling the API.
+        self._discard_alert_interval = max(
+            1, int(_get_env_float("SIGNAL_DISCARD_ALERT_INTERVAL", 10))
+        )
+
         logger.info(
             f"Strategy enable flags: MeanReversion={self.enable_mean_reversion}, "
             f"MACrossover={self.enable_ma_crossover}, GridTrading={self.enable_grid_trading}, "
@@ -408,6 +426,10 @@ class StrategyManager:
             momentum_macd_slow = int(os.getenv("MOMENTUM_MACD_SLOW", "26"))
             momentum_macd_signal = int(os.getenv("MOMENTUM_MACD_SIGNAL", "9"))
             momentum_min_atr_pct = float(os.getenv("MOMENTUM_MIN_ATR_PCT", "0.0"))
+            # Minimum reward/risk for the signal's rrr_meets_minimum flag.
+            # Momentum's RRR is the constant atr_target/atr_stop, so this
+            # directly decides whether the strategy can trade at all.
+            momentum_min_rrr = float(os.getenv("MOMENTUM_MIN_RRR", "1.5"))
 
             self.strategies["MomentumScalping"] = MomentumScalpingStrategy(
                 ema_fast=momentum_ema_fast,
@@ -425,10 +447,18 @@ class StrategyManager:
                 macd_slow=momentum_macd_slow,
                 macd_signal=momentum_macd_signal,
                 min_atr_pct=momentum_min_atr_pct,
+                min_rrr=momentum_min_rrr,
+            )
+            _momentum = self.strategies["MomentumScalping"]
+            _momentum_rrr = (
+                _momentum.atr_target_mult / _momentum.atr_stop_mult
+                if _momentum.atr_stop_mult > 0
+                else 0.0
             )
             logger.info(
                 f"Momentum Scalping strategy enabled: EMA {momentum_ema_fast}/{momentum_ema_slow}, "
-                f"ATR stop={momentum_atr_stop}x, target={momentum_atr_target}x, "
+                f"ATR stop={_momentum.atr_stop_mult}x, target={_momentum.atr_target_mult}x "
+                f"(RRR {_momentum_rrr:.2f}, min_rrr={momentum_min_rrr}), "
                 f"min_confidence={momentum_min_confidence:.0%}"
                 + (f", min_atr={momentum_min_atr_pct:.3%}" if momentum_min_atr_pct > 0 else "")
             )
@@ -997,6 +1027,7 @@ class StrategyManager:
                             f"{symbol}: {strategy_name} generated {len(signals)} signal(s) "
                             f"in {regime.value} regime"
                         )
+                        self._record_generated_signals(signals)
                         all_signals.extend(signals)
                     else:
                         logger.debug(f"{symbol}: {strategy_name} returned 0 signals")
@@ -1024,14 +1055,30 @@ class StrategyManager:
                     )
                     return [signal]
                 else:
-                    logger.warning(f"{symbol}: Single signal failed validation")
+                    failed = self._record_discarded_signal(signal, symbol)
+                    logger.warning(
+                        f"{symbol}: Single signal from "
+                        f"{self._signal_strategy_key(signal)} failed validation - "
+                        f"failing flags: {', '.join(failed)}"
+                    )
                     return []
 
             # Multiple signals - resolve conflicts
             final_signals = self._resolve_signal_conflicts(all_signals, regime)
 
-            # Validate final signals
-            valid_signals = [s for s in final_signals if s.is_valid()]
+            # Validate final signals (attributing every discard to its
+            # strategy and the flag(s) that failed)
+            valid_signals = []
+            for candidate in final_signals:
+                if candidate.is_valid():
+                    valid_signals.append(candidate)
+                    continue
+                failed = self._record_discarded_signal(candidate, symbol)
+                logger.warning(
+                    f"{symbol}: Signal from "
+                    f"{self._signal_strategy_key(candidate)} failed validation - "
+                    f"failing flags: {', '.join(failed)}"
+                )
 
             if valid_signals:
                 logger.info(
@@ -1044,6 +1091,125 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"Error generating signals for {symbol}: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # Signal discard accounting
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _signal_strategy_key(signal: Signal) -> str:
+        """Best-effort strategy name for a signal (used as counter key)."""
+        strategy = getattr(signal, "strategy", None)
+        return str(getattr(strategy, "value", strategy) or "unknown")
+
+    def _record_generated_signals(self, signals: List[Signal]) -> None:
+        """Count signals a strategy emitted, before any validation."""
+        for signal in signals:
+            name = self._signal_strategy_key(signal)
+            self._signal_generated_counts[name] = (
+                self._signal_generated_counts.get(name, 0) + 1
+            )
+
+    def _record_discarded_signal(self, signal: Signal, symbol: str) -> List[str]:
+        """
+        Record a signal dropped by Signal.is_valid() and return the failing flags.
+
+        Counts the discard per strategy and per failing validity flag so a
+        strategy that never trades looks different from one that never fires.
+        """
+        failed = signal.failed_validity_flags()
+        name = self._signal_strategy_key(signal)
+
+        total = self._signal_discarded_counts.get(name, 0) + 1
+        self._signal_discarded_counts[name] = total
+
+        flags = self._signal_discard_flags.setdefault(name, {})
+        for flag in failed:
+            flags[flag] = flags.get(flag, 0) + 1
+
+        if total % self._discard_alert_interval == 0:
+            generated = self._signal_generated_counts.get(name, total)
+            rate = total / generated if generated else 1.0
+            top = sorted(flags.items(), key=lambda kv: kv[1], reverse=True)
+            top_desc = ", ".join(f"{k}={v}" for k, v in top[:3])
+            logger.warning(
+                f"Signal discard alert: {name} has discarded {total}/{generated} "
+                f"signals ({rate:.0%}) as invalid; top failing flags: {top_desc}"
+            )
+
+        logger.debug(f"{symbol}: {name} signal discarded on {failed}")
+        return failed
+
+    def get_signal_discard_stats(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Per-strategy accounting of signals dropped by Signal.is_valid().
+
+        Returns a dict keyed by strategy name:
+
+            {
+                "momentum_scalping": {
+                    "generated": 46,       # signals the strategy emitted
+                    "discarded": 46,       # of those, failed is_valid()
+                    "discard_rate": 1.0,   # discarded / generated
+                    "failed_flags": {"rrr_meets_minimum": 46},
+                },
+                ...
+            }
+
+        Note: signals removed by conflict resolution are NOT counted as
+        discards - they never reach the validity check. A discard_rate of
+        1.0 means the strategy is structurally unable to trade.
+        """
+        names = set(self._signal_generated_counts) | set(self._signal_discarded_counts)
+        stats: Dict[str, Dict[str, Any]] = {}
+        for name in sorted(names):
+            generated = self._signal_generated_counts.get(name, 0)
+            discarded = self._signal_discarded_counts.get(name, 0)
+            stats[name] = {
+                "generated": generated,
+                "discarded": discarded,
+                "discard_rate": (discarded / generated) if generated else 0.0,
+                "failed_flags": dict(self._signal_discard_flags.get(name, {})),
+            }
+        return stats
+
+    def log_signal_discard_summary(self) -> Dict[str, Dict[str, Any]]:
+        """
+        Log one line per strategy summarising validation discards.
+
+        Strategies with a 100% discard rate are logged at WARNING; the rest
+        at INFO. Returns the same dict as get_signal_discard_stats().
+        """
+        stats = self.get_signal_discard_stats()
+        if not stats:
+            logger.info("Signal discard summary: no signals generated yet")
+            return stats
+
+        for name, entry in stats.items():
+            flags = entry["failed_flags"]
+            flag_desc = (
+                ", ".join(
+                    f"{k}={v}"
+                    for k, v in sorted(flags.items(), key=lambda kv: kv[1], reverse=True)
+                )
+                or "none"
+            )
+            message = (
+                f"Signal discard summary: {name} generated={entry['generated']} "
+                f"discarded={entry['discarded']} "
+                f"({entry['discard_rate']:.0%}) failing_flags=[{flag_desc}]"
+            )
+            if entry["generated"] > 0 and entry["discard_rate"] >= 1.0:
+                logger.warning(message + " - strategy cannot trade with this config")
+            else:
+                logger.info(message)
+        return stats
+
+    def reset_signal_discard_stats(self) -> None:
+        """Clear all discard counters (used by tests and long-running sessions)."""
+        self._signal_generated_counts.clear()
+        self._signal_discarded_counts.clear()
+        self._signal_discard_flags.clear()
 
     def _apply_regime_confidence_gate(
         self, signals: List[Signal], regime: MarketRegime

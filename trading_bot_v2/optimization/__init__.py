@@ -27,7 +27,14 @@ Usage:
     # python -m trading_bot_v2.optimization --strategy mean_reversion --trials 100
 """
 
-from .search_spaces import get_search_space, list_strategies, suggest_params
+from .search_spaces import (
+    InfeasibleParamsError,
+    check_param_feasibility,
+    get_search_space,
+    list_strategies,
+    suggest_params,
+    validate_params,
+)
 from .optuna_runner import OptunaRunner
 from .run_optimize import main as run_optimize_cli
 
@@ -40,9 +47,12 @@ except ImportError:
 __all__ = [
     "OptunaRunner",
     "OptimizationAdapter",
+    "InfeasibleParamsError",
+    "check_param_feasibility",
     "get_search_space",
     "list_strategies",
     "suggest_params",
+    "validate_params",
     "run_optimize_cli",
 ]
 
