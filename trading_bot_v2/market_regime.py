@@ -48,6 +48,42 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_threshold(name: str, default: float) -> float:
+    """Read a REGIME BOUNDARY from the environment, loudly.
+
+    The four boundaries below are documented in CLAUDE.md and .env but
+    were never actually read (only the hysteresis bands and the dwell
+    time were). Wiring them keeps the knob real, and changing one is a
+    single global parameter that re-gates EVERY strategy on EVERY
+    symbol - so a non-default value announces itself at construction
+    time rather than silently invalidating a backtest.
+
+    Blast-radius note: ``BTV2/optimizer_agent.py`` maps a per-strategy
+    ADX ceiling filter (``adx_max``) onto the env key
+    ``ADX_TRENDING_THRESHOLD`` and writes it into ``.env`` when a study
+    improves. Those two things are NOT the same parameter. Until that
+    mapping is fixed, a BTV2 optimizer run can retune the global regime
+    detector as a side effect - which is exactly what this warning is
+    for.
+
+    Args:
+        name: Environment variable name.
+        default: Value shipped in code.
+
+    Returns:
+        The configured value, or the default when unset/unparseable.
+    """
+    value = _env_float(name, default)
+    if value != default:
+        logger.warning(
+            f"{name}={value} overrides the shipped default {default}. "
+            f"This is a GLOBAL regime boundary: it re-gates every "
+            f"strategy on every symbol and invalidates prior backtest "
+            f"numbers. See docs/REGIME-DISCRIMINATION.md."
+        )
+    return value
+
+
 class MarketRegime(Enum):
     """Market regime classification based on ADX and volatility."""
 
@@ -70,10 +106,10 @@ class MarketRegimeDetector:
 
     def __init__(
         self,
-        adx_trending_threshold: float = 25.0,  # Was 30.0 - catch trends earlier
-        adx_ranging_threshold: float = 20.0,  # Was 25.0 - tighter ranging band
-        adx_moderate_threshold: float = 20.0,  # Was 25.0 - aligned with ranging
-        volatility_high_percentile: float = 65.0,  # Was 75.0 - easier volatile classification
+        adx_trending_threshold: Optional[float] = None,  # env, else 25.0
+        adx_ranging_threshold: Optional[float] = None,  # env, else 20.0
+        adx_moderate_threshold: Optional[float] = None,  # env, else 20.0
+        volatility_high_percentile: Optional[float] = None,  # env, else 65.0
         adx_period: int = 14,
         atr_period: int = 14,
         bb_period: int = 20,
@@ -87,17 +123,29 @@ class MarketRegimeDetector:
         """
         Initialize MarketRegimeDetector.
 
+        The four regime boundaries are read from the environment when not
+        passed explicitly (env ADX_TRENDING_THRESHOLD,
+        ADX_RANGING_THRESHOLD, ADX_MODERATE_THRESHOLD,
+        VOLATILITY_HIGH_PERCENTILE). Defaults are unchanged from what
+        shipped; a non-default value logs a warning, because these are
+        GLOBAL boundaries that re-gate every strategy. Read
+        docs/REGIME-DISCRIMINATION.md before turning any of them - the
+        measured answer is that the label carries almost no forward
+        information at any threshold, so moving one buys nothing and
+        invalidates every prior backtest number.
+
         Args:
             adx_trending_threshold: ADX above this enters TRENDING_STRONG
-                (default: 25).
+                (env ADX_TRENDING_THRESHOLD, default: 25).
             adx_ranging_threshold: ADX at/below this = ranging market
-                (default: 20).
+                (env ADX_RANGING_THRESHOLD, default: 20).
             adx_moderate_threshold: ADX above this but at/below trending =
-                TRENDING_MODERATE or INDECISIVE by ADX slope (default: 20).
+                TRENDING_MODERATE or INDECISIVE by ADX slope
+                (env ADX_MODERATE_THRESHOLD, default: 20).
             volatility_high_percentile: Volatility score (0-100) above which a
                 ranging market is classified RANGING_VOLATILE on first
                 classification, i.e. when there is no previous confirmed
-                regime (default: 65).
+                regime (env VOLATILITY_HIGH_PERCENTILE, default: 65).
             adx_period: Period for ADX calculation (default: 14).
             atr_period: Period for ATR calculation (default: 14).
             bb_period: Period for Bollinger Bands calculation (default: 20).
@@ -119,10 +167,29 @@ class MarketRegimeDetector:
                 save_regime_transition); confirmed transitions are persisted
                 to regime_history. No-op when None.
         """
-        self.adx_trending = adx_trending_threshold
-        self.adx_ranging = adx_ranging_threshold
-        self.adx_moderate = adx_moderate_threshold
-        self.volatility_percentile = volatility_high_percentile
+        # Regime boundaries: explicit argument wins, then env, then the
+        # shipped default. Unset env reproduces the previous behaviour
+        # exactly.
+        self.adx_trending = (
+            adx_trending_threshold
+            if adx_trending_threshold is not None
+            else _env_threshold("ADX_TRENDING_THRESHOLD", 25.0)
+        )
+        self.adx_ranging = (
+            adx_ranging_threshold
+            if adx_ranging_threshold is not None
+            else _env_threshold("ADX_RANGING_THRESHOLD", 20.0)
+        )
+        self.adx_moderate = (
+            adx_moderate_threshold
+            if adx_moderate_threshold is not None
+            else _env_threshold("ADX_MODERATE_THRESHOLD", 20.0)
+        )
+        self.volatility_percentile = (
+            volatility_high_percentile
+            if volatility_high_percentile is not None
+            else _env_threshold("VOLATILITY_HIGH_PERCENTILE", 65.0)
+        )
         self.adx_period = adx_period
         self.atr_period = atr_period
         self.bb_period = bb_period
@@ -197,10 +264,10 @@ class MarketRegimeDetector:
 
         logger.info(
             f"MarketRegimeDetector initialized: "
-            f"ADX trending={adx_trending_threshold}, "
-            f"moderate={adx_moderate_threshold}, "
-            f"ranging={adx_ranging_threshold}, "
-            f"volatility percentile={volatility_high_percentile}%, "
+            f"ADX trending={self.adx_trending}, "
+            f"moderate={self.adx_moderate}, "
+            f"ranging={self.adx_ranging}, "
+            f"volatility percentile={self.volatility_percentile}%, "
             f"cache_ttl={self._cache_ttl_hours}h"
         )
 
