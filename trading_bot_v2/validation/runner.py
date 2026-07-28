@@ -720,12 +720,33 @@ def format_duration(seconds: float) -> str:
     return f"{hours}h {rest:02d}m"
 
 
+class _DataDirConfig:
+    """Config proxy pinning backtest_data_dir to an explicit path.
+
+    ``.env`` sets BACKTEST_DATA_DIR to a RELATIVE path and config.py
+    loads it with override=True, so exporting the variable does nothing
+    and a git worktree resolves it to its own (parquet-less) directory.
+    Redirecting in-process is the only way to point a chunk backtest at
+    the canonical store.
+    """
+
+    def __init__(self, base: Any, data_dir: str):
+        object.__setattr__(self, "_base", base)
+        object.__setattr__(self, "_data_dir", data_dir)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "backtest_data_dir":
+            return object.__getattribute__(self, "_data_dir")
+        return getattr(object.__getattribute__(self, "_base"), name)
+
+
 def _run_chunk_backtest(
     strategy_key: str,
     symbol: str,
     start: str,
     end: str,
     capital: float,
+    data_dir: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Backtest one (strategy, symbol, window) chunk offline.
 
@@ -738,15 +759,28 @@ def _run_chunk_backtest(
         start: Window start (ISO date).
         end: Window end (ISO date).
         capital: Initial capital for the chunk.
+        data_dir: Candle store to read. Defaults to the configured one.
+            Window resolution already honours this; passing it here keeps
+            the backtest reading the SAME store the windows were cut from.
 
     Returns:
         Dict with "returns" (per-trade fractional returns of the chunk's
         closed trades), "regimes" (regime value -> bars observed in the
-        window) and "diagnosis" (the funnel's outcome classification).
+        window), "regime_trades" (regime value -> closed trades ENTERED
+        in that regime) and "diagnosis" (the funnel's outcome).
     """
     from ..backtesting.engine import BacktestEngine
 
-    engine = BacktestEngine()
+    override = None
+    if data_dir:
+        from ..config import config as base_config
+
+        if str(data_dir) != str(
+            getattr(base_config, "backtest_data_dir", "")
+        ):
+            override = _DataDirConfig(base_config, str(data_dir))
+
+    engine = BacktestEngine(override_config=override)
     result = engine.run(
         start=start,
         end=end,
@@ -758,6 +792,10 @@ def _run_chunk_backtest(
     return {
         "returns": closed_trade_returns(result.trade_log, capital),
         "regimes": dict(diagnostics.get("regimes") or {}),
+        "regime_trades": {
+            str(regime): int(cell.get("closed_trades", 0))
+            for regime, cell in (getattr(result, "by_regime", None) or {}).items()
+        },
         "diagnosis": diagnostics.get("diagnosis"),
     }
 
@@ -778,9 +816,15 @@ def _normalize_chunk_result(value: Any) -> Dict[str, Any]:
         return {
             "returns": list(value.get("returns") or []),
             "regimes": dict(value.get("regimes") or {}),
+            "regime_trades": dict(value.get("regime_trades") or {}),
             "diagnosis": value.get("diagnosis"),
         }
-    return {"returns": list(value or []), "regimes": {}, "diagnosis": None}
+    return {
+        "returns": list(value or []),
+        "regimes": {},
+        "regime_trades": {},
+        "diagnosis": None,
+    }
 
 
 def build_window_spec(
@@ -871,6 +915,7 @@ def validate_strategy(
         "chunks": [],
         "coverage": resolved.get("coverage", {}),
         "regimes": {},
+        "regime_trades": {},
         "verdict": None,
         "overall": "UNKNOWN",
         "data_start": resolved["data_start"],
@@ -886,6 +931,7 @@ def validate_strategy(
 
     symbol_returns: Dict[str, List[float]] = {}
     pooled_regimes: Dict[str, int] = {}
+    pooled_regime_trades: Dict[str, int] = {}
     for symbol in resolved["symbols"]:
         pooled: List[float] = []
         for start, end in by_symbol.get(symbol) or windows:
@@ -894,7 +940,12 @@ def validate_strategy(
             )
             chunk = _normalize_chunk_result(
                 _run_chunk_backtest(
-                    strategy_key, symbol, start, end, capital
+                    strategy_key,
+                    symbol,
+                    start,
+                    end,
+                    capital,
+                    data_dir=resolved_dir,
                 )
             )
             returns = chunk["returns"]
@@ -902,6 +953,10 @@ def validate_strategy(
             for regime, bars in chunk["regimes"].items():
                 pooled_regimes[regime] = (
                     pooled_regimes.get(regime, 0) + int(bars)
+                )
+            for regime, n in chunk["regime_trades"].items():
+                pooled_regime_trades[regime] = (
+                    pooled_regime_trades.get(regime, 0) + int(n)
                 )
             result["chunks"].append(
                 {
@@ -911,11 +966,13 @@ def validate_strategy(
                     "n_trades": len(returns),
                     "sum_return": round(sum(returns), 6),
                     "regimes": chunk["regimes"],
+                    "regime_trades": chunk["regime_trades"],
                     "diagnosis": chunk["diagnosis"],
                 }
             )
         symbol_returns[symbol] = pooled
     result["regimes"] = pooled_regimes
+    result["regime_trades"] = pooled_regime_trades
 
     n_trials: Optional[int] = None
     sr_variance: Optional[float] = None
@@ -1016,6 +1073,31 @@ def format_regime_shares(regimes: Dict[str, int], top: int = 3) -> str:
     if not shares:
         return "-"
     return ", ".join(f"{k} {v * 100:.0f}%" for k, v in shares[:top])
+
+
+def format_regime_trades(regime_trades: Dict[str, int]) -> str:
+    """Render closed trades per entry regime as "name 106 (97%), ...".
+
+    Bar shares say where the TAPE was; this says where the STRATEGY
+    actually traded. The two diverge sharply - a strategy gated to a
+    4.6%-of-bars regime can still take most of its trades elsewhere,
+    because resting orders fill after the regime has moved on.
+
+    Args:
+        regime_trades: Regime value -> closed trades entered there.
+
+    Returns:
+        Formatted string, or "-" when nothing traded.
+    """
+    total = sum(int(v) for v in regime_trades.values())
+    if total <= 0:
+        return "-"
+    ordered = sorted(
+        regime_trades.items(), key=lambda kv: (-int(kv[1]), str(kv[0]))
+    )
+    return ", ".join(
+        f"{name} {int(n)} ({int(n) / total * 100:.0f}%)" for name, n in ordered
+    )
 
 
 def collect_regime_coverage(
@@ -1200,6 +1282,11 @@ def print_run_summary(results: List[Dict[str, Any]]) -> None:
             print(
                 f"  {'':<24} regimes: "
                 f"{format_regime_shares(r['regimes'], top=5)}"
+            )
+        if r.get("regime_trades"):
+            print(
+                f"  {'':<24} trades by entry regime: "
+                f"{format_regime_trades(r['regime_trades'])}"
             )
         if r.get("reason"):
             print(f"  {'':<24} reason: {r['reason']}")

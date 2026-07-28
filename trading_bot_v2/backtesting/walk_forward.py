@@ -600,6 +600,8 @@ class ChunkedWalkForwardReport:
     strategy: str
     symbols: List[str] = field(default_factory=list)
     objective: str = "sharpe_ratio"
+    #: Regime the whole report is conditioned on, or None for all trades.
+    regime: Optional[str] = None
     window_spec: str = ""
     windows: List[Tuple[str, str]] = field(default_factory=list)
     folds: List[ChunkedFold] = field(default_factory=list)
@@ -678,6 +680,7 @@ def run_chunked_walk_forward(
     windows: Optional[List[Tuple[str, str]]] = None,
     runner: Optional[Any] = None,
     optuna_db_path: Optional[str] = None,
+    regime: Optional[str] = None,
 ) -> ChunkedWalkForwardReport:
     """Run a chunked, multi-symbol, rolling-origin walk-forward sweep.
 
@@ -705,6 +708,15 @@ def run_chunked_walk_forward(
             callers that already resolved the series).
         runner: An OptunaRunner to reuse (tests inject a stubbed one).
         optuna_db_path: Study storage path when building a runner.
+        regime: Optional regime value. When set, BOTH the per-fold study
+            and the out-of-sample grading score only closed trades whose
+            entry regime matches - so a per-regime parameter variant is
+            falsifiable on data no trial saw, and the pooled OOS returns
+            handed to the promotion gate describe that regime alone.
+            Check the sample first: ``python -m
+            trading_bot_v2.validation.regime_census`` reports whether the
+            (strategy, regime) cell has enough trades to support a
+            verdict at all.
 
     Returns:
         A ChunkedWalkForwardReport.
@@ -752,10 +764,16 @@ def run_chunked_walk_forward(
             f"lower --train-windows."
         )
 
+    if regime is not None:
+        from ..regime_param_overlay import normalize_regime_value
+
+        regime = normalize_regime_value(regime)
+
     report = ChunkedWalkForwardReport(
         strategy=strategy,
         symbols=sweep_symbols,
         objective=canonical_objective,
+        regime=regime,
         window_spec=f"{len(series)}x{window_months}mo",
         windows=series,
     )
@@ -786,6 +804,7 @@ def run_chunked_walk_forward(
             timeout=timeout,
             windows=train,
             study_suffix=f"_wf{i}",
+            regime=regime,
         )
         fold.study_name = getattr(study, "study_name", "")
         fold.n_trials, completed = _fold_trial_counts(study)
@@ -809,6 +828,7 @@ def run_chunked_walk_forward(
             objective=canonical_objective,
             initial_capital=initial_capital,
             label=f"{strategy}/oos-fold{i}",
+            regime=regime,
         )
         payload = evaluation.funnel.to_dict()
         fold.out_of_sample = evaluation.banded_value
@@ -1046,7 +1066,14 @@ def print_chunked_walk_forward_report(
     print(
         f"CHUNKED WALK-FORWARD: {report.strategy} | "
         f"{','.join(report.symbols)}"
+        + (f" | REGIME: {report.regime}" if report.regime else "")
     )
+    if report.regime:
+        print(
+            f"  Every number below counts ONLY trades entered in "
+            f"{report.regime}. Trades in other regimes still happen - "
+            f"this measures a subset, not a variant that trades less."
+        )
     print(
         f"Objective: {report.objective} | windows: {report.window_spec} "
         f"({report.windows[0][0]} .. {report.windows[-1][1]}) | "

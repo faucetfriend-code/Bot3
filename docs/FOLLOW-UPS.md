@@ -226,6 +226,45 @@ not reproducible from a fresh clone, and an agent auditing from a worktree canno
 them. Decide whether validation history should be an artifact (exported JSON/CSV
 alongside the DB) rather than living only in a gitignored-in-practice binary.
 
+## 10. Regime census findings not yet acted on (2026-07-28)
+
+See `docs/REGIME-CENSUS.md` for the full table and the audit of the regime
+machinery. Fixed there: 11 silent no-op search-space parameters, one phantom
+parameter, `--regime` now composes with `--chunked`, the regime min-trades is
+derived rather than the legacy 15, and infeasible overlays are rolled back.
+Left open deliberately:
+
+**a. `grid_trading` is not reproducible.** Three runs of identical code over
+identical windows gave 578 / 539 / 516 closed trades (12% spread). Grid
+lifecycle state is in-memory. Every grid number this project has produced,
+including the campaign's PF 0.90, is approximate until this is explained. It
+is also the only strategy where this happens - the other five reproduce to
+the trade.
+
+**b. Two regime mappings lose money and could just be removed.** This costs
+zero search budget, so unlike tuning it deflates nothing:
+- VWAPScalping in RANGING_CALM: 1246 trades at PF 0.65 (its INDECISIVE
+  subset is PF 1.05 on 337 trades). `strategy_manager.py` `_vwap_regimes`.
+- GridTrading in RANGING_CALM: 440 trades at PF 0.85, against PF 1.06 in its
+  nominal RANGING_VOLATILE. `market_regime.py:934`. Only 76 trades remain
+  after removal, so this one needs validating rather than assuming.
+
+**c. CLAUDE.md's regime-to-strategy table does not match the code.**
+`market_regime.py` maps GridTrading into RANGING_CALM and MACrossover into
+TRENDING_MODERATE, and `strategy_manager.py` adds VWAPScalping in three
+regimes and LiquidationCapture/FundingArb in all of them. None of that is in
+the CLAUDE.md table.
+
+**d. The roster is aimed at the wrong fifth of the tape.** trending_strong is
+59.9% of bars and produced 360 trades in eight years; ranging_calm is 21.6%
+and produced 2401. That is a strategy-selection problem no parameter change
+addresses.
+
+**e. `run_regime_optimization.py` is still in-sample only**, and its
+`--walk-forward` does not refit per fold (`OptimizationAdapter.
+run_walk_forward` just skips the first `train_months`). Either point it at
+`optimize_chunked(regime=...)` or retire it.
+
 ## 8. Only 1m has a hard coverage guard
 
 The engine raises a clear error when 1m execution data does not cover the

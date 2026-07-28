@@ -57,6 +57,9 @@ python -m trading_bot_v2.validation.runner --strategies all --dry-run
 # Parameter optimization
 python -m trading_bot_v2.optimization --strategy mean_reversion --trials 100
 
+# Which (strategy, regime) pairs have the sample to be tuned separately?
+python -m trading_bot_v2.validation.regime_census --quiet
+
 # Why did those trials not trade?
 python -m trading_bot_v2.diagnostics.explain --strategy mean_reversion
 
@@ -799,6 +802,40 @@ against the result. The same out-of-sample series is then run through the standi
 `--in-sample-only` reproduces the pre-2026-07-28 behaviour. It logs a warning because
 the result is unfalsifiable: with 60 trials over 3 symbols some parameter set looks
 excellent by chance, and nothing separates that from an edge.
+
+### Regime-conditional tuning (`--regime`)
+
+`--regime RANGING_CALM` scores every trial on the closed trades whose **entry
+regime** matches, and prunes trials with fewer matching trades than the
+gate-derived minimum (33 at the current settings - `REGIME_OPT_MIN_TRADES`
+still overrides). It **composes with `--chunked`**, which is the only form
+worth running:
+
+```bash
+python -m trading_bot_v2.optimization --strategy momentum_scalping \
+    --chunked --regime TRENDING_STRONG \
+    --symbols BTC-USDC,ETH-USDC,SUI-USDC \
+    --windows 3 --window-months 2 --trials 40
+```
+
+Each fold optimizes on its train window(s), the winner is graded on the
+held-out window, and the standing 4-check gate is applied to the
+regime-filtered out-of-sample series. Without `--chunked` the run fits and
+scores on one contiguous window and nothing is falsifiable.
+
+**Check the sample before spending the budget.**
+`python -m trading_bot_v2.validation.regime_census` reports closed trades per
+(strategy, regime) over the same window series and marks each cell tunable or
+not against the derived requirement. Only 9 of 30 cells clear it today, and
+only 3 of those have a profit factor above 1 - see `docs/REGIME-CENSUS.md`.
+A regime cell below the bar can only ever return `INSUFFICIENT_DATA`, and the
+study's trials are still charged to the pooled strategy's deflated Sharpe.
+
+`python -m trading_bot_v2.optimization.run_regime_optimization` is the older
+per-regime orchestrator. It is **in-sample only** (and its `--walk-forward`
+does not refit per fold - it discards the first `train_months` and evaluates
+one parameter set on windows every trial also sees). Prefer
+`--chunked --regime`.
 
 ### Banded trial scoring
 
