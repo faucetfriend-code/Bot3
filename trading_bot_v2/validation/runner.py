@@ -263,6 +263,117 @@ def refresh_market_data(
             logger.warning(f"refresh-data failed for {symbol} 1m: {e}")
 
 
+def resolve_chunk_windows(
+    symbols: List[str],
+    window_months: int,
+    n_windows: int,
+    data_dir: Optional[str] = None,
+    label: str = "chunks",
+    anchor_end: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Resolve the chunk window series shared by a set of symbols.
+
+    Intersects candle coverage across the symbols so every symbol sees
+    the SAME window series (otherwise per-symbol results are not
+    comparable), clamps the anchor to the minimum 1m coverage end (the
+    backtest engine refuses a window its 1m data does not cover), and
+    cuts the windows with compute_chunk_windows.
+
+    Shared by the validation runner and the chunked optimizer sweep
+    (optimization/optuna_runner.py::optimize_chunked) so both evaluate
+    exactly the same windows.
+
+    Args:
+        symbols: Trading pairs to intersect.
+        window_months: Months per chunk window.
+        n_windows: Number of chunk windows.
+        data_dir: Candle data dir override (default: config).
+        label: Log prefix, for context.
+        anchor_end: Optional ISO date to end the newest window on,
+            instead of the data end. Only ever moves the anchor EARLIER
+            (a later anchor would ask for candles that do not exist).
+            Useful when the automatic anchor lands in a hole in a
+            higher-timeframe store that 5m coverage cannot see.
+
+    Returns:
+        Dict with keys: symbols (those that had data), windows (list of
+        (start, end) ISO pairs), data_start, data_end (ISO or None), and
+        reason (set only when no windows could be produced).
+    """
+    from ..config import config as cfg
+
+    resolved_dir = data_dir or cfg.backtest_data_dir
+    out: Dict[str, Any] = {
+        "symbols": [],
+        "windows": [],
+        "data_start": None,
+        "data_end": None,
+    }
+
+    coverage = {}
+    for symbol in symbols:
+        cov = _data_coverage(symbol, resolved_dir)
+        if cov is None:
+            logger.warning(f"[{label}] skipping symbol {symbol}: no data")
+            continue
+        coverage[symbol] = cov
+    if not coverage:
+        out["reason"] = "no candle data for any symbol"
+        return out
+
+    data_start = max(c[0] for c in coverage.values())
+    data_end = min(c[1] for c in coverage.values())
+
+    # Clamp the window anchor to 1m execution coverage. The 5m store
+    # auto-downloads up to now, but 1m is topped up manually, so the
+    # anchor can overrun the 1m store and the engine's 1m coverage
+    # guard would fail the newest window. Windows are computed once for
+    # all symbols, so clamp to the MINIMUM 1m coverage end across the
+    # run's symbols. A symbol with no 1m data at all contributes
+    # nothing here - the engine's guard stays the loud failure path.
+    m1_ends: Dict[str, date] = {}
+    for symbol in coverage:
+        m1_end = _coverage_1m_end(symbol, resolved_dir)
+        if m1_end is not None:
+            m1_ends[symbol] = m1_end
+    if m1_ends:
+        min_symbol = min(m1_ends, key=lambda s: m1_ends[s])
+        clamped_end = m1_ends[min_symbol]
+        if clamped_end < data_end:
+            logger.info(
+                f"[{label}] window anchor clamped to 1m coverage "
+                f"end of {min_symbol} (min across "
+                f"{','.join(sorted(m1_ends))}): "
+                f"{data_end.isoformat()} -> {clamped_end.isoformat()}"
+            )
+            data_end = clamped_end
+
+    if anchor_end:
+        requested = date.fromisoformat(str(anchor_end)[:10])
+        if requested < data_end:
+            logger.info(
+                f"[{label}] window anchor moved back on request: "
+                f"{data_end.isoformat()} -> {requested.isoformat()}"
+            )
+            data_end = requested
+        elif requested > data_end:
+            logger.warning(
+                f"[{label}] requested anchor {requested.isoformat()} is "
+                f"beyond available coverage - keeping "
+                f"{data_end.isoformat()}"
+            )
+
+    out["symbols"] = list(coverage)
+    out["data_start"] = data_start.isoformat()
+    out["data_end"] = data_end.isoformat()
+    out["windows"] = compute_chunk_windows(
+        data_end, window_months, n_windows, data_start=data_start
+    )
+    if not out["windows"]:
+        out["reason"] = "no usable windows in data coverage"
+    return out
+
+
 def _run_chunk_backtest(
     strategy_key: str,
     symbol: str,
@@ -345,60 +456,25 @@ def validate_strategy(
     }
 
     # Intersect coverage across symbols so every symbol sees the same
-    # window series.
-    coverage = {}
-    for symbol in symbols:
-        cov = _data_coverage(symbol, resolved_dir)
-        if cov is None:
-            logger.warning(
-                f"[{strategy_key}] skipping symbol {symbol}: no data"
-            )
-            continue
-        coverage[symbol] = cov
-    if not coverage:
-        result["reason"] = "no candle data for any symbol"
-        return result
-
-    data_start = max(c[0] for c in coverage.values())
-    data_end = min(c[1] for c in coverage.values())
-
-    # Clamp the window anchor to 1m execution coverage. The 5m store
-    # auto-downloads up to now, but 1m is topped up manually, so the
-    # anchor can overrun the 1m store and the engine's 1m coverage
-    # guard would fail the newest window. Windows are computed once for
-    # all symbols, so clamp to the MINIMUM 1m coverage end across the
-    # run's symbols. A symbol with no 1m data at all contributes
-    # nothing here - the engine's guard stays the loud failure path.
-    m1_ends: Dict[str, date] = {}
-    for symbol in coverage:
-        m1_end = _coverage_1m_end(symbol, resolved_dir)
-        if m1_end is not None:
-            m1_ends[symbol] = m1_end
-    if m1_ends:
-        min_symbol = min(m1_ends, key=lambda s: m1_ends[s])
-        clamped_end = m1_ends[min_symbol]
-        if clamped_end < data_end:
-            logger.info(
-                f"[{strategy_key}] window anchor clamped to 1m coverage "
-                f"end of {min_symbol} (min across "
-                f"{','.join(sorted(m1_ends))}): "
-                f"{data_end.isoformat()} -> {clamped_end.isoformat()}"
-            )
-            data_end = clamped_end
-
-    result["data_start"] = data_start.isoformat()
-    result["data_end"] = data_end.isoformat()
-
-    windows = compute_chunk_windows(
-        data_end, window_months, n_windows, data_start=data_start
+    # window series (shared with the chunked optimizer sweep).
+    resolved = resolve_chunk_windows(
+        symbols,
+        window_months,
+        n_windows,
+        data_dir=resolved_dir,
+        label=strategy_key,
     )
-    if not windows:
-        result["reason"] = "no usable windows in data coverage"
+    result["data_start"] = resolved["data_start"]
+    result["data_end"] = resolved["data_end"]
+    if resolved.get("reason"):
+        result["reason"] = resolved["reason"]
         return result
+
+    windows = resolved["windows"]
     result["windows"] = windows
 
     symbol_returns: Dict[str, List[float]] = {}
-    for symbol in coverage:
+    for symbol in resolved["symbols"]:
         pooled: List[float] = []
         for start, end in windows:
             logger.info(

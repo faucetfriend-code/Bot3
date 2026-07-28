@@ -14,6 +14,13 @@ Usage:
     # Walk-forward optimization
     python -m trading_bot_v2.optimization.run_optimize --strategy ma_crossover --walk-forward
 
+    # CHUNKED CROSS-SYMBOL SWEEP (house style: several short windows, not
+    # one long run; per-symbol results reported, never averaged away)
+    python -m trading_bot_v2.optimization.run_optimize \\
+        --strategy ma_crossover --chunked \\
+        --symbols BTC-USDC,ETH-USDC,SUI-USDC \\
+        --windows 3 --window-months 2 --trials 40
+
     # Export results
     python -m trading_bot_v2.optimization.run_optimize --strategy grid_trading --export results.csv
 
@@ -57,6 +64,12 @@ Examples:
   # Optimize all strategies with Random sampler
   python -m trading_bot_v2.optimization.run_optimize \\
     --all --trials 100 --sampler random
+
+  # Chunked cross-symbol sweep (3 x 2-month windows on BTC/ETH/SUI)
+  python -m trading_bot_v2.optimization.run_optimize \\
+    --strategy ma_crossover --chunked \\
+    --symbols BTC-USDC,ETH-USDC,SUI-USDC \\
+    --windows 3 --window-months 2 --trials 40
 
   # List all completed studies
   python -m trading_bot_v2.optimization.run_optimize --list
@@ -130,6 +143,35 @@ Examples:
              "overlay for (strategy, regime). Requires --regime.",
     )
 
+    # Chunked cross-symbol sweep
+    parser.add_argument(
+        "--chunked",
+        action="store_true",
+        help="Score every trial across a SERIES of short windows and "
+             "several symbols (house style) instead of one long "
+             "single-symbol backtest. Uses the same window series as "
+             "the validation runner and reports per-symbol results.",
+    )
+    parser.add_argument(
+        "--symbols",
+        type=str,
+        default="BTC-USDC,ETH-USDC,SUI-USDC",
+        help="Comma-separated symbols for --chunked "
+             "(default: BTC-USDC,ETH-USDC,SUI-USDC)",
+    )
+    parser.add_argument(
+        "--windows",
+        type=int,
+        default=3,
+        help="Number of chunk windows for --chunked (default: 3)",
+    )
+    parser.add_argument(
+        "--window-months",
+        type=int,
+        default=2,
+        help="Months per chunk window for --chunked (default: 2)",
+    )
+
     # Walk-forward options
     parser.add_argument(
         "--walk-forward", "-w",
@@ -158,7 +200,9 @@ Examples:
     parser.add_argument(
         "--end",
         type=str,
-        help="Backtest end date (ISO format, e.g., 2024-12-31). Uses config default if not set.",
+        help="Backtest end date (ISO format, e.g., 2024-12-31). Uses config "
+             "default if not set. With --chunked this anchors the newest "
+             "window (only ever moves it earlier).",
     )
 
     # Symbol and capital
@@ -354,6 +398,58 @@ def trial_funnel_payload(trial) -> dict:
     }
 
 
+def print_per_symbol_table(trial) -> None:
+    """Print a trial's per-symbol breakdown, when it has one.
+
+    Aggregating a sweep to a single number hides the failure mode this
+    strategy actually has: one symbol carrying the average while the
+    others lose money. Cross-symbol consistency is a real gate check
+    (validation/gate.py), so it is printed, not summarised away.
+
+    Args:
+        trial: An Optuna trial annotated by _chunked_objective.
+    """
+    attrs = getattr(trial, "user_attrs", None) or {}
+    per_symbol = attrs.get("per_symbol") or {}
+    if not per_symbol:
+        return
+
+    print("\n  PER-SYMBOL BREAKDOWN")
+    print(
+        f"    {'Symbol':<14} {'Bars':>9} {'Raw sig':>9} {'Trades':>8} "
+        f"{'Objective':>12} {'Return %':>10}"
+    )
+    print(f"    {'-' * 66}")
+    blind = []
+    for symbol in sorted(per_symbol):
+        cell = per_symbol[symbol] or {}
+        if not cell.get("invoked", 0):
+            blind.append(symbol)
+        print(
+            f"    {symbol:<14} {cell.get('invoked', 0):>9} "
+            f"{cell.get('raw_signals', 0):>9} {cell.get('trades', 0):>8} "
+            f"{cell.get('objective', 0.0):>12.4f} "
+            f"{cell.get('return_pct', 0.0):>10.2f}"
+        )
+    print(f"    {'-' * 66}")
+    print(
+        f"    total trades: {attrs.get('total_trades', 0)} | "
+        f"symbols that traded: {attrs.get('traded_symbols', 0)}"
+        f"/{len(per_symbol)} | "
+        f"symbols with positive objective: "
+        f"{attrs.get('profitable_symbols', 0)}/{len(per_symbol)}"
+    )
+    if blind:
+        # Zero bars is a DATA problem, not a parameter result - saying so
+        # here stops it being read as "the strategy found nothing".
+        print(
+            f"    WARNING: {', '.join(blind)} contributed 0 bars - the "
+            f"strategy's timeframe has no candles in these windows. "
+            f"Re-anchor with --end or backfill the data; their rows above "
+            f"are not evidence about the parameters."
+        )
+
+
 def print_results_summary(
     study, strategy: str, top_n: int = 10
 ) -> None:
@@ -384,6 +480,7 @@ def print_results_summary(
             title=f"{strategy} (deepest trial #{probe.number})",
             params=getattr(probe, "params", None),
         )
+        print_per_symbol_table(probe)
         return
 
     # Shown on success too: where the largest attrition happened is
@@ -395,6 +492,8 @@ def print_results_summary(
             title=f"{strategy} (best trial #{best.number})",
             params=getattr(best, "params", None),
         )
+
+    print_per_symbol_table(best)
 
     print(f"\n  Best Value: {study.best_value:.4f}")
     print(f"  Best Trial: #{study.best_trial.number}")
@@ -455,6 +554,34 @@ def run_single_strategy(
         return None
 
     try:
+        if getattr(args, "chunked", False):
+            if regime:
+                logger.error("--chunked and --regime are not compatible")
+                return None
+            symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
+            if not symbols:
+                logger.error("--chunked requires at least one --symbols entry")
+                return None
+            study = runner.optimize_chunked(
+                strategy=strategy,
+                symbols=symbols,
+                n_trials=args.trials,
+                sampler=args.sampler,
+                objective=args.objective,
+                window_months=args.window_months,
+                n_windows=args.windows,
+                initial_capital=args.capital,
+                timeout=args.timeout,
+                end=args.end,
+            )
+            print_results_summary(study, strategy, args.top)
+            if args.export:
+                export_path = args.export
+                if not export_path.endswith(".csv"):
+                    export_path = f"{export_path}.csv"
+                runner.export_results(strategy, export_path, args.top)
+            return study
+
         study = runner.optimize(
             strategy=strategy,
             n_trials=args.trials,

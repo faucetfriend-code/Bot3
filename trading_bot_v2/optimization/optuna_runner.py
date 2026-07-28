@@ -376,15 +376,7 @@ class OptunaRunner:
             symbol = cfg.backtest_symbol
 
         # Create sampler
-        if sampler.lower() == "tpe":
-            optuna_sampler = optuna.samplers.TPESampler(
-                seed=42,
-                n_startup_trials=min(20, n_trials // 5),
-            )
-        elif sampler.lower() == "random":
-            optuna_sampler = optuna.samplers.RandomSampler(seed=42)
-        else:
-            raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
+        optuna_sampler = self._build_sampler(sampler, n_trials)
 
         # Create study name. Regime-conditional studies embed the regime
         # and objective so per-regime studies never collide, e.g.
@@ -484,6 +476,315 @@ class OptunaRunner:
             logger.warning(f"Trial registry recording failed: {e}")
 
         return study
+
+    def optimize_chunked(
+        self,
+        strategy: str,
+        symbols: List[str],
+        n_trials: int = 50,
+        sampler: str = "tpe",
+        objective: str = "sharpe_ratio",
+        window_months: int = 2,
+        n_windows: int = 3,
+        initial_capital: float = 10000.0,
+        timeout: Optional[int] = None,
+        data_dir: Optional[str] = None,
+        end: Optional[str] = None,
+    ) -> "optuna.Study":
+        """Optimize a strategy over chunked windows and multiple symbols.
+
+        Each trial backtests the sampled parameters on every
+        (symbol, window) chunk and scores the aggregate, so the search
+        cannot latch onto one lucky symbol or one lucky quarter. Window
+        boundaries come from validation.runner.resolve_chunk_windows -
+        the same series the standing validation gate uses, so a sweep
+        result and a gate verdict describe the same periods.
+
+        Per-symbol results are attached to every trial (``per_symbol``
+        user attr) and printed by the CLI, so cross-symbol consistency -
+        an actual gate check - stays visible instead of being averaged
+        away. The merged signal funnel is attached too, so a trial that
+        lands zero trades still names the gate that killed it.
+
+        Args:
+            strategy: Strategy name (snake_case, e.g. "ma_crossover").
+            symbols: Trading pairs to sweep (evaluated on identical
+                windows; symbols with no candle data are dropped).
+            n_trials: Number of optimization trials.
+            sampler: "tpe" or "random".
+            objective: Metric to optimize (short forms accepted).
+            window_months: Months per chunk window.
+            n_windows: Number of chunk windows (newest-first, abutting).
+            initial_capital: Starting capital per chunk backtest.
+            timeout: Timeout in seconds (None = no limit).
+            data_dir: Candle data dir override (default: config).
+            end: Optional ISO date to anchor the newest window on. Use it
+                when the automatic anchor (data end, clamped to 1m
+                coverage) lands in a gap of the timeframe the strategy
+                actually reads - 5m coverage cannot see a hole in the 4h
+                store, and the affected symbol would silently contribute
+                zero bars.
+
+        Returns:
+            The completed Optuna study.
+
+        Raises:
+            ValueError: If the strategy is unknown or no usable windows
+                exist for the requested symbols.
+            RuntimeError: If most trials crash (see _FailRateGuard).
+        """
+        from ..validation.runner import resolve_chunk_windows
+
+        available = list_strategies()
+        if strategy not in available:
+            raise ValueError(
+                f"Unknown strategy: '{strategy}'. Available: {available}"
+            )
+        get_search_space(strategy)
+        objective = normalize_objective(objective)
+
+        resolved = resolve_chunk_windows(
+            symbols,
+            window_months,
+            n_windows,
+            data_dir=data_dir,
+            label=f"{strategy}/sweep",
+            anchor_end=end,
+        )
+        if resolved.get("reason"):
+            raise ValueError(
+                f"Cannot sweep {strategy}: {resolved['reason']} "
+                f"(symbols={','.join(symbols)})"
+            )
+        sweep_symbols: List[str] = resolved["symbols"]
+        windows: List[Any] = resolved["windows"]
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        study_name = f"{strategy}_chunked_{timestamp}"
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=self.storage_url,
+            load_if_exists=True,
+            direction="maximize",
+            sampler=self._build_sampler(sampler, n_trials),
+        )
+        _assert_scoring_schema(study)
+        study.set_user_attr("sweep_symbols", sweep_symbols)
+        study.set_user_attr("sweep_windows", windows)
+        study.set_user_attr("sweep_objective", objective)
+
+        logger.info(
+            f"Chunked sweep: strategy={strategy}, trials={n_trials}, "
+            f"symbols={','.join(sweep_symbols)}, "
+            f"windows={n_windows}x{window_months}mo "
+            f"({windows[0][0]} .. {windows[-1][1]}), "
+            f"objective={objective} -> "
+            f"{len(sweep_symbols) * len(windows)} backtests/trial"
+        )
+
+        def objective_fn(trial: "optuna.Trial") -> float:
+            return self._chunked_objective(
+                trial=trial,
+                strategy=strategy,
+                objective=objective,
+                symbols=sweep_symbols,
+                windows=windows,
+                initial_capital=initial_capital,
+            )
+
+        abort = _FailRateGuard(study_name)
+        try:
+            study.optimize(
+                objective_fn,
+                n_trials=n_trials,
+                timeout=timeout,
+                show_progress_bar=True,
+                catch=(Exception,),
+                callbacks=[abort],
+            )
+        except Exception as e:
+            logger.error(f"Chunked sweep failed: {e}")
+            raise
+        abort.raise_if_aborted()
+
+        try:
+            self._record_trial_registry(study, strategy, None, objective)
+        except Exception as e:
+            logger.warning(f"Trial registry recording failed: {e}")
+
+        return study
+
+    def _build_sampler(self, sampler: str, n_trials: int) -> Any:
+        """Construct the Optuna sampler for a run.
+
+        Args:
+            sampler: "tpe" or "random".
+            n_trials: Trial budget (sets TPE's startup trials).
+
+        Returns:
+            An Optuna sampler.
+
+        Raises:
+            ValueError: On an unknown sampler name.
+        """
+        if sampler.lower() == "tpe":
+            return optuna.samplers.TPESampler(
+                seed=42,
+                n_startup_trials=min(20, n_trials // 5),
+            )
+        if sampler.lower() == "random":
+            return optuna.samplers.RandomSampler(seed=42)
+        raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
+
+    def _suggest_or_prune(
+        self, trial: "optuna.Trial", strategy: str
+    ) -> Dict[str, Any]:
+        """Sample parameters, pruning structurally infeasible regions.
+
+        Combinations that could never produce a tradeable signal are
+        pruned up front with the reason attached, instead of being
+        backtested into a silent zero-trade result.
+
+        Args:
+            trial: The running Optuna trial.
+            strategy: Strategy name.
+
+        Returns:
+            The sampled parameters.
+
+        Raises:
+            optuna.TrialPruned: When the sampled region is infeasible.
+        """
+        try:
+            return suggest_params(trial, strategy)
+        except InfeasibleParamsError as e:
+            trial.set_user_attr("outcome", TrialOutcome.INFEASIBLE_CONFIG.value)
+            trial.set_user_attr("headline", str(e))
+            trial.set_user_attr(
+                "suggested_fix",
+                "reparameterize the search space so this region is "
+                "unrepresentable, or widen the bounds",
+            )
+            logger.debug(f"Trial {trial.number} pruned as infeasible: {e}")
+            raise optuna.TrialPruned(str(e))
+
+    def _chunked_objective(
+        self,
+        trial: "optuna.Trial",
+        strategy: str,
+        objective: str,
+        symbols: List[str],
+        windows: List[Any],
+        initial_capital: float,
+    ) -> float:
+        """Score one trial across every (symbol, window) chunk.
+
+        Args:
+            trial: The running Optuna trial.
+            strategy: Strategy name.
+            objective: Canonical objective name.
+            symbols: Trading pairs to evaluate.
+            windows: (start, end) ISO date pairs.
+            initial_capital: Starting capital per chunk.
+
+        Returns:
+            The trial value: the mean chunk objective (penalized for
+            dispersion across chunks) when the trial traded, else the
+            reserved band for its funnel diagnosis.
+
+        Raises:
+            optuna.TrialPruned: On infeasible params.
+            Exception: Any backtest failure, so Optuna records a FAIL.
+        """
+        params = self._suggest_or_prune(trial, strategy)
+        logger.debug(f"Trial {trial.number}: params={params}")
+
+        funnel = SignalFunnel(label=f"{strategy}/sweep")
+        chunk_values: List[float] = []
+        per_symbol: Dict[str, Dict[str, Any]] = {}
+        chunk_log: List[Dict[str, Any]] = []
+
+        for symbol in symbols:
+            values: List[float] = []
+            trades = 0
+            invoked = 0
+            raw_signals = 0
+            return_pct = 0.0
+            for start, end in windows:
+                result = self.adapter.run_backtest(
+                    strategy=strategy,
+                    params=params,
+                    start=start,
+                    end=end,
+                    symbol=symbol,
+                    initial_capital=initial_capital,
+                )
+                chunk_funnel = _funnel_for_result(result)
+                funnel.merge(chunk_funnel)
+                value = self.adapter.calculate_objective(result, objective)
+                values.append(value)
+                chunk_values.append(value)
+                closed = int(getattr(result, "closed_trades", 0) or 0)
+                trades += closed
+                invoked += chunk_funnel.get(STAGE_STRATEGY_INVOKED)
+                raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
+                return_pct += float(
+                    getattr(result, "total_return_pct", 0.0) or 0.0
+                )
+                chunk_log.append(
+                    {
+                        "symbol": symbol,
+                        "start": start,
+                        "end": end,
+                        "trades": closed,
+                        "value": round(value, 6),
+                    }
+                )
+            # invoked / raw are carried per symbol so a symbol that
+            # contributed NO BARS AT ALL (a hole in the timeframe the
+            # strategy reads, which 5m-based window resolution cannot
+            # see) is distinguishable from one that ran and found
+            # nothing.
+            per_symbol[symbol] = {
+                "trades": trades,
+                "invoked": invoked,
+                "raw_signals": raw_signals,
+                "objective": round(sum(values) / len(values), 6),
+                "return_pct": round(return_pct, 4),
+            }
+
+        if not chunk_values:
+            raise RuntimeError(
+                f"chunked sweep produced no backtests for {strategy} "
+                f"(symbols={symbols}, windows={windows})"
+            )
+
+        avg_value = sum(chunk_values) / len(chunk_values)
+        # Penalize dispersion across chunks, mirroring the walk-forward
+        # branch: a parameter set that only works in one window/symbol
+        # should not outrank a steadier one at the same mean.
+        if len(chunk_values) > 1:
+            variance = sum(
+                (v - avg_value) ** 2 for v in chunk_values
+            ) / len(chunk_values)
+            std_dev = variance ** 0.5
+            if std_dev > 1.0:
+                avg_value -= (std_dev - 1.0) * 0.2
+
+        total_trades = sum(s["trades"] for s in per_symbol.values())
+        traded_symbols = sum(
+            1 for s in per_symbol.values() if s["trades"] > 0
+        )
+        profitable_symbols = sum(
+            1 for s in per_symbol.values() if s["objective"] > 0
+        )
+        trial.set_user_attr("per_symbol", per_symbol)
+        trial.set_user_attr("chunks", chunk_log)
+        trial.set_user_attr("total_trades", total_trades)
+        trial.set_user_attr("traded_symbols", traded_symbols)
+        trial.set_user_attr("profitable_symbols", profitable_symbols)
+
+        return self._score_trial(trial, funnel, avg_value, params)
 
     def _record_trial_registry(
         self,
@@ -621,18 +922,7 @@ class OptunaRunner:
         # tradeable signal (e.g. a constant RRR below the strategy's gate)
         # are pruned up front with the reason attached, instead of being
         # backtested into a silent zero-trade result.
-        try:
-            params = suggest_params(trial, strategy)
-        except InfeasibleParamsError as e:
-            trial.set_user_attr("outcome", TrialOutcome.INFEASIBLE_CONFIG.value)
-            trial.set_user_attr("headline", str(e))
-            trial.set_user_attr(
-                "suggested_fix",
-                "reparameterize the search space so this region is "
-                "unrepresentable, or widen the bounds",
-            )
-            logger.debug(f"Trial {trial.number} pruned as infeasible: {e}")
-            raise optuna.TrialPruned(str(e))
+        params = self._suggest_or_prune(trial, strategy)
 
         # Log trial
         logger.debug(f"Trial {trial.number}: params={params}")

@@ -271,6 +271,66 @@ class TestAnchorClamping:
         assert result["overall"] in ("PASS", "FAIL")  # no crash
 
 
+class TestResolveChunkWindows:
+    """The window resolver is shared with the chunked optimizer sweep.
+
+    Both must evaluate the SAME window series, otherwise a sweep result
+    and a gate verdict silently describe different periods.
+    """
+
+    def _patch(self, monkeypatch):
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2024, 1, 1), date(2025, 1, 1)),
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_end", lambda symbol, data_dir: None
+        )
+
+    def test_windows_abut_and_end_at_the_anchor(self, monkeypatch):
+        self._patch(monkeypatch)
+        out = runner.resolve_chunk_windows(["BTC-USDC", "SUI-USDC"], 2, 3)
+        assert out["symbols"] == ["BTC-USDC", "SUI-USDC"]
+        assert len(out["windows"]) == 3
+        assert out["windows"][-1][1] == "2025-01-01"
+        for earlier, later in zip(out["windows"], out["windows"][1:]):
+            assert earlier[1] == later[0]
+
+    def test_anchor_end_moves_the_series_back(self, monkeypatch):
+        """A requested anchor re-aims the series at a covered period.
+
+        Needed when the automatic anchor lands in a hole of the
+        timeframe the strategy actually reads - 5m coverage cannot see a
+        gap in the 4h store.
+        """
+        self._patch(monkeypatch)
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC"], 1, 3, anchor_end="2024-04-01"
+        )
+        assert out["windows"] == [
+            ("2024-01-01", "2024-02-01"),
+            ("2024-02-01", "2024-03-01"),
+            ("2024-03-01", "2024-04-01"),
+        ]
+
+    def test_anchor_end_never_moves_forward(self, monkeypatch):
+        """An anchor past coverage is refused, not honoured."""
+        self._patch(monkeypatch)
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC"], 2, 1, anchor_end="2026-01-01"
+        )
+        assert out["windows"][-1][1] == "2025-01-01"
+
+    def test_no_data_reports_a_reason(self, monkeypatch):
+        monkeypatch.setattr(
+            runner, "_data_coverage", lambda symbol, data_dir: None
+        )
+        out = runner.resolve_chunk_windows(["NOPE-USDC"], 2, 3)
+        assert out["windows"] == []
+        assert "no candle data" in out["reason"]
+
+
 class TestRefreshData:
     """Opt-in --refresh-data / VALIDATION_REFRESH_DATA behavior."""
 
