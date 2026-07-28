@@ -12,10 +12,11 @@ Timeframes provided: 1m, 5m, 15m, 1h, 4h
 Minimum history for regime detection: 29 x 4h candles (4.8 days)
 """
 
+import math
 import os
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
 
@@ -38,6 +39,38 @@ def _autodownload_timeframes() -> set:
     """
     raw = os.getenv("DATA_AUTODOWNLOAD_TIMEFRAMES", "5m,15m,1h,4h")
     return {t.strip() for t in raw.split(",") if t.strip()}
+
+
+def autodownload_lever(timeframe: str) -> str:
+    """One sentence naming the auto-download lever for a timeframe.
+
+    Coverage errors have to tell the reader *which* knob applies to the
+    gap in front of them: 1m is excluded from auto-download by default,
+    so no amount of ``DATA_AUTODOWNLOAD=true`` will fill it, whereas a
+    5m gap on an offline run is one env var away from being fetched.
+
+    Args:
+        timeframe: Candle timeframe (e.g. "1m").
+
+    Returns:
+        A sentence describing why auto-download did not close the gap.
+    """
+    if not _autodownload_enabled():
+        return (
+            "Auto-download is OFF (DATA_AUTODOWNLOAD=false), so nothing was "
+            "fetched; set DATA_AUTODOWNLOAD=true to let the loader try."
+        )
+    allowed = _autodownload_timeframes()
+    if timeframe not in allowed:
+        return (
+            f"Auto-download is on but EXCLUDES '{timeframe}' "
+            f"(DATA_AUTODOWNLOAD_TIMEFRAMES={','.join(sorted(allowed))}), so "
+            f"this gap can only be closed manually."
+        )
+    return (
+        "Auto-download is on and already ran for this range without closing "
+        "the gap (the upstream API has no candles there)."
+    )
 
 
 class BacktestDataLoader:
@@ -156,18 +189,89 @@ class BacktestDataLoader:
             True when the store covers [start, end]; False when it does
             not or when no data can be loaded at all.
         """
+        return bool(self.coverage_shortfall(timeframe, start, end)["covered"])
+
+    def coverage_shortfall(
+        self,
+        timeframe: str,
+        start: str,
+        end: str,
+        allow_download: bool = True,
+    ) -> Dict[str, Any]:
+        """Measure how far the local store falls short of [start, end].
+
+        The quantified sibling of :meth:`covers`. Same load-then-maybe-
+        download sequence as :meth:`get_candles`, so the answer describes
+        the data a real run would actually see, but it reports *how many*
+        candles are missing on each side instead of a bare boolean. That
+        number is what makes a coverage failure actionable: "missing 6912
+        of 8640 4h candles" says something a "not covered" never does.
+
+        Only leading/trailing coverage is measured, matching
+        :meth:`_covers_range` - internal gaps are unfillable exchange
+        downtime, not a truncated window.
+
+        Args:
+            timeframe: Candle timeframe (e.g. "1m").
+            start: Range start (ISO date/datetime string).
+            end: Range end (ISO date/datetime string).
+            allow_download: Whether an auto-download may be attempted for
+                a range the local store does not cover. Pass False for a
+                follow-up probe of a range already primed by an earlier
+                call, so the same gap is not requested twice.
+
+        Returns:
+            Dict with keys ``covered`` (bool), ``first`` / ``last``
+            (ISO strings, or None when nothing is on disk),
+            ``missing_leading`` / ``missing_trailing`` (int candle counts,
+            0 when that side is covered) and ``requested`` (int candles
+            spanned by [start, end], 0 when the bounds are unparseable).
+        """
+        report: Dict[str, Any] = {
+            "covered": False,
+            "first": None,
+            "last": None,
+            "missing_leading": 0,
+            "missing_trailing": 0,
+            "requested": 0,
+        }
         try:
             df = self._load_or_fetch(timeframe, start, end)
-            if not self._covers_range(df, timeframe, start, end):
+            if not self._covers_range(df, timeframe, start, end) and allow_download:
                 if self._maybe_autodownload(timeframe, start, end):
                     self._cache.pop(f"{self.symbol}_{timeframe}", None)
                     df = self._load_or_fetch(timeframe, start, end)
-            return self._covers_range(df, timeframe, start, end)
         except Exception as e:  # noqa: BLE001 - absent data means "not covered"
-            logger.debug(
-                f"Coverage check failed for {self.symbol} {timeframe}: {e}"
-            )
-            return False
+            logger.debug(f"Coverage check failed for {self.symbol} {timeframe}: {e}")
+            return report
+
+        report["covered"] = self._covers_range(df, timeframe, start, end)
+        if df.empty:
+            return report
+        report["first"] = str(df["timestamp"].iloc[0])
+        report["last"] = str(df["timestamp"].iloc[-1])
+        try:
+            from ..data_manager import TF_MINUTES, _parse_dt
+
+            minutes = TF_MINUTES.get(timeframe, 5)
+            step = timedelta(minutes=minutes)
+            first = _parse_dt(report["first"])
+            last = _parse_dt(report["last"])
+            start_dt = _parse_dt(start)
+            end_dt = _parse_dt(end)
+        except (ValueError, TypeError):
+            return report  # Unparseable bounds: nothing to quantify
+
+        report["requested"] = max(
+            0, math.ceil((end_dt - start_dt).total_seconds() / (minutes * 60.0))
+        )
+        # The one-step tolerance mirrors _covers_range, so the counts are
+        # zero exactly when `covered` is True.
+        lead = (first - (start_dt + step)).total_seconds() / (minutes * 60.0)
+        trail = ((end_dt - step) - last).total_seconds() / (minutes * 60.0)
+        report["missing_leading"] = max(0, math.ceil(lead))
+        report["missing_trailing"] = max(0, math.ceil(trail))
+        return report
 
     def coverage_bounds(self, timeframe: str) -> Optional[Tuple[str, str]]:
         """First and last locally stored candle timestamps for a timeframe.

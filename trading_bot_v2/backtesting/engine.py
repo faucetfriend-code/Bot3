@@ -54,7 +54,7 @@ from ..regime_param_overlay import (
 )
 from ..strategy_manager import StrategyManager
 from ..risk_manager import RiskManager
-from .data_loader import BacktestDataLoader
+from .data_loader import BacktestDataLoader, autodownload_lever
 from .simulated_exchange import SimulatedExchange
 from .performance import PerformanceTracker, BacktestResult
 from .cost_model import CostModel
@@ -107,6 +107,66 @@ DEFAULT_PYRAMID_MIN_SPACING_CANDLES = 0
 #: Only consulted when signal-driven closes are enabled - see
 #: BACKTEST_OPPOSING_CLOSES_POSITION below.
 DEFAULT_MIN_HOLD_CANDLES = 6
+
+# ---------------------------------------------------------------------------
+# Data-coverage policy
+# ---------------------------------------------------------------------------
+# Every timeframe the replay loop loads. Order is the order they are
+# reported in, cheapest-to-explain first.
+COVERAGE_TIMEFRAMES = ("1m", "5m", "15m", "1h", "4h")
+
+#: Timeframes that drive the replay itself. 5m is the bar clock - a short
+#: 5m store does not shorten the *data*, it shortens the *run*, silently.
+#: 1m feeds execution refinement, where _nearest_idx would otherwise serve
+#: a stale candle as if it were the current minute.
+EXECUTION_TIMEFRAMES = ("1m", "5m")
+
+#: Timeframes consumed as context (regime detection, higher-TF indicators).
+#: A shortfall here does not truncate the run; it freezes the context on
+#: the last stored bar while the replay walks on.
+CONTEXT_TIMEFRAMES = ("15m", "1h", "4h")
+
+#: "all": any timeframe missing coverage of the requested window is fatal.
+#: "execution": only 1m/5m are fatal; 15m/1h/4h log an ERROR and continue.
+#: "warn": nothing is fatal, every shortfall logs an ERROR.
+#: No mode is silent - "warn" is for deliberate exploration, not for
+#: making a bad window look like a good one.
+COVERAGE_STRICTNESS_MODES = ("all", "execution", "warn")
+
+#: Default is "all". Justification: on the canonical store every context
+#: timeframe reaches back at least as far as 1m for every symbol, so the
+#: strict mode rejects nothing that the pre-existing 1m guard would have
+#: allowed - while a frozen 4h slice gates every trade in the replay and
+#: is no less corrupting than a truncated window. Stores where that is
+#: not true can drop to "execution".
+DEFAULT_COVERAGE_STRICTNESS = "all"
+
+
+def validate_coverage_strictness(value: Any) -> str:
+    """Validate the BACKTEST_COVERAGE_STRICTNESS mode.
+
+    Unknown values warn and fall back rather than raising - the same
+    warn-and-fall-back contract as ``validate_max_pyramid_entries``. The
+    fallback is deliberately the *strict* mode: a typo must not be able
+    to quietly disarm the guard.
+
+    Args:
+        value: Configured value (string or None).
+
+    Returns:
+        One of COVERAGE_STRICTNESS_MODES.
+    """
+    mode = str(value or "").strip().lower()
+    if mode in COVERAGE_STRICTNESS_MODES:
+        return mode
+    if mode:
+        logger.warning(
+            f"BACKTEST_COVERAGE_STRICTNESS={value!r} is not one of "
+            f"{'/'.join(COVERAGE_STRICTNESS_MODES)}. Falling back to "
+            f"'{DEFAULT_COVERAGE_STRICTNESS}' (strictest). Fix "
+            f"BACKTEST_COVERAGE_STRICTNESS in .env."
+        )
+    return DEFAULT_COVERAGE_STRICTNESS
 
 
 def _env_or_cfg(cfg: Any, cfg_attr: str, env_name: str) -> Optional[str]:
@@ -325,6 +385,152 @@ class BacktestEngine:
             "pyramid_min_spacing_candles": self._pyramid_min_spacing,
         }
 
+    # ------------------------------------------------------------------
+    # Data-coverage guard
+    # ------------------------------------------------------------------
+
+    def coverage_strictness(self) -> str:
+        """Resolve BACKTEST_COVERAGE_STRICTNESS for this run."""
+        return validate_coverage_strictness(
+            _env_or_cfg(
+                self.cfg,
+                "backtest_coverage_strictness",
+                "BACKTEST_COVERAGE_STRICTNESS",
+            )
+        )
+
+    def _check_data_coverage(
+        self,
+        loader: BacktestDataLoader,
+        symbol: str,
+        start: str,
+        end: str,
+        warmup: int,
+        funnel: Any = NULL_FUNNEL,
+    ) -> None:
+        """Refuse (or loudly flag) a window the candle store cannot cover.
+
+        Historically only 1m was guarded, because _nearest_idx serves the
+        most recent candle at-or-before a timestamp and therefore hands
+        out a stale bar - as if it were current - once a series runs out.
+        Every other timeframe had the same hole: with auto-download off, a
+        5m store that stops early silently truncates the replay, which is
+        how two runs with different ``end`` dates came back identical.
+
+        Two spans are measured per timeframe, and they mean different
+        things:
+
+        * The **loaded span** ``[start - warmup, end]`` is what the run
+          actually reads, so it is what gets probed first (auto-download
+          therefore also gets its chance at the warmup prefix).
+        * The **requested window** ``[start, end]`` is what the result
+          claims to describe. Only a shortfall *here* can mis-date a
+          replayed bar, so only this one is ever fatal.
+
+        A short warmup prefix is never fatal: it degrades indicator
+        saturation on the first bars - the behaviour that shipped before
+        warmup existed - without mis-dating anything. Making it fatal
+        would reject the earliest window of the 8-year campaign, whose
+        BTC-USDC 1m store begins exactly at the window start.
+
+        Args:
+            loader: Data loader for ``symbol``.
+            symbol: Trading pair being backtested.
+            start: Requested window start.
+            end: Requested window end.
+            warmup: Pre-window candles loaded per timeframe.
+            funnel: Signal funnel to annotate with any degradation.
+
+        Raises:
+            ValueError: When a timeframe the active strictness mode
+                treats as fatal does not cover [start, end].
+        """
+        strictness = self.coverage_strictness()
+        failures: List[str] = []
+        degraded: Dict[str, Dict[str, Any]] = {}
+
+        for timeframe in COVERAGE_TIMEFRAMES:
+            load_start = loader.shift_start(start, timeframe, warmup)
+            span = loader.coverage_shortfall(timeframe, load_start, end)
+            window = (
+                span
+                if load_start == start
+                else loader.coverage_shortfall(
+                    timeframe, start, end, allow_download=False
+                )
+            )
+            available = (
+                f"{span['first']} .. {span['last']}"
+                if span["first"] is not None
+                else f"no {timeframe} data on disk"
+            )
+
+            if not window["covered"]:
+                fatal = strictness == "all" or (
+                    strictness == "execution" and timeframe in EXECUTION_TIMEFRAMES
+                )
+                message = (
+                    f"{timeframe} candle data for {symbol} does not cover the "
+                    f"requested backtest window {start} .. {end} "
+                    f"(available {timeframe} coverage: {available}; missing "
+                    f"{window['missing_leading']} leading and "
+                    f"{window['missing_trailing']} trailing {timeframe} "
+                    f"candles of {window['requested']} requested). "
+                    f"{autodownload_lever(timeframe)} "
+                    f"Backfill it with: python -m trading_bot_v2.data_manager "
+                    f"--symbols {symbol} --timeframes {timeframe}"
+                )
+                degraded[timeframe] = {
+                    "window_covered": False,
+                    "missing_leading": window["missing_leading"],
+                    "missing_trailing": window["missing_trailing"],
+                    "requested": window["requested"],
+                    "available": available,
+                    "fatal": fatal,
+                }
+                if fatal:
+                    failures.append(message)
+                else:
+                    logger.error(
+                        f"DEGRADED BACKTEST (BACKTEST_COVERAGE_STRICTNESS="
+                        f"{strictness}): {message} Results past the last "
+                        f"stored {timeframe} candle are computed against a "
+                        f"FROZEN {timeframe} slice and are not trustworthy."
+                    )
+                continue
+
+            if span["missing_leading"]:
+                degraded[timeframe] = {
+                    "window_covered": True,
+                    "warmup_short_candles": span["missing_leading"],
+                    "available": available,
+                    "fatal": False,
+                }
+                logger.warning(
+                    f"{timeframe} warmup prefix for {symbol} is short by "
+                    f"{span['missing_leading']} candles: the {warmup}-candle "
+                    f"prefix reaches back to {load_start} but {timeframe} "
+                    f"data starts at {span['first']}. The requested window "
+                    f"{start} .. {end} IS fully covered, so no bar is "
+                    f"mis-dated - but the first replayed bars see a shorter "
+                    f"history slice and their indicators are not saturated. "
+                    f"{autodownload_lever(timeframe)} "
+                    f"Backfill it with: python -m trading_bot_v2.data_manager "
+                    f"--symbols {symbol} --timeframes {timeframe}"
+                )
+
+        funnel.note(
+            "data_coverage",
+            {"strictness": strictness, "warmup_candles": warmup, "degraded": degraded},
+        )
+
+        if failures:
+            raise ValueError(
+                "Backtest refused: candle data does not cover the requested "
+                f"window (BACKTEST_COVERAGE_STRICTNESS={strictness}).\n"
+                + "\n".join(failures)
+            )
+
     def run(
         self,
         start: str,
@@ -442,25 +648,6 @@ class BacktestEngine:
             taker_fee_pct=self.cfg.backtest_taker_fee_pct,
         )
 
-        # --- 1m execution-coverage guard ---
-        # The replay loop always feeds a 1m execution slice to the
-        # strategy pipeline, and _nearest_idx falls back to a positional
-        # guess when a timestamp is missing from the 1m map - which
-        # silently serves wrong-date candles when 1m data does not cover
-        # the window. Refuse to run instead.
-        if not loader.covers("1m", start, end):
-            bounds = loader.coverage_bounds("1m")
-            available = (
-                f"{bounds[0]} .. {bounds[1]}" if bounds else "no 1m data on disk"
-            )
-            raise ValueError(
-                f"1m candle data for {symbol} does not cover the requested "
-                f"backtest window {start} .. {end} "
-                f"(available 1m coverage: {available}). "
-                f"Backfill it with: python -m trading_bot_v2.data_manager "
-                f"--symbols {symbol} --timeframes 1m"
-            )
-
         # --- Load candles (with a pre-window warmup prefix) ---
         # Every timeframe is loaded from `start - warmup` so the first
         # replayed bar already sees a full `lookback`-candle history slice,
@@ -471,6 +658,9 @@ class BacktestEngine:
             f"History lookback: {lookback} candles/timeframe | "
             f"warmup prefix: {warmup} candles/timeframe"
         )
+
+        # --- Data-coverage guard (every timeframe) ---
+        self._check_data_coverage(loader, symbol, start, end, warmup, funnel)
 
         candles = {
             tf: loader.get_candles(tf, start, end, warmup_candles=warmup)
