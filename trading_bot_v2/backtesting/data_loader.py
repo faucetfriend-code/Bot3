@@ -172,6 +172,11 @@ class BacktestDataLoader:
     def coverage_bounds(self, timeframe: str) -> Optional[Tuple[str, str]]:
         """First and last locally stored candle timestamps for a timeframe.
 
+        Reads the timestamp column alone when a parquet store exists, so
+        a bounds probe on a multi-million-row 1m store does not
+        materialise (or cache) the full OHLCV frame. Falls back to the
+        regular load path for CSV-only stores.
+
         Args:
             timeframe: Candle timeframe (e.g. "1m").
 
@@ -179,6 +184,21 @@ class BacktestDataLoader:
             (first_timestamp, last_timestamp) ISO strings, or None when
             no local data exists for the timeframe.
         """
+        base = self.symbol.replace("/", "_")
+        parquet_path = self.data_dir / f"{base}_{timeframe}.parquet"
+        if parquet_path.exists():
+            try:
+                stamps = pd.read_parquet(
+                    parquet_path, columns=["timestamp"]
+                )["timestamp"]
+            except Exception as e:  # noqa: BLE001 - fall back to full load
+                logger.debug(
+                    f"Timestamp-only read failed for {parquet_path}: {e}"
+                )
+            else:
+                if stamps.empty:
+                    return None
+                return str(stamps.iloc[0]), str(stamps.iloc[-1])
         try:
             df = self._load_or_fetch(timeframe, "2000-01-01", "2000-01-02")
         except Exception:  # noqa: BLE001 - no data on disk

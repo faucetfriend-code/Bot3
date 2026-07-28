@@ -19,8 +19,13 @@ import pytest
 import trading_bot_v2.validation.runner as runner
 from trading_bot_v2.validation.runner import (
     STRATEGY_ENV_FLAGS,
+    build_window_spec,
+    collect_regime_coverage,
     compute_chunk_windows,
+    compute_spread_windows,
     discover_enabled_strategies,
+    estimate_runtime_seconds,
+    format_duration,
     persist_result,
     run_once,
     validate_strategy,
@@ -129,6 +134,12 @@ class TestPooledGateAggregation:
             lambda symbol, data_dir: (date(2024, 1, 1), date(2025, 1, 1)),
         )
         monkeypatch.setattr(
+            runner, "_coverage_1m_start", lambda symbol, data_dir: None
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_end", lambda symbol, data_dir: None
+        )
+        monkeypatch.setattr(
             runner,
             "_run_chunk_backtest",
             lambda strategy, symbol, start, end, capital: list(
@@ -142,7 +153,7 @@ class TestPooledGateAggregation:
             "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
         )
         assert result["overall"] == "PASS"
-        assert result["window_spec"] == "3x2mo"
+        assert result["window_spec"] == "3x2mo@8y"
         # 2 symbols x 3 windows = 6 chunk records
         assert len(result["chunks"]) == 6
         # Pooled: 2 symbols x 3 chunks x 17 trades = 102 closed trades,
@@ -195,6 +206,9 @@ class TestAnchorClamping:
             runner,
             "_coverage_1m_end",
             lambda symbol, data_dir: m1_ends.get(symbol),
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_start", lambda symbol, data_dir: None
         )
         monkeypatch.setattr(
             runner,
@@ -288,11 +302,17 @@ class TestResolveChunkWindows:
         monkeypatch.setattr(
             runner, "_coverage_1m_end", lambda symbol, data_dir: None
         )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_start", lambda symbol, data_dir: None
+        )
 
     def test_windows_abut_and_end_at_the_anchor(self, monkeypatch):
         self._patch(monkeypatch)
-        out = runner.resolve_chunk_windows(["BTC-USDC", "SUI-USDC"], 2, 3)
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "SUI-USDC"], 2, 3, mode="recent"
+        )
         assert out["symbols"] == ["BTC-USDC", "SUI-USDC"]
+        assert out["mode"] == "recent"
         assert len(out["windows"]) == 3
         assert out["windows"][-1][1] == "2025-01-01"
         for earlier, later in zip(out["windows"], out["windows"][1:]):
@@ -330,6 +350,421 @@ class TestResolveChunkWindows:
         out = runner.resolve_chunk_windows(["NOPE-USDC"], 2, 3)
         assert out["windows"] == []
         assert "no candle data" in out["reason"]
+
+
+class TestSpreadWindows:
+    """Spread mode: N windows distributed across a multi-YEAR span."""
+
+    def test_spread_across_eight_years(self):
+        windows = compute_spread_windows(
+            date(2026, 7, 1), 2, 6, data_start=date(2018, 7, 1)
+        )
+        assert len(windows) == 6
+        # Oldest starts at the span start, newest ends at the anchor.
+        assert windows[0][0] == "2018-07-01"
+        assert windows[-1][1] == "2026-07-01"
+        # Every window is the requested length and none overlap.
+        for start, end in windows:
+            s = date.fromisoformat(start)
+            e = date.fromisoformat(end)
+            assert runner._month_span(s, e) == 2
+        for earlier, later in zip(windows, windows[1:]):
+            assert earlier[1] < later[0]
+        # Windows land in distinct calendar years - the whole point.
+        years = {w[0][:4] for w in windows}
+        assert len(years) >= 5
+
+    def test_spread_degrades_to_contiguous_when_span_is_tight(self):
+        # 3 x 2mo needs 6 months; only 6 are available -> packed series.
+        spread = compute_spread_windows(
+            date(2025, 1, 1), 2, 3, data_start=date(2024, 7, 1)
+        )
+        contiguous = compute_chunk_windows(
+            date(2025, 1, 1), 2, 3, data_start=date(2024, 7, 1)
+        )
+        assert spread == contiguous
+
+    def test_spread_clamps_to_short_history(self):
+        # Only 4 months of data but 3 x 2mo requested: clamp, do not
+        # invent windows before the data starts.
+        windows = compute_spread_windows(
+            date(2025, 1, 1), 2, 3, data_start=date(2024, 9, 1)
+        )
+        assert windows
+        assert all(w[0] >= "2024-09-01" for w in windows)
+        assert windows[-1][1] == "2025-01-01"
+
+    def test_degenerate_inputs(self):
+        assert compute_spread_windows(date(2025, 1, 1), 0, 3) == []
+        assert compute_spread_windows(date(2025, 1, 1), 2, 0) == []
+
+    def test_mode_selects_the_layout(self):
+        recent = runner.cut_windows(
+            date(2026, 7, 1), 2, 4, date(2018, 7, 1), mode="recent"
+        )
+        spread = runner.cut_windows(
+            date(2026, 7, 1), 2, 4, date(2018, 7, 1), mode="spread"
+        )
+        # Recent packs into the last 8 months; spread reaches 2018.
+        assert recent[0][0] > "2025-01-01"
+        assert spread[0][0] == "2018-07-01"
+
+
+class TestMultiYearResolution:
+    """resolve_chunk_windows over years, with a late-listing symbol."""
+
+    # BTC 1m starts 2018-01-01 though 5m reaches 2017-08-17;
+    # SUI does not exist before its 2023-05-03 listing.
+    COVERAGE = {
+        "BTC-USDC": (date(2017, 8, 17), date(2026, 7, 28)),
+        "SUI-USDC": (date(2023, 5, 3), date(2026, 7, 28)),
+    }
+    M1_START = {
+        "BTC-USDC": date(2018, 1, 1),
+        "SUI-USDC": date(2023, 5, 3),
+    }
+    M1_END = {
+        "BTC-USDC": date(2026, 7, 28),
+        "SUI-USDC": date(2026, 7, 28),
+    }
+
+    @pytest.fixture(autouse=True)
+    def _patch(self, monkeypatch):
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: self.COVERAGE.get(symbol),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_start",
+            lambda symbol, data_dir: self.M1_START.get(symbol),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_end",
+            lambda symbol, data_dir: self.M1_END.get(symbol),
+        )
+
+    def test_per_symbol_series_uses_each_symbols_own_history(self):
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
+        )
+        by_symbol = out["windows_by_symbol"]
+        assert set(by_symbol) == {"BTC-USDC", "SUI-USDC"}
+        # BTC reaches back to its 1m floor, not to SUI's listing.
+        assert by_symbol["BTC-USDC"][0][0] == "2018-07-28"
+        # SUI is clamped to its listing date.
+        assert by_symbol["SUI-USDC"][0][0] >= "2023-05-03"
+        # Both end at the shared anchor.
+        assert by_symbol["BTC-USDC"][-1][1] == "2026-07-28"
+        assert by_symbol["SUI-USDC"][-1][1] == "2026-07-28"
+
+    def test_1m_start_beats_5m_start(self):
+        """BTC 5m reaches 2017-08 but 1m does not - never use 5m."""
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC"], 2, 6, span_years=20
+        )
+        assert out["data_start"] == "2018-01-01"
+        assert out["windows"][0][0] >= "2018-01-01"
+
+    def test_shared_series_is_the_intersection(self):
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
+        )
+        # The shared series can never predate the youngest symbol.
+        assert out["data_start"] == "2023-05-03"
+        assert out["windows"][0][0] >= "2023-05-03"
+
+    def test_coverage_reports_asymmetry(self):
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
+        )
+        coverage = out["coverage"]
+        assert coverage["BTC-USDC"]["data_start"] == "2018-01-01"
+        assert coverage["SUI-USDC"]["data_start"] == "2023-05-03"
+        assert coverage["SUI-USDC"]["listing_limited"] is True
+        assert coverage["BTC-USDC"]["listing_limited"] is False
+        # Months are the evaluated span, not a guess.
+        assert coverage["BTC-USDC"]["months"] > 100
+        assert coverage["SUI-USDC"]["months"] < 45
+        assert coverage["BTC-USDC"]["n_windows"] == 6
+
+    def test_small_store_boundary_is_not_flagged_as_asymmetry(
+        self, monkeypatch
+    ):
+        """BTC 1m starts 2018-01, ETH 1m 2017-08 - that is not a gap."""
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2017, 8, 17), date(2026, 7, 28)),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_start",
+            lambda symbol, data_dir: {
+                "BTC-USDC": date(2018, 1, 1),
+                "ETH-USDC": date(2017, 8, 18),
+            }[symbol],
+        )
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "ETH-USDC"], 2, 6, span_years=8
+        )
+        assert out["coverage"]["BTC-USDC"]["listing_limited"] is False
+        assert out["coverage"]["ETH-USDC"]["listing_limited"] is False
+
+    def test_shared_windows_opt_out(self):
+        out = runner.resolve_chunk_windows(
+            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8, per_symbol=False
+        )
+        assert out["windows_by_symbol"] == {}
+        assert len(out["windows"]) == 6
+
+    def test_span_years_bounds_the_reach(self):
+        narrow = runner.resolve_chunk_windows(
+            ["BTC-USDC"], 2, 4, span_years=2
+        )
+        wide = runner.resolve_chunk_windows(
+            ["BTC-USDC"], 2, 4, span_years=8
+        )
+        assert narrow["windows"][0][0] > "2024-01-01"
+        assert wide["windows"][0][0] < "2019-01-01"
+
+    def test_env_defaults_drive_the_mode(self, monkeypatch):
+        monkeypatch.setenv("VALIDATION_WINDOW_MODE", "recent")
+        monkeypatch.setenv("VALIDATION_SPAN_YEARS", "3")
+        out = runner.resolve_chunk_windows(["BTC-USDC"], 2, 4)
+        assert out["mode"] == "recent"
+        assert out["span_years"] == 3
+        # Recent mode = one contiguous 8-month block at the anchor.
+        assert out["windows"][0][0] > "2025-01-01"
+
+
+class TestListingBoundary:
+    """A mid-day listing must not produce a window the engine rejects.
+
+    SUI-USDC's first 1m candle is 2023-05-03T12:00:00, so a window
+    starting 2023-05-03 is NOT covered and the engine's 1m guard fails
+    it. The 1m start therefore rounds up to a whole day.
+    """
+
+    def test_day_ceiling_rounds_mid_day_starts_up(self):
+        assert runner._day_ceiling("2023-05-03T12:00:00") == date(
+            2023, 5, 4
+        )
+        assert runner._day_ceiling("2023-05-03T00:00:00") == date(
+            2023, 5, 3
+        )
+        assert runner._day_ceiling("2023-05-03") == date(2023, 5, 3)
+        assert runner._day_ceiling("2023-05-03T00:00:01") == date(
+            2023, 5, 4
+        )
+
+    def test_window_start_clears_the_listing_timestamp(self, monkeypatch):
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2023, 5, 3), date(2026, 7, 28)),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_start",
+            lambda symbol, data_dir: runner._day_ceiling(
+                "2023-05-03T12:00:00"
+            ),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_end",
+            lambda symbol, data_dir: date(2026, 7, 28),
+        )
+        out = runner.resolve_chunk_windows(["SUI-USDC"], 2, 3, span_years=8)
+        assert out["data_start"] == "2023-05-04"
+        assert out["windows"][0][0] == "2023-05-04"
+
+
+class TestRuntimeEstimate:
+    def test_scales_with_total_bars(self):
+        one = estimate_runtime_seconds(1, 1, 3, 2, seconds_per_month=10.0)
+        assert one == 60.0
+        # 2 strategies x 3 symbols x 6 windows x 2 months
+        many = estimate_runtime_seconds(2, 3, 6, 2, seconds_per_month=10.0)
+        assert many == 720.0
+
+    def test_env_override(self, monkeypatch):
+        monkeypatch.setenv("VALIDATION_SECONDS_PER_MONTH", "5")
+        assert estimate_runtime_seconds(1, 1, 2, 2) == 20.0
+
+    def test_zero_factors(self):
+        assert estimate_runtime_seconds(0, 3, 6, 2) == 0.0
+
+    def test_format_duration(self):
+        assert format_duration(45) == "45s"
+        assert format_duration(600) == "10m"
+        assert format_duration(3 * 3600 + 12 * 60) == "3h 12m"
+
+    def test_window_spec_records_the_span(self):
+        assert build_window_spec(6, 2, "spread", 8) == "6x2mo@8y"
+        assert build_window_spec(3, 2, "recent", 8) == "3x2mo"
+
+
+class TestRegimeCoverageReporting:
+    """Per-window regime breakdown - the payoff of a multi-year span."""
+
+    def _patch(self, monkeypatch, regimes_by_window):
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2018, 1, 1), date(2026, 1, 1)),
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_start", lambda symbol, data_dir: None
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_end", lambda symbol, data_dir: None
+        )
+
+        def fake_backtest(strategy, symbol, start, end, capital):
+            return {
+                "returns": list(GOOD_CHUNK),
+                "regimes": dict(regimes_by_window(start)),
+                "diagnosis": "traded",
+            }
+
+        monkeypatch.setattr(runner, "_run_chunk_backtest", fake_backtest)
+
+    def test_regimes_recorded_per_chunk_and_pooled(
+        self, monkeypatch, tmp_db
+    ):
+        self._patch(
+            monkeypatch,
+            lambda start: (
+                {"trending_strong": 900, "ranging_calm": 100}
+                if start < "2022-01-01"
+                else {"ranging_volatile": 400, "ranging_calm": 600}
+            ),
+        )
+        result = validate_strategy("mean_reversion", ["BTC-USDC"], 2, 4)
+        assert result["chunks"]
+        for chunk in result["chunks"]:
+            assert sum(chunk["regimes"].values()) == 1000
+            assert chunk["diagnosis"] == "traded"
+        # Pooled histogram spans both epochs.
+        pooled = result["regimes"]
+        assert pooled["trending_strong"] > 0
+        assert pooled["ranging_volatile"] > 0
+        assert sum(pooled.values()) == 1000 * len(result["chunks"])
+
+    def test_collect_regime_coverage_dedupes_across_strategies(self):
+        chunk = {
+            "symbol": "BTC-USDC",
+            "start": "2020-01-01",
+            "end": "2020-03-01",
+            "n_trades": 3,
+            "sum_return": 0.1,
+            "regimes": {"trending_strong": 500, "ranging_calm": 500},
+        }
+        results = [
+            {"chunks": [dict(chunk)]},
+            {"chunks": [dict(chunk)]},
+        ]
+        rows, pooled = collect_regime_coverage(results)
+        assert len(rows) == 1
+        assert rows[0]["bars"] == 1000
+        assert pooled == {"trending_strong": 500, "ranging_calm": 500}
+
+    def test_regime_shares_formatting(self):
+        text = runner.format_regime_shares(
+            {"trending_strong": 700, "ranging_calm": 300}
+        )
+        assert "trending_strong 70%" in text
+        assert runner.format_regime_shares({}) == "-"
+
+    def test_single_regime_span_is_flagged(self, monkeypatch, capsys):
+        results = [
+            {
+                "chunks": [
+                    {
+                        "symbol": "BTC-USDC",
+                        "start": "2020-01-01",
+                        "end": "2020-03-01",
+                        "regimes": {
+                            "ranging_calm": 950,
+                            "trending_strong": 50,
+                        },
+                    }
+                ]
+            }
+        ]
+        runner.print_regime_coverage(results)
+        out = capsys.readouterr().out
+        assert "REGIME COVERAGE BY WINDOW" in out
+        assert "single regime epoch" in out
+
+    def test_data_spans_flag_asymmetry(self, capsys):
+        results = [
+            {
+                "coverage": {
+                    "BTC-USDC": {
+                        "data_start": "2018-01-01",
+                        "data_end": "2026-07-28",
+                        "months": 102,
+                        "listing_limited": False,
+                    },
+                    "SUI-USDC": {
+                        "data_start": "2023-05-03",
+                        "data_end": "2026-07-28",
+                        "months": 38,
+                        "listing_limited": True,
+                    },
+                }
+            }
+        ]
+        runner.print_data_spans(results)
+        out = capsys.readouterr().out
+        assert "PER-SYMBOL DATA SPANS" in out
+        assert "SHORTER HISTORY" in out
+        assert "ASYMMETRIC" in out
+
+
+class TestDryRun:
+    def test_dry_run_prints_plan_and_exits(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2018, 1, 1), date(2026, 1, 1)),
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_start", lambda symbol, data_dir: None
+        )
+        monkeypatch.setattr(
+            runner, "_coverage_1m_end", lambda symbol, data_dir: None
+        )
+
+        def boom(*args, **kwargs):
+            raise AssertionError("dry run must not backtest")
+
+        monkeypatch.setattr(runner, "run_once", boom)
+        code = runner.main(
+            [
+                "--dry-run",
+                "--strategies",
+                "mean_reversion",
+                "--symbols",
+                "BTC-USDC",
+                "--windows",
+                "6",
+                "--window-months",
+                "2",
+                "--span-years",
+                "8",
+            ]
+        )
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "VALIDATION PLAN (dry run) - 6x2mo@8y" in out
+        assert "estimated runtime" in out
+        assert "2018-" in out  # the plan really reaches back
 
 
 class TestRefreshData:

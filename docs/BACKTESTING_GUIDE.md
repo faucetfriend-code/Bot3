@@ -47,9 +47,12 @@ python -m trading_bot_v2.backtesting.run_backtest \
 # Every strategy in isolation, ranked
 python -m trading_bot_v2.backtesting.run_strategy_sweep --symbol SUI-USDC
 
-# Chunked validation + promotion gate verdict
+# Chunked validation + promotion gate verdict (6 x 2mo spread over 8 years)
 python -m trading_bot_v2.validation.runner \
-    --strategies mean_reversion --symbols SUI-USDC --windows 3 --once
+    --strategies mean_reversion --symbols SUI-USDC --once
+
+# ...and the plan + runtime estimate without running anything
+python -m trading_bot_v2.validation.runner --strategies all --dry-run
 
 # Parameter optimization
 python -m trading_bot_v2.optimization --strategy mean_reversion --trials 100
@@ -497,9 +500,17 @@ so it can run while the bot trades. Instead of one long backtest it evaluates a 
 of smaller windows** (house preference) and pools the results.
 
 ```bash
-# 3 windows of 2 months each, over the configured symbols
+# See the plan and the runtime estimate before committing to a run
 python -m trading_bot_v2.validation.runner --strategies mean_reversion \
-    --symbols SUI-USDC,BTC-USDC --window-months 2 --windows 3 --once
+    --symbols BTC-USDC,ETH-USDC,SUI-USDC --dry-run
+
+# Default: 6 windows of 2 months spread across the last 8 years
+python -m trading_bot_v2.validation.runner --strategies mean_reversion \
+    --symbols SUI-USDC,BTC-USDC --once
+
+# The legacy layout: 3 abutting windows at the trailing edge
+python -m trading_bot_v2.validation.runner --strategies mean_reversion \
+    --window-mode recent --windows 3 --window-months 2 --once
 
 # Every ENABLE_*-enabled strategy, topping up candle data first
 python -m trading_bot_v2.validation.runner --strategies all --refresh-data --once
@@ -513,25 +524,95 @@ python -m trading_bot_v2.validation.runner --strategies all --loop-hours 24
 | `--strategies` | `all` | — |
 | `--symbols` | `SUI-USDC,BTC-USDC` | `VALIDATION_SYMBOLS` |
 | `--window-months` | `2` | `VALIDATION_WINDOW_MONTHS` |
-| `--windows` | `3` | `VALIDATION_WINDOWS` |
+| `--windows` | `6` | `VALIDATION_WINDOWS` |
+| `--window-mode` | `spread` | `VALIDATION_WINDOW_MODE` |
+| `--span-years` | `8` | `VALIDATION_SPAN_YEARS` |
+| `--shared-windows` | off (per-symbol series) | `VALIDATION_PER_SYMBOL_SPAN=false` |
+| `--dry-run` | off | — |
 | `--capital` | `10000` | — |
 | `--refresh-data` | off | `VALIDATION_REFRESH_DATA` |
 | `--loop-hours` / `--once` | `--once` | — |
 
-Windows are cut walking backward from the most recent candle available offline, and
-**anchors clamp to 1m coverage** so a window can never be requested that the engine would
-reject. Verdicts are persisted to the `validation_runs` table and served read-only by the
-bot API (`GET /api/validation/runs`, `GET /api/validation/latest`).
+### Window modes
+
+`spread` (default) distributes the N windows evenly across `--span-years` ending at the
+data anchor. Runtime depends only on `N x window-months`, **not** on the span, so 8 years
+of calendar reach costs the same as 12 contiguous months — you just get out-of-sample
+seams between every pair of windows instead of one recent block. `recent` is the legacy
+contiguous layout walking backward from the anchor.
+
+Six months of contiguous data is a single regime epoch; a strategy that grades well there
+may simply be fitted to it. That is what the default is widened away from.
+
+### Per-symbol spans
+
+Symbols list at different times: BTC-USDC 1m starts 2018-01-01, ETH-USDC 2017-08-17,
+SUI-USDC 2023-05-03. By default each symbol gets its **own** window series over its own
+1m-clamped coverage, and the summary prints the spans so an 8-year BTC record is never
+silently compared against a 3-year SUI one:
+
+```
+  Symbol     Data span (1m-clamped)     Months  Windows evaluated                     Note
+  BTC-USDC   2018-01-01 .. 2026-07-28      102  2018-07-28 -> 2026-07-28 (6 windows)
+  ETH-USDC   2017-08-18 .. 2026-07-28      107  2018-07-28 -> 2026-07-28 (6 windows)
+  SUI-USDC   2023-05-04 .. 2026-07-28       38  2023-05-04 -> 2026-07-28 (6 windows)  SHORTER HISTORY
+  Per-symbol history is ASYMMETRIC: the pooled verdict weighs a long record against a
+  short one. Read the cross-symbol check per symbol, not as an average.
+```
+
+`SHORTER HISTORY` marks a symbol whose usable history starts 6+ months after the
+longest-history symbol in the run.
+
+`--shared-windows` forces one intersected series instead — comparable window-for-window,
+but SUI's 2023 listing then truncates BTC's history too.
+
+Anchors and span starts **clamp to 1m coverage at both ends**, so a window can never be
+requested that the engine would reject. The 1m start rounds up to a whole day (SUI listed
+at 12:00, and a window starting at that day's midnight is not covered).
+
+### Regime coverage
+
+Every run prints a per-window regime breakdown built from the funnel diagnostics. This is
+the whole point of a multi-year span — if a strategy only ever traded one regime across
+eight years, that is the finding:
+
+```
+  Symbol     Window                         Bars  Regimes (share of bars)
+  BTC-USDC   2018-07-28 -> 2018-09-28      17856  trending_strong 64%, ranging_calm 24%, indecisive 5%
+  BTC-USDC   2022-06-28 -> 2022-08-28      17568  trending_strong 57%, ranging_calm 21%, trending_moderate 10%
+  SUI-USDC   2024-11-04 -> 2025-01-04      17568  trending_strong 44%, ranging_calm 30%, ranging_volatile 12%
+  POOLED (104496 bars over 6 windows)
+    trending_strong           62844   60.1%
+    ranging_calm              22140   21.2%
+  5 regimes observed; most common trending_strong at 60% of bars.
+```
+
+A regime above 70% of all bars prints a `WARNING: ... single regime epoch` line: a PASS
+earned there is not evidence of robustness.
+
+Verdicts are persisted to the `validation_runs` table (per-chunk regime histograms
+included in `chunks_json`) and served read-only by the bot API
+(`GET /api/validation/runs`, `GET /api/validation/latest`).
+
+### Runtime
+
+Runtime scales with total replayed bars — `strategies x symbols x windows x
+window-months`. Measured here: **~5s per window-month** for a regime-gated strategy.
+`--dry-run` prints the estimate up front; tune the constant with
+`VALIDATION_SECONDS_PER_MONTH` (default 8, deliberately conservative).
 
 Real output:
 
 ```
   Strategy                 Verdict   Trades   PF       PSR/DSR                        Consistent
   ----------------------------------------------------------------------------------------------
-  mean_reversion           FAIL      42       0.78     PSR 0.2500 / DSR n/a (N trials unknown) 0
+  mean_reversion           FAIL      228      0.63     PSR 0.0029 / DSR 0.0000        0
+                           regimes: trending_strong 60%, ranging_calm 21%, trending_moderate 7%, indecisive 7%, ranging_volatile 5%
   ----------------------------------------------------------------------------------------------
-  windows: 2x1mo | symbols: SUI-USDC
+  windows: 3x2mo@8y | symbols: BTC-USDC,SUI-USDC | shared span: 2023-05-04 .. 2026-07-28
 ```
+
+The `window_spec` reads `NxMmo@Yy` in spread mode (`NxMmo` in recent mode).
 
 A `FAIL` verdict still exits 0 — the process only returns non-zero on a configuration
 error, so do not use the exit code as a pass/fail signal.
