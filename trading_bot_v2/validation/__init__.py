@@ -7,8 +7,9 @@ Statistical validation utilities for strategy results:
 - statistics: Sharpe ratio, Probabilistic Sharpe Ratio (PSR), Deflated
   Sharpe Ratio (DSR), expected max Sharpe under multiple testing, and
   minimum track record length (MinTRL).
-- gate: standing go/no-go policy for promoting a strategy
-  (trade count, profit factor, PSR/DSR, cross-symbol consistency).
+- gate: standing go/no-go policy for promoting a strategy (sample
+  adequacy, profit factor, PSR/DSR, cross-symbol consistency). Reports
+  a GateOutcome so INSUFFICIENT_DATA is distinguishable from FAIL.
 - runner: standalone service that periodically re-validates enabled
   strategies over chunked backtest windows and persists verdicts to
   the validation_runs table.
@@ -34,19 +35,27 @@ References:
 from .statistics import (
     DSRResult,
     PSRResult,
+    bootstrap_profit_factor_bound,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    min_observations_for_sharpe,
     min_track_record_length,
     probabilistic_sharpe_ratio,
+    profit_factor,
+    sample_adequacy,
     sharpe_ratio,
 )
 
 __all__ = [
     "DSRResult",
     "PSRResult",
+    "bootstrap_profit_factor_bound",
     "deflated_sharpe_ratio",
     "expected_max_sharpe",
+    "min_observations_for_sharpe",
     "min_track_record_length",
     "probabilistic_sharpe_ratio",
+    "profit_factor",
+    "sample_adequacy",
     "sharpe_ratio",
 ]

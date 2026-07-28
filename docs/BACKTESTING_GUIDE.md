@@ -540,15 +540,79 @@ error, so do not use the exit code as a pass/fail signal.
 
 | # | Check | Requirement | Env override |
 |---|---|---|---|
-| 1 | `min_closed_trades` | Every symbol has >= 30 closed trades | `GATE_MIN_TRADES` |
-| 2 | `profit_factor` | Pooled PF > 1.3 | `GATE_MIN_PF` |
+| 1 | `sample_adequacy` | >= 33 **pooled** closed trades (derived, see below) **and** >= 2 symbols with >= 5 trades each | `GATE_REFERENCE_SR`, `GATE_MIN_TRADES_PER_SYMBOL`, `GATE_MIN_TRADES` |
+| 2 | `profit_factor` | Pooled PF > 1.3 | `GATE_MIN_PF`, `GATE_PF_CONFIDENCE` |
 | 3 | `psr_or_dsr` | Pooled PSR >= 0.95, **or** DSR >= 0.95 when the trial registry knows N | `GATE_MIN_PSR` |
-| 4 | `cross_symbol` | Positive expectancy on >= 2 symbols | fixed |
+| 4 | `cross_symbol` | Positive expectancy on >= 2 eligible symbols | fixed |
 
 All four must pass. Check 3 is the multiple-testing defence: if you tried 200
 configurations, a Sharpe that looks good is expected by chance, and DSR deflates it.
 Check 4 is the overfitting defence: a strategy that only works on one symbol is
 usually curve-fitted.
+
+### Why check 1 is derived and pooled
+
+The old check demanded 30 closed trades **per symbol**, which measures **bar frequency,
+not strategy quality**. A 5m grid strategy clears it in a fortnight; `ma_crossover`
+trades on 4h bars with a 5-bar entry window, so a two-month window (~360 bars) contains
+maybe 10-20 crossovers and the check was *structurally unreachable* — guaranteed FAIL
+regardless of how good the strategy was.
+
+The replacement asks a statistical question: how many observations does the PSR need
+before an edge worth deploying would be provable at the confidence we demand? That is
+`min_observations_for_sharpe(GATE_REFERENCE_SR, GATE_MIN_PSR)` — the MinTRL formula run
+forwards. At the defaults (Sharpe-per-trade 0.30, 95% confidence) it derives **33**,
+which is where the legacy "30" was informally aiming. Raise `GATE_MIN_PSR` to 0.99 and
+the requirement rises to 64 on its own; there is no second number to keep in sync.
+
+It is applied to the **pooled** sample (all symbols, all windows) because pooling is how
+a slow strategy accumulates evidence. The per-symbol number drops to a floor of 5 whose
+only job is deciding which symbols are allowed to vote in check 4 — a symbol with 2
+trades has no measurable expectancy.
+
+### Four outcomes, not two
+
+A 3-trade sample cannot support a confident verdict in *either* direction, and calling
+that FAIL reads identically to a genuine rejection. The gate reports a `GateOutcome`:
+
+| Outcome | Meaning | Exit code (CLI) |
+|---|---|---|
+| `PASS` | Adequate sample, every check cleared | 0 |
+| `FAIL` | Adequate sample, a quality check failed — a real rejection | 1 |
+| `INSUFFICIENT_DATA` | It traded, but not enough to decide. **Not** a rejection | 2 |
+| `NO_TRADES` | Zero closed trades — a plumbing question, not a quality one | 2 |
+
+On an inadequate sample the quality checks are still computed and printed but marked
+`advisory` (`PASS*`/`FAIL*`) — they are not decisive, and `verdict.passed` is False
+either way, so a thin sample can never promote anything.
+
+The remedy for `INSUFFICIENT_DATA` is **more data, not a lower bar**. The verdict carries
+`data_multiple_needed` and the reason line names a concrete window, extrapolated from the
+trade rate actually observed rather than from a hand-maintained table of per-strategy
+frequencies:
+
+```
+OVERALL: INSUFFICIENT_DATA
+REASON:  sample too small to decide: pooled 10 < 33; only 0 symbol(s) with >= 5 trades
+         - needs ~3.3x more data (about 20 calendar months, i.e. 3x7mo)
+         - lengthen the window rather than lowering the bar
+```
+
+`gate.required_window_months(observed_trades, observed_calendar_months)` exposes the same
+calculation for callers that want to re-run automatically.
+
+### The PF/PSR asymmetry
+
+`GATE_MIN_PSR` being uniform is *correct*: the PSR is a significance test with a
+`sqrt(n-1)` term, so a small sample already needs a proportionally larger Sharpe to reach
+0.95. It is the mechanism that makes "small sample, larger effect required" true.
+
+`GATE_MIN_PF` is the one that is genuinely sample-size blind — a profit factor is a point
+estimate of a ratio with no confidence interval, so PF 1.5 on 4 trades and PF 1.5 on 400
+score identically. Setting `GATE_PF_CONFIDENCE=true` switches check 2 to a one-sided
+bootstrap lower bound on the PF (deterministic, fixed seed), which shrinks toward 1.0 as
+the sample shrinks. It is **off by default because it is materially stricter** — a true
+PF of 1.5 needs several hundred trades before its 95% lower bound clears 1.3.
 
 You can run the gate standalone against a single window:
 
@@ -558,7 +622,7 @@ python -m trading_bot_v2.validation.gate --strategy mean_reversion \
 ```
 
 It prints a per-check `PASS`/`FAIL` table with the observed value against the threshold,
-then an `OVERALL:` line.
+then an `OVERALL:` line and, when the outcome is not `PASS`, a `REASON:` line.
 
 ---
 

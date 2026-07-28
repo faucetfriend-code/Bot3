@@ -26,8 +26,9 @@ References:
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Sequence
+from typing import List, Optional, Sequence, Tuple
 
+import numpy as np
 from scipy.stats import norm
 
 # Euler-Mascheroni constant (used by the expected-max-Sharpe formula)
@@ -322,6 +323,151 @@ def min_track_record_length(
         return None
     z_conf = float(norm.ppf(confidence))
     return 1.0 + var_term * (z_conf / (sr - benchmark_sr)) ** 2
+
+
+def min_observations_for_sharpe(
+    reference_sr: float,
+    confidence: float = 0.95,
+    benchmark_sr: float = 0.0,
+    skew: float = 0.0,
+    kurtosis: float = 3.0,
+) -> Optional[int]:
+    """Observations needed before a Sharpe of reference_sr is provable.
+
+    This is ``min_track_record_length`` run FORWARDS: instead of asking
+    "is the track record I already have long enough?", it asks "how long
+    must any track record be before an edge of this size could clear the
+    PSR bar at all?". Solving PSR(SR*) >= confidence for n gives
+
+        n >= 1 + (1 - skew*sr + ((kurt - 1) / 4) * sr^2)
+                 * (z(confidence) / (sr - SR*))^2
+
+    with sr = reference_sr. The default arguments assume a normal return
+    distribution (skew 0, non-excess kurtosis 3), which is the neutral
+    assumption to make about a series that has not been observed yet.
+
+    This is the principled replacement for a hand-set minimum trade
+    count: the sample requirement is derived from the effect size worth
+    detecting and the confidence demanded of the PSR, so raising
+    GATE_MIN_PSR automatically raises the sample needed to satisfy it.
+    Worked default: reference_sr 0.30 per trade at 95% confidence needs
+    33 observations - which is where the legacy "30 trades" rule of
+    thumb happens to land.
+
+    Formula source: Bailey & Lopez de Prado (2012), eq. (13), evaluated
+    at a reference Sharpe rather than an observed one.
+
+    Args:
+        reference_sr: Sharpe-per-observation the sample must be able to
+            detect (the smallest edge considered worth deploying).
+        confidence: Confidence the PSR is required to reach.
+        benchmark_sr: Benchmark Sharpe SR* the edge is measured against.
+        skew: Assumed skewness of the return series.
+        kurtosis: Assumed NON-excess kurtosis (normal -> 3.0).
+
+    Returns:
+        Required observation count (int), or None when reference_sr does
+        not exceed benchmark_sr or the variance term is non-positive.
+    """
+    if reference_sr <= benchmark_sr:
+        return None
+    var_term = 1.0 - skew * reference_sr + ((kurtosis - 1.0) / 4.0) * reference_sr**2
+    if var_term <= 0:
+        return None
+    z_conf = float(norm.ppf(confidence))
+    return int(
+        math.ceil(1.0 + var_term * (z_conf / (reference_sr - benchmark_sr)) ** 2)
+    )
+
+
+def profit_factor(returns: Sequence[float]) -> float:
+    """Profit factor (gross profit / gross loss) of a return series.
+
+    Args:
+        returns: Per-trade return observations.
+
+    Returns:
+        Gross profit divided by gross loss; ``inf`` when there are wins
+        and no losses, 0.0 when there is nothing to divide.
+    """
+    gross_profit = sum(r for r in returns if r > 0)
+    gross_loss = abs(sum(r for r in returns if r < 0))
+    if gross_loss > 0:
+        return gross_profit / gross_loss
+    return float("inf") if gross_profit > 0 else 0.0
+
+
+def bootstrap_profit_factor_bound(
+    returns: Sequence[float],
+    confidence: float = 0.95,
+    n_boot: int = 2000,
+    seed: int = 20250727,
+) -> Optional[float]:
+    """One-sided lower confidence bound on the profit factor.
+
+    The profit factor is a ratio of two sums with no closed-form
+    sampling distribution, so a uniform PF floor treats a PF of 5.0 on
+    four trades exactly like a PF of 1.4 on four hundred. Resampling the
+    trades with replacement and taking the ``1 - confidence`` quantile
+    of the resampled PFs gives the PF the strategy can be trusted to
+    have, which IS sample-size aware: a small sample produces a wide
+    bootstrap distribution and therefore a low bound.
+
+    Deterministic: the resampling uses a fixed seed so a verdict is
+    reproducible.
+
+    Args:
+        returns: Per-trade return observations.
+        confidence: Confidence level for the one-sided bound.
+        n_boot: Number of bootstrap resamples.
+        seed: RNG seed (fixed so verdicts are reproducible).
+
+    Returns:
+        Lower confidence bound on the profit factor, or None when there
+        are fewer than 2 observations. Resamples with no losing trade
+        contribute an infinite PF, which only ever raises the bound.
+    """
+    n = len(returns)
+    if n < 2:
+        return None
+    arr = np.asarray(returns, dtype=float)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, n, size=(n_boot, n))
+    sample = arr[idx]
+    gross_profit = np.where(sample > 0, sample, 0.0).sum(axis=1)
+    gross_loss = np.abs(np.where(sample < 0, sample, 0.0).sum(axis=1))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        pf = np.where(
+            gross_loss > 0,
+            gross_profit / np.where(gross_loss > 0, gross_loss, 1.0),
+            np.where(gross_profit > 0, np.inf, 0.0),
+        )
+    return float(np.quantile(pf, 1.0 - confidence))
+
+
+def sample_adequacy(
+    n_observations: int,
+    reference_sr: float,
+    confidence: float = 0.95,
+) -> Tuple[bool, int]:
+    """Whether a sample is large enough to decide on a reference edge.
+
+    Args:
+        n_observations: Observations actually available.
+        reference_sr: Smallest Sharpe-per-observation worth detecting.
+        confidence: Confidence the PSR must reach.
+
+    Returns:
+        Tuple (adequate, required) where ``required`` is the observation
+        count from ``min_observations_for_sharpe``. When the requirement
+        cannot be computed the sample is reported as adequate with a
+        required count of 0, so a malformed policy never blocks a
+        verdict outright.
+    """
+    required = min_observations_for_sharpe(reference_sr, confidence=confidence)
+    if required is None:
+        return True, 0
+    return n_observations >= required, required
 
 
 def closed_trade_returns(

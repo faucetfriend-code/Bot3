@@ -14,11 +14,15 @@ import pytest
 from trading_bot_v2.validation.statistics import (
     DSRResult,
     PSRResult,
+    bootstrap_profit_factor_bound,
     closed_trade_returns,
     deflated_sharpe_ratio,
     expected_max_sharpe,
+    min_observations_for_sharpe,
     min_track_record_length,
     probabilistic_sharpe_ratio,
+    profit_factor,
+    sample_adequacy,
     sharpe_ratio,
 )
 
@@ -164,6 +168,84 @@ class TestMinTrackRecordLength:
         far = min_track_record_length(REF_RETURNS, 0.0)
         close = min_track_record_length(REF_RETURNS, REF_SR * 0.8)
         assert close > far
+
+
+class TestMinObservationsForSharpe:
+    def test_matches_mintrl_run_forwards(self):
+        """The forward requirement is the MinTRL formula evaluated at a
+        reference Sharpe instead of an observed one."""
+        z = 1.6448536269514722  # norm.ppf(0.95)
+        sr = 0.30
+        expected = 1.0 + (1.0 + 0.5 * sr**2) * (z / sr) ** 2
+        assert min_observations_for_sharpe(sr) == math.ceil(expected)
+
+    def test_default_lands_near_the_legacy_thirty(self):
+        assert min_observations_for_sharpe(0.30) == 33
+
+    def test_more_confidence_needs_more_observations(self):
+        assert min_observations_for_sharpe(0.30, confidence=0.99) > (
+            min_observations_for_sharpe(0.30, confidence=0.95)
+        )
+
+    def test_bigger_edge_needs_fewer_observations(self):
+        assert min_observations_for_sharpe(0.60) < min_observations_for_sharpe(0.30)
+
+    def test_no_edge_is_unprovable(self):
+        assert min_observations_for_sharpe(0.0) is None
+        assert min_observations_for_sharpe(0.30, benchmark_sr=0.40) is None
+
+
+class TestSampleAdequacy:
+    def test_reports_requirement_and_verdict(self):
+        adequate, required = sample_adequacy(10, 0.30)
+        assert required == 33
+        assert adequate is False
+        assert sample_adequacy(40, 0.30)[0] is True
+
+    def test_unprovable_reference_never_blocks(self):
+        adequate, required = sample_adequacy(0, 0.0)
+        assert adequate is True
+        assert required == 0
+
+
+class TestProfitFactor:
+    def test_basic_ratio(self):
+        assert profit_factor([0.02, -0.01]) == pytest.approx(2.0)
+
+    def test_no_losses_is_infinite(self):
+        assert profit_factor([0.02, 0.01]) == float("inf")
+
+    def test_nothing_to_divide(self):
+        assert profit_factor([]) == 0.0
+
+
+class TestBootstrapProfitFactorBound:
+    #: Same point-estimate PF (1.5) at every length - only n differs.
+    UNIT = [0.03, 0.02, 0.01, -0.04]
+
+    def test_point_estimate_is_sample_size_blind(self):
+        """The problem being fixed: PF cannot tell 4 trades from 400."""
+        assert profit_factor(self.UNIT) == pytest.approx(
+            profit_factor(self.UNIT * 100)
+        )
+
+    def test_bound_rises_with_sample_size(self):
+        small = bootstrap_profit_factor_bound(self.UNIT)
+        medium = bootstrap_profit_factor_bound(self.UNIT * 40)
+        large = bootstrap_profit_factor_bound(self.UNIT * 100)
+        assert small < medium < large
+
+    def test_bound_never_exceeds_the_point_estimate_materially(self):
+        bound = bootstrap_profit_factor_bound(self.UNIT * 100)
+        assert bound <= profit_factor(self.UNIT * 100)
+
+    def test_deterministic(self):
+        first = bootstrap_profit_factor_bound(self.UNIT * 20)
+        second = bootstrap_profit_factor_bound(self.UNIT * 20)
+        assert first == second
+
+    def test_tiny_series_returns_none(self):
+        assert bootstrap_profit_factor_bound([0.01]) is None
 
 
 class TestClosedTradeReturns:
