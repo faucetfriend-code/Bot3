@@ -10,6 +10,22 @@ CRITICAL RULES:
 - 1m/5m data NEVER flips signal direction (higher TF determines BUY/SELL)
 - All refinements are OPTIONAL improvements, not hard gates
 - If 1m/5m data is unavailable, fall back to immediate execution
+
+SCOPE - THIS MODULE IS LIVE-ONLY:
+    ``trading_bot.py`` is the only importer. ``BacktestEngine`` does not build
+    or call an ExecutionLayer, and it cannot: this class needs a live
+    MultiTimeframeFetcher, and SimulatedExchange does not provide one. So the
+    ``exec:*`` rejection reasons on a backtest funnel come exclusively from
+    ``backtesting/engine.py::_execute_signal`` - none of them originate here.
+
+    That is currently harmless for live/backtest parity, because
+    :meth:`ExecutionLayer.refine_entry` never returns None: every path returns
+    a signal, adjusting only confidence, stop_loss and notes. The
+    ``refined_signal is None`` branch in ``trading_bot.py`` and the
+    ``signals_skipped`` counter below are therefore both unreachable today.
+    Anything that makes this class start skipping entries would silently
+    diverge live from every backtest, so it needs a matching gate in the
+    engine. ``test_execution_layer_no_hard_block`` pins this.
 """
 
 from typing import Optional, Dict, Any, List

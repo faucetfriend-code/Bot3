@@ -115,6 +115,9 @@ REASON_EXEC_HEDGE_MODE = "exec:hedge_mode_block"
 REASON_EXEC_MIN_HOLD = "exec:min_hold_block"
 REASON_EXEC_QTY_NON_POSITIVE = "exec:qty_non_positive"
 REASON_EXEC_EXCEPTION = "exec:exception"
+#: A same-direction add was permitted by max_pyramid_entries but arrived
+#: sooner than pyramid_min_spacing_candles after the previous entry.
+REASON_EXEC_PYRAMID_SPACING = "exec:pyramid_spacing_block"
 
 #: validity flag name -> interned reason string, built once at import.
 REASON_VALIDITY: Dict[str, str] = {

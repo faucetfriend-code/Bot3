@@ -182,6 +182,17 @@ def render_funnel_report(
             lines.append(f"  {'  ' + str(metric):<26} {info}")
         lines.append(f"  {rule}")
 
+    # Execution policy behind the exec:* reasons below. Absent for funnels
+    # produced outside the backtest engine (e.g. the live NullFunnel).
+    exec_policy = (payload.get("notes") or {}).get("execution_policy")
+    if exec_policy:
+        desc = ", ".join(f"{k}={v}" for k, v in sorted(exec_policy.items()))
+        wrapped = _wrap(desc, _INNER - 28)
+        lines.append(f"  {'Execution policy':<26} {wrapped[0]}")
+        for chunk in wrapped[1:]:
+            lines.append(f"  {'':<26} {chunk}")
+        lines.append(f"  {rule}")
+
     binding = str(payload.get("binding_stage") or "")
     lines.append(f"  BINDING CONSTRAINT: {binding or 'unknown'}")
     top_reasons = payload.get("top_reasons") or []
