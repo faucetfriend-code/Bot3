@@ -32,7 +32,24 @@ def main():
         default=getattr(config, "backtest_strategy", ""),
         help="Run only one strategy (e.g. MomentumScalping). Empty = all strategies.",
     )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help=(
+            "Candle store to read. THE ONLY RELIABLE WAY to redirect it: "
+            "exporting BACKTEST_DATA_DIR does nothing, because .env sets it "
+            "and config.py calls load_dotenv(override=True). The configured "
+            "path is also relative, so running from a git worktree silently "
+            "resolves to that worktree's own (usually empty) data directory."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.data_dir:
+        # The engine reads config.backtest_data_dir when it builds its loader,
+        # so overriding it here is what makes the flag take effect.
+        config.backtest_data_dir = args.data_dir
+        print(f"Candle store: {args.data_dir}")
 
     engine = BacktestEngine()
     strategy_filter = args.strategy or None

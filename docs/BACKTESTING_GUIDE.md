@@ -103,7 +103,18 @@ to accept the override and silently read the wrong store. Consequences:
 - **Always run backtests from the main checkout root.** Because the configured path is
   relative, running from a git worktree resolves it to that worktree's own (parquet-less)
   data directory, and you get "Loaded 0 candles" or a silently truncated window.
-- To point at a different store, edit `.env` or redirect it in-process — not via the shell.
+- To point at a different store, use the explicit flag — not the shell:
+
+```bash
+python -m trading_bot_v2.backtesting.run_backtest --symbol BTC-USDC \
+    --data-dir "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/trading_bot_v2/backtesting/data"
+```
+
+  It prints `Candle store: <path>` so you can see which store a run actually read.
+  `data_manager` has had `--data-dir` all along. Other entry points
+  (`run_strategy_sweep`, `validation.runner`, `optimization`) do not yet, so for those
+  the workaround is still to edit `.env`, or set `config.backtest_data_dir` in-process
+  after importing `trading_bot_v2.config`.
 
 To see what your `.env` actually resolves to rather than guessing, print it:
 
