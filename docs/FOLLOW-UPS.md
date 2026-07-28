@@ -109,6 +109,31 @@ containing invented API references. The real guide now lives at
 `docs/BACKTESTING_GUIDE.md`. The duplicate is confusable and probably should be
 deleted, but it was left alone pending a decision from the owner.
 
+## 8e. Campaign runs are not reproducible unless the end date is pinned
+
+The regime census reported grid_trading yielding 578 / 539 / 516 trades across three
+"identical" campaign runs. This is NOT engine nondeterminism — a single-window grid
+backtest reproduces exactly (verified: 17 trades, PF 1.79, three consecutive runs).
+
+The cause is that the data moves underneath the run. `DATA_AUTODOWNLOAD` defaults on and
+tops the 5m store up to *now*, and the validation runner anchors its newest window to the
+coverage end. Observed within one day: the 5m trailing edge advanced from ~11:35 to 17:40.
+So consecutive campaign runs evaluate a slightly different final window, and the
+highest-frequency strategy shows the largest swing.
+
+Consequences:
+
+- **Any campaign whose results you intend to compare must pin `--end`**, or run with
+  `DATA_AUTODOWNLOAD=false`. Otherwise re-running "the same" campaign legitimately gives
+  different numbers and it looks like a bug.
+- The 2026-07-28 8-year campaign did not pin `--end`, so its exact trade counts are not
+  reproducible. The verdicts are robust (they do not turn on a handful of trades in one
+  window) but the counts are not.
+
+Worth doing: have the runner record the resolved anchor and the store's trailing edge in
+`validation_runs`, so a result carries the data state that produced it. Consider defaulting
+campaigns to a pinned anchor with an explicit `--to-now` opt-in.
+
 ## 8a. Calibration's hard criterion should probably not be `max`
 
 Phase 4 shipped (commit 9cbc86b) and works, but calibrating over 2.5 years qualified the
