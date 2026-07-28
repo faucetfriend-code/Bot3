@@ -972,9 +972,28 @@ the code actually reads that variable (see the `MIN_ENTRY_BARS` case above).
 before both dates, silently truncating the window. Check coverage including 1m, and
 compare `bars_evaluated` against the days you requested.
 
-**`test_profiler_benchmark.py::TestPerformanceBenchmark::test_check_regression` fails** —
-known timing flake. It passes in isolation and fails under full-suite load. Do not panic
-and do not "fix" it.
+**Performance tests are excluded from the default run.** `pyproject.toml` sets
+`addopts = "-m 'not perf'"`, so a clean suite reports `1461 passed, 1 deselected`. To run
+them, on a quiet machine:
+
+```bash
+python -m pytest trading_bot_v2/tests/ -m perf
+```
+
+The two long-standing "known timing flakes" were retired on 2026-07-28 — they were not
+flaky tests of real properties, they were tests of nothing. `test_check_regression` ran
+the benchmark suite twice *in the same process* and asserted no regression appeared:
+both sides were identical code, so it had zero power to detect a slowdown and noise was
+its only possible failure mode. It also compared means; across 224 same-code comparisons
+the mean drifted up to +212% while the median stayed within +19%. The funnel-overhead
+test derived a ~0.06% answer from the difference of two ~0.35s wall-clock loops, and a
+null-vs-null control (true answer 0%) reported up to +5.5% — its noise floor exceeded
+its own 3% budget.
+
+Both now measure what they claim: the regression check compares medians against a
+locally generated baseline and detects an 11% slowdown deterministically, and the funnel
+test times the funnel calls directly (overhead 0.056-0.059%, noise floor +/-0.001%).
+Measured full-suite pass rate went from 2/5 to 5/5.
 
 **Data-dependent tests skip** — expected in any git worktree; the parquets are gitignored.
 
