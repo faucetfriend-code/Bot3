@@ -177,7 +177,14 @@ Key variables:
 - `AGENT_WALLET_PRIVATE_KEY` / `ACCOUNT_PUBLIC_KEY` - Pacifica auth (Ed25519)
 - `TESTNET=true` - Testnet mode
 - `ENABLE_MEAN_REVERSION=true` (one per strategy)
-- `ADX_TRENDING_THRESHOLD=25.0` - Regime detection
+- `ADX_TRENDING_THRESHOLD=25.0` - Regime detection. **Do not turn this without
+  reading `docs/REGIME-DISCRIMINATION.md`**: it is one global parameter that
+  re-gates every strategy on every symbol, and the measured answer is that the
+  regime label carries almost no forward information at any threshold. Also
+  `ADX_RANGING_THRESHOLD=20.0`, `ADX_MODERATE_THRESHOLD=20.0`,
+  `VOLATILITY_HIGH_PERCENTILE=65.0` (all four were documented but unwired
+  before 2026-07-28), plus `ADX_EXIT_TRENDING`, `VOL_SCORE_ENTER`,
+  `VOL_SCORE_EXIT`, `MIN_REGIME_DWELL_HOURS`.
 - `CIRCUIT_BREAKER_LOSS_PCT=0.10` - 10% portfolio loss stop
 - `KELLY_FRACTION=0.5` / `KELLY_MIN_TRADES=50`
 - `LOG_LEVEL=INFO`

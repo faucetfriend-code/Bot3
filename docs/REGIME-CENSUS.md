@@ -136,6 +136,17 @@ The roster is aimed at the fifth of the tape that ranges, while three fifths
 of it trends. That is a strategy-selection finding, not a parameter finding,
 and no amount of per-regime tuning changes it.
 
+**Follow-up (2026-07-28):** `docs/REGIME-DISCRIMINATION.md` went one level
+down and measured whether the label means anything. It barely does - the
+five regimes explain 1-3% of forward-volatility rank variance, nothing at
+all of forward direction, and `trending_strong` has the **wrong sign** on
+forward trend persistence (its median directional efficiency sits on the
+random-walk benchmark, while `ranging_calm`'s sits above it). It also
+decomposes the 60%: 90% of it is raw `ADX > 25`, and the pooled median ADX
+on 4h crypto is 26.4. The `vwap_scalping / indecisive` cell being the
+census's best performer is what that predicts - the residual bucket wins
+when the taxonomy is not doing work.
+
 ---
 
 ## What the census says about per-regime tuning
