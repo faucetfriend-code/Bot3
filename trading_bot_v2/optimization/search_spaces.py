@@ -496,7 +496,10 @@ def _vwap_scalping_space() -> SearchSpace:
     return {
         # VWAP deviation
         "sd_entry_threshold": (1.0, 3.0),        # Min SD for entry
-        "sd_exit_threshold": (0.5, 1.5),         # Exit at this SD
+        # NOTE: "sd_exit_threshold" was removed on 2026-07-28. VWAPScalping
+        # has no exit-at-SD mechanism at all - it exits on the ATR stop or
+        # target - so the parameter never reached the strategy and every
+        # sampled value scored identically. It was a pure noise dimension.
         # ATR stop loss
         "atr_stop_multiplier": (1.0, 2.5),       # ATR multiplier for stop
         # RSI confirmation
@@ -626,7 +629,6 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
     },
     "vwap_scalping": {
         "sd_entry_threshold": "float",
-        "sd_exit_threshold": "float",
         "atr_stop_multiplier": "float",
         "rsi_oversold": "float",
         "rsi_overbought": "float",

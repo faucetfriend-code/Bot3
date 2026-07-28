@@ -137,13 +137,19 @@ Examples:
         type=str,
         help="Target regime (e.g. RANGING_CALM). Scores each trial only "
              "on closed trades whose entry regime matches; trials with "
-             "fewer than REGIME_OPT_MIN_TRADES matching trades are pruned.",
+             "fewer than the derived minimum matching trades are pruned. "
+             "COMBINE WITH --chunked so the winner is graded out of "
+             "sample; without it the run fits and scores on one window. "
+             "Check the cell has the sample first with "
+             "python -m trading_bot_v2.validation.regime_census.",
     )
     parser.add_argument(
         "--min-trades",
         type=int,
         help="Minimum matching-regime trades per trial before pruning "
-             "(default: env REGIME_OPT_MIN_TRADES or 15)",
+             "(default: REGIME_OPT_MIN_TRADES, else the gate-derived "
+             "requirement from min_observations_for_sharpe - 33 at the "
+             "current gate settings)",
     )
     parser.add_argument(
         "--save-overlay",
@@ -610,6 +616,7 @@ def run_chunked_walk_forward_cli(
             timeout=args.timeout,
             end=args.end,
             runner=runner,
+            regime=getattr(args, "regime", None),
         )
     except ValueError as e:
         logger.error(f"Chunked walk-forward setup failed: {e}")
@@ -633,12 +640,27 @@ def run_single_strategy(
 
     try:
         if getattr(args, "chunked", False):
-            if regime:
-                logger.error("--chunked and --regime are not compatible")
-                return None
             symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
             if not symbols:
                 logger.error("--chunked requires at least one --symbols entry")
+                return None
+
+            if regime:
+                logger.info(
+                    f"Regime-conditional chunked run: every trial and the "
+                    f"out-of-sample grading count only trades ENTERED in "
+                    f"{regime}. Confirm the cell has the sample first: "
+                    f"python -m trading_bot_v2.validation.regime_census "
+                    f"--strategies {strategy}"
+                )
+            if save_overlay and not getattr(args, "in_sample_only", False):
+                logger.error(
+                    "--save-overlay is not supported on the chunked "
+                    "walk-forward path: each fold produces its own winner, "
+                    "so there is no single best trial to persist. Read the "
+                    "report, then save the chosen params with a "
+                    "--in-sample-only or non-chunked run."
+                )
                 return None
 
             if not getattr(args, "in_sample_only", False):
@@ -660,8 +682,14 @@ def run_single_strategy(
                 initial_capital=args.capital,
                 timeout=args.timeout,
                 end=args.end,
+                regime=regime,
+                min_regime_trades=getattr(args, "min_trades", None),
             )
             print_results_summary(study, strategy, args.top)
+            if save_overlay:
+                save_overlay_from_study(
+                    study, strategy, regime, args.objective
+                )
             if args.export:
                 export_path = args.export
                 if not export_path.endswith(".csv"):

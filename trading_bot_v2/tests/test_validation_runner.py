@@ -142,7 +142,7 @@ class TestPooledGateAggregation:
         monkeypatch.setattr(
             runner,
             "_run_chunk_backtest",
-            lambda strategy, symbol, start, end, capital: list(
+            lambda strategy, symbol, start, end, capital, **kw: list(
                 chunk_returns
             ),
         )
@@ -213,7 +213,9 @@ class TestAnchorClamping:
         monkeypatch.setattr(
             runner,
             "_run_chunk_backtest",
-            lambda strategy, symbol, start, end, capital: list(GOOD_CHUNK),
+            lambda strategy, symbol, start, end, capital, **kw: list(
+                GOOD_CHUNK
+            ),
         )
 
     def _capture_info_logs(self):
@@ -624,7 +626,7 @@ class TestRegimeCoverageReporting:
             runner, "_coverage_1m_end", lambda symbol, data_dir: None
         )
 
-        def fake_backtest(strategy, symbol, start, end, capital):
+        def fake_backtest(strategy, symbol, start, end, capital, **kw):
             return {
                 "returns": list(GOOD_CHUNK),
                 "regimes": dict(regimes_by_window(start)),

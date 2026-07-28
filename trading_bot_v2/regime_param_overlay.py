@@ -61,6 +61,56 @@ DISPLAY_TO_STRATEGY_KEY: Dict[str, str] = {
 }
 
 
+# Search-space parameter name -> strategy INSTANCE attribute name, for the
+# cases where the two diverge.
+#
+# WHY THIS EXISTS: overlays and optimizer parameter overrides are applied by
+# setattr (see apply_params_to_strategy), so a search-space key that does not
+# match the instance attribute is a SILENT NO-OP - the trial samples a value,
+# the value is never read, and every sampled value scores identically. An
+# audit on 2026-07-28 found 11 such parameters across four strategies, which
+# meant liquidation_capture was searching 2 of its 7 declared dimensions and
+# grid_trading 2 of its 5.
+#
+# The alias is applied instead of renaming the search-space keys so existing
+# Optuna studies stay readable and comparable. tests/test_regime_optimization.py
+# ::TestSearchSpaceReachability asserts every declared parameter resolves, so
+# this class of bug cannot recur silently.
+PARAM_ATTR_ALIASES: Dict[str, Dict[str, str]] = {
+    "grid_trading": {
+        "grid_spacing_atr_multiplier": "grid_spacing_multiplier",
+        "emergency_stop_loss_pct": "emergency_stop_pct",
+        "adx_regime_threshold": "adx_threshold",
+    },
+    "liquidation_capture": {
+        "price_move_threshold": "price_threshold",
+        "volume_spike_multiplier": "volume_multiplier",
+        "rsi_oversold_threshold": "rsi_oversold",
+        "rsi_overbought_threshold": "rsi_overbought",
+        "min_consecutive_moves": "min_consecutive",
+    },
+    "orderbook_imbalance": {
+        "imbalance_long_threshold": "imbalance_long",
+        "imbalance_short_threshold": "imbalance_short",
+        "strong_imbalance_threshold": "strong_imbalance",
+    },
+}
+
+
+def resolve_param_attr(strategy_key: str, param: str) -> str:
+    """Map a search-space parameter name to its instance attribute name.
+
+    Args:
+        strategy_key: Snake_case strategy key.
+        param: Search-space parameter name.
+
+    Returns:
+        The attribute name to setattr, which is ``param`` itself unless
+        PARAM_ATTR_ALIASES declares a rename for this strategy.
+    """
+    return PARAM_ATTR_ALIASES.get(strategy_key, {}).get(param, param)
+
+
 def _env_bool(name: str, default: bool) -> bool:
     """Read a boolean from the environment (true/1/yes/on, false/0/no/off)."""
     value = os.getenv(name, "").lower()
@@ -149,25 +199,64 @@ def get_param_whitelist(strategy_key: str) -> set:
         return set()
 
 
+def effective_params(strategy: Any, strategy_key: str) -> Dict[str, Any]:
+    """Read the strategy's current values for every search-space parameter.
+
+    Used to feasibility-check an overlay against the parameters it does
+    NOT set: a coupled constraint (e.g. momentum's constant RRR) is only
+    decidable on the full combination.
+
+    Args:
+        strategy: Strategy instance to read.
+        strategy_key: Snake_case strategy key.
+
+    Returns:
+        Parameter name -> current value, omitting params the instance
+        does not carry.
+    """
+    values: Dict[str, Any] = {}
+    for name in get_param_whitelist(strategy_key):
+        attr = resolve_param_attr(strategy_key, name)
+        if hasattr(strategy, attr):
+            values[name] = getattr(strategy, attr)
+    return values
+
+
 def apply_params_to_strategy(
-    strategy: Any, strategy_key: str, params: Dict[str, Any]
+    strategy: Any,
+    strategy_key: str,
+    params: Dict[str, Any],
+    check_feasibility: bool = True,
 ) -> Dict[str, Any]:
     """Set whitelisted parameters on a strategy instance.
 
-    Only parameters present in the strategy's search space AND already
-    existing as attributes on the instance are applied. Everything else
-    is skipped with a warning.
+    Only parameters present in the strategy's search space AND resolving
+    to an existing attribute on the instance are applied. Everything else
+    is skipped with a warning. Search-space names that differ from the
+    instance attribute name are translated via PARAM_ATTR_ALIASES.
+
+    Strategy ``__init__`` methods repair or clamp some parameters
+    (momentum's constant RRR, VWAP's deviation threshold), and setattr
+    bypasses all of that. So the resulting COMBINATION is re-checked
+    against search_spaces.check_param_feasibility, and an infeasible one
+    is rolled back rather than silently disabling the strategy - an
+    out-of-range value here produces zero signals, not worse ones.
 
     Args:
         strategy: Strategy instance to modify.
         strategy_key: Snake_case strategy key used for whitelist lookup.
         params: Parameter name -> value mapping to apply.
+        check_feasibility: Roll back the whole application when the
+            resulting combination could never trade. Leave True outside
+            tests.
 
     Returns:
-        Dict of the parameters that were actually applied.
+        Dict of the parameters that were actually applied (empty when the
+        combination was rejected as infeasible).
     """
     whitelist = get_param_whitelist(strategy_key)
     applied: Dict[str, Any] = {}
+    previous: Dict[str, Any] = {}
 
     for name, value in params.items():
         if name not in whitelist:
@@ -176,16 +265,58 @@ def apply_params_to_strategy(
                 f"'{name}' for {strategy_key}"
             )
             continue
-        if not hasattr(strategy, name):
+        attr = resolve_param_attr(strategy_key, name)
+        if not hasattr(strategy, attr):
             logger.warning(
                 f"Param overlay: {strategy_key} instance has no attribute "
-                f"'{name}' - skipping"
+                f"'{attr}' (search-space name '{name}') - skipping. This "
+                f"parameter is a NO-OP: add it to PARAM_ATTR_ALIASES or "
+                f"drop it from the search space."
             )
             continue
-        setattr(strategy, name, value)
+        previous[attr] = getattr(strategy, attr)
+        setattr(strategy, attr, value)
         applied[name] = value
 
+    if applied and check_feasibility:
+        reasons = _infeasible_reasons(strategy, strategy_key)
+        if reasons:
+            for attr, old in previous.items():
+                setattr(strategy, attr, old)
+            logger.error(
+                f"Param overlay REJECTED for {strategy_key}: the resulting "
+                f"combination could never trade - "
+                + "; ".join(reasons)
+                + ". Previous values restored."
+            )
+            return {}
+
     return applied
+
+
+def _infeasible_reasons(strategy: Any, strategy_key: str) -> list:
+    """Return feasibility violations of the strategy's current params.
+
+    Args:
+        strategy: Strategy instance, already mutated.
+        strategy_key: Snake_case strategy key.
+
+    Returns:
+        List of human-readable reasons; empty means feasible. A missing
+        or failing feasibility checker yields an empty list, so this can
+        never block an application for infrastructural reasons.
+    """
+    try:
+        from .optimization.search_spaces import check_param_feasibility
+
+        return list(
+            check_param_feasibility(
+                strategy_key, effective_params(strategy, strategy_key)
+            )
+        )
+    except Exception as e:  # noqa: BLE001 - never block on the checker
+        logger.debug(f"Param overlay: feasibility check unavailable: {e}")
+        return []
 
 
 class RegimeParamOverlayManager:
@@ -418,10 +549,7 @@ class RegimeParamOverlayManager:
         """Capture pre-overlay values for all whitelisted params (once)."""
         if strategy_key in self._baselines:
             return
-        baseline: Dict[str, Any] = {}
-        for name in get_param_whitelist(strategy_key):
-            if hasattr(strategy, name):
-                baseline[name] = getattr(strategy, name)
+        baseline = effective_params(strategy, strategy_key)
         self._baselines[strategy_key] = baseline
         logger.debug(
             f"Regime param overlays: captured baseline for {strategy_key}: "

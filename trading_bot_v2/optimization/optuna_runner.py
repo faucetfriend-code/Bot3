@@ -73,8 +73,46 @@ SCORING_SCHEMA = 2
 FAIL_RATE_ABORT_THRESHOLD = 0.5
 FAIL_RATE_MIN_TRIALS = 10
 
-# Default minimum matching-regime trades before a trial is pruned
+# Fallback minimum matching-regime trades before a trial is pruned, used
+# only when the derived requirement cannot be computed. The literal 15 is
+# LEGACY: it predates the promotion gate's derived sample floor, and a
+# regime study that clears 15 produces a subset the gate then rejects as
+# INSUFFICIENT_DATA. See regime_opt_min_trades().
 DEFAULT_REGIME_OPT_MIN_TRADES = 15
+
+
+def regime_opt_min_trades() -> int:
+    """Minimum matching-regime trades a trial must produce to be scored.
+
+    Derived from the SAME statistic the promotion gate uses
+    (``validation.statistics.min_observations_for_sharpe`` at
+    GATE_REFERENCE_SR / GATE_MIN_PSR, 33 at the defaults), so a regime
+    study cannot spend its budget optimizing a subset that the gate would
+    afterwards refuse to grade. ``REGIME_OPT_MIN_TRADES`` still overrides
+    it explicitly.
+
+    Returns:
+        Minimum matching trades per trial (at least 1).
+    """
+    raw = os.getenv("REGIME_OPT_MIN_TRADES")
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            logger.warning(
+                f"REGIME_OPT_MIN_TRADES={raw!r} is not an integer - "
+                f"falling back to the derived requirement"
+            )
+    try:
+        from ..validation.gate import load_gate_policy
+
+        derived = int(load_gate_policy()["min_closed_trades"])
+        if derived > 0:
+            return derived
+    except Exception as e:  # noqa: BLE001 - never block a run on this
+        logger.debug(f"Derived regime min-trades unavailable: {e}")
+    return DEFAULT_REGIME_OPT_MIN_TRADES
+
 
 # Objective aliases (CLI short forms -> canonical metric names)
 OBJECTIVE_ALIASES = {
@@ -480,9 +518,7 @@ class OptunaRunner:
         if regime is not None:
             regime = normalize_regime_value(regime)
         if min_regime_trades is None:
-            min_regime_trades = int(
-                os.getenv("REGIME_OPT_MIN_TRADES", str(DEFAULT_REGIME_OPT_MIN_TRADES))
-            )
+            min_regime_trades = regime_opt_min_trades()
 
         # Set up dates from config if not provided
         from ..config import config as default_config
@@ -613,6 +649,8 @@ class OptunaRunner:
         windows: Optional[List[Tuple[str, str]]] = None,
         study_suffix: str = "",
         record_registry: bool = True,
+        regime: Optional[str] = None,
+        min_regime_trades: Optional[int] = None,
     ) -> "optuna.Study":
         """Optimize a strategy over chunked windows and multiple symbols.
 
@@ -659,6 +697,17 @@ class OptunaRunner:
                 trial_registry. Leave True: the deflation path reads it,
                 and the walk-forward records every fold so the gate's N
                 covers every configuration explored.
+            regime: Optional regime value. When set, every trial is
+                scored only on closed trades whose ENTRY regime matches,
+                and trials matching fewer than min_regime_trades are
+                pruned. Note the trial_registry entry is tagged with the
+                regime, but validation.runner reads the strategy's TOTAL
+                trial count - so per-regime studies deflate the pooled
+                strategy's Sharpe too. That is intentional: they are
+                configurations explored against the same strategy.
+            min_regime_trades: Pruning threshold for regime mode
+                (default: the gate-derived requirement, 33 at the
+                current gate settings).
 
         Returns:
             The completed Optuna study.
@@ -675,6 +724,10 @@ class OptunaRunner:
             )
         get_search_space(strategy)
         objective = normalize_objective(objective)
+        if regime is not None:
+            regime = normalize_regime_value(regime)
+        if min_regime_trades is None and regime is not None:
+            min_regime_trades = regime_opt_min_trades()
 
         if windows:
             sweep_symbols: List[str] = list(symbols)
@@ -699,7 +752,8 @@ class OptunaRunner:
             sweep_windows = resolved["windows"]
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        study_name = f"{strategy}_chunked_{timestamp}{study_suffix}"
+        regime_tag = f"_{regime.upper()}" if regime else ""
+        study_name = f"{strategy}_chunked{regime_tag}_{timestamp}{study_suffix}"
         study = optuna.create_study(
             study_name=study_name,
             storage=self.storage_url,
@@ -711,14 +765,22 @@ class OptunaRunner:
         study.set_user_attr("sweep_symbols", sweep_symbols)
         study.set_user_attr("sweep_windows", sweep_windows)
         study.set_user_attr("sweep_objective", objective)
+        if regime:
+            study.set_user_attr("sweep_regime", regime)
 
         logger.info(
             f"Chunked sweep: strategy={strategy}, trials={n_trials}, "
             f"symbols={','.join(sweep_symbols)}, "
             f"windows={len(sweep_windows)}x{window_months}mo "
             f"({sweep_windows[0][0]} .. {sweep_windows[-1][1]}), "
-            f"objective={objective} -> "
-            f"{len(sweep_symbols) * len(sweep_windows)} backtests/trial"
+            f"objective={objective}"
+            + (
+                f", regime={regime} (min {min_regime_trades} matching "
+                f"trades/trial)"
+                if regime
+                else ""
+            )
+            + f" -> {len(sweep_symbols) * len(sweep_windows)} backtests/trial"
         )
 
         def objective_fn(trial: "optuna.Trial") -> float:
@@ -729,6 +791,8 @@ class OptunaRunner:
                 symbols=sweep_symbols,
                 windows=sweep_windows,
                 initial_capital=initial_capital,
+                regime=regime,
+                min_regime_trades=min_regime_trades,
             )
 
         abort = _FailRateGuard(study_name)
@@ -748,7 +812,7 @@ class OptunaRunner:
 
         if record_registry:
             try:
-                self._record_trial_registry(study, strategy, None, objective)
+                self._record_trial_registry(study, strategy, regime, objective)
             except Exception as e:
                 logger.warning(f"Trial registry recording failed: {e}")
 
@@ -817,6 +881,7 @@ class OptunaRunner:
         objective: str,
         initial_capital: float = 10000.0,
         label: Optional[str] = None,
+        regime: Optional[str] = None,
     ) -> ChunkEvaluation:
         """Evaluate ONE parameter set over a (symbol, window) chunk grid.
 
@@ -834,6 +899,12 @@ class OptunaRunner:
             objective: Canonical objective name.
             initial_capital: Starting capital per chunk backtest.
             label: Funnel label (default: "<strategy>/chunks").
+            regime: Optional regime value. When set, every chunk is
+                scored ONLY on closed trades whose ENTRY regime matches,
+                and trade counts / pooled returns describe that subset.
+                Chunks with no matching trade are excluded from the mean
+                rather than scored as zero, mirroring the walk-forward
+                branch of ``_objective``.
 
         Returns:
             A ChunkEvaluation with the aggregate value, the banded
@@ -842,11 +913,15 @@ class OptunaRunner:
         Raises:
             RuntimeError: When the grid produced no backtests at all.
         """
+        target_regime = (
+            normalize_regime_value(regime) if regime is not None else None
+        )
         funnel = SignalFunnel(label=label or f"{strategy}/chunks")
         chunk_values: List[float] = []
         per_symbol: Dict[str, Dict[str, Any]] = {}
         symbol_returns: Dict[str, List[float]] = {}
         chunk_log: List[Dict[str, Any]] = []
+        backtests_run = 0
 
         for symbol in symbols:
             values: List[float] = []
@@ -864,31 +939,60 @@ class OptunaRunner:
                     symbol=symbol,
                     initial_capital=initial_capital,
                 )
+                backtests_run += 1
                 chunk_funnel = _funnel_for_result(result)
                 funnel.merge(chunk_funnel)
-                value = self.adapter.calculate_objective(result, objective)
-                values.append(value)
-                chunk_values.append(value)
-                closed = int(getattr(result, "closed_trades", 0) or 0)
-                trades += closed
                 invoked += chunk_funnel.get(STAGE_STRATEGY_INVOKED)
                 raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
-                return_pct += float(
-                    getattr(result, "total_return_pct", 0.0) or 0.0
-                )
-                pooled.extend(
-                    closed_trade_returns(
-                        getattr(result, "trade_log", None) or [],
-                        initial_capital,
+
+                if target_regime is not None:
+                    matched = self.adapter.get_regime_trades(
+                        result, target_regime
                     )
-                )
+                    closed = len(matched)
+                    pnls = [float(t.get("pnl", 0)) for t in matched]
+                    return_pct += (
+                        sum(pnls) / initial_capital * 100
+                        if initial_capital > 0
+                        else 0.0
+                    )
+                    if initial_capital > 0:
+                        pooled.extend(p / initial_capital for p in pnls)
+                    value = (
+                        self.adapter.calculate_objective_from_trades(
+                            trades=matched,
+                            objective=objective,
+                            initial_capital=initial_capital,
+                            start=start,
+                            end=end,
+                        )
+                        if matched
+                        else None
+                    )
+                else:
+                    closed = int(getattr(result, "closed_trades", 0) or 0)
+                    return_pct += float(
+                        getattr(result, "total_return_pct", 0.0) or 0.0
+                    )
+                    pooled.extend(
+                        closed_trade_returns(
+                            getattr(result, "trade_log", None) or [],
+                            initial_capital,
+                        )
+                    )
+                    value = self.adapter.calculate_objective(result, objective)
+
+                trades += closed
+                if value is not None:
+                    values.append(value)
+                    chunk_values.append(value)
                 chunk_log.append(
                     {
                         "symbol": symbol,
                         "start": start,
                         "end": end,
                         "trades": closed,
-                        "value": round(value, 6),
+                        "value": round(value, 6) if value is not None else None,
                     }
                 )
             # invoked / raw are carried per symbol so a symbol that
@@ -900,18 +1004,25 @@ class OptunaRunner:
                 "trades": trades,
                 "invoked": invoked,
                 "raw_signals": raw_signals,
-                "objective": round(sum(values) / len(values), 6),
+                "objective": (
+                    round(sum(values) / len(values), 6) if values else 0.0
+                ),
                 "return_pct": round(return_pct, 4),
             }
             symbol_returns[symbol] = pooled
 
-        if not chunk_values:
+        if not backtests_run:
             raise RuntimeError(
                 f"chunked evaluation produced no backtests for {strategy} "
                 f"(symbols={symbols}, windows={windows})"
             )
 
-        mean_value = sum(chunk_values) / len(chunk_values)
+        # In regime mode a parameter set can run every chunk and still
+        # match no trade in the target regime. That is a zero-trade
+        # outcome to be banded by the funnel, not a setup failure.
+        mean_value = (
+            sum(chunk_values) / len(chunk_values) if chunk_values else 0.0
+        )
         std_dev = 0.0
         value = mean_value
         # Penalize dispersion across chunks, mirroring the walk-forward
@@ -925,7 +1036,18 @@ class OptunaRunner:
             if std_dev > 1.0:
                 value -= (std_dev - 1.0) * 0.2
 
-        outcome, banded = classify_and_score(funnel, value)
+        matched_trades = sum(s["trades"] for s in per_symbol.values())
+        if target_regime is not None and matched_trades == 0:
+            # The run traded, but nothing in the target regime. The
+            # merged funnel says "traded" and would score this 0.0,
+            # ranking a regime no-show above every genuine loss. Band it
+            # as a no-opportunity outcome instead.
+            outcome = TrialOutcome.NO_OPPORTUNITIES
+            banded = score_for_outcome(outcome, progress=funnel.progress())
+        else:
+            outcome, banded = classify_and_score(
+                funnel, value, traded_override=target_regime is not None
+            )
         return ChunkEvaluation(
             value=value,
             mean_objective=mean_value,
@@ -953,6 +1075,8 @@ class OptunaRunner:
         symbols: List[str],
         windows: List[Any],
         initial_capital: float,
+        regime: Optional[str] = None,
+        min_regime_trades: Optional[int] = None,
     ) -> float:
         """Score one trial across every (symbol, window) chunk.
 
@@ -963,6 +1087,11 @@ class OptunaRunner:
             symbols: Trading pairs to evaluate.
             windows: (start, end) ISO date pairs.
             initial_capital: Starting capital per chunk.
+            regime: Optional regime value. When set, only closed trades
+                entered in that regime are scored, and a trial matching
+                fewer than min_regime_trades of them is pruned.
+            min_regime_trades: Pruning threshold for regime mode
+                (default: the gate-derived requirement).
 
         Returns:
             The trial value: the mean chunk objective (penalized for
@@ -970,7 +1099,8 @@ class OptunaRunner:
             reserved band for its funnel diagnosis.
 
         Raises:
-            optuna.TrialPruned: On infeasible params.
+            optuna.TrialPruned: On infeasible params, or on too few
+                matching-regime trades.
             Exception: Any backtest failure, so Optuna records a FAIL.
         """
         params = self._suggest_or_prune(trial, strategy)
@@ -984,6 +1114,7 @@ class OptunaRunner:
             objective=objective,
             initial_capital=initial_capital,
             label=f"{strategy}/sweep",
+            regime=regime,
         )
 
         trial.set_user_attr("per_symbol", evaluation.per_symbol)
@@ -994,8 +1125,25 @@ class OptunaRunner:
             "profitable_symbols", evaluation.profitable_symbols
         )
 
+        if regime is not None:
+            trial.set_user_attr("regime_trade_count", evaluation.total_trades)
+            threshold = (
+                regime_opt_min_trades()
+                if min_regime_trades is None
+                else min_regime_trades
+            )
+            if evaluation.total_trades < threshold:
+                raise optuna.TrialPruned(
+                    f"Only {evaluation.total_trades} {regime} trades "
+                    f"(< {threshold})"
+                )
+
         return self._score_trial(
-            trial, evaluation.funnel, evaluation.value, params
+            trial,
+            evaluation.funnel,
+            evaluation.value,
+            params,
+            traded_override=regime is not None,
         )
 
     def _record_trial_registry(

@@ -454,3 +454,102 @@ class TestReporting:
         print_chunked_walk_forward_report(report)
         out = capsys.readouterr().out
         assert "nothing to believe yet" in out
+
+
+# ---------------------------------------------------------------------------
+# Regime-conditional walk-forward
+# ---------------------------------------------------------------------------
+
+
+class RegimeMixAdapter:
+    """Every window trades in two regimes with opposite sign.
+
+    trending_strong trades win, ranging_calm trades lose, so a
+    regime-conditional run must produce a different verdict from the
+    pooled one - and must count only the matching subset.
+    """
+
+    N_TRENDING = 40
+    N_RANGING = 40
+
+    def run_backtest(self, **kwargs):
+        trade_log = [
+            {"pnl": 12.0 if i % 2 else 8.0, "regime": "trending_strong"}
+            for i in range(self.N_TRENDING)
+        ]
+        trade_log += [
+            {"pnl": -12.0 if i % 2 else -8.0, "regime": "ranging_calm"}
+            for i in range(self.N_RANGING)
+        ]
+        result = _result(
+            kwargs["symbol"], kwargs["start"], kwargs["end"], 1, 0.1, 0.0
+        )
+        result.trade_log = trade_log
+        result.closed_trades = len(trade_log)
+        return result
+
+    def calculate_objective(self, result, objective):
+        return result.sharpe_ratio
+
+    def get_regime_trades(self, result, regime):
+        from trading_bot_v2.backtesting.optimization_adapter import (
+            OptimizationAdapter,
+        )
+
+        return OptimizationAdapter.get_regime_trades(self, result, regime)
+
+    def calculate_objective_from_trades(self, **kwargs):
+        from trading_bot_v2.backtesting.optimization_adapter import (
+            OptimizationAdapter,
+        )
+
+        return OptimizationAdapter.calculate_objective_from_trades(
+            self, **kwargs
+        )
+
+
+class TestRegimeConditionalWalkForward:
+    """A regime-conditional run stays out-of-sample and counts only the
+    matching subset.
+
+    Regime tuning used to be reachable ONLY through the legacy
+    single-window ``optimize()``, which fits and scores on the same data.
+    Wiring it into the chunked walk-forward is what makes a per-regime
+    variant falsifiable.
+    """
+
+    def test_only_matching_trades_are_counted(self):
+        report = _run(
+            RegimeMixAdapter(),
+            n_trials=2,
+            windows=WINDOWS_ONE_FOLD,
+            regime="TRENDING_STRONG",
+        )
+        assert report.regime == "trending_strong"
+        # 2 symbols x 1 test window x 40 trending trades
+        assert report.oos_trades == 2 * RegimeMixAdapter.N_TRENDING
+        assert report.oos_returns
+        assert all(r > 0 for r in report.oos_returns)
+
+    def test_the_losing_regime_grades_negative(self):
+        report = _run(
+            RegimeMixAdapter(),
+            n_trials=2,
+            windows=WINDOWS_ONE_FOLD,
+            regime="RANGING_CALM",
+        )
+        assert report.oos_trades == 2 * RegimeMixAdapter.N_RANGING
+        assert report.oos_returns
+        assert all(r < 0 for r in report.oos_returns)
+
+    def test_report_header_names_the_regime(self, capsys):
+        report = _run(
+            RegimeMixAdapter(),
+            n_trials=2,
+            windows=WINDOWS_ONE_FOLD,
+            regime="TRENDING_STRONG",
+        )
+        print_chunked_walk_forward_report(report)
+        out = capsys.readouterr().out
+        assert "REGIME: trending_strong" in out
+        assert "counts ONLY trades entered in trending_strong" in out

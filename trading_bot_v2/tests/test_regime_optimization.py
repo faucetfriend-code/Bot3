@@ -637,5 +637,251 @@ class TestHelpers:
             normalize_regime_value("sideways")
 
 
+# ---------------------------------------------------------------------------
+# 8. Search-space reachability (regression guard)
+# ---------------------------------------------------------------------------
+
+
+class TestSearchSpaceReachability:
+    """Every declared search-space parameter must reach the strategy.
+
+    Overlays and optimizer overrides are applied by setattr, so a
+    search-space key that does not resolve to an instance attribute is a
+    SILENT NO-OP: the trial samples a value, the value is never read, and
+    every sampled value scores identically. Eleven such parameters were
+    found on 2026-07-28 (5 of liquidation_capture's 7, 3 of
+    grid_trading's 5, 3 of orderbook_imbalance's 8) plus one phantom
+    (vwap's sd_exit_threshold, which had no mechanism behind it at all).
+    """
+
+    @staticmethod
+    def _live_strategies():
+        from trading_bot_v2.risk_manager import RiskManager
+        from trading_bot_v2.strategy_manager import StrategyManager
+
+        return StrategyManager(risk_manager=RiskManager(), client=None)
+
+    def test_every_search_space_param_resolves_to_an_attribute(self):
+        from trading_bot_v2.optimization.search_spaces import (
+            get_search_space,
+            list_strategies,
+        )
+        from trading_bot_v2.regime_param_overlay import resolve_param_attr
+
+        manager = self._live_strategies()
+        unreachable = []
+        for key in list_strategies():
+            display = STRATEGY_KEY_TO_DISPLAY[key]
+            instance = manager.strategies.get(display)
+            if instance is None:
+                continue
+            for param in get_search_space(key):
+                attr = resolve_param_attr(key, param)
+                if not hasattr(instance, attr):
+                    unreachable.append(f"{key}.{param} -> {attr}")
+
+        assert not unreachable, (
+            "search-space parameters that never reach the strategy "
+            "instance (silent no-ops): " + ", ".join(sorted(unreachable))
+        )
+
+    def test_aliases_only_declare_real_renames(self):
+        from trading_bot_v2.optimization.search_spaces import get_search_space
+        from trading_bot_v2.regime_param_overlay import PARAM_ATTR_ALIASES
+
+        for key, aliases in PARAM_ATTR_ALIASES.items():
+            space = set(get_search_space(key))
+            stale = sorted(set(aliases) - space)
+            assert not stale, (
+                f"PARAM_ATTR_ALIASES[{key}] maps parameters that are no "
+                f"longer in the search space: {stale}"
+            )
+
+    def test_alias_is_applied_on_setattr(self):
+        class Grid:
+            grid_spacing_multiplier = 0.4
+
+        applied = apply_params_to_strategy(
+            Grid(), "grid_trading", {"grid_spacing_atr_multiplier": 0.7},
+            check_feasibility=False,
+        )
+        assert applied == {"grid_spacing_atr_multiplier": 0.7}
+
+
+# ---------------------------------------------------------------------------
+# 9. Overlay feasibility guard
+# ---------------------------------------------------------------------------
+
+
+class TestOverlayFeasibility:
+    """setattr bypasses the repairs that strategy __init__ applies.
+
+    momentum_scalping raises its ATR target when the implied (constant)
+    RRR falls below min_rrr; an overlay writing the raw values skips that
+    and every signal would then fail rrr_meets_minimum. The application
+    is rolled back instead.
+    """
+
+    class Momentum:
+        def __init__(self):
+            self.atr_stop_mult = 1.5
+            self.atr_target_mult = 3.0
+            self.min_rrr = 1.5
+            self.ema_fast = 9
+            self.ema_slow = 21
+            self.rsi_lower = 30.0
+            self.rsi_upper = 70.0
+            self.volume_threshold = 1.2
+            self.min_confidence = 0.5
+
+    def test_infeasible_combination_is_rolled_back(self):
+        strategy = self.Momentum()
+        applied = apply_params_to_strategy(
+            strategy,
+            "momentum_scalping",
+            {"atr_stop_mult": 2.5, "atr_target_mult": 3.0},
+        )
+        assert applied == {}
+        assert strategy.atr_stop_mult == 1.5
+        assert strategy.atr_target_mult == 3.0
+
+    def test_feasible_combination_is_applied(self):
+        strategy = self.Momentum()
+        applied = apply_params_to_strategy(
+            strategy,
+            "momentum_scalping",
+            {"atr_stop_mult": 2.0, "atr_target_mult": 4.0},
+        )
+        assert applied == {
+            "atr_stop_mult": 2.0,
+            "atr_target_mult": 4.0,
+        }
+        assert strategy.atr_stop_mult == 2.0
+
+
+# ---------------------------------------------------------------------------
+# 10. Derived regime min-trades
+# ---------------------------------------------------------------------------
+
+
+class TestRegimeMinTrades:
+    def test_defaults_to_the_gate_derived_requirement(self, monkeypatch):
+        from trading_bot_v2.optimization.optuna_runner import (
+            regime_opt_min_trades,
+        )
+        from trading_bot_v2.validation.gate import load_gate_policy
+
+        monkeypatch.delenv("REGIME_OPT_MIN_TRADES", raising=False)
+        assert (
+            regime_opt_min_trades()
+            == load_gate_policy()["min_closed_trades"]
+        )
+
+    def test_env_override_wins(self, monkeypatch):
+        from trading_bot_v2.optimization.optuna_runner import (
+            regime_opt_min_trades,
+        )
+
+        monkeypatch.setenv("REGIME_OPT_MIN_TRADES", "7")
+        assert regime_opt_min_trades() == 7
+
+    def test_derived_requirement_exceeds_the_legacy_literal(self):
+        from trading_bot_v2.optimization.optuna_runner import (
+            DEFAULT_REGIME_OPT_MIN_TRADES,
+            regime_opt_min_trades,
+        )
+
+        # The legacy 15 was more permissive than the gate the result is
+        # later judged by; that gap is what this change closes.
+        assert regime_opt_min_trades() > DEFAULT_REGIME_OPT_MIN_TRADES
+
+
+# ---------------------------------------------------------------------------
+# 11. Regime census
+# ---------------------------------------------------------------------------
+
+
+class TestRegimeCensus:
+    REQ = {"pooled": 33, "per_symbol": 5, "min_symbols": 2}
+
+    def test_cell_with_enough_pooled_and_symbols_is_tunable(self):
+        from trading_bot_v2.validation.regime_census import classify_cell
+
+        cell = {"trades": 106, "by_symbol": {"BTC": 36, "ETH": 29, "SUI": 41}}
+        assert classify_cell(cell, self.REQ) == "tunable"
+
+    def test_cell_below_pooled_requirement_is_thin(self):
+        from trading_bot_v2.validation.regime_census import classify_cell
+
+        cell = {"trades": 25, "by_symbol": {"BTC": 7, "ETH": 11, "SUI": 7}}
+        assert classify_cell(cell, self.REQ) == "thin"
+
+    def test_cell_on_one_symbol_only_is_thin(self):
+        from trading_bot_v2.validation.regime_census import classify_cell
+
+        cell = {"trades": 90, "by_symbol": {"BTC": 88, "ETH": 2}}
+        assert classify_cell(cell, self.REQ) == "thin"
+
+    def test_untraded_cell_is_none(self):
+        from trading_bot_v2.validation.regime_census import classify_cell
+
+        assert classify_cell({"trades": 0, "by_symbol": {}}, self.REQ) == "none"
+
+    def test_requirements_come_from_the_gate_policy(self):
+        from trading_bot_v2.validation.gate import load_gate_policy
+        from trading_bot_v2.validation.regime_census import (
+            derived_requirements,
+        )
+
+        policy = load_gate_policy()
+        req = derived_requirements()
+        assert req["pooled"] == policy["min_closed_trades"]
+        assert req["per_symbol"] == policy["min_trades_per_symbol"]
+
+    def test_regime_columns_cover_every_market_regime(self):
+        from trading_bot_v2.market_regime import MarketRegime
+        from trading_bot_v2.validation.regime_census import regime_columns
+
+        assert set(regime_columns()) == {r.value for r in MarketRegime}
+
+    def test_table_marks_tunable_and_thin_cells(self):
+        from trading_bot_v2.validation.regime_census import (
+            format_census_table,
+        )
+
+        census = {
+            "requirements": self.REQ,
+            "symbols": ["BTC-USDC", "SUI-USDC"],
+            "window_spec": "6x2mo@8y",
+            "windows_by_symbol": {},
+            "cells": {
+                "momentum_scalping": {
+                    "trending_strong": {
+                        "trades": 106,
+                        "wins": 51,
+                        "pnl": 67.0,
+                        "gross_win": 470.0,
+                        "gross_loss": 403.0,
+                        "by_symbol": {"BTC-USDC": 60, "SUI-USDC": 46},
+                    },
+                    "trending_moderate": {
+                        "trades": 3,
+                        "wins": 1,
+                        "pnl": 0.3,
+                        "gross_win": 10.0,
+                        "gross_loss": 9.7,
+                        "by_symbol": {"SUI-USDC": 3},
+                    },
+                }
+            },
+            "regime_bars": {},
+            "elapsed_seconds": {"momentum_scalping": 70.0},
+        }
+        table = format_census_table(census)
+        assert "106*" in table
+        assert "3!" in table
+        assert "1 tunable cell(s)" in table
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
