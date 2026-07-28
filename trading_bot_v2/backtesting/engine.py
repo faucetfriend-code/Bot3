@@ -24,9 +24,10 @@ Usage:
     result.save_html("backtest_result.html")
 """
 
+import os
 from bisect import bisect_left, bisect_right
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from loguru import logger
 
 from ..diagnostics.funnel import (
@@ -35,6 +36,7 @@ from ..diagnostics.funnel import (
     REASON_EXEC_HEDGE_MODE,
     REASON_EXEC_MIN_HOLD,
     REASON_EXEC_NO_PRICE,
+    REASON_EXEC_PYRAMID_SPACING,
     REASON_EXEC_QTY_NON_POSITIVE,
     REASON_EXEC_SAME_DIRECTION,
     STAGE_BARS_SKIPPED_WARMUP,
@@ -77,6 +79,127 @@ STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
     "CalendarFlow": "enable_calendar_flow",
 }
 
+# ---------------------------------------------------------------------------
+# Execution policy
+# ---------------------------------------------------------------------------
+# _execute_signal drops signals that already passed all eight validity flags.
+# Measured on the canonical candle store (SUI-USDC 2024-06..09, BTC-USDC
+# 2024-03..06), those drops are the single largest attrition stage for several
+# strategies - e.g. MeanReversion/SUI dropped 546 of 601 raw signals here.
+# Every knob below therefore defaults to the behaviour that shipped, so this
+# module stays bit-for-bit reproducible, and is sweepable from .env.
+#
+# Empirical note on pyramiding: replaying each skipped same-direction signal as
+# an independent trade gives mean +0.33R (MACrossover/SUI) but -0.28R
+# (MeanReversion/SUI). Allowing adds is NOT free - it is a parameter to sweep,
+# which is exactly why the default stays 1.
+
+#: Only one entry per position - a same-direction signal is skipped. Matches
+#: the shipped behaviour and is the honest anti-pyramiding default.
+DEFAULT_MAX_PYRAMID_ENTRIES = 1
+#: Sanity ceiling. Above this, exit-order bookkeeping (one SL/TP set replaced
+#: per add) stops being a meaningful model of a real position.
+MAX_PYRAMID_ENTRIES_CEILING = 10
+#: No enforced gap between pyramid adds (shipped behaviour is "no adds at
+#: all", so any spacing default other than 0 would be inventing policy).
+DEFAULT_PYRAMID_MIN_SPACING_CANDLES = 0
+#: 5m replay candles a position must be held before a signal may close it.
+#: Only consulted when signal-driven closes are enabled - see
+#: BACKTEST_OPPOSING_CLOSES_POSITION below.
+DEFAULT_MIN_HOLD_CANDLES = 6
+
+
+def _env_or_cfg(cfg: Any, cfg_attr: str, env_name: str) -> Optional[str]:
+    """Return the raw configured value for a policy knob, or None.
+
+    ``cfg`` wins when it carries the attribute (the optimization adapter and
+    the tests both drive the engine through a config proxy); otherwise the
+    environment is consulted directly, so a knob can be added to ``.env``
+    without also having to be threaded through ``config.py``.
+
+    Args:
+        cfg: Config object (live config or an override proxy).
+        cfg_attr: Attribute name to look for on ``cfg``.
+        env_name: Environment variable to fall back to.
+
+    Returns:
+        The raw string value, or None when neither source sets it.
+    """
+    value = getattr(cfg, cfg_attr, None)
+    if value is not None:
+        return str(value)
+    raw = os.getenv(env_name)
+    return raw if raw not in (None, "") else None
+
+
+def _as_bool(raw: str) -> bool:
+    """Parse a truthy config string the way ``config.py`` does."""
+    return raw.strip().lower() in ("true", "1", "yes")
+
+
+def validate_max_pyramid_entries(value: Any) -> int:
+    """Validate the maximum number of entries allowed per open position.
+
+    1 means "no pyramiding" (the shipped behaviour): once a position is open,
+    further same-direction signals are skipped. Values above
+    MAX_PYRAMID_ENTRIES_CEILING, below 1, or non-numeric are rejected with a
+    warning and replaced by the default rather than raising - the same
+    warn-and-fall-back contract as
+    ``strategies/vwap_scalping.py::validate_sd_entry_threshold``.
+
+    Args:
+        value: Configured value (string, int or None).
+
+    Returns:
+        A usable entry cap in [1, MAX_PYRAMID_ENTRIES_CEILING].
+    """
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"BACKTEST_MAX_PYRAMID_ENTRIES={value!r} is not an integer. "
+            f"Falling back to {DEFAULT_MAX_PYRAMID_ENTRIES} (no pyramiding)."
+        )
+        return DEFAULT_MAX_PYRAMID_ENTRIES
+    if 1 <= parsed <= MAX_PYRAMID_ENTRIES_CEILING:
+        return parsed
+    logger.warning(
+        f"BACKTEST_MAX_PYRAMID_ENTRIES={parsed} is outside the supported "
+        f"range [1, {MAX_PYRAMID_ENTRIES_CEILING}]. Below 1 would block every "
+        f"entry outright; above the ceiling the per-add exit-order model stops "
+        f"being realistic. Falling back to {DEFAULT_MAX_PYRAMID_ENTRIES}. "
+        f"Fix BACKTEST_MAX_PYRAMID_ENTRIES in .env."
+    )
+    return DEFAULT_MAX_PYRAMID_ENTRIES
+
+
+def validate_non_negative_candles(value: Any, env_name: str, default: int) -> int:
+    """Validate a candle-count knob that must be >= 0.
+
+    Args:
+        value: Configured value (string, int or None).
+        env_name: Variable name, used in the warning so the message names the
+            exact thing to fix.
+        default: Value substituted when ``value`` is unusable.
+
+    Returns:
+        A non-negative candle count.
+    """
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        logger.warning(
+            f"{env_name}={value!r} is not an integer. Falling back to {default}."
+        )
+        return default
+    if parsed >= 0:
+        return parsed
+    logger.warning(
+        f"{env_name}={parsed} is negative, which would disable the guard "
+        f"silently. Falling back to {default}. Fix {env_name} in .env."
+    )
+    return default
+
 
 class BacktestEngine:
     """
@@ -98,12 +221,109 @@ class BacktestEngine:
         self._funnel = NULL_FUNNEL
         # Per-run state (reset in run())
         self._hedge_mode: bool = False
-        self._min_hold_candles: int = 6
+        self._opposing_closes_position: bool = False
+        self._min_hold_candles: int = DEFAULT_MIN_HOLD_CANDLES
+        self._max_pyramid_entries: int = DEFAULT_MAX_PYRAMID_ENTRIES
+        self._pyramid_min_spacing: int = DEFAULT_PYRAMID_MIN_SPACING_CANDLES
+        # symbol -> replay index of the bar the CURRENT position was first
+        # observed on. Maintained by _sync_position_tracking(), not by
+        # _execute_signal, so a resting limit entry that fills several bars
+        # later is aged from its fill and not from its order placement.
         self._position_open_candle: Dict[str, int] = {}
+        # symbol -> entries placed into the current position (pyramid depth)
+        self._position_entry_count: Dict[str, int] = {}
+        # symbol -> replay index of the most recent entry into the position
+        self._position_last_entry_candle: Dict[str, int] = {}
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
         self._position_time_exit: Dict[str, Dict] = {}
         self._sim_dt: Optional[datetime] = None
+
+    # ------------------------------------------------------------------
+    # Execution policy
+    # ------------------------------------------------------------------
+
+    def _resolve_execution_policy(self) -> None:
+        """Resolve and validate the four execution-policy knobs for this run.
+
+        Every knob defaults to the behaviour that shipped before the policy was
+        made configurable, so resolving it is never a behaviour change on its
+        own. Nonsense values warn and fall back instead of raising.
+
+        ``BACKTEST_HEDGE_MODE`` is retained as a deprecated alias for
+        ``BACKTEST_OPPOSING_CLOSES_POSITION``. It never meant "hold both sides"
+        - the code it gates sizes the order to the existing position and exits
+        it - so the name has always described something the engine does not do.
+        """
+        hedge_raw = _env_or_cfg(
+            self.cfg, "backtest_hedge_mode", "BACKTEST_HEDGE_MODE"
+        )
+        self._hedge_mode = _as_bool(hedge_raw) if hedge_raw is not None else False
+
+        opposing_raw = _env_or_cfg(
+            self.cfg,
+            "backtest_opposing_closes_position",
+            "BACKTEST_OPPOSING_CLOSES_POSITION",
+        )
+        # The alias is an OR, not an override: setting either one enables
+        # signal-driven closes, so existing BACKTEST_HEDGE_MODE=true configs
+        # keep working untouched.
+        self._opposing_closes_position = self._hedge_mode or (
+            _as_bool(opposing_raw) if opposing_raw is not None else False
+        )
+
+        self._min_hold_candles = validate_non_negative_candles(
+            _env_or_cfg(
+                self.cfg, "backtest_min_hold_candles", "BACKTEST_MIN_HOLD_CANDLES"
+            )
+            or DEFAULT_MIN_HOLD_CANDLES,
+            "BACKTEST_MIN_HOLD_CANDLES",
+            DEFAULT_MIN_HOLD_CANDLES,
+        )
+        self._max_pyramid_entries = validate_max_pyramid_entries(
+            _env_or_cfg(
+                self.cfg,
+                "backtest_max_pyramid_entries",
+                "BACKTEST_MAX_PYRAMID_ENTRIES",
+            )
+            or DEFAULT_MAX_PYRAMID_ENTRIES
+        )
+        self._pyramid_min_spacing = validate_non_negative_candles(
+            _env_or_cfg(
+                self.cfg,
+                "backtest_pyramid_min_spacing_candles",
+                "BACKTEST_PYRAMID_MIN_SPACING_CANDLES",
+            )
+            or DEFAULT_PYRAMID_MIN_SPACING_CANDLES,
+            "BACKTEST_PYRAMID_MIN_SPACING_CANDLES",
+            DEFAULT_PYRAMID_MIN_SPACING_CANDLES,
+        )
+
+        if self._min_hold_candles and not self._opposing_closes_position:
+            logger.info(
+                f"BACKTEST_MIN_HOLD_CANDLES={self._min_hold_candles} has no "
+                f"effect in this run: it only gates signal-driven closes, and "
+                f"BACKTEST_OPPOSING_CLOSES_POSITION is off, so opposing "
+                f"signals are dropped outright (exec:hedge_mode_block) and "
+                f"positions exit only via SL/TP."
+            )
+
+    def execution_policy(self) -> Dict[str, Any]:
+        """Return the resolved execution policy as a JSON-safe dict.
+
+        Attached to every funnel as the ``execution_policy`` note so a funnel
+        block is self-describing: the counts under ``exec:`` are only
+        interpretable against the policy that produced them.
+
+        Returns:
+            Mapping of knob name to resolved value.
+        """
+        return {
+            "opposing_closes_position": self._opposing_closes_position,
+            "min_hold_candles": self._min_hold_candles,
+            "max_pyramid_entries": self._max_pyramid_entries,
+            "pyramid_min_spacing_candles": self._pyramid_min_spacing,
+        }
 
     def run(
         self,
@@ -118,9 +338,10 @@ class BacktestEngine:
         strategy_filter = strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
 
         # Initialise per-run state
-        self._hedge_mode = getattr(self.cfg, "backtest_hedge_mode", False)
-        self._min_hold_candles = getattr(self.cfg, "backtest_min_hold_candles", 6)
+        self._resolve_execution_policy()
         self._position_open_candle = {}
+        self._position_entry_count = {}
+        self._position_last_entry_candle = {}
         self._position_time_exit = {}
         self._sim_dt = None
         # Signal funnel: a backtest always wants diagnostics (the cost is
@@ -130,10 +351,17 @@ class BacktestEngine:
             label=f"{strategy_filter or 'all'}/{symbol} {start}..{end}"
         )
         self._funnel = funnel
+        funnel.note("execution_policy", self.execution_policy())
 
+        policy = self.execution_policy()
         logger.info(
-            f"Starting backtest: {symbol} | {start} -> {end} | capital={initial_capital} | "
-            f"hedge_mode={self._hedge_mode} | min_hold_candles={self._min_hold_candles}"
+            f"Starting backtest: {symbol} | {start} -> {end} | "
+            f"capital={initial_capital} | "
+            f"opposing_closes_position={policy['opposing_closes_position']} | "
+            f"min_hold_candles={policy['min_hold_candles']} | "
+            f"max_pyramid_entries={policy['max_pyramid_entries']} | "
+            f"pyramid_min_spacing_candles="
+            f"{policy['pyramid_min_spacing_candles']}"
             + (f" | strategy_filter={strategy_filter}" if strategy_filter else "")
         )
 
@@ -278,6 +506,9 @@ class BacktestEngine:
             # Advance the simulated exchange price to this candle's close
             candle_5m = self._candle_at(candles["5m"], i)
             exchange.advance(candle_5m, ts)
+            # advance() fills resting orders, so position bookkeeping has to be
+            # reconciled against the exchange before any signal is executed.
+            self._sync_position_tracking(exchange, i)
 
             # --- Build multi-timeframe bundles ---
             i_15m = self._nearest_idx(idx_map["15m"], sorted_ts["15m"], ts)
@@ -394,6 +625,44 @@ class BacktestEngine:
         return result
 
     # ------------------------------------------------------------------
+    # Position bookkeeping
+    # ------------------------------------------------------------------
+
+    def _sync_position_tracking(
+        self, exchange: SimulatedExchange, candle_idx: int
+    ) -> None:
+        """Reconcile per-position bookkeeping against the exchange.
+
+        Called once per replayed bar, immediately after ``exchange.advance()``
+        fills resting orders. Two things it fixes that per-signal bookkeeping
+        could not:
+
+        * A position opened by a resting limit order (GridTrading places every
+          entry as a limit away from the market) appears several bars after the
+          signal that ordered it. Stamping the open candle here ages the
+          position from its FILL, which is what ``min_hold_candles`` is
+          supposed to measure, instead of from order placement.
+        * A position closed by SL/TP left ``_position_open_candle`` populated
+          forever, because only the signal-driven close path popped it. Stale
+          entries are cleared here, along with the pyramid counters.
+
+        Args:
+            exchange: The simulated exchange for this run.
+            candle_idx: Current replay index.
+        """
+        positions = exchange._positions
+        for asset in list(self._position_open_candle):
+            if asset not in positions:
+                self._position_open_candle.pop(asset, None)
+                self._position_entry_count.pop(asset, None)
+                self._position_last_entry_candle.pop(asset, None)
+        for asset in positions:
+            if asset not in self._position_open_candle:
+                self._position_open_candle[asset] = candle_idx
+                self._position_entry_count.setdefault(asset, 1)
+                self._position_last_entry_candle.setdefault(asset, candle_idx)
+
+    # ------------------------------------------------------------------
     # Signal execution
     # ------------------------------------------------------------------
 
@@ -403,15 +672,31 @@ class BacktestEngine:
 
         Returns True if an order was placed, False if the signal was skipped.
 
-        Hedge-mode enforcement (Fix 2D):
-            When hedge_mode=False (Pacifica default), any signal that opposes an
-            open position is dropped. Positions are closed only when their SL or
-            TP order fills - never by a competing strategy signal.
+        This is the last gate in the pipeline, and it discards signals that
+        already passed all eight validity flags. Each early return below is
+        counted on the funnel under an ``exec:`` reason. Every threshold is a
+        policy knob resolved by :meth:`_resolve_execution_policy`, and every
+        default reproduces the behaviour that shipped.
 
-        Min-hold enforcement (Fix Layer 1):
-            When hedge_mode=True, opposing signals are additionally blocked until
-            the position has been open for at least min_hold_candles candles,
-            preventing premature cross-strategy exits that crush R/R.
+        Same-direction signals (``exec:same_direction_skip``):
+            A position already open in the signal's direction. Verified against
+            live position state - across seven strategy/symbol replays, 1042 of
+            1042 skips had a genuinely open same-side position (the exchange
+            deletes closed positions and OCO-cancels their exits, so there is
+            no stale-record case). This is anti-pyramiding, not lost re-entry.
+            ``max_pyramid_entries`` > 1 permits adds; ``pyramid_min_spacing``
+            candles must separate them (``exec:pyramid_spacing_block``).
+
+        Opposing signals (``exec:hedge_mode_block``):
+            Dropped unless ``opposing_closes_position`` is set. The name
+            "hedge mode" is historical and misleading: enabling it never opens
+            a hedge, it sizes the order to the existing position and exits it.
+            Off means positions leave only via SL/TP or a time exit.
+
+        Min hold (``exec:min_hold_block``):
+            Counted in 5m replay candles from the bar the position was first
+            observed on. Only consulted when signal-driven closes are enabled,
+            so it is silent (by design, not by accident) under the default.
         """
         funnel = self._funnel
         price = exchange._current_price
@@ -425,61 +710,74 @@ class BacktestEngine:
 
         # --- Existing position check ---
         existing_pos = exchange._positions.get(signal.asset)
+        is_pyramid_add = False
         if existing_pos:
             signal_side_str = "long" if signal.side == OrderSide.BUY else "short"
             if existing_pos.side == signal_side_str:
-                funnel.count(STAGE_EXECUTION_BLOCKED)
-                funnel.reject(REASON_EXEC_SAME_DIRECTION)
-                return False  # Same direction - skip duplicate entry
-
-            # Opposing direction - apply hedge_mode and hold_time guards
-            if not self._hedge_mode:
-                # Hedge mode disabled (Pacifica): skip opposing signals entirely.
-                # Positions are only closed by their SL/TP orders.
-                funnel.count(STAGE_EXECUTION_BLOCKED)
-                funnel.reject(REASON_EXEC_HEDGE_MODE)
-                logger.debug(
-                    f"Hedge mode off: blocking opposing {signal.side.value} signal "
-                    f"for {signal.asset}"
+                entries = self._position_entry_count.get(signal.asset, 1)
+                if entries >= self._max_pyramid_entries:
+                    funnel.count(STAGE_EXECUTION_BLOCKED)
+                    funnel.reject(REASON_EXEC_SAME_DIRECTION)
+                    return False  # Same direction - skip duplicate entry
+                last_entry = self._position_last_entry_candle.get(
+                    signal.asset, candle_idx
                 )
-                return False
-
-            # Hedge mode enabled: enforce minimum hold time
-            open_candle = self._position_open_candle.get(signal.asset, candle_idx)
-            candles_held = candle_idx - open_candle
-            if candles_held < self._min_hold_candles:
-                funnel.count(STAGE_EXECUTION_BLOCKED)
-                funnel.reject(REASON_EXEC_MIN_HOLD)
-                logger.debug(
-                    f"Min hold not met for {signal.asset}: "
-                    f"{candles_held}/{self._min_hold_candles} candles - skipping close"
-                )
-                return False
-
-            # Allow close: size to exactly the existing position quantity
-            close_qty = existing_pos.quantity
-            price_diff_pct = abs(signal.entry_price - price) / price
-            if price_diff_pct > 0.001:
-                exchange.place_order(
-                    symbol=signal.asset,
-                    side=side,
-                    quantity=str(close_qty),
-                    order_type="limit",
-                    price=signal.entry_price,
-                )
+                if candle_idx - last_entry < self._pyramid_min_spacing:
+                    funnel.count(STAGE_EXECUTION_BLOCKED)
+                    funnel.reject(REASON_EXEC_PYRAMID_SPACING)
+                    return False
+                is_pyramid_add = True
             else:
-                exchange.place_order(
-                    symbol=signal.asset,
-                    side=side,
-                    quantity=str(close_qty),
-                    order_type="market",
-                )
-            # Closing trades need no SL/TP - the position is being exited
-            self._position_open_candle.pop(signal.asset, None)
-            self._position_time_exit.pop(signal.asset, None)
-            return True
+                # Opposing direction - signal-driven close, if permitted
+                if not self._opposing_closes_position:
+                    funnel.count(STAGE_EXECUTION_BLOCKED)
+                    funnel.reject(REASON_EXEC_HEDGE_MODE)
+                    logger.debug(
+                        f"Signal-driven closes disabled: blocking opposing "
+                        f"{signal.side.value} signal for {signal.asset}"
+                    )
+                    return False
 
-        # --- Opening a new position ---
+                open_candle = self._position_open_candle.get(
+                    signal.asset, candle_idx
+                )
+                candles_held = candle_idx - open_candle
+                if candles_held < self._min_hold_candles:
+                    funnel.count(STAGE_EXECUTION_BLOCKED)
+                    funnel.reject(REASON_EXEC_MIN_HOLD)
+                    logger.debug(
+                        f"Min hold not met for {signal.asset}: "
+                        f"{candles_held}/{self._min_hold_candles} candles - "
+                        f"skipping close"
+                    )
+                    return False
+
+                # Allow close: size to exactly the existing position quantity
+                close_qty = existing_pos.quantity
+                price_diff_pct = abs(signal.entry_price - price) / price
+                if price_diff_pct > 0.001:
+                    exchange.place_order(
+                        symbol=signal.asset,
+                        side=side,
+                        quantity=str(close_qty),
+                        order_type="limit",
+                        price=signal.entry_price,
+                    )
+                else:
+                    exchange.place_order(
+                        symbol=signal.asset,
+                        side=side,
+                        quantity=str(close_qty),
+                        order_type="market",
+                    )
+                # Closing trades need no SL/TP - the position is being exited
+                self._position_open_candle.pop(signal.asset, None)
+                self._position_entry_count.pop(signal.asset, None)
+                self._position_last_entry_candle.pop(signal.asset, None)
+                self._position_time_exit.pop(signal.asset, None)
+                return True
+
+        # --- Opening a new position (or adding to one) ---
         qty = signal.quantity
         if qty <= 0:
             # Fixed fractional sizing: 2% of available balance per trade
@@ -491,6 +789,12 @@ class BacktestEngine:
             funnel.count(STAGE_EXECUTION_BLOCKED)
             funnel.reject(REASON_EXEC_QTY_NON_POSITIVE)
             return False
+
+        if is_pyramid_add:
+            # Replace the position's exit orders rather than stacking a second
+            # SL/TP set on top. Stacked exits total more than the position, so
+            # the second one to trigger over-closes and flips direction.
+            exchange.cancel_all_orders(signal.asset)
 
         # Use limit order at entry_price if it differs from current price
         # by more than 0.1%, otherwise use market order for immediate fill
@@ -511,8 +815,28 @@ class BacktestEngine:
                 order_type="market",
             )
 
-        # Track when this position was opened (for min_hold_candles)
-        self._position_open_candle[signal.asset] = candle_idx
+        # Size the exits off the position that actually exists now, never off
+        # the requested quantity. A market entry has already filled, so this is
+        # the full (possibly pyramided) position; a resting limit entry has not,
+        # so exits cover only the requested size exactly as before. Either way
+        # the exits can never total more than the position and over-close it.
+        position_after = exchange._positions.get(signal.asset)
+        exit_qty = position_after.quantity if position_after is not None else qty
+
+        # A market order fills inside place_order(), so stamp the open candle
+        # now to keep min-hold ageing identical to the pre-policy engine. A
+        # resting limit entry has no position yet; _sync_position_tracking()
+        # stamps that one from the bar it actually fills on.
+        if position_after is not None and signal.asset not in self._position_open_candle:
+            self._position_open_candle[signal.asset] = candle_idx
+
+        if is_pyramid_add:
+            self._position_entry_count[signal.asset] = (
+                self._position_entry_count.get(signal.asset, 1) + 1
+            )
+        else:
+            self._position_entry_count[signal.asset] = 1
+        self._position_last_entry_candle[signal.asset] = candle_idx
 
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
@@ -531,7 +855,7 @@ class BacktestEngine:
                 exchange.place_order(
                     symbol=signal.asset,
                     side=exit_side,
-                    quantity=str(qty),
+                    quantity=str(exit_qty),
                     order_type="stop",
                     price=signal.stop_loss,
                 )
@@ -540,7 +864,7 @@ class BacktestEngine:
                 exchange.place_order(
                     symbol=signal.asset,
                     side=exit_side,
-                    quantity=str(qty),
+                    quantity=str(exit_qty),
                     order_type="stop",
                     price=signal.stop_loss,
                 )
@@ -548,7 +872,7 @@ class BacktestEngine:
                 exchange.place_order(
                     symbol=signal.asset,
                     side=exit_side,
-                    quantity=str(qty),
+                    quantity=str(exit_qty),
                     order_type="limit",
                     price=signal.take_profit,
                 )
@@ -592,6 +916,8 @@ class BacktestEngine:
             )
             del self._position_time_exit[symbol]
             self._position_open_candle.pop(symbol, None)
+            self._position_entry_count.pop(symbol, None)
+            self._position_last_entry_candle.pop(symbol, None)
             logger.debug(
                 f"time_exit: closed {symbol} {pos.side} after {age_hours:.1f}h "
                 f"(limit {info['hours']}h)"
