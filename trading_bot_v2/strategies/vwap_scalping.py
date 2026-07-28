@@ -56,6 +56,7 @@ from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
 from ..models import Signal, OrderSide
+from ..diagnostics.gate_metrics import GATE_AT_LEAST, GateMetric
 from ..indicators import (
     calculate_atr,
     calculate_macd,
@@ -713,3 +714,75 @@ class VWAPScalpingStrategy:
             "sd2_lower": bands.get("sd2.0_lower"),
             "in_cooldown": self._check_cooldown(symbol),
         }
+
+    def describe_gate_metrics(
+        self,
+        symbol: str,
+        multi_tf_data: Dict[str, Dict[str, List[float]]],
+        current_price: float,
+        execution_tf_data: Optional[Dict[str, Dict[str, List[float]]]] = None,
+    ) -> List[GateMetric]:
+        """
+        Report the entry gate's metric for one bar (calibration hook).
+
+        This is the hook that would have caught the 4.037 bug on day one:
+        ``deviation_sd`` is the metric ``sd_entry_threshold`` gates on, and
+        its distribution over real data has a hard ceiling near 4.0 because
+        the VWAP here is rolling cumulative rather than session-anchored.
+
+        The value is threshold-independent - it depends only on the 15m
+        window and the current price - so an artifact built from it stays
+        valid for any candidate ``sd_entry_threshold``. It does depend on
+        how many 15m candles the caller supplies (the VWAP is cumulative
+        over the whole window), which is why the calibration pass records
+        the history lookback in its provenance.
+
+        Side-effect free: no cooldown is set and no state is touched.
+
+        Args:
+            symbol: Trading symbol (unused; kept for hook uniformity).
+            multi_tf_data: Regime/structure timeframes, must contain "15m".
+            current_price: Current market price.
+            execution_tf_data: Execution timeframes (unused - neither 5m
+                MACD nor 1m ATR gates entry).
+
+        Returns:
+            One GateMetric for ``deviation_sd``, or an empty list when the
+            15m bundle cannot produce VWAP bands.
+        """
+        data_15m = (multi_tf_data or {}).get("15m")
+        if not data_15m:
+            return []
+        for field in ("high", "low", "close", "volume"):
+            series = data_15m.get(field)
+            if not series or len(series) < 30:
+                return []
+
+        bands = self._calculate_vwap_and_bands(
+            data_15m["high"],
+            data_15m["low"],
+            data_15m["close"],
+            data_15m["volume"],
+        )
+        if not bands:
+            return []
+
+        stddev = bands["stddev"]
+        if stddev <= 0:
+            return []
+
+        deviation_sd = abs(current_price - bands["vwap"]) / stddev
+        return [
+            GateMetric(
+                name="deviation_sd",
+                value=deviation_sd,
+                threshold=self.sd_entry_threshold,
+                direction=GATE_AT_LEAST,
+                param_key="sd_entry_threshold",
+                description=(
+                    "absolute price deviation from the rolling cumulative "
+                    "VWAP, in volume-weighted standard deviations; the "
+                    "entry gate every VWAP signal must clear first"
+                ),
+            )
+        ]

@@ -90,10 +90,19 @@ SCORE_BANDS: Dict[TrialOutcome, float] = {
 }
 
 
+#: Width of the near-miss refinement, in units of the within-band offset.
+#: progress() moves in steps of 1/(len(DEPTH_LADDER) + 1) = 0.1, so a
+#: near-miss can never promote a trial past a trial that got a whole
+#: milestone further down the funnel - it only orders trials that stalled
+#: at the SAME depth.
+NEAR_MISS_WEIGHT = 0.1
+
+
 def score_for_outcome(
     outcome: TrialOutcome,
     progress: float = 0.0,
     objective_value: Optional[float] = None,
+    near_miss: Optional[float] = None,
 ) -> float:
     """Return the Optuna trial value for an outcome.
 
@@ -102,6 +111,13 @@ def score_for_outcome(
         progress: Funnel depth in [0, 1) - added to the band base so
             deeper trials rank higher within their band.
         objective_value: The real objective, required for TRADED.
+        near_miss: Optional gradient in [0, 1) from
+            :func:`trading_bot_v2.diagnostics.gate_metrics.near_miss`,
+            saying how close the tightest gate came to opening. Without
+            it every "never fired" trial in a region scores identically
+            and TPE learns nothing from the region; with it, a threshold
+            of 4.037 against a metric that reached 3.95 ranks above one
+            that needed 100.
 
     Returns:
         A finite float. Never ``-inf`` (which would poison
@@ -126,6 +142,9 @@ def score_for_outcome(
 
     base = SCORE_BANDS.get(outcome, SCORE_BANDS[TrialOutcome.NO_DATA])
     bounded = min(max(float(progress), 0.0), 0.999)
+    if near_miss is not None:
+        gradient = min(max(float(near_miss), 0.0), 0.999)
+        bounded = min(bounded + gradient * NEAR_MISS_WEIGHT, 0.999)
     return base + bounded
 
 

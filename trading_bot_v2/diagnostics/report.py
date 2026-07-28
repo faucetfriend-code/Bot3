@@ -18,6 +18,12 @@ Usage:
 from typing import Any, Dict, List, Optional, Union
 
 from .funnel import DROP_STAGES, STAGES, SignalFunnel
+from .gate_metrics import (
+    GATE_AT_LEAST,
+    GATE_AT_MOST,
+    binding_metric,
+    describe_gate,
+)
 from .outcomes import suggest_fix
 
 WIDTH = 78
@@ -173,14 +179,11 @@ def render_funnel_report(
         lines.append(f"  {'Regimes (bars)':<26} {desc}")
         lines.append(f"  {rule}")
 
-    # Gate metrics are a Phase 4 (calibration) artifact. Degrade
+    # Gate metrics come from the describe_gate_metrics() hook. Degrade
     # gracefully: the section is simply absent when no hook supplied it.
     gate_metrics = (payload.get("notes") or {}).get("gate_metrics")
     if gate_metrics:
-        lines.append("  GATE METRICS")
-        for metric, info in sorted(gate_metrics.items()):
-            lines.append(f"  {'  ' + str(metric):<26} {info}")
-        lines.append(f"  {rule}")
+        lines.extend(_gate_metric_lines(gate_metrics, rule))
 
     # Execution policy behind the exec:* reasons below. Absent for funnels
     # produced outside the backtest engine (e.g. the live NullFunnel).
@@ -195,6 +198,15 @@ def render_funnel_report(
 
     binding = str(payload.get("binding_stage") or "")
     lines.append(f"  BINDING CONSTRAINT: {binding or 'unknown'}")
+    # When a calibrated gate never opened, the stage name alone is not
+    # actionable - name the metric and the parameter that sets it.
+    if gate_metrics:
+        tightest = binding_metric(gate_metrics)
+        if tightest is not None:
+            detail = describe_gate(*tightest)
+            if detail:
+                for chunk in _wrap(detail, _INNER - 6):
+                    lines.append(f"    {chunk}")
     top_reasons = payload.get("top_reasons") or []
     for entry in top_reasons[:max_reasons]:
         try:
@@ -250,6 +262,60 @@ def funnel_one_liner(funnel: FunnelLike) -> str:
     if diagnosis:
         return str(diagnosis)
     return SignalFunnel.from_dict(payload).diagnose()
+
+
+def _gate_bound(record: Dict[str, Any]) -> str:
+    """Render a gate's configured bound as a comparison string.
+
+    Args:
+        record: Distribution record from a calibration artifact.
+
+    Returns:
+        e.g. ">= 4.037", "<= 0.1", "[1, 5]".
+    """
+    threshold = record.get("threshold_at_calibration")
+    low = record.get("threshold_low_at_calibration")
+    direction = record.get("direction", GATE_AT_LEAST)
+    if direction == GATE_AT_LEAST:
+        return f">= {threshold:g}" if threshold is not None else "?"
+    if direction == GATE_AT_MOST:
+        return f"<= {threshold:g}" if threshold is not None else "?"
+    low_text = "-inf" if low is None else f"{low:g}"
+    high_text = "inf" if threshold is None else f"{threshold:g}"
+    return f"[{low_text}, {high_text}]"
+
+
+def _gate_metric_lines(
+    gate_metrics: Dict[str, Any], rule: str
+) -> List[str]:
+    """Render the GATE METRICS block.
+
+    Args:
+        gate_metrics: The ``gate_metrics`` note (metric -> record).
+        rule: Horizontal rule string used by the surrounding report.
+
+    Returns:
+        Report lines, including the trailing rule.
+    """
+    lines = ["  GATE METRICS"]
+    lines.append(
+        f"  {'  metric':<20}{'observed':>26}  {'gate':>14}  {'pass':>8}"
+    )
+    for name, record in sorted(gate_metrics.items()):
+        if not isinstance(record, dict):
+            lines.append(f"  {'  ' + str(name):<20}{str(record):>26}")
+            continue
+        if not record.get("count"):
+            lines.append(f"  {'  ' + str(name):<20}{'(no observations)':>26}")
+            continue
+        observed = f"{record['min']:g} .. {record['max']:g}"
+        lines.append(
+            f"  {'  ' + str(name):<20}{observed:>26}  "
+            f"{_gate_bound(record):>14}  "
+            f"{record.get('pass_rate', 0.0):>8.4f}"
+        )
+    lines.append(f"  {rule}")
+    return lines
 
 
 def _wrap(text: str, width: int) -> List[str]:

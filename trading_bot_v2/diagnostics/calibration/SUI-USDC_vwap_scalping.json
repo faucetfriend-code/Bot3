@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "kind": "gate_metric_calibration",
+  "strategy": "vwap_scalping",
+  "symbol": "SUI-USDC",
+  "provenance": {
+    "generated_at": "2026-07-28T16:57:28Z",
+    "window_start": "2024-01-01",
+    "window_end": "2026-07-01",
+    "driver_timeframe": "5m",
+    "structure_timeframes": [
+      "15m"
+    ],
+    "execution_timeframes": [
+      "5m"
+    ],
+    "history_lookback": 60,
+    "bars_observed": 262656,
+    "params_at_calibration": {
+      "sd_entry_threshold": 2.0,
+      "atr_period": 14,
+      "min_confidence": 0.55
+    }
+  },
+  "metrics": {
+    "deviation_sd": {
+      "param_key": "sd_entry_threshold",
+      "direction": "at_least",
+      "threshold_at_calibration": 2.0,
+      "count": 262656,
+      "n_pass": 19147,
+      "description": "absolute price deviation from the rolling cumulative VWAP, in volume-weighted standard deviations; the entry gate every VWAP signal must clear first",
+      "pass_rate": 0.072898,
+      "min": 1.1e-05,
+      "max": 4.418274,
+      "mean": 1.028932,
+      "std": 0.632356,
+      "p01": 0.02155,
+      "p05": 0.105466,
+      "p25": 0.513904,
+      "p50": 0.991605,
+      "p75": 1.467686,
+      "p95": 2.130705,
+      "p99": 2.613823,
+      "p001": 0.002192,
+      "p999": 3.183912,
+      "closest_approach": 4.418274,
+      "histogram": {
+        "bin_edges": [
+          1.1e-05,
+          0.220924,
+          0.441837,
+          0.66275,
+          0.883663,
+          1.104577,
+          1.32549,
+          1.546403,
+          1.767316,
+          1.988229,
+          2.209142,
+          2.430055,
+          2.650969,
+          2.871882,
+          3.092795,
+          3.313708,
+          3.534621,
+          3.755534,
+          3.976448,
+          4.197361,
+          4.418274
+        ],
+        "counts": [
+          27769,
+          28393,
+          29167,
+          30509,
+          31877,
+          31061,
+          27510,
+          21593,
+          15041,
+          9382,
+          5341,
+          2699,
+          1321,
+          585,
+          272,
+          83,
+          33,
+          16,
+          1,
+          3
+        ]
+      }
+    }
+  }
+}

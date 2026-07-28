@@ -40,6 +40,7 @@ from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
 from ..models import Signal, OrderSide
+from ..diagnostics.gate_metrics import GATE_IN_BAND, GateMetric
 from ..indicators import calculate_sma, calculate_macd, calculate_atr
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
 
@@ -804,3 +805,135 @@ class MACrossoverStrategy:
         )
 
         return signal
+
+    def _newest_crossover_in_window(
+        self, closes: List[float]
+    ) -> Optional[Tuple[int, str]]:
+        """Locate the most recent crossover inside a supplied window.
+
+        Deliberately independent of ``self.last_crossover``: the tracked
+        state is popped once the entry window closes, so reading it would
+        make the observed ``bars_since_cross`` distribution a function of
+        ``max_entry_bars`` - the very threshold the calibration is meant
+        to judge. Rescanning the window keeps the metric
+        threshold-independent, which is what an artifact needs to stay
+        valid for any candidate parameter set.
+
+        Args:
+            closes: 4h closes, oldest -> newest.
+
+        Returns:
+            ``(bars_since_crossover, "golden"|"death")`` for the newest
+            crossover visible in the window, or None when there is none.
+        """
+        n = len(closes)
+        # A crossover needs one prior bar, so the earliest evaluable
+        # window end is slow_ma_period + 1 closes.
+        floor = self.slow_ma_period + 1
+        for end in range(n, floor - 1, -1):
+            window = closes[:end]
+            crossover = self._detect_crossover(
+                calculate_sma(window, period=self.fast_ma_period),
+                calculate_sma(window, period=self.slow_ma_period),
+                calculate_sma(window[:-1], period=self.fast_ma_period),
+                calculate_sma(window[:-1], period=self.slow_ma_period),
+            )
+            if crossover:
+                return n - end, crossover
+        return None
+
+    def describe_gate_metrics(
+        self,
+        symbol: str,
+        multi_tf_data: Dict[str, Dict[str, List[float]]],
+        current_price: float,
+        execution_tf_data: Optional[Dict[str, Dict[str, List[float]]]] = None,
+    ) -> List[GateMetric]:
+        """
+        Report this strategy's two band gates for one 4h bar.
+
+        Both are BANDS, not one-sided thresholds, and both have already
+        silently disabled this strategy once:
+
+        * ``bars_since_cross`` must land inside
+          ``[min_entry_bars, max_entry_bars]``. The 2026-07-28
+          investigation found this metric pinned at a constant 0 (an
+          absolute list index into a rolling window), so a band starting
+          at 1 was unreachable: 552 crossovers, 0 signals. A calibrated
+          artifact whose ``max`` is 0 says that out loud.
+        * ``pullback_pct`` must land inside
+          ``[pullback_range_min, pullback_range_max]``. Measured against
+          the fast MA, signed so that a golden cross wants price BELOW
+          the MA and a death cross wants it above - the same quantity
+          generate_signals compares.
+
+        Both are only defined while a crossover is in view, so nothing is
+        reported on bars without one. ``pullback_pct`` does depend on
+        ``fast_ma_period``, which IS searched, so an artifact is only
+        strictly valid at the calibrated period - the pass records it in
+        provenance.
+
+        Side-effect free: neither ``last_crossover`` nor the bar counter
+        is touched.
+
+        Args:
+            symbol: Trading symbol (unused; kept for hook uniformity).
+            multi_tf_data: Timeframe bundles, must contain "4h".
+            current_price: Current market price.
+            execution_tf_data: Unused - no execution timeframe gates entry.
+
+        Returns:
+            Two GateMetric observations, or an empty list.
+        """
+        data_4h = (multi_tf_data or {}).get("4h")
+        if not data_4h:
+            return []
+        closes = data_4h.get("close") or []
+        # Quiet equivalent of _validate_data: that helper logs a warning
+        # per call, which a per-bar calibration pass would drown in.
+        if len(closes) < self.required_history():
+            return []
+
+        found = self._newest_crossover_in_window(list(closes))
+        if found is None:
+            return []
+        bars_since, crossover_type = found
+
+        fast_ma = calculate_sma(closes, period=self.fast_ma_period)
+        if fast_ma <= 0:
+            return []
+        if crossover_type == "golden":
+            pullback_pct = (fast_ma - current_price) / fast_ma
+        else:
+            pullback_pct = (current_price - fast_ma) / fast_ma
+
+        return [
+            GateMetric(
+                name="bars_since_cross",
+                value=float(bars_since),
+                threshold=float(self.max_entry_bars),
+                direction=GATE_IN_BAND,
+                param_key="max_entry_bars",
+                threshold_low=float(self.min_entry_bars),
+                param_key_low="min_entry_bars",
+                description=(
+                    "4h bars since the newest crossover visible in the "
+                    "supplied window; the post-crossover entry window "
+                    "every signal must land inside"
+                ),
+            ),
+            GateMetric(
+                name="pullback_pct",
+                value=pullback_pct,
+                threshold=float(self.pullback_range[1]),
+                direction=GATE_IN_BAND,
+                param_key="pullback_range_max",
+                threshold_low=float(self.pullback_range[0]),
+                param_key_low="pullback_range_min",
+                description=(
+                    "signed distance from the fast MA as a fraction of "
+                    "it - pullback for a golden cross, rally for a death "
+                    "cross; negative means price has run the wrong way"
+                ),
+            ),
+        ]
