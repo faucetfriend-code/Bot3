@@ -28,11 +28,11 @@ CLI:
     python -m trading_bot_v2.validation.runner \\
         [--strategies all|mean_reversion,momentum_scalping] \\
         [--symbols SUI-USDC,BTC-USDC] [--window-months 2] [--windows 3] \\
-        [--objective sharpe] [--capital 10000] \\
+        [--objective sharpe] [--capital 10000] [--refresh-data] \\
         [--loop-hours H | --once]
 
 Env defaults (flags override): VALIDATION_WINDOW_MONTHS,
-VALIDATION_WINDOWS, VALIDATION_SYMBOLS.
+VALIDATION_WINDOWS, VALIDATION_SYMBOLS, VALIDATION_REFRESH_DATA.
 """
 
 import argparse
@@ -193,6 +193,76 @@ def _data_coverage(
     return first, last
 
 
+def _coverage_1m_end(symbol: str, data_dir: str) -> Optional[date]:
+    """Last date with locally stored 1m candle data for a symbol.
+
+    Uses BacktestDataLoader.coverage_bounds, which only inspects the
+    local store - no network, no live bot. 1m matters because the
+    backtest engine refuses to run a window that 1m data does not
+    cover, and 1m is excluded from auto-download (manual top-up).
+
+    Args:
+        symbol: Trading pair (e.g. "SUI-USDC").
+        data_dir: Candle data directory.
+
+    Returns:
+        Date of the last 1m candle, or None when no 1m data is on disk.
+    """
+    from ..backtesting.data_loader import BacktestDataLoader
+
+    try:
+        loader = BacktestDataLoader(symbol=symbol, data_dir=data_dir)
+        bounds = loader.coverage_bounds("1m")
+    except Exception as e:
+        logger.warning(f"1m coverage check failed for {symbol}: {e}")
+        return None
+    if bounds is None:
+        return None
+    return date.fromisoformat(str(bounds[1])[:10])
+
+
+def refresh_market_data(
+    symbols: List[str], data_dir: Optional[str] = None
+) -> None:
+    """Top up the 1m candle store for each symbol before validating.
+
+    Opt-in only (--refresh-data / VALIDATION_REFRESH_DATA): runs
+    CandleDownloadManager in update mode for 1m - from the last stored
+    candle up to now. 5m/15m/1h/4h stay on the loader's existing
+    auto-download path. Symbols with no 1m store at all are skipped
+    (a from-scratch multi-year 1m pull is huge - backfill manually).
+
+    Args:
+        symbols: Trading pairs to refresh.
+        data_dir: Candle data dir override (default: config).
+    """
+    from ..config import config as cfg
+    from ..data_manager import CandleDownloadManager
+
+    resolved_dir = data_dir or cfg.backtest_data_dir
+    manager = CandleDownloadManager(data_dir=resolved_dir)
+    for symbol in symbols:
+        try:
+            cov = manager.coverage(symbol, "1m")
+            if not cov.end:
+                logger.warning(
+                    f"refresh-data: no existing 1m store for {symbol}, "
+                    f"skipping (backfill manually with: python -m "
+                    f"trading_bot_v2.data_manager --symbols {symbol} "
+                    f"--timeframes 1m)"
+                )
+                continue
+            summary = manager.ensure(
+                symbol, "1m", cov.end, include_internal_gaps=False
+            )
+            logger.info(
+                f"refresh-data: {symbol} 1m +{summary.get('added', 0)} "
+                f"candles (updated from {cov.end})"
+            )
+        except Exception as e:
+            logger.warning(f"refresh-data failed for {symbol} 1m: {e}")
+
+
 def _run_chunk_backtest(
     strategy_key: str,
     symbol: str,
@@ -291,6 +361,31 @@ def validate_strategy(
 
     data_start = max(c[0] for c in coverage.values())
     data_end = min(c[1] for c in coverage.values())
+
+    # Clamp the window anchor to 1m execution coverage. The 5m store
+    # auto-downloads up to now, but 1m is topped up manually, so the
+    # anchor can overrun the 1m store and the engine's 1m coverage
+    # guard would fail the newest window. Windows are computed once for
+    # all symbols, so clamp to the MINIMUM 1m coverage end across the
+    # run's symbols. A symbol with no 1m data at all contributes
+    # nothing here - the engine's guard stays the loud failure path.
+    m1_ends: Dict[str, date] = {}
+    for symbol in coverage:
+        m1_end = _coverage_1m_end(symbol, resolved_dir)
+        if m1_end is not None:
+            m1_ends[symbol] = m1_end
+    if m1_ends:
+        min_symbol = min(m1_ends, key=lambda s: m1_ends[s])
+        clamped_end = m1_ends[min_symbol]
+        if clamped_end < data_end:
+            logger.info(
+                f"[{strategy_key}] window anchor clamped to 1m coverage "
+                f"end of {min_symbol} (min across "
+                f"{','.join(sorted(m1_ends))}): "
+                f"{data_end.isoformat()} -> {clamped_end.isoformat()}"
+            )
+            data_end = clamped_end
+
     result["data_start"] = data_start.isoformat()
     result["data_end"] = data_end.isoformat()
 
@@ -445,6 +540,7 @@ def run_once(
     n_windows: int,
     capital: float = DEFAULT_CAPITAL,
     data_dir: Optional[str] = None,
+    refresh_data: bool = False,
 ) -> List[Dict[str, Any]]:
     """Run one full validation cycle and persist every verdict.
 
@@ -458,6 +554,8 @@ def run_once(
         n_windows: Number of chunk windows.
         capital: Initial capital per chunk backtest.
         data_dir: Candle data dir override.
+        refresh_data: Top up the 1m candle store from public APIs
+            before validating (default False: fully offline).
 
     Returns:
         List of per-strategy result dicts (with "row_id" added).
@@ -465,6 +563,9 @@ def run_once(
     from ..backtesting.engine import NON_BACKTESTABLE_STRATEGIES
     from ..database import DatabaseManager
     from ..regime_param_overlay import resolve_strategy_key
+
+    if refresh_data:
+        refresh_market_data(symbols, data_dir=data_dir)
 
     db = DatabaseManager()
     results: List[Dict[str, Any]] = []
@@ -574,6 +675,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         help="Initial capital per chunk backtest (default: 10000)",
     )
     parser.add_argument(
+        "--refresh-data",
+        action="store_true",
+        default=_env_bool("VALIDATION_REFRESH_DATA", False),
+        help=(
+            "Top up the 1m candle store from public APIs before "
+            "validating (env: VALIDATION_REFRESH_DATA; default: off, "
+            "fully offline)"
+        ),
+    )
+    parser.add_argument(
         "--loop-hours",
         type=float,
         default=None,
@@ -619,6 +730,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.window_months,
             args.windows,
             capital=args.capital,
+            refresh_data=args.refresh_data,
         )
         if loop_hours is None:
             break

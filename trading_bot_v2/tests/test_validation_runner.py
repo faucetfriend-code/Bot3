@@ -175,6 +175,242 @@ class TestPooledGateAggregation:
         assert "no candle data" in result["reason"]
 
 
+class TestAnchorClamping:
+    """Chunk-window anchor is clamped to 1m data coverage.
+
+    The 5m store auto-downloads up to now while the 1m store is topped
+    up manually, so without clamping the newest window overruns 1m
+    coverage and the engine's 1m guard fails it (runner_error/UNKNOWN).
+    """
+
+    def _patch_backtests(self, monkeypatch, m1_ends):
+        """Stub 5m coverage, per-symbol 1m coverage ends, and backtests."""
+        monkeypatch.setattr(
+            runner,
+            "_data_coverage",
+            lambda symbol, data_dir: (date(2024, 1, 1), date(2025, 1, 1)),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_coverage_1m_end",
+            lambda symbol, data_dir: m1_ends.get(symbol),
+        )
+        monkeypatch.setattr(
+            runner,
+            "_run_chunk_backtest",
+            lambda strategy, symbol, start, end, capital: list(GOOD_CHUNK),
+        )
+
+    def _capture_info_logs(self):
+        """Attach a loguru sink; returns (messages, remove_fn)."""
+        from loguru import logger as loguru_logger
+
+        messages = []
+        sink_id = loguru_logger.add(
+            lambda m: messages.append(str(m)), level="INFO"
+        )
+        return messages, lambda: loguru_logger.remove(sink_id)
+
+    def test_anchor_clamped_to_min_1m_coverage_end(
+        self, monkeypatch, tmp_db
+    ):
+        # BTC's 1m store lags the most: the anchor must clamp to it.
+        self._patch_backtests(
+            monkeypatch,
+            {
+                "SUI-USDC": date(2024, 12, 20),
+                "BTC-USDC": date(2024, 12, 15),
+            },
+        )
+        messages, remove = self._capture_info_logs()
+        try:
+            result = validate_strategy(
+                "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
+            )
+        finally:
+            remove()
+        assert result["data_end"] == "2024-12-15"
+        # Newest window ends at the clamped anchor, not the 5m end.
+        assert result["windows"][-1][1] == "2024-12-15"
+        clamp_logs = [m for m in messages if "window anchor clamped" in m]
+        assert len(clamp_logs) == 1
+        assert "BTC-USDC" in clamp_logs[0]
+        assert "2025-01-01" in clamp_logs[0]  # original anchor
+        assert "2024-12-15" in clamp_logs[0]  # clamped anchor
+
+    def test_anchor_not_clamped_when_1m_covers_boundary(
+        self, monkeypatch, tmp_db
+    ):
+        self._patch_backtests(
+            monkeypatch,
+            {
+                "SUI-USDC": date(2025, 3, 1),
+                "BTC-USDC": date(2025, 1, 1),
+            },
+        )
+        messages, remove = self._capture_info_logs()
+        try:
+            result = validate_strategy(
+                "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
+            )
+        finally:
+            remove()
+        assert result["data_end"] == "2025-01-01"
+        assert result["windows"][-1][1] == "2025-01-01"
+        assert not [m for m in messages if "window anchor clamped" in m]
+
+    def test_no_1m_data_keeps_current_behavior(self, monkeypatch, tmp_db):
+        # No 1m data for any symbol: window computation is unchanged
+        # (the engine's 1m guard stays the loud failure path).
+        self._patch_backtests(monkeypatch, {})
+        result = validate_strategy(
+            "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
+        )
+        assert result["data_end"] == "2025-01-01"
+        assert result["windows"][-1][1] == "2025-01-01"
+        assert result["overall"] in ("PASS", "FAIL")  # no crash
+
+
+class TestRefreshData:
+    """Opt-in --refresh-data / VALIDATION_REFRESH_DATA behavior."""
+
+    class _FakeManager:
+        """Records CandleDownloadManager calls; never hits the network."""
+
+        instances = []
+
+        def __init__(self, data_dir=None, **kwargs):
+            self.data_dir = data_dir
+            self.coverage_calls = []
+            self.ensure_calls = []
+            TestRefreshData._FakeManager.instances.append(self)
+
+        def coverage(self, symbol, tf):
+            self.coverage_calls.append((symbol, tf))
+
+            class _Cov:
+                end = "2025-01-01T00:00"
+
+            return _Cov()
+
+        def ensure(self, symbol, tf, start, end=None, **kwargs):
+            self.ensure_calls.append(
+                (symbol, tf, start, end, kwargs)
+            )
+            return {"added": 5}
+
+    @pytest.fixture(autouse=True)
+    def _reset_fake_manager(self):
+        TestRefreshData._FakeManager.instances = []
+        yield
+        TestRefreshData._FakeManager.instances = []
+
+    def _stub_validate(self, monkeypatch):
+        def fake_validate(strategy, *args, **kwargs):
+            return {
+                "strategy": strategy,
+                "symbols": ["SUI-USDC"],
+                "window_spec": "3x2mo",
+                "chunks": [],
+                "verdict": None,
+                "overall": "PASS",
+                "data_start": "2024-01-01",
+                "data_end": "2025-01-01",
+            }
+
+        monkeypatch.setattr(runner, "validate_strategy", fake_validate)
+
+    def test_refresh_data_flag_parses(self, monkeypatch):
+        monkeypatch.delenv("VALIDATION_REFRESH_DATA", raising=False)
+        calls = []
+
+        def fake_run_once(*args, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr(runner, "run_once", fake_run_once)
+        assert (
+            runner.main(
+                ["--once", "--strategies", "mean_reversion",
+                 "--refresh-data"]
+            )
+            == 0
+        )
+        assert calls[0]["refresh_data"] is True
+
+        calls.clear()
+        assert (
+            runner.main(["--once", "--strategies", "mean_reversion"]) == 0
+        )
+        assert calls[0]["refresh_data"] is False
+
+    def test_refresh_data_env_var_default(self, monkeypatch):
+        monkeypatch.setenv("VALIDATION_REFRESH_DATA", "true")
+        calls = []
+
+        def fake_run_once(*args, **kwargs):
+            calls.append(kwargs)
+            return []
+
+        monkeypatch.setattr(runner, "run_once", fake_run_once)
+        assert (
+            runner.main(["--once", "--strategies", "mean_reversion"]) == 0
+        )
+        assert calls[0]["refresh_data"] is True
+
+    def test_refresh_skipped_by_default(self, monkeypatch, tmp_db):
+        self._stub_validate(monkeypatch)
+        refreshed = []
+        monkeypatch.setattr(
+            runner,
+            "refresh_market_data",
+            lambda symbols, data_dir=None: refreshed.append(symbols),
+        )
+        run_once(["mean_reversion"], ["SUI-USDC"], 2, 3)
+        assert refreshed == []
+
+    def test_refresh_invoked_when_enabled(self, monkeypatch, tmp_db):
+        self._stub_validate(monkeypatch)
+        refreshed = []
+        monkeypatch.setattr(
+            runner,
+            "refresh_market_data",
+            lambda symbols, data_dir=None: refreshed.append(symbols),
+        )
+        run_once(
+            ["mean_reversion"], ["SUI-USDC"], 2, 3, refresh_data=True
+        )
+        assert refreshed == [["SUI-USDC"]]
+
+    def test_refresh_uses_update_mode_1m(self, monkeypatch, tmp_path):
+        import trading_bot_v2.data_manager as dm
+
+        monkeypatch.setattr(
+            dm, "CandleDownloadManager", TestRefreshData._FakeManager
+        )
+        runner.refresh_market_data(
+            ["SUI-USDC", "BTC-USDC"], data_dir=str(tmp_path)
+        )
+        assert len(TestRefreshData._FakeManager.instances) == 1
+        mgr = TestRefreshData._FakeManager.instances[0]
+        assert mgr.coverage_calls == [
+            ("SUI-USDC", "1m"),
+            ("BTC-USDC", "1m"),
+        ]
+        # Update mode: start = last stored candle, end = now (None),
+        # internal gaps skipped.
+        assert mgr.ensure_calls == [
+            (
+                "SUI-USDC", "1m", "2025-01-01T00:00", None,
+                {"include_internal_gaps": False},
+            ),
+            (
+                "BTC-USDC", "1m", "2025-01-01T00:00", None,
+                {"include_internal_gaps": False},
+            ),
+        ]
+
+
 class TestPersistence:
     def _stub_result(self, strategy, overall="PASS"):
         return {
