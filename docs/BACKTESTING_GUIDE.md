@@ -87,14 +87,23 @@ The export was silently replaced by the `.env` value. **To change a strategy par
 edit `.env`.**
 
 The exception is any variable `.env` does not set — those still come from the shell.
-`BACKTEST_DATA_DIR` and `DATA_AUTODOWNLOAD` are currently in that category, which makes
-them the two useful per-run overrides:
+`DATA_AUTODOWNLOAD` is in that category and works as a per-run override:
 
 ```bash
-# Run fully offline (no public API calls) against a specific store
-DATA_AUTODOWNLOAD=false BACKTEST_DATA_DIR=/some/other/data \
+# Run fully offline (no public API calls)
+DATA_AUTODOWNLOAD=false \
     python -m trading_bot_v2.backtesting.run_backtest --symbol BTC-USDC
 ```
+
+**`BACKTEST_DATA_DIR` is NOT overridable from the shell.** `.env:207` sets it to the
+relative path `trading_bot_v2/backtesting/data`, so `load_dotenv(override=True)`
+clobbers anything you export. Two separate agents lost time to this — commands appear
+to accept the override and silently read the wrong store. Consequences:
+
+- **Always run backtests from the main checkout root.** Because the configured path is
+  relative, running from a git worktree resolves it to that worktree's own (parquet-less)
+  data directory, and you get "Loaded 0 candles" or a silently truncated window.
+- To point at a different store, edit `.env` or redirect it in-process — not via the shell.
 
 To see what your `.env` actually resolves to rather than guessing, print it:
 
