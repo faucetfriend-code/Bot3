@@ -141,6 +141,47 @@ Also from the same audit:
   as neutral `sharpe 0.0`; `baseline_sharpe = -0.12` is hardcoded; `optimize_strategy`
   swallows all exceptions.
 
+## 8c. RiskManager is bypassed in every backtest (found 2026-07-28)
+
+`CLAUDE.md` states RiskManager is AUTHORITATIVE for position sizing and exposure, and
+that other components delegate to it. In backtests it does not:
+`BacktestEngine._execute_signal` sizes from `signal.quantity`, falling back to a flat
+`max_risk_per_trade` (2%) fraction of balance. `RiskManager` is constructed and handed
+to `StrategyManager`, but `max_portfolio_exposure_pct` is never consulted on the sizing
+path, and only GridTrading asks it for capital.
+
+Measured consequence: in a portfolio run the largest single fill was $221 against a
+$1,500 notional cap, and max concurrent positions was 1 — the limits never bound, so
+they are untested. **Every backtest number this project has produced used sizing that
+does not match live behaviour.** Until this is closed, backtest returns and drawdowns
+are not directly comparable to what the live bot would do.
+
+## 8d. Portfolio capacity is the binding constraint, not correlation
+
+From `trading_bot_v2/validation/portfolio.py` (new): running six strategies together on
+one symbol is materially WORSE than the equal-weight blend of running them alone (mean
+return edge -0.73%, drawdown edge -1.04%).
+
+The cause is not correlated bets — mean pairwise correlation is +0.04, i.e. these
+strategies are close to independent and real diversification IS available. The
+portfolio cannot collect it because there is effectively **one position slot per
+symbol, occupied 69% of the time**, with six strategies competing for it. Retention
+alone-to-portfolio ran 6-71%: mean_reversion kept 4 of its 68 trades, ma_crossover was
+shut out entirely, grid_trading won 382 conflict resolutions. `exec:hedge_mode_block`
+more than doubled (552 vs 262 across isolated runs).
+
+So the live system is close to "grid_trading plus whatever fits in the gaps" rather
+than a diversified portfolio. Worth deciding deliberately: raise capacity (more
+concurrent positions, per-strategy slots, or per-strategy capital allocation), or
+accept that most enabled strategies are decorative.
+
+Related engine hooks that would sharpen this measurement, all small:
+`_execute_signal`'s six `funnel.reject(REASON_EXEC_*)` calls do not pass `strategy=`,
+so execution-stage crowd-out cannot be attributed per strategy;
+`run(strategy_filter=...)` accepts only a single strategy, so portfolio subsets must be
+selected via `ENABLE_*` environment scoping; and `strategy_manager` counts conflict
+DROPS but not conflict INVOCATIONS.
+
 ## 9. Campaign results live only in an uncommitted database
 
 `validation_runs` and `trial_registry` do not exist in any committed `trading_bot.db` —
