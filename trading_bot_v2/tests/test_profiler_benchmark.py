@@ -628,26 +628,150 @@ class TestPerformanceBenchmark:
         assert "sqlite" in comparison
         assert len(comparison["sqlite"]) > 0
 
-    def test_check_regression(self):
-        """check_regression() should detect regressions."""
-        bench = PerformanceBenchmark()
-        bench.run_all(iterations=10)
+    @pytest.mark.perf
+    def test_check_regression_end_to_end(self):
+        """Wire run_all -> save_report -> check_regression on real timings.
 
-        # Save baseline
+        Opt-in (``-m perf``) because it measures the machine. Note it can
+        only ever fail on noise: both sides run identical code in the same
+        process, so the true change is 0% by construction. It is kept as a
+        smoke test of the pipeline, not as a regression detector -- the
+        tests in TestCheckRegression are what actually pin the detection
+        behaviour.
+        """
+        bench = PerformanceBenchmark()
+        bench.run_all(iterations=100)
+
         with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
             baseline_path = f.name
 
         try:
             bench.save_report(output_path=baseline_path, format="json")
 
-            # Run again (no regression expected)
             bench2 = PerformanceBenchmark()
-            bench2.run_all(iterations=10)
+            bench2.run_all(iterations=100)
             regressions = bench2.check_regression(baseline_path, threshold_pct=50.0)
-            # With a 50% threshold, no regressions should be detected
-            assert len(regressions) == 0
+            assert regressions == [], (
+                "same-code comparison reported a regression; the machine was "
+                f"too noisy to measure on: {regressions}"
+            )
         finally:
             os.unlink(baseline_path)
+
+
+# ============================================================================
+# Regression Detection Tests
+# ============================================================================
+
+
+def _fixed_result(name: str, times_ms: list) -> BenchmarkResult:
+    """Build a BenchmarkResult from injected timings.
+
+    Args:
+        name: Benchmark name.
+        times_ms: Per-iteration timings in milliseconds.
+
+    Returns:
+        A BenchmarkResult carrying exactly those samples.
+    """
+    result = BenchmarkResult(name=name, backend="sqlite", iterations=len(times_ms))
+    result.times_ms = list(times_ms)
+    return result
+
+
+class TestCheckRegression:
+    """Pins what check_regression does and does not flag.
+
+    Timings are injected rather than measured, so these tests exercise the
+    comparison itself instead of the machine's mood. The previous version
+    of this test ran the real benchmarks twice in one process and asserted
+    no regression appeared -- which compared identical code against
+    itself, giving it no power to detect a real slowdown and leaving
+    timing noise as its only possible failure mode. It failed roughly one
+    full-suite run in four, naming a different benchmark each time.
+    """
+
+    @staticmethod
+    def _bench_with(samples: dict) -> PerformanceBenchmark:
+        """Build a benchmark whose results are the given fixed timings.
+
+        Args:
+            samples: Mapping of benchmark name to list of timings in ms.
+
+        Returns:
+            A PerformanceBenchmark preloaded with those results.
+        """
+        bench = PerformanceBenchmark()
+        bench._results = [_fixed_result(name, times) for name, times in samples.items()]
+        return bench
+
+    @pytest.fixture
+    def baseline_path(self):
+        """Write a baseline report of known timings and yield its path."""
+        bench = self._bench_with({"fast_op": [1.0] * 20, "slow_op": [10.0] * 20})
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as f:
+            path = f.name
+        bench.save_report(output_path=path, format="json")
+        try:
+            yield path
+        finally:
+            os.unlink(path)
+
+    def test_flags_genuine_slowdown(self, baseline_path):
+        """A 2x slowdown is reported, with the right magnitude."""
+        current = self._bench_with({"fast_op": [2.0] * 20, "slow_op": [10.0] * 20})
+        regressions = current.check_regression(baseline_path, threshold_pct=50.0)
+
+        assert [r["benchmark"] for r in regressions] == ["fast_op"]
+        assert regressions[0]["change_pct"] == pytest.approx(100.0)
+        assert regressions[0]["statistic"] == "median"
+
+    def test_detects_slowdown_just_over_threshold(self, baseline_path):
+        """An 11% slowdown is caught at a 10% threshold."""
+        current = self._bench_with({"fast_op": [1.11] * 20, "slow_op": [10.0] * 20})
+        regressions = current.check_regression(baseline_path, threshold_pct=10.0)
+
+        assert [r["benchmark"] for r in regressions] == ["fast_op"]
+
+    def test_ignores_change_below_threshold(self, baseline_path):
+        """A 5% drift is not reported at a 10% threshold."""
+        current = self._bench_with({"fast_op": [1.05] * 20, "slow_op": [10.0] * 20})
+
+        assert current.check_regression(baseline_path, threshold_pct=10.0) == []
+
+    def test_ignores_speedups(self, baseline_path):
+        """Getting faster is not a regression."""
+        current = self._bench_with({"fast_op": [0.2] * 20, "slow_op": [1.0] * 20})
+
+        assert current.check_regression(baseline_path, threshold_pct=10.0) == []
+
+    def test_median_survives_a_single_outlier(self, baseline_path):
+        """One descheduled iteration must not be reported as a regression.
+
+        This is the exact shape of the flake: 19 clean samples plus one
+        that took 100x as long. The median does not move; the mean moves
+        by roughly 500%, which is why the mean is no longer the default.
+        """
+        noisy = [1.0] * 19 + [100.0]
+        current = self._bench_with({"fast_op": noisy, "slow_op": [10.0] * 20})
+
+        assert current.check_regression(baseline_path, threshold_pct=50.0) == []
+        assert current.check_regression(
+            baseline_path, threshold_pct=50.0, statistic="mean"
+        ), "the mean-based comparison should have been fooled by the outlier"
+
+    def test_benchmarks_absent_from_baseline_are_skipped(self, baseline_path):
+        """A newly added benchmark has nothing to compare against."""
+        current = self._bench_with({"brand_new_op": [999.0] * 20})
+
+        assert current.check_regression(baseline_path, threshold_pct=10.0) == []
+
+    def test_rejects_unknown_statistic(self, baseline_path):
+        """An unsupported statistic is a programming error, not a default."""
+        current = self._bench_with({"fast_op": [1.0] * 20})
+
+        with pytest.raises(ValueError, match="median.*mean"):
+            current.check_regression(baseline_path, statistic="p95")
 
 
 # ============================================================================

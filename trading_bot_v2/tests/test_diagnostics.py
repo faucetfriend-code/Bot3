@@ -665,7 +665,34 @@ class TestFunnelOverhead:
     The funnel runs inside generate_signals_for_market, which a backtest
     calls once per 5m candle (tens of thousands of times). The budget is
     3% of a bar's work.
+
+    The funnel calls are timed directly rather than by diffing two
+    instrumented bar loops. The previous estimator ran a bar loop with and
+    without the funnel and took the difference: it derived a ~0.06% answer
+    from two ~0.35s wall-clock measurements, so each measurement's ~5%
+    reproducibility noise landed on the result amplified roughly 100x. A
+    NULL-vs-NULL control, whose true overhead is 0% by construction,
+    reported as much as +5.5% -- the estimator could not resolve its own
+    3% budget, and the test failed about one full-suite run in six.
+
+    Timing the calls at a repeat count where they *are* the measurement,
+    rather than a perturbation of one, drops that control to
+    0.000% +/- 0.001% and holds under heavy CPU contention.
     """
+
+    # Sized so each timed block runs ~0.15s: long enough to average out
+    # scheduler noise, short enough to keep the whole class near a second.
+    FUNNEL_REPS = 20000
+    BAR_REPS = 60
+    BAR_INNER = 10000
+    REPEATS = 3
+
+    # The documented contract: the funnel may cost at most 3% of a bar.
+    BUDGET = 0.03
+    # Early warning. Measured cost when this pin was written was ~0.06%,
+    # so this trips at roughly 9x the current cost while still leaving 6x
+    # of margin beneath the budget itself.
+    CANARY = 0.005
 
     @staticmethod
     def _bar_work(n: int) -> float:
@@ -682,48 +709,105 @@ class TestFunnelOverhead:
             total += (i * 1.000001) ** 0.5
         return total
 
-    def _timed(self, funnel, bars: int, inner: int) -> float:
-        """Run the instrumented bar loop and return the elapsed seconds.
+    @classmethod
+    def _time_funnel_calls(cls, funnel) -> float:
+        """Time FUNNEL_REPS repeats of one bar's funnel call sequence.
 
         Args:
             funnel: SignalFunnel or NullFunnel.
-            bars: Number of simulated bars.
-            inner: Work size per bar.
 
         Returns:
-            Elapsed wall-clock seconds.
+            Elapsed wall-clock seconds for the whole block.
         """
+        reason = REASON_VALIDITY["rrr_meets_minimum"]
         start = time.perf_counter()
-        for _ in range(bars):
+        for _ in range(cls.FUNNEL_REPS):
             funnel.count(STAGE_BARS_EVALUATED)
-            self._bar_work(inner)
             funnel.record_regime("trending_strong")
             funnel.count_strategy("momentum_scalping", STAGE_STRATEGY_INVOKED)
             funnel.count_strategy("momentum_scalping", STAGE_RAW_SIGNALS)
             funnel.count_strategy("momentum_scalping", STAGE_VALIDITY_DROPPED)
-            funnel.reject(
-                REASON_VALIDITY["rrr_meets_minimum"],
-                strategy="momentum_scalping",
-            )
+            funnel.reject(reason, strategy="momentum_scalping")
         return time.perf_counter() - start
 
-    def test_overhead_under_three_percent(self):
-        # inner is sized so one simulated bar costs ~1.5ms, matching the
-        # real cost of running the strategy set over a 5m candle. Sizing
-        # it much smaller measures timer noise, not the funnel.
-        bars, inner, repeats = 200, 10000, 5
-        # min-of-N: wall-clock noise only ever inflates a sample, so the
-        # minimum is the stable estimator here.
-        baseline = min(
-            self._timed(NULL_FUNNEL, bars, inner) for _ in range(repeats)
+    @classmethod
+    def _time_bar_work(cls) -> float:
+        """Time BAR_REPS bars' worth of stand-in signal-generation work.
+
+        Returns:
+            Elapsed wall-clock seconds for the whole block.
+        """
+        start = time.perf_counter()
+        for _ in range(cls.BAR_REPS):
+            cls._bar_work(cls.BAR_INNER)
+        return time.perf_counter() - start
+
+    @classmethod
+    def _best(cls, fn, *args) -> float:
+        """Return the fastest of REPEATS runs.
+
+        Noise only ever inflates a wall-clock sample, so the minimum is
+        the stable estimator.
+
+        Args:
+            fn: Callable returning elapsed seconds.
+            *args: Arguments forwarded to fn.
+
+        Returns:
+            The smallest observed elapsed time.
+        """
+        return min(fn(*args) for _ in range(cls.REPEATS))
+
+    @classmethod
+    def _funnel_cost_per_bar(cls, funnel) -> float:
+        """Seconds of funnel work attributable to a single bar."""
+        return cls._best(cls._time_funnel_calls, funnel) / cls.FUNNEL_REPS
+
+    @classmethod
+    def _bar_cost(cls) -> float:
+        """Seconds of signal-generation work in a single bar."""
+        return cls._best(cls._time_bar_work) / cls.BAR_REPS
+
+    def test_overhead_within_budget(self):
+        """The funnel's incremental cost stays inside the 3% budget."""
+        overhead = (
+            self._funnel_cost_per_bar(SignalFunnel())
+            - self._funnel_cost_per_bar(NULL_FUNNEL)
+        ) / self._bar_cost()
+
+        assert overhead < self.BUDGET, (
+            f"signal funnel costs {overhead:.3%} of a bar's work, over the "
+            f"{self.BUDGET:.0%} hot-path budget"
         )
-        instrumented = min(
-            self._timed(SignalFunnel(), bars, inner) for _ in range(repeats)
+        assert overhead < self.CANARY, (
+            f"signal funnel costs {overhead:.3%} of a bar's work. That is "
+            f"still inside the {self.BUDGET:.0%} budget, but far above the "
+            f"~0.06% measured when this pin was written, so something got "
+            f"materially slower. If the extra cost is deliberate, raise "
+            f"CANARY and say why."
         )
-        overhead = (instrumented - baseline) / baseline
-        assert overhead < 0.03, (
-            f"signal funnel overhead {overhead:.2%} exceeds the 3% budget "
-            f"(baseline {baseline:.4f}s, instrumented {instrumented:.4f}s)"
+
+    def test_measurement_resolves_its_own_budget(self):
+        """Control: NULL against NULL, whose true overhead is exactly 0.
+
+        Guards the pin above. If this ever reports a number anywhere near
+        the budget, the estimator has stopped being able to tell a real
+        regression from machine noise and the assertion above is
+        worthless -- which is precisely how the previous version of this
+        test came to cry wolf.
+        """
+        noise = (
+            abs(
+                self._funnel_cost_per_bar(NULL_FUNNEL)
+                - self._funnel_cost_per_bar(NULL_FUNNEL)
+            )
+            / self._bar_cost()
+        )
+
+        assert noise < self.CANARY, (
+            f"measurement noise floor is {noise:.3%} of a bar's work, which "
+            f"is too close to the {self.BUDGET:.0%} budget for the overhead "
+            f"assertion to mean anything on this machine"
         )
 
     def test_null_funnel_allocates_no_state(self):

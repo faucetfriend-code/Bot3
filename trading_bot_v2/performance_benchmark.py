@@ -847,17 +847,39 @@ class PerformanceBenchmark:
         self,
         baseline_path: str,
         threshold_pct: float = 10.0,
+        statistic: str = "median",
     ) -> List[Dict[str, Any]]:
         """
         Check for performance regressions against a baseline.
 
+        Compares medians by default. The mean is not a safe statistic here:
+        the benchmarked operations run in microseconds, so a single
+        descheduled iteration is a 100x sample, and it shifts the mean by
+        outlier/n regardless of how large n is. Measured over 224
+        comparisons of a benchmark against *itself* (same code, same
+        process, so the true change is 0%), the mean drifted as far as
+        +212% while the median stayed within +19%. A mean-based check
+        against a stored baseline therefore reports regressions that are
+        not there, which is worse than not checking at all.
+
         Args:
-            baseline_path: Path to baseline JSON report
-            threshold_pct: Regression threshold percentage
+            baseline_path: Path to baseline JSON report.
+            threshold_pct: Regression threshold percentage.
+            statistic: Statistic to compare, either "median" or "mean".
 
         Returns:
-            List of detected regressions
+            List of detected regressions, each naming the benchmark, the
+            baseline and current values, and the percentage change.
+
+        Raises:
+            ValueError: If statistic is neither "median" nor "mean".
         """
+        if statistic not in ("median", "mean"):
+            raise ValueError(
+                f"statistic must be 'median' or 'mean', got {statistic!r}"
+            )
+        stat_key = f"{statistic}_ms"
+
         with open(baseline_path, "r", encoding="utf-8") as f:
             baseline = json.load(f)
 
@@ -865,30 +887,34 @@ class PerformanceBenchmark:
         baseline_map = {r["name"]: r for r in baseline.get("results", [])}
 
         for result in self._results:
-            if result.name in baseline_map:
-                base = baseline_map[result.name]
-                base_mean = base.get("mean_ms", 0)
-                if base_mean > 0:
-                    change_pct = ((result.mean_ms - base_mean) / base_mean) * 100
-                    if change_pct > threshold_pct:
-                        regressions.append(
-                            {
-                                "benchmark": result.name,
-                                "baseline_mean_ms": base_mean,
-                                "current_mean_ms": round(result.mean_ms, 3),
-                                "change_pct": round(change_pct, 1),
-                                "threshold_pct": threshold_pct,
-                            }
-                        )
+            if result.name not in baseline_map:
+                continue
+            base_value = baseline_map[result.name].get(stat_key, 0)
+            if base_value <= 0:
+                continue
+            current_value = getattr(result, stat_key)
+            change_pct = ((current_value - base_value) / base_value) * 100
+            if change_pct > threshold_pct:
+                regressions.append(
+                    {
+                        "benchmark": result.name,
+                        "statistic": statistic,
+                        "baseline_ms": base_value,
+                        "current_ms": round(current_value, 3),
+                        "change_pct": round(change_pct, 1),
+                        "threshold_pct": threshold_pct,
+                    }
+                )
 
         if regressions:
             logger.warning(
-                f"Detected {len(regressions)} performance regressions above {threshold_pct}% threshold"
+                f"Detected {len(regressions)} performance regressions above "
+                f"{threshold_pct}% threshold ({statistic})"
             )
             for reg in regressions:
                 logger.warning(
                     f"  {reg['benchmark']}: {reg['change_pct']:+.1f}% "
-                    f"({reg['baseline_mean_ms']:.3f}ms -> {reg['current_mean_ms']:.3f}ms)"
+                    f"({reg['baseline_ms']:.3f}ms -> {reg['current_ms']:.3f}ms)"
                 )
 
         return regressions
@@ -954,6 +980,16 @@ Examples:
         help="Regression threshold percentage (default: 10.0)",
     )
     parser.add_argument(
+        "--statistic",
+        choices=["median", "mean"],
+        default="median",
+        help=(
+            "Statistic compared against the baseline (default: median). "
+            "The mean is outlier-dominated at microsecond scale and will "
+            "report regressions that are not real."
+        ),
+    )
+    parser.add_argument(
         "--output",
         type=str,
         default=None,
@@ -993,14 +1029,14 @@ Examples:
     # Check regressions
     if args.check_regression:
         regressions = bench.check_regression(
-            args.check_regression, args.threshold
+            args.check_regression, args.threshold, args.statistic
         )
         if regressions:
             print(f"\nWARNING: {len(regressions)} regressions detected!")
             for reg in regressions:
                 print(
                     f"  {reg['benchmark']}: +{reg['change_pct']:.1f}% "
-                    f"({reg['baseline_mean_ms']:.3f}ms -> {reg['current_mean_ms']:.3f}ms)"
+                    f"({reg['baseline_ms']:.3f}ms -> {reg['current_ms']:.3f}ms)"
                 )
             sys.exit(1)
         else:
