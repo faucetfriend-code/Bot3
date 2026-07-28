@@ -13,8 +13,17 @@ Usage:
     # Returns a dict of parameter_name -> (low, high) or categorical choices
 """
 
+import logging
 import os
 from typing import Dict, Any, List, Optional, Tuple
+
+from ..diagnostics.gate_metrics import (
+    SEVERITY_UNREACHABLE,
+    load_calibrations,
+    threshold_verdicts,
+)
+
+logger = logging.getLogger(__name__)
 
 # Type alias for search space definitions
 SearchSpace = Dict[str, Any]
@@ -113,8 +122,108 @@ class InfeasibleParamsError(ValueError):
     """Raised when a parameter set can never produce a tradeable signal."""
 
 
+# ---------------------------------------------------------------------------
+# Calibrated gate metrics
+# ---------------------------------------------------------------------------
+#
+# The constraints above are ALGEBRAIC: they can be evaluated with zero
+# data because the relationship is fixed by construction (a fast MA at or
+# above a slow MA never crosses it). The VWAP class of bug is not like
+# that. VWAP_SD_ENTRY_THRESHOLD=4.037 was arithmetically fine and broke
+# nothing structurally - it was simply above the highest value the metric
+# ever took on real data (3.95 over 52,041 bars), so no bar could pass and
+# the strategy silently produced nothing for months.
+#
+# Catching that needs measurement, which is what the calibration
+# artifacts under diagnostics/calibration/ carry. Consumption rules, per
+# the observability plan:
+#
+#   threshold above the observed max  -> HARD violation, the trial is
+#                                        pruned before the backtest burns
+#   threshold above p99               -> WARNING, the trial still runs
+#   no artifact for this strategy     -> skipped silently, logged once
+#
+# Deliberately wired through check_param_feasibility rather than as a
+# parallel path, so everything downstream (suggest_params, validate_params,
+# InfeasibleParamsError, optuna_runner's TrialPruned handler) keeps
+# working unchanged.
+
+#: Keys already logged, so a study of 200 trials emits one line per
+#: dimension rather than 200.
+_CALIBRATION_LOGGED: set = set()
+
+
+def calibration_warnings(
+    strategy_name: str,
+    params: Dict[str, Any],
+    symbol: Optional[str] = None,
+) -> List[str]:
+    """
+    Non-fatal calibration findings for a parameter set.
+
+    A threshold beyond the 99th percentile of its metric is satisfiable
+    but by under 1% of bars - worth recording, not worth pruning. Exposed
+    separately so a caller can attach these to a trial's user_attrs.
+
+    Args:
+        strategy_name: Strategy name.
+        params: Candidate parameter values.
+        symbol: Restrict to one calibrated symbol (None = all).
+
+    Returns:
+        Human-readable warnings. Empty when there is nothing to say.
+    """
+    _, warnings = threshold_verdicts(strategy_name, params, symbol=symbol)
+    return [
+        verdict.reason
+        for verdict in warnings
+        if verdict.severity != SEVERITY_UNREACHABLE
+    ]
+
+
+def _calibration_reasons(
+    strategy_name: str,
+    params: Dict[str, Any],
+    symbol: Optional[str] = None,
+) -> List[str]:
+    """
+    Hard infeasibility reasons drawn from the calibration artifacts.
+
+    Args:
+        strategy_name: Strategy name.
+        params: Candidate parameter values.
+        symbol: Restrict to one calibrated symbol (None = all).
+
+    Returns:
+        Reasons for thresholds no observed value could ever satisfy.
+    """
+    if not load_calibrations(strategy_name, symbol=symbol):
+        key = ("missing", strategy_name, symbol or "*")
+        if key not in _CALIBRATION_LOGGED:
+            _CALIBRATION_LOGGED.add(key)
+            logger.info(
+                "No gate-metric calibration artifact for %s%s - unreachable "
+                "thresholds cannot be detected. Build one with: python -m "
+                "trading_bot_v2.diagnostics.calibrate --strategies %s",
+                strategy_name,
+                f" ({symbol})" if symbol else "",
+                strategy_name,
+            )
+        return []
+
+    hard, warnings = threshold_verdicts(strategy_name, params, symbol=symbol)
+    for verdict in warnings:
+        key = ("warn", strategy_name, verdict.metric, verdict.param_key)
+        if key not in _CALIBRATION_LOGGED:
+            _CALIBRATION_LOGGED.add(key)
+            logger.warning("Gate-metric calibration: %s", verdict.reason)
+    return [verdict.reason for verdict in hard]
+
+
 def check_param_feasibility(
-    strategy_name: str, params: Dict[str, Any]
+    strategy_name: str,
+    params: Dict[str, Any],
+    symbol: Optional[str] = None,
 ) -> List[str]:
     """
     Check a parameter set for combinations that can never trade.
@@ -122,6 +231,9 @@ def check_param_feasibility(
     Args:
         strategy_name: Strategy name (e.g. "momentum_scalping")
         params: Candidate parameter values.
+        symbol: Symbol whose calibration artifact should be consulted.
+            None consults every calibrated symbol and only calls a
+            threshold unreachable when it is unreachable on all of them.
 
     Returns:
         List of human-readable reasons. Empty means feasible.
@@ -170,21 +282,28 @@ def check_param_feasibility(
                     f"reject every bar and the strategy would emit nothing"
                 )
 
+    reasons.extend(_calibration_reasons(strategy_name, params, symbol=symbol))
+
     return reasons
 
 
-def validate_params(strategy_name: str, params: Dict[str, Any]) -> None:
+def validate_params(
+    strategy_name: str,
+    params: Dict[str, Any],
+    symbol: Optional[str] = None,
+) -> None:
     """
     Raise InfeasibleParamsError if params can never produce a valid signal.
 
     Args:
         strategy_name: Strategy name.
         params: Candidate parameter values.
+        symbol: Symbol whose calibration artifact should be consulted.
 
     Raises:
         InfeasibleParamsError: With all failing reasons in the message.
     """
-    reasons = check_param_feasibility(strategy_name, params)
+    reasons = check_param_feasibility(strategy_name, params, symbol=symbol)
     if reasons:
         raise InfeasibleParamsError(
             f"Infeasible parameters for {strategy_name}: " + "; ".join(reasons)

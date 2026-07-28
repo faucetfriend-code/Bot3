@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "kind": "gate_metric_calibration",
+  "strategy": "vwap_scalping",
+  "symbol": "ETH-USDC",
+  "provenance": {
+    "generated_at": "2026-07-28T16:57:16Z",
+    "window_start": "2024-01-01",
+    "window_end": "2026-07-01",
+    "driver_timeframe": "5m",
+    "structure_timeframes": [
+      "15m"
+    ],
+    "execution_timeframes": [
+      "5m"
+    ],
+    "history_lookback": 60,
+    "bars_observed": 262656,
+    "params_at_calibration": {
+      "sd_entry_threshold": 2.0,
+      "atr_period": 14,
+      "min_confidence": 0.55
+    }
+  },
+  "metrics": {
+    "deviation_sd": {
+      "param_key": "sd_entry_threshold",
+      "direction": "at_least",
+      "threshold_at_calibration": 2.0,
+      "count": 262656,
+      "n_pass": 15613,
+      "description": "absolute price deviation from the rolling cumulative VWAP, in volume-weighted standard deviations; the entry gate every VWAP signal must clear first",
+      "pass_rate": 0.059443,
+      "min": 4e-06,
+      "max": 4.160075,
+      "mean": 0.988424,
+      "std": 0.605364,
+      "p01": 0.021202,
+      "p05": 0.106336,
+      "p25": 0.505782,
+      "p50": 0.943206,
+      "p75": 1.39624,
+      "p95": 2.062138,
+      "p99": 2.552945,
+      "p001": 0.002209,
+      "p999": 3.089931,
+      "closest_approach": 4.160075,
+      "histogram": {
+        "bin_edges": [
+          4e-06,
+          0.208008,
+          0.416011,
+          0.624015,
+          0.832018,
+          1.040022,
+          1.248025,
+          1.456029,
+          1.664032,
+          1.872036,
+          2.080039,
+          2.288043,
+          2.496047,
+          2.70405,
+          2.912054,
+          3.120057,
+          3.328061,
+          3.536064,
+          3.744068,
+          3.952071,
+          4.160075
+        ],
+        "counts": [
+          25600,
+          27519,
+          29535,
+          31329,
+          32292,
+          30877,
+          27214,
+          21298,
+          14919,
+          9586,
+          6019,
+          3222,
+          1820,
+          830,
+          363,
+          144,
+          53,
+          24,
+          6,
+          6
+        ]
+      }
+    }
+  }
+}

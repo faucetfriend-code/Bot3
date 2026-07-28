@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "kind": "gate_metric_calibration",
+  "strategy": "vwap_scalping",
+  "symbol": "BTC-USDC",
+  "provenance": {
+    "generated_at": "2026-07-28T16:57:04Z",
+    "window_start": "2024-01-01",
+    "window_end": "2026-07-01",
+    "driver_timeframe": "5m",
+    "structure_timeframes": [
+      "15m"
+    ],
+    "execution_timeframes": [
+      "5m"
+    ],
+    "history_lookback": 60,
+    "bars_observed": 262656,
+    "params_at_calibration": {
+      "sd_entry_threshold": 2.0,
+      "atr_period": 14,
+      "min_confidence": 0.55
+    }
+  },
+  "metrics": {
+    "deviation_sd": {
+      "param_key": "sd_entry_threshold",
+      "direction": "at_least",
+      "threshold_at_calibration": 2.0,
+      "count": 262656,
+      "n_pass": 17031,
+      "description": "absolute price deviation from the rolling cumulative VWAP, in volume-weighted standard deviations; the entry gate every VWAP signal must clear first",
+      "pass_rate": 0.064841,
+      "min": 4e-06,
+      "max": 4.562193,
+      "mean": 1.001307,
+      "std": 0.617016,
+      "p01": 0.021471,
+      "p05": 0.107254,
+      "p25": 0.506191,
+      "p50": 0.955481,
+      "p75": 1.419785,
+      "p95": 2.088918,
+      "p99": 2.589158,
+      "p001": 0.002166,
+      "p999": 3.142025,
+      "closest_approach": 4.562193,
+      "histogram": {
+        "bin_edges": [
+          4e-06,
+          0.228113,
+          0.456223,
+          0.684332,
+          0.912442,
+          1.140551,
+          1.36866,
+          1.59677,
+          1.824879,
+          2.052989,
+          2.281098,
+          2.509208,
+          2.737317,
+          2.965427,
+          3.193536,
+          3.421645,
+          3.649755,
+          3.877864,
+          4.105974,
+          4.334083,
+          4.562193
+        ],
+        "counts": [
+          28679,
+          30204,
+          31715,
+          34052,
+          34928,
+          31104,
+          25912,
+          18802,
+          12644,
+          7370,
+          3807,
+          1936,
+          917,
+          375,
+          138,
+          44,
+          13,
+          9,
+          4,
+          3
+        ]
+      }
+    }
+  }
+}

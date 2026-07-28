@@ -39,6 +39,7 @@ from loguru import logger
 
 from ..models import Signal, OrderSide
 from ..config import StrategyType, TradeQuality, MarketState, AssetClass
+from ..diagnostics.gate_metrics import GATE_AT_LEAST, GateMetric
 
 
 def calculate_ema(prices: List[float], period: int) -> List[float]:
@@ -602,3 +603,109 @@ class MomentumScalpingStrategy:
         )
 
         return signals
+
+    def describe_gate_metrics(
+        self,
+        symbol: str,
+        multi_tf_data: Dict[str, Any],
+        current_price: float,
+        execution_tf_data: Optional[Dict[str, Any]] = None,
+    ) -> List[GateMetric]:
+        """
+        Report this strategy's gating metrics for one 1h bar.
+
+        Three gates decide whether a momentum signal exists and survives:
+
+        * ``rrr`` - reward/risk. Stop and target are multiples of the SAME
+          ATR, so this is the constant ``atr_target_mult /
+          atr_stop_mult``: entirely determined by parameters, with no
+          data dependence at all. Its threshold is ``min_rrr``, which is
+          NOT in the search space, so the feasibility check never fires on
+          it - the coupled bound in ``MIN_RRR_CONSTRAINTS`` already owns
+          that case. It is reported because a flat distribution pinned
+          below its threshold is exactly what the 2026-07-28 campaign saw
+          (136 signals, all discarded), and the report should say so.
+        * ``volume_ratio`` - the last 1h volume over its 20-bar mean,
+          gated by ``volume_threshold``.
+        * ``atr_pct`` - ATR as a fraction of price, gated by
+          ``min_atr_pct``. Also not searched today (0.0 disables the
+          gate), but its distribution is what tells you whether turning
+          the gate on would cost every trade.
+
+        Side-effect free: no cooldown, no crossover state is touched.
+
+        Args:
+            symbol: Trading symbol (unused; kept for hook uniformity).
+            multi_tf_data: Timeframe bundles, must contain "1h".
+            current_price: Current market price.
+            execution_tf_data: Unused - no execution timeframe gates entry.
+
+        Returns:
+            Zero to three GateMetric observations.
+        """
+        df_1h = (multi_tf_data or {}).get("1h")
+        if not df_1h:
+            return []
+
+        closes = list(df_1h.get("close") or [])
+        if len(closes) < self.ema_slow + 10:
+            return []
+
+        metrics: List[GateMetric] = []
+
+        if self.atr_stop_mult > 0:
+            metrics.append(
+                GateMetric(
+                    name="rrr",
+                    value=self.atr_target_mult / self.atr_stop_mult,
+                    threshold=self.min_rrr,
+                    direction=GATE_AT_LEAST,
+                    param_key="min_rrr",
+                    description=(
+                        "atr_target_mult / atr_stop_mult - a CONSTANT, "
+                        "since both legs are multiples of the same ATR. "
+                        "Raise atr_target_mult (or lower min_rrr) when it "
+                        "sits below the gate"
+                    ),
+                )
+            )
+
+        volumes = list(df_1h.get("volume") or [])
+        if len(volumes) >= 20:
+            avg_volume = sum(volumes[-20:]) / 20
+            if avg_volume > 0:
+                metrics.append(
+                    GateMetric(
+                        name="volume_ratio",
+                        value=volumes[-1] / avg_volume,
+                        threshold=self.volume_threshold,
+                        direction=GATE_AT_LEAST,
+                        param_key="volume_threshold",
+                        description=(
+                            "latest 1h volume over its trailing 20-bar "
+                            "mean; feeds both the volume_ok gate and the "
+                            "volume_confirmation validity flag"
+                        ),
+                    )
+                )
+
+        highs = list(df_1h.get("high") or [])
+        lows = list(df_1h.get("low") or [])
+        if len(highs) == len(closes) and len(lows) == len(closes) and current_price > 0:
+            atr = calculate_atr(highs, lows, closes, self.atr_period)
+            if atr:
+                metrics.append(
+                    GateMetric(
+                        name="atr_pct",
+                        value=atr[-1] / current_price,
+                        threshold=self.min_atr_pct,
+                        direction=GATE_AT_LEAST,
+                        param_key="min_atr_pct",
+                        description=(
+                            "1h ATR as a fraction of price; the "
+                            "low-volatility filter (0.0 disables it)"
+                        ),
+                    )
+                )
+
+        return metrics
