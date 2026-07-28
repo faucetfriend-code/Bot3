@@ -55,7 +55,7 @@
 
 **Active Strategies with Jan 2026 Updates**:
 - **Mean Reversion**: RSI 35/65 (loosened), confidence 0.45 (down from 0.6)
-- **MA Crossover**: 50/200 MA with pullback, confidence 0.65 (unchanged)
+- **MA Crossover**: fast/slow MA with pullback (`.env` runs 10/30; code default 20/50), confidence 0.50
 - **Grid Trading**: 0.4x ATR spacing (tighter), 8 levels (reduced from 10)
 - **Liquidation Capture**: 2.5% price move, 2.5x volume spike (loosened)
 
