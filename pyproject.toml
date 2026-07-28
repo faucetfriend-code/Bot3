@@ -11,3 +11,13 @@ dependencies = []
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["core_logic*"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: long-running but deterministic; stays in the default run",
+    "perf: wall-clock measurement of the machine rather than of the code. Excluded from the default run because a test that fails randomly teaches the reader to ignore failures. Run deliberately, on a quiet machine, with: pytest -m perf",
+]
+# Keep the default suite trustworthy: every failure in it should mean
+# something. Timing-dependent tests opt in via -m perf, which overrides
+# this because command-line args are applied after addopts.
+addopts = "-m 'not perf'"
