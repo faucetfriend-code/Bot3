@@ -21,6 +21,18 @@ optimize=True (P5, real walk-forward):
     aggregate report includes PSR and DSR (deflated by the total trial
     count across windows).
 
+CHUNKED walk-forward (run_chunked_walk_forward):
+    The multi-symbol, chunk-window form used by the optimizer sweep
+    (`run_optimize --chunked`). Folds are cut from the SAME window
+    series the validation runner uses (validation.runner
+    .resolve_chunk_windows): with windows W1..WN oldest->newest, fold i
+    trains an Optuna study on the preceding window(s) and grades the
+    winner on Wi, which no trial ever saw.
+
+    Every number is reported in-sample beside out-of-sample, on one
+    banded scale, and the gap between them is the headline overfitting
+    signal. The out-of-sample side is the headline result.
+
 Usage:
     wf = WalkForwardAnalyzer(engine, config)
     results = wf.run(start="2023-01-01", end="2024-12-31", symbol="SUI-USDC")
@@ -38,11 +50,10 @@ CLI:
         --train-months 3 --test-months 1 --trials 15 --objective sharpe
 """
 
-import math
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -59,6 +70,11 @@ from ..validation.statistics import (
 
 # Default number of Optuna trials per train window (env-overridable)
 DEFAULT_WALK_FORWARD_TRIALS = int(os.getenv("WALK_FORWARD_TRIALS", "20"))
+
+# Chunked walk-forward defaults (house style: a series of short windows)
+DEFAULT_CHUNK_WINDOW_MONTHS = 2
+DEFAULT_CHUNK_WINDOWS = 3
+DEFAULT_TRAIN_WINDOWS = 1
 
 
 @dataclass
@@ -254,6 +270,7 @@ class WalkForwardAnalyzer:
         from ..optimization.optuna_runner import (
             OptunaRunner,
             normalize_objective,
+            traded_trial_values,
         )
 
         canonical_objective = normalize_objective(objective)
@@ -303,11 +320,10 @@ class WalkForwardAnalyzer:
             completed = [t for t in study.trials if t.state == state.COMPLETE]
             pruned = [t for t in study.trials if t.state == state.PRUNED]
             window.n_trials = len(completed) + len(pruned)
-            trial_values.extend(
-                t.value
-                for t in completed
-                if t.value is not None and math.isfinite(t.value)
-            )
+            # Only trials that traded carry a real objective; zero-trade
+            # trials carry reserved band scores (-100 .. -400) that would
+            # blow up the DSR variance estimate.
+            trial_values.extend(traded_trial_values(completed))
 
             if best_trial is not None:
                 window.params = dict(best_trial.params)
@@ -514,6 +530,644 @@ class WalkForwardAnalyzer:
             test_start += timedelta(days=test_months * 30)
 
         return windows
+
+
+# ----------------------------------------------------------------------
+# Chunked (multi-symbol) rolling-origin walk-forward
+# ----------------------------------------------------------------------
+
+
+@dataclass
+class ChunkedFold:
+    """One train/test fold of a chunked walk-forward run.
+
+    Attributes:
+        index: 1-based fold number.
+        train_windows: (start, end) windows the study optimized on.
+        test_window: The held-out (start, end) window.
+        study_name: Optuna study name of this fold's search.
+        n_trials: Configurations this fold explored (COMPLETE + PRUNED,
+            infeasible excluded) - what the deflation is charged for.
+        params: Best parameters found in-sample.
+        in_sample: Best trial value on the train windows (banded scale).
+        out_of_sample: The same parameters' value on the test window,
+            on the SAME banded scale.
+        oos_raw: Unbanded aggregate objective on the test window.
+        oos_outcome: Funnel outcome of the out-of-sample evaluation.
+        oos_headline: Funnel headline of the out-of-sample evaluation.
+        oos_suggested_fix: Suggested fix when the OOS run never traded.
+        oos_trades: Closed trades out of sample.
+        oos_traded_symbols: Symbols that traded out of sample.
+        oos_profitable_symbols: Symbols with a positive OOS objective.
+        oos_per_symbol: Per-symbol OOS rollup.
+        oos_symbol_returns: Per-symbol OOS per-trade fractional returns.
+    """
+
+    index: int
+    train_windows: List[Tuple[str, str]]
+    test_window: Tuple[str, str]
+    study_name: str = ""
+    n_trials: int = 0
+    params: Dict[str, Any] = field(default_factory=dict)
+    in_sample: Optional[float] = None
+    out_of_sample: Optional[float] = None
+    oos_raw: float = 0.0
+    oos_outcome: str = ""
+    oos_headline: str = ""
+    oos_suggested_fix: str = ""
+    oos_trades: int = 0
+    oos_traded_symbols: int = 0
+    oos_profitable_symbols: int = 0
+    oos_per_symbol: Dict[str, Any] = field(default_factory=dict)
+    oos_symbol_returns: Dict[str, List[float]] = field(default_factory=dict)
+
+    @property
+    def gap(self) -> Optional[float]:
+        """In-sample minus out-of-sample value (the overfit gap)."""
+        if self.in_sample is None or self.out_of_sample is None:
+            return None
+        return self.in_sample - self.out_of_sample
+
+
+@dataclass
+class ChunkedWalkForwardReport:
+    """Aggregate report of a chunked walk-forward sweep.
+
+    The headline is ``out_of_sample_objective``. ``overfit_gap`` is the
+    number that says whether the search found an edge or fitted noise.
+    """
+
+    strategy: str
+    symbols: List[str] = field(default_factory=list)
+    objective: str = "sharpe_ratio"
+    window_spec: str = ""
+    windows: List[Tuple[str, str]] = field(default_factory=list)
+    folds: List[ChunkedFold] = field(default_factory=list)
+    in_sample_objective: Optional[float] = None
+    out_of_sample_objective: Optional[float] = None
+    overfit_gap: Optional[float] = None
+    oos_symbol_returns: Dict[str, List[float]] = field(default_factory=dict)
+    oos_total_return_pct: float = 0.0
+    oos_sharpe: float = 0.0
+    oos_profit_factor: float = 0.0
+    oos_max_drawdown_pct: float = 0.0
+    oos_trades: int = 0
+    psr: Optional[PSRResult] = None
+    dsr: Optional[DSRResult] = None
+    n_trials_total: int = 0
+    n_trials_registry: Optional[int] = None
+    n_trials_deflated: int = 0
+    gate: Optional[Any] = None
+
+    @property
+    def oos_returns(self) -> List[float]:
+        """Pooled out-of-sample per-trade returns across symbols."""
+        pooled: List[float] = []
+        for values in self.oos_symbol_returns.values():
+            pooled.extend(values)
+        return pooled
+
+
+def build_chunk_folds(
+    windows: List[Tuple[str, str]],
+    train_windows: int = DEFAULT_TRAIN_WINDOWS,
+    anchored: bool = False,
+) -> List[Tuple[List[Tuple[str, str]], Tuple[str, str]]]:
+    """Cut rolling-origin train/test folds out of a chunk window series.
+
+    Rolling-origin (rather than a single random split) is the right
+    scheme here because the data is a time series: a random split leaks
+    the future into training, and one fixed holdout gives exactly one
+    out-of-sample observation. Rolling origin gives several, each one
+    strictly after its training data, which is also how the strategy
+    would actually be run.
+
+    Args:
+        windows: (start, end) pairs ordered oldest -> newest.
+        train_windows: Windows per training set.
+        anchored: Expanding training set (every window before the test
+            one) instead of the rolling fixed-length one.
+
+    Returns:
+        List of (train_window_list, test_window) folds, oldest first.
+        Empty when there are not enough windows for one fold.
+    """
+    if train_windows < 1:
+        raise ValueError(f"train_windows must be >= 1 (got {train_windows})")
+    folds: List[Tuple[List[Tuple[str, str]], Tuple[str, str]]] = []
+    for i in range(train_windows, len(windows)):
+        train = windows[:i] if anchored else windows[i - train_windows: i]
+        folds.append((list(train), windows[i]))
+    return folds
+
+
+def run_chunked_walk_forward(
+    strategy: str,
+    symbols: List[str],
+    n_trials: int = 20,
+    sampler: str = "tpe",
+    objective: str = "sharpe",
+    window_months: int = DEFAULT_CHUNK_WINDOW_MONTHS,
+    n_windows: int = DEFAULT_CHUNK_WINDOWS,
+    train_windows: int = DEFAULT_TRAIN_WINDOWS,
+    anchored: bool = False,
+    initial_capital: float = 10000.0,
+    timeout: Optional[int] = None,
+    data_dir: Optional[str] = None,
+    end: Optional[str] = None,
+    windows: Optional[List[Tuple[str, str]]] = None,
+    runner: Optional[Any] = None,
+    optuna_db_path: Optional[str] = None,
+) -> ChunkedWalkForwardReport:
+    """Run a chunked, multi-symbol, rolling-origin walk-forward sweep.
+
+    Each fold runs a chunked Optuna study on its TRAIN windows only,
+    then grades the winning parameters on the next window - data no
+    trial ever touched. In-sample and out-of-sample values are computed
+    by the same function (``OptunaRunner.evaluate_param_set``) on the
+    same banded scale, so their difference is meaningful.
+
+    Args:
+        strategy: Strategy name (snake_case).
+        symbols: Trading pairs, evaluated on identical windows.
+        n_trials: Optuna trials PER FOLD.
+        sampler: "tpe" or "random".
+        objective: Objective metric (short or long form).
+        window_months: Months per chunk window.
+        n_windows: Number of chunk windows in the series.
+        train_windows: Chunk windows per training set.
+        anchored: Expanding instead of rolling training set.
+        initial_capital: Starting capital per chunk backtest.
+        timeout: Per-fold Optuna timeout in seconds.
+        data_dir: Candle data dir override.
+        end: ISO date anchoring the newest window (only moves earlier).
+        windows: Explicit window series, skipping resolution (tests and
+            callers that already resolved the series).
+        runner: An OptunaRunner to reuse (tests inject a stubbed one).
+        optuna_db_path: Study storage path when building a runner.
+
+    Returns:
+        A ChunkedWalkForwardReport.
+
+    Raises:
+        ValueError: When no usable windows exist, or the series is too
+            short for a single train/test fold.
+    """
+    from ..optimization.optuna_runner import (
+        OptunaRunner,
+        normalize_objective,
+        traded_trial_values,
+    )
+
+    canonical_objective = normalize_objective(objective)
+    runner = runner or OptunaRunner(db_path=optuna_db_path)
+
+    if windows:
+        sweep_symbols = list(symbols)
+        series = [tuple(w) for w in windows]
+    else:
+        from ..validation.runner import resolve_chunk_windows
+
+        resolved = resolve_chunk_windows(
+            symbols,
+            window_months,
+            n_windows,
+            data_dir=data_dir,
+            label=f"{strategy}/wf-sweep",
+            anchor_end=end,
+        )
+        if resolved.get("reason"):
+            raise ValueError(
+                f"Cannot sweep {strategy}: {resolved['reason']} "
+                f"(symbols={','.join(symbols)})"
+            )
+        sweep_symbols = resolved["symbols"]
+        series = [tuple(w) for w in resolved["windows"]]
+
+    folds = build_chunk_folds(series, train_windows, anchored)
+    if not folds:
+        raise ValueError(
+            f"Need at least {train_windows + 1} chunk windows for a "
+            f"train/test fold, got {len(series)}. Raise --windows or "
+            f"lower --train-windows."
+        )
+
+    report = ChunkedWalkForwardReport(
+        strategy=strategy,
+        symbols=sweep_symbols,
+        objective=canonical_objective,
+        window_spec=f"{len(series)}x{window_months}mo",
+        windows=series,
+    )
+
+    logger.info(
+        f"Chunked walk-forward: strategy={strategy}, "
+        f"symbols={','.join(sweep_symbols)}, windows={len(series)}, "
+        f"folds={len(folds)}, train_windows={train_windows}"
+        f"{' (anchored)' if anchored else ''}, {n_trials} trials/fold, "
+        f"objective={canonical_objective}"
+    )
+
+    trial_values: List[float] = []
+    for i, (train, test) in enumerate(folds, start=1):
+        fold = ChunkedFold(index=i, train_windows=train, test_window=test)
+        logger.info(
+            f"Fold {i}/{len(folds)}: train "
+            f"{train[0][0]} -> {train[-1][1]}, test {test[0]} -> {test[1]}"
+        )
+
+        study = runner.optimize_chunked(
+            strategy=strategy,
+            symbols=sweep_symbols,
+            n_trials=n_trials,
+            sampler=sampler,
+            objective=canonical_objective,
+            initial_capital=initial_capital,
+            timeout=timeout,
+            windows=train,
+            study_suffix=f"_wf{i}",
+        )
+        fold.study_name = getattr(study, "study_name", "")
+        fold.n_trials, completed = _fold_trial_counts(study)
+        trial_values.extend(traded_trial_values(completed))
+
+        best = _best_trial_or_none(study)
+        if best is not None:
+            fold.params = dict(best.params)
+            fold.in_sample = best.value
+        else:
+            logger.warning(
+                f"Fold {i}: no valid trial - grading default params "
+                f"out of sample"
+            )
+
+        evaluation = runner.evaluate_param_set(
+            strategy=strategy,
+            params=fold.params,
+            symbols=sweep_symbols,
+            windows=[test],
+            objective=canonical_objective,
+            initial_capital=initial_capital,
+            label=f"{strategy}/oos-fold{i}",
+        )
+        payload = evaluation.funnel.to_dict()
+        fold.out_of_sample = evaluation.banded_value
+        fold.oos_raw = evaluation.value
+        fold.oos_outcome = str(
+            getattr(evaluation.outcome, "value", evaluation.outcome)
+        )
+        fold.oos_headline = payload.get("headline", "")
+        fold.oos_trades = evaluation.total_trades
+        fold.oos_traded_symbols = evaluation.traded_symbols
+        fold.oos_profitable_symbols = evaluation.profitable_symbols
+        fold.oos_per_symbol = evaluation.per_symbol
+        fold.oos_symbol_returns = evaluation.symbol_returns
+        if fold.oos_trades == 0:
+            from ..diagnostics.outcomes import suggest_fix
+
+            fold.oos_suggested_fix = suggest_fix(payload, fold.params)
+
+        for symbol, values in evaluation.symbol_returns.items():
+            report.oos_symbol_returns.setdefault(symbol, []).extend(values)
+        report.folds.append(fold)
+
+    _finalize_chunked_report(report, initial_capital, trial_values)
+    return report
+
+
+def _fold_trial_counts(study: Any) -> Tuple[int, List[Any]]:
+    """Count the configurations a fold's study explored.
+
+    Mirrors OptunaRunner._record_trial_registry: COMPLETE + PRUNED,
+    minus trials pruned as structurally infeasible (those explored
+    nothing and must not inflate the deflation's N).
+
+    Args:
+        study: The fold's Optuna study.
+
+    Returns:
+        (n_trials, completed_trials).
+    """
+    import optuna
+
+    from ..optimization.optuna_runner import _is_infeasible_trial
+
+    state = optuna.trial.TrialState
+    trials = getattr(study, "trials", None) or []
+    completed = [
+        t
+        for t in trials
+        if t.state == state.COMPLETE and not _is_infeasible_trial(t)
+    ]
+    pruned = [
+        t
+        for t in trials
+        if t.state == state.PRUNED and not _is_infeasible_trial(t)
+    ]
+    return len(completed) + len(pruned), completed
+
+
+def _best_trial_or_none(study: Any) -> Optional[Any]:
+    """Return study.best_trial, or None when every trial failed/pruned."""
+    try:
+        return study.best_trial
+    except (ValueError, AttributeError):
+        return None
+
+
+def _finalize_chunked_report(
+    report: ChunkedWalkForwardReport,
+    initial_capital: float,
+    trial_values: List[float],
+) -> None:
+    """Compute the aggregate in-sample / out-of-sample metrics.
+
+    The out-of-sample side pools the per-trade returns of every test
+    window, which is the only series that was never optimized on. The
+    deflation N is read back from the trial registry so the number the
+    standing gate will use is the number reported here.
+
+    Args:
+        report: Report to fill in-place.
+        initial_capital: Common capital base of every chunk.
+        trial_values: Traded trial objective values across folds.
+    """
+    is_values = [f.in_sample for f in report.folds if f.in_sample is not None]
+    oos_values = [
+        f.out_of_sample for f in report.folds if f.out_of_sample is not None
+    ]
+    if is_values:
+        report.in_sample_objective = sum(is_values) / len(is_values)
+    if oos_values:
+        report.out_of_sample_objective = sum(oos_values) / len(oos_values)
+    if report.in_sample_objective is not None and (
+        report.out_of_sample_objective is not None
+    ):
+        report.overfit_gap = (
+            report.in_sample_objective - report.out_of_sample_objective
+        )
+
+    returns = report.oos_returns
+    report.oos_trades = len(returns)
+    pnls = [r * initial_capital for r in returns]
+    report.oos_total_return_pct = sum(returns) * 100
+    report.oos_sharpe = sharpe_ratio(returns)
+
+    gross_profit = sum(p for p in pnls if p > 0)
+    gross_loss = abs(sum(p for p in pnls if p < 0))
+    report.oos_profit_factor = (
+        gross_profit / gross_loss if gross_loss > 0 else float("inf")
+    )
+
+    equity = initial_capital
+    peak = initial_capital
+    max_dd = 0.0
+    for p in pnls:
+        equity += p
+        if equity > peak:
+            peak = equity
+        if peak > 0:
+            dd = (peak - equity) / peak
+            if dd > max_dd:
+                max_dd = dd
+    report.oos_max_drawdown_pct = max_dd * 100
+
+    report.n_trials_total = sum(f.n_trials for f in report.folds)
+
+    # Read the registry back: this is the exact N validation/gate.py
+    # will feed to the DSR, so verifying it here is verifying the
+    # deflation path end to end rather than assuming it.
+    registry_variance: Optional[float] = None
+    try:
+        from ..database import DatabaseManager
+
+        db = DatabaseManager()
+        total = db.get_total_trials(report.strategy)
+        if total > 0:
+            report.n_trials_registry = total
+            registry_variance = db.get_trial_sr_variance(report.strategy)
+    except Exception as e:
+        logger.warning(f"Trial registry lookup failed: {e}")
+
+    report.n_trials_deflated = max(
+        report.n_trials_registry or 0, report.n_trials_total, 1
+    )
+
+    report.psr = probabilistic_sharpe_ratio(returns)
+
+    var_across: Optional[float] = None
+    if report.objective == "sharpe_ratio" and len(trial_values) >= 2:
+        mean_v = sum(trial_values) / len(trial_values)
+        var_across = sum((v - mean_v) ** 2 for v in trial_values) / (
+            len(trial_values) - 1
+        )
+    elif registry_variance is not None:
+        var_across = registry_variance
+    report.dsr = deflated_sharpe_ratio(
+        returns,
+        n_trials=report.n_trials_deflated,
+        var_sharpe_across_trials=var_across,
+    )
+
+    try:
+        from ..validation.gate import evaluate_strategy_gate
+
+        report.gate = evaluate_strategy_gate(
+            strategy=report.strategy,
+            symbol_returns=report.oos_symbol_returns,
+            n_trials=report.n_trials_deflated,
+            sr_variance=var_across,
+        )
+    except Exception as e:
+        logger.warning(f"Gate evaluation failed: {e}")
+
+
+def _fmt(value: Optional[float], spec: str = "9.3f") -> str:
+    """Format an optional float, or 'n/a'."""
+    return "n/a" if value is None else f"{value:{spec}}"
+
+
+def _print_fold_symbols(fold: ChunkedFold) -> None:
+    """Print a fold's per-symbol out-of-sample breakdown.
+
+    Cross-symbol consistency is a real gate check, so it stays visible
+    instead of being averaged into the fold's single number. A symbol
+    that contributed zero bars is called out as a DATA problem, not
+    read as "the strategy found nothing".
+
+    Args:
+        fold: The fold to print.
+    """
+    if not fold.oos_per_symbol:
+        return
+    print(
+        f"        {'symbol':<14} {'bars':>9} {'raw sig':>9} "
+        f"{'trades':>7} {'objective':>11} {'return %':>9}"
+    )
+    blind = []
+    for symbol in sorted(fold.oos_per_symbol):
+        cell = fold.oos_per_symbol[symbol] or {}
+        if not cell.get("invoked", 0):
+            blind.append(symbol)
+        print(
+            f"        {symbol:<14} {cell.get('invoked', 0):>9} "
+            f"{cell.get('raw_signals', 0):>9} {cell.get('trades', 0):>7} "
+            f"{cell.get('objective', 0.0):>11.4f} "
+            f"{cell.get('return_pct', 0.0):>9.2f}"
+        )
+    print(
+        f"        symbols that traded out of sample: "
+        f"{fold.oos_traded_symbols}/{len(fold.oos_per_symbol)} | "
+        f"positive objective: {fold.oos_profitable_symbols}"
+        f"/{len(fold.oos_per_symbol)}"
+    )
+    if blind:
+        print(
+            f"        WARNING: {', '.join(blind)} contributed 0 bars - "
+            f"a data hole, not a parameter result. Re-anchor with --end "
+            f"or backfill."
+        )
+
+
+def print_chunked_walk_forward_report(
+    report: ChunkedWalkForwardReport,
+) -> None:
+    """Print the chunked walk-forward report in the house table style.
+
+    The out-of-sample column is the headline, and the IS->OOS gap gets
+    its own line: a large gap is the overfitting signal and must not be
+    something the reader has to compute.
+
+    Args:
+        report: The finished report.
+    """
+    line = "=" * 78
+    print(f"\n{line}")
+    print(
+        f"CHUNKED WALK-FORWARD: {report.strategy} | "
+        f"{','.join(report.symbols)}"
+    )
+    print(
+        f"Objective: {report.objective} | windows: {report.window_spec} "
+        f"({report.windows[0][0]} .. {report.windows[-1][1]}) | "
+        f"{len(report.folds)} fold{'' if len(report.folds) == 1 else 's'}"
+    )
+    print(line)
+    print(
+        f"  {'Fold':<5} {'Train':<24} {'Test':<24} "
+        f"{'IS':>9} {'OOS':>9} {'Gap':>8} {'Trades':>7}"
+    )
+    print(f"  {'-' * 90}")
+    for fold in report.folds:
+        train_s = f"{fold.train_windows[0][0]}..{fold.train_windows[-1][1]}"
+        test_s = f"{fold.test_window[0]}..{fold.test_window[1]}"
+        print(
+            f"  {fold.index:<5} {train_s:<24} {test_s:<24} "
+            f"{_fmt(fold.in_sample):>9} {_fmt(fold.out_of_sample):>9} "
+            f"{_fmt(fold.gap, '8.3f'):>8} {fold.oos_trades:>7}"
+        )
+        params_s = ", ".join(
+            f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+            for k, v in sorted(fold.params.items())
+        ) or "(defaults)"
+        print(f"        params: {params_s}")
+        _print_fold_symbols(fold)
+        if fold.oos_trades == 0:
+            print(f"        OOS outcome: {fold.oos_outcome}")
+            if fold.oos_headline:
+                print(f"        OOS funnel : {fold.oos_headline}")
+            if fold.oos_suggested_fix:
+                print(f"        fix        : {fold.oos_suggested_fix}")
+        if fold.study_name:
+            print(
+                f"        explain    : python -m "
+                f"trading_bot_v2.diagnostics.explain --study "
+                f"{fold.study_name}"
+            )
+    print(f"  {'-' * 90}")
+
+    print("\n  IN-SAMPLE vs OUT-OF-SAMPLE (same banded scale)")
+    print(f"    In-sample  (optimized on) : {_fmt(report.in_sample_objective)}")
+    print(
+        f"    OUT-OF-SAMPLE  (HEADLINE)  : "
+        f"{_fmt(report.out_of_sample_objective)}"
+    )
+    print(f"    Overfit gap (IS - OOS)    : {_fmt(report.overfit_gap)}")
+    print(f"    {_overfit_verdict(report)}")
+
+    pf_s = (
+        "inf"
+        if report.oos_profit_factor == float("inf")
+        else f"{report.oos_profit_factor:.2f}"
+    )
+    print(f"\n  AGGREGATE OUT-OF-SAMPLE ({report.oos_trades} closed trades)")
+    print(f"    Total return    : {report.oos_total_return_pct:+.2f}%")
+    print(f"    Sharpe (trade)  : {report.oos_sharpe:.4f}")
+    print(f"    Profit factor   : {pf_s}")
+    print(f"    Max drawdown    : {report.oos_max_drawdown_pct:.2f}%")
+    if report.psr and report.psr.value is not None:
+        print(f"    PSR             : {report.psr.value:.4f}")
+    else:
+        reason = report.psr.reason if report.psr else "not computed"
+        print(f"    PSR             : n/a ({reason})")
+    if report.dsr and report.dsr.value is not None:
+        tag = "PASS" if report.dsr.passed else "FAIL"
+        fb = " [var fallback]" if report.dsr.var_fallback else ""
+        print(
+            f"    DSR             : {report.dsr.value:.4f} ({tag}, "
+            f"N={report.dsr.n_trials}, benchmark SR "
+            f"{report.dsr.benchmark_sr:.4f}{fb})"
+        )
+    else:
+        reason = report.dsr.reason if report.dsr else "not computed"
+        print(f"    DSR             : n/a ({reason})")
+    print(
+        f"    Trials          : {report.n_trials_total} this run, "
+        f"registry total {report.n_trials_registry or 'unknown'} -> "
+        f"deflated for N={report.n_trials_deflated}"
+    )
+
+    if report.gate is not None:
+        print("\n  STANDING GATE ON THE OUT-OF-SAMPLE SERIES")
+        for check in report.gate.checks:
+            tag = "PASS" if check.passed else "FAIL"
+            print(f"    {check.name:<26} {tag:<5} {check.value}")
+        print(
+            f"    OVERALL: {'PASS' if report.gate.passed else 'FAIL'}"
+        )
+    print(f"{line}\n")
+
+
+def _overfit_verdict(report: ChunkedWalkForwardReport) -> str:
+    """One-line reading of the in-sample / out-of-sample gap."""
+    if report.out_of_sample_objective is None:
+        return "VERDICT: no out-of-sample result - nothing to believe yet."
+    if report.oos_trades == 0:
+        return (
+            "VERDICT: the winner never traded out of sample - the "
+            "in-sample result is not evidence of anything."
+        )
+    if report.out_of_sample_objective <= 0:
+        if (report.in_sample_objective or 0.0) > 0:
+            return (
+                "VERDICT: OVERFIT - positive in sample, non-positive out "
+                "of sample. Do not deploy these parameters."
+            )
+        return (
+            "VERDICT: NO EDGE - the objective is non-positive out of "
+            "sample, and the search never found one in sample either."
+        )
+    if report.overfit_gap is not None and report.in_sample_objective:
+        denom = abs(report.in_sample_objective)
+        if denom > 1e-9 and report.overfit_gap / denom > 0.5:
+            return (
+                "VERDICT: WEAK - out-of-sample keeps less than half the "
+                "in-sample edge; treat the in-sample number as noise."
+            )
+    return (
+        "VERDICT: out-of-sample holds up; grade it against the gate "
+        "checks above before deploying."
+    )
 
 
 def main() -> int:
