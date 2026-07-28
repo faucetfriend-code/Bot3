@@ -28,6 +28,21 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from loguru import logger
 
+from ..diagnostics.funnel import (
+    NULL_FUNNEL,
+    REASON_EXEC_EXCEPTION,
+    REASON_EXEC_HEDGE_MODE,
+    REASON_EXEC_MIN_HOLD,
+    REASON_EXEC_NO_PRICE,
+    REASON_EXEC_QTY_NON_POSITIVE,
+    REASON_EXEC_SAME_DIRECTION,
+    STAGE_BARS_SKIPPED_WARMUP,
+    STAGE_CLOSED_TRADES,
+    STAGE_EXECUTION_BLOCKED,
+    STAGE_FILLS,
+    STAGE_ORDERS_PLACED,
+    SignalFunnel,
+)
 from ..models import OrderSide, StrategyType
 from ..regime_param_overlay import (
     DISPLAY_TO_STRATEGY_KEY,
@@ -77,6 +92,9 @@ class BacktestEngine:
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
         self.cfg = override_config or live_config
+        # Signal funnel for this run (replaced in run(); NullFunnel until
+        # then so _execute_signal is safe to call standalone in tests).
+        self._funnel = NULL_FUNNEL
         # Per-run state (reset in run())
         self._hedge_mode: bool = False
         self._min_hold_candles: int = 6
@@ -104,6 +122,13 @@ class BacktestEngine:
         self._position_open_candle = {}
         self._position_time_exit = {}
         self._sim_dt = None
+        # Signal funnel: a backtest always wants diagnostics (the cost is
+        # a handful of dict increments per bar - see the <3% benchmark in
+        # tests/test_diagnostics.py). The live bot keeps NullFunnel.
+        funnel = SignalFunnel(
+            label=f"{strategy_filter or 'all'}/{symbol} {start}..{end}"
+        )
+        self._funnel = funnel
 
         logger.info(
             f"Starting backtest: {symbol} | {start} -> {end} | capital={initial_capital} | "
@@ -159,6 +184,7 @@ class BacktestEngine:
             client=exchange,
             **strategy_kwargs,
         )
+        strategy_manager.set_funnel(funnel)
 
         # Apply per-strategy optimization parameter overrides carried on
         # the config proxy (set by OptimizationAdapter as
@@ -251,6 +277,7 @@ class BacktestEngine:
 
             # Skip until we have enough 4h history for regime detection (29 candles)
             if i_4h < 28:
+                funnel.count(STAGE_BARS_SKIPPED_WARMUP)
                 continue
 
             # Advance simulated time so strategy cooldowns use candle timestamps
@@ -301,6 +328,7 @@ class BacktestEngine:
                     exchange._current_strategy = signal.strategy.value
                     executed = self._execute_signal(signal, exchange, i)
                     if executed:
+                        funnel.count(STAGE_ORDERS_PLACED)
                         strategy_manager.register_trade_execution(
                             signal, {"quantity": 0, "price": exchange._current_price}
                         )
@@ -310,6 +338,8 @@ class BacktestEngine:
                             if lc:
                                 lc.record_trade()
                 except Exception as e:
+                    funnel.count(STAGE_EXECUTION_BLOCKED)
+                    funnel.reject(REASON_EXEC_EXCEPTION)
                     logger.debug(f"Signal execution skipped: {e}")
 
             # --- Equity snapshot every 60 candles (~5h) ---
@@ -326,6 +356,11 @@ class BacktestEngine:
             start=start,
             end=end,
         )
+        # Terminal funnel stages are only known once the exchange has
+        # been finalised.
+        funnel.set_stage(STAGE_FILLS, result.total_trades)
+        funnel.set_stage(STAGE_CLOSED_TRADES, result.closed_trades)
+        result.diagnostics = funnel.to_dict()
         logger.info(
             f"Backtest complete | Final: ${final_equity:,.2f} | "
             f"Return: {result.total_return_pct:+.1f}% | "
@@ -355,8 +390,11 @@ class BacktestEngine:
             the position has been open for at least min_hold_candles candles,
             preventing premature cross-strategy exits that crush R/R.
         """
+        funnel = self._funnel
         price = exchange._current_price
         if price <= 0:
+            funnel.count(STAGE_EXECUTION_BLOCKED)
+            funnel.reject(REASON_EXEC_NO_PRICE)
             return False
 
         side = "bid" if signal.side == OrderSide.BUY else "ask"
@@ -367,12 +405,16 @@ class BacktestEngine:
         if existing_pos:
             signal_side_str = "long" if signal.side == OrderSide.BUY else "short"
             if existing_pos.side == signal_side_str:
+                funnel.count(STAGE_EXECUTION_BLOCKED)
+                funnel.reject(REASON_EXEC_SAME_DIRECTION)
                 return False  # Same direction - skip duplicate entry
 
             # Opposing direction - apply hedge_mode and hold_time guards
             if not self._hedge_mode:
                 # Hedge mode disabled (Pacifica): skip opposing signals entirely.
                 # Positions are only closed by their SL/TP orders.
+                funnel.count(STAGE_EXECUTION_BLOCKED)
+                funnel.reject(REASON_EXEC_HEDGE_MODE)
                 logger.debug(
                     f"Hedge mode off: blocking opposing {signal.side.value} signal "
                     f"for {signal.asset}"
@@ -383,6 +425,8 @@ class BacktestEngine:
             open_candle = self._position_open_candle.get(signal.asset, candle_idx)
             candles_held = candle_idx - open_candle
             if candles_held < self._min_hold_candles:
+                funnel.count(STAGE_EXECUTION_BLOCKED)
+                funnel.reject(REASON_EXEC_MIN_HOLD)
                 logger.debug(
                     f"Min hold not met for {signal.asset}: "
                     f"{candles_held}/{self._min_hold_candles} candles - skipping close"
@@ -421,6 +465,8 @@ class BacktestEngine:
             qty = round((available * risk_pct) / price, 6)
 
         if qty <= 0:
+            funnel.count(STAGE_EXECUTION_BLOCKED)
+            funnel.reject(REASON_EXEC_QTY_NON_POSITIVE)
             return False
 
         # Use limit order at entry_price if it differs from current price

@@ -53,6 +53,10 @@ class BacktestResult:
     by_strategy: Dict = field(default_factory=dict)
     by_regime: Dict = field(default_factory=dict)
 
+    # Signal-funnel diagnostics (SignalFunnel.to_dict()). Empty when the
+    # run was not instrumented, so existing callers are unaffected.
+    diagnostics: Dict = field(default_factory=dict)
+
     # Raw data for report generation
     equity_curve: List = field(default_factory=list)
     trade_log: List = field(default_factory=list)

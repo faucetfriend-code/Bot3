@@ -24,6 +24,26 @@ from loguru import logger
 
 from .models import Signal, OrderSide, TradeQuality
 from .config import StrategyType
+from .diagnostics.funnel import (
+    NULL_FUNNEL,
+    REASON_CONFIDENCE_GATE,
+    REASON_CONFLICT_RESOLUTION,
+    REASON_DATA_QUALITY,
+    REASON_NO_ACTIVE_STRATEGIES,
+    REASON_NO_ORDERBOOK,
+    REASON_NO_REGIME_DATA,
+    REASON_STRATEGY_EXCEPTION,
+    REASON_STRATEGY_MISSING,
+    REASON_VALIDITY,
+    STAGE_BARS_EVALUATED,
+    STAGE_CONFIDENCE_DROPPED,
+    STAGE_CONFLICT_DROPPED,
+    STAGE_DATA_REJECTED,
+    STAGE_RAW_SIGNALS,
+    STAGE_REGIME_BLOCKED,
+    STAGE_STRATEGY_INVOKED,
+    STAGE_VALIDITY_DROPPED,
+)
 from .market_regime import MarketRegimeDetector, MarketRegime
 from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.ma_crossover import MACrossoverStrategy
@@ -34,6 +54,7 @@ from .strategies.vwap_scalping import (
     DEFAULT_SD_ENTRY_THRESHOLD as VWAP_DEFAULT_SD_ENTRY_THRESHOLD,
 )
 from .exchanges import get_exchange_capabilities
+from .regime_param_overlay import DISPLAY_TO_STRATEGY_KEY
 from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
@@ -239,6 +260,10 @@ class StrategyManager:
         self._discard_alert_interval = max(
             1, int(_get_env_float("SIGNAL_DISCARD_ALERT_INTERVAL", 10))
         )
+        # Signal funnel (diagnostics). NullFunnel by default so the live
+        # bot pays one attribute lookup and a no-op call per stage; the
+        # backtest engine swaps in a real SignalFunnel via set_funnel().
+        self._funnel = NULL_FUNNEL
 
         logger.info(
             f"Strategy enable flags: MeanReversion={self.enable_mean_reversion}, "
@@ -802,9 +827,13 @@ class StrategyManager:
         Returns:
             List of validated Signal objects (0-1 signals)
         """
+        funnel = self._funnel
+        funnel.count(STAGE_BARS_EVALUATED)
         try:
             # Step 0: Validate data quality before proceeding
             if not self._validate_market_data(symbol, multi_tf_data):
+                funnel.count(STAGE_DATA_REJECTED)
+                funnel.reject(REASON_DATA_QUALITY)
                 logger.warning(
                     f"{symbol}: Skipping signal generation due to data quality issues"
                 )
@@ -814,6 +843,8 @@ class StrategyManager:
             regime_data = multi_tf_data.get("4h", multi_tf_data.get("1h", {}))
 
             if not regime_data or "close" not in regime_data:
+                funnel.count(STAGE_DATA_REJECTED)
+                funnel.reject(REASON_NO_REGIME_DATA)
                 logger.warning(
                     f"No suitable timeframe data for regime detection for {symbol}"
                 )
@@ -840,6 +871,7 @@ class StrategyManager:
             # use it directly instead of recalculating from the same raw data.
             # Will be None if the regime was served from cache (no recalculation).
             regime_adx = self.regime_detector.get_last_adx(symbol)
+            funnel.record_regime(getattr(regime, "value", str(regime)))
 
             # Step 2: Get active strategies for current regime
             active_strategy_names = self.regime_detector.get_active_strategies(regime)
@@ -950,6 +982,8 @@ class StrategyManager:
                 )
 
             if not active_strategy_names:
+                funnel.count(STAGE_REGIME_BLOCKED)
+                funnel.reject(REASON_NO_ACTIVE_STRATEGIES)
                 logger.info(f"{symbol}: Regime {regime.value} - no active strategies")
                 return []
 
@@ -963,13 +997,18 @@ class StrategyManager:
 
             for strategy_name in active_strategy_names:
                 strategy = self.strategies.get(strategy_name)
+                funnel_key = DISPLAY_TO_STRATEGY_KEY.get(
+                    strategy_name, strategy_name
+                )
 
                 if not strategy:
+                    funnel.reject(REASON_STRATEGY_MISSING, strategy=funnel_key)
                     logger.warning(
                         f"Strategy {strategy_name} is active but not initialized"
                     )
                     continue
 
+                funnel.count_strategy(funnel_key, STAGE_STRATEGY_INVOKED)
                 try:
                     logger.debug(
                         f"{symbol}: Calling {strategy_name}.generate_signals()"
@@ -987,6 +1026,9 @@ class StrategyManager:
                                 execution_tf_data=execution_tf_data,
                             )
                         else:
+                            funnel.reject(
+                                REASON_NO_ORDERBOOK, strategy=funnel_key
+                            )
                             logger.debug(f"{symbol}: No orderbook data for OrderBookImbalance")
                             signals = []
 
@@ -1023,6 +1065,9 @@ class StrategyManager:
                             )
 
                     if signals:
+                        funnel.count_strategy(
+                            funnel_key, STAGE_RAW_SIGNALS, len(signals)
+                        )
                         logger.info(
                             f"{symbol}: {strategy_name} generated {len(signals)} signal(s) "
                             f"in {regime.value} regime"
@@ -1033,6 +1078,7 @@ class StrategyManager:
                         logger.debug(f"{symbol}: {strategy_name} returned 0 signals")
 
                 except Exception as e:
+                    funnel.reject(REASON_STRATEGY_EXCEPTION, strategy=funnel_key)
                     logger.error(f"Error in {strategy_name} for {symbol}: {e}")
                     continue
 
@@ -1065,6 +1111,7 @@ class StrategyManager:
 
             # Multiple signals - resolve conflicts
             final_signals = self._resolve_signal_conflicts(all_signals, regime)
+            self._count_conflict_drops(all_signals, final_signals)
 
             # Validate final signals (attributing every discard to its
             # strategy and the flag(s) that failed)
@@ -1091,6 +1138,51 @@ class StrategyManager:
         except Exception as e:
             logger.error(f"Error generating signals for {symbol}: {e}")
             return []
+
+    # ------------------------------------------------------------------
+    # Signal funnel (diagnostics)
+    # ------------------------------------------------------------------
+
+    def set_funnel(self, funnel: Any) -> None:
+        """Attach a signal funnel to this manager.
+
+        Args:
+            funnel: A SignalFunnel, or None / NullFunnel to disable
+                diagnostics (the default - the live bot never sets one).
+        """
+        self._funnel = funnel if funnel is not None else NULL_FUNNEL
+
+    def get_funnel(self) -> Any:
+        """Return the attached funnel (NULL_FUNNEL when disabled).
+
+        Returns:
+            The current funnel object.
+        """
+        return self._funnel
+
+    def _count_conflict_drops(
+        self, candidates: List[Signal], survivors: List[Signal]
+    ) -> None:
+        """Count signals removed by conflict resolution.
+
+        Conflict resolution can also synthesise combined signals, so the
+        drop set is computed by object identity rather than by length.
+        Only runs on the multi-signal path, which is rare.
+
+        Args:
+            candidates: Signals entering conflict resolution.
+            survivors: Signals it returned.
+        """
+        funnel = self._funnel
+        if not funnel.enabled:
+            return
+        kept = {id(s) for s in survivors}
+        for signal in candidates:
+            if id(signal) in kept:
+                continue
+            name = self._signal_strategy_key(signal)
+            funnel.count_strategy(name, STAGE_CONFLICT_DROPPED)
+            funnel.reject(REASON_CONFLICT_RESOLUTION, strategy=name)
 
     # ------------------------------------------------------------------
     # Signal discard accounting
@@ -1124,8 +1216,12 @@ class StrategyManager:
         self._signal_discarded_counts[name] = total
 
         flags = self._signal_discard_flags.setdefault(name, {})
+        funnel = self._funnel
+        funnel.count_strategy(name, STAGE_VALIDITY_DROPPED)
         for flag in failed:
             flags[flag] = flags.get(flag, 0) + 1
+            # Interned constant, never an f-string (hot path).
+            funnel.reject(REASON_VALIDITY[flag], strategy=name)
 
         if total % self._discard_alert_interval == 0:
             generated = self._signal_generated_counts.get(name, total)
@@ -1241,12 +1337,15 @@ class StrategyManager:
         if threshold <= 0:
             return signals
 
+        funnel = self._funnel
         kept: List[Signal] = []
         for signal in signals:
             if signal.confidence < threshold:
                 strategy_name = getattr(
                     signal.strategy, "value", str(signal.strategy)
                 )
+                funnel.count_strategy(strategy_name, STAGE_CONFIDENCE_DROPPED)
+                funnel.reject(REASON_CONFIDENCE_GATE, strategy=strategy_name)
                 logger.info(
                     f"Confidence gate: dropping {strategy_name} {signal.asset} "
                     f"signal - confidence {signal.confidence:.2%} < threshold "

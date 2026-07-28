@@ -16,6 +16,7 @@ Strategies (--strategy):
 import argparse
 from trading_bot_v2.backtesting import BacktestEngine, WalkForwardAnalyzer
 from trading_bot_v2.config import config
+from trading_bot_v2.diagnostics.report import print_funnel_report
 
 
 def main():
@@ -46,6 +47,12 @@ def main():
         result = engine.run(args.start, args.end, args.symbol, args.capital,
                             strategy_filter=strategy_filter)
         result.print_summary()
+        # Shown on every run, not just empty ones: on a profitable run it
+        # still names the stage with the largest attrition.
+        print_funnel_report(
+            result.diagnostics,
+            title=f"{strategy_filter or 'all strategies'} | {args.symbol}",
+        )
         result.save_html(args.report)
         print(f"Report saved: {args.report}")
 

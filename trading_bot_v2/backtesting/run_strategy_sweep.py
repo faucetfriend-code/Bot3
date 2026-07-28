@@ -141,6 +141,7 @@ try:
         "final_equity":     br.final_equity,
         "calmar":           br.calmar_ratio,
         "trade_returns":    trade_returns,
+        "diagnostics":      br.diagnostics or {},
     }
 except Exception as exc:
     out = {"ok": False, "error": str(exc)}
@@ -168,6 +169,8 @@ class StrategyResult:
         self.total_fees        = 0.0
         self.final_equity      = 0.0
         self.calmar            = 0.0
+        # Signal-funnel diagnostics (SignalFunnel.to_dict() payload)
+        self.diagnostics: dict = {}
         # P5 validation fields (filled by apply_validation_stats)
         self.trade_returns: List[float] = []
         self.psr: Optional[float] = None
@@ -225,6 +228,7 @@ def run_single_strategy(
         r.final_equity     = data["final_equity"]
         r.calmar           = data["calmar"]
         r.trade_returns    = data.get("trade_returns", [])
+        r.diagnostics      = data.get("diagnostics", {}) or {}
 
     except subprocess.TimeoutExpired:
         r.error = "timed out (>300 s)"
@@ -298,7 +302,22 @@ _COLS = {
     "Calmar":      7,
     "Closed":      7,
     "Fees":        8,
+    "Outcome":    24,
 }
+
+
+def _outcome(r: "StrategyResult") -> str:
+    """Return the funnel diagnosis for a sweep row.
+
+    Args:
+        r: A finished StrategyResult.
+
+    Returns:
+        The outcome name, or "n/a" when the run was not instrumented.
+    """
+    from trading_bot_v2.diagnostics.report import funnel_one_liner
+
+    return funnel_one_liner(r.diagnostics)
 
 def _header() -> str:
     return "  ".join(bold(k.ljust(v)) for k, v in _COLS.items())
@@ -315,7 +334,10 @@ def _row(r: StrategyResult) -> str:
         return f"  {name}  {msg}"
 
     if r.closed_trades == 0:
-        return f"  {name}  " + dim("0 trades fired")
+        # The funnel outcome is the whole point here: it separates
+        # "never invoked" from "fired 136 times and had every signal
+        # discarded", which used to print identically.
+        return f"  {name}  " + dim(f"0 trades fired  [{_outcome(r)}]")
 
     def ret(v):
         s = f"{v:+.2f}%".ljust(_COLS["Return"])
@@ -358,6 +380,7 @@ def _row(r: StrategyResult) -> str:
         calmar,
         closed,
         fees,
+        _outcome(r).ljust(_COLS["Outcome"]),
     ])
 
 def _verdict(r: StrategyResult) -> str:
@@ -554,6 +577,13 @@ def main():
     if no_trade:
         names = ", ".join(r.name for r in no_trade)
         print(f"  {dim('No trades')}  ({len(no_trade)} strategies):  {names}")
+        # One funnel block per silent strategy - the diagnosis, the
+        # binding stage and the suggested fix, instead of a bare zero.
+        from trading_bot_v2.diagnostics.report import print_funnel_report
+
+        for r in no_trade:
+            if r.ok and r.diagnostics:
+                print_funnel_report(r.diagnostics, title=r.name)
 
     total_fees = sum(r.total_fees for r in results if r.ok)
     total_time = sum(r.elapsed_sec for r in results)

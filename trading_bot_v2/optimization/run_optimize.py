@@ -294,18 +294,107 @@ def save_overlay_from_study(
     return True
 
 
+def deepest_trial(study):
+    """Return the trial that got furthest down the signal funnel.
+
+    Used to explain a study where nothing traded: the trial with the
+    highest recorded funnel progress is the most informative one, since
+    it names the stage that actually blocked the search.
+
+    Args:
+        study: An Optuna study.
+
+    Returns:
+        The deepest trial, or None when no trial recorded a funnel.
+    """
+    best = None
+    best_progress = -1.0
+    for trial in getattr(study, "trials", []) or []:
+        attrs = getattr(trial, "user_attrs", None) or {}
+        if "funnel" not in attrs:
+            continue
+        try:
+            progress = float(attrs.get("progress", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            progress = 0.0
+        if progress > best_progress:
+            best = trial
+            best_progress = progress
+    return best
+
+
+def trial_funnel_payload(trial) -> dict:
+    """Rebuild a funnel report payload from a trial's user_attrs.
+
+    Args:
+        trial: An Optuna trial annotated by OptunaRunner._score_trial.
+
+    Returns:
+        A payload accepted by diagnostics.report (possibly empty).
+    """
+    attrs = getattr(trial, "user_attrs", None) or {}
+    if "funnel" not in attrs and "outcome" not in attrs:
+        return {}
+    return {
+        "label": f"trial #{getattr(trial, 'number', '?')}",
+        "stages": attrs.get("funnel") or {},
+        "by_strategy": attrs.get("by_strategy") or {},
+        "regimes": attrs.get("regimes") or {},
+        "notes": (
+            {"gate_metrics": attrs["gate_metrics"]}
+            if attrs.get("gate_metrics")
+            else {}
+        ),
+        "diagnosis": attrs.get("outcome", ""),
+        "headline": attrs.get("headline", ""),
+        "binding_stage": attrs.get("binding_stage", ""),
+        "progress": attrs.get("progress", 0.0),
+        "top_reasons": attrs.get("top_reasons") or [],
+        "suggested_fix": attrs.get("suggested_fix", ""),
+    }
+
+
 def print_results_summary(
     study, strategy: str, top_n: int = 10
 ) -> None:
     """Print a summary of optimization results."""
+    from ..diagnostics.report import print_funnel_report
+
     print(f"\n{'='*60}")
     print(f"OPTIMIZATION RESULTS: {strategy.upper()}")
     print(f"{'='*60}")
 
-    if get_best_trial_or_none(study) is None:
-        print("  No valid trials completed (all pruned or failed).")
-        print(f"{'='*60}\n")
+    best = get_best_trial_or_none(study)
+    if best is None:
+        # A bare "nothing completed" is exactly the message that cost
+        # multi-hour manual investigations. Show the funnel of the trial
+        # that got furthest instead.
+        probe = deepest_trial(study)
+        if probe is None:
+            print("  No valid trials completed (all pruned or failed).")
+            print(f"{'='*60}\n")
+            return
+        print(
+            f"  No valid trials completed - explaining trial "
+            f"#{probe.number}, the one that got furthest:"
+        )
+        print(f"{'='*60}")
+        print_funnel_report(
+            trial_funnel_payload(probe),
+            title=f"{strategy} (deepest trial #{probe.number})",
+            params=getattr(probe, "params", None),
+        )
         return
+
+    # Shown on success too: where the largest attrition happened is
+    # actionable even at a good objective value.
+    payload = trial_funnel_payload(best)
+    if payload:
+        print_funnel_report(
+            payload,
+            title=f"{strategy} (best trial #{best.number})",
+            params=getattr(best, "params", None),
+        )
 
     print(f"\n  Best Value: {study.best_value:.4f}")
     print(f"  Best Trial: #{study.best_trial.number}")

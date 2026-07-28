@@ -40,11 +40,31 @@ from .search_spaces import (
     list_strategies,
 )
 from ..backtesting.optimization_adapter import OptimizationAdapter
+from ..diagnostics.funnel import (
+    STAGE_BARS_EVALUATED,
+    STAGE_CLOSED_TRADES,
+    STAGE_ORDERS_PLACED,
+    STAGE_RAW_SIGNALS,
+    STAGE_STRATEGY_INVOKED,
+    SignalFunnel,
+)
+from ..diagnostics.outcomes import TrialOutcome, score_for_outcome, suggest_fix
 from ..regime_param_overlay import normalize_regime_value
 
 
 # Default database path
 DEFAULT_DB_PATH = "optimization_studies.db"
+
+# Version of the trial-scoring scheme. Stored on every study as the
+# "scoring_schema" user attr; resuming a study written under a different
+# (or missing) schema is refused, because mixing raw objective values
+# with banded zero-trade scores would make best_trial meaningless.
+SCORING_SCHEMA = 2
+
+# Abort a run whose trials are mostly crashing, rather than burning the
+# whole budget on a broken configuration.
+FAIL_RATE_ABORT_THRESHOLD = 0.5
+FAIL_RATE_MIN_TRIALS = 10
 
 # Default minimum matching-regime trades before a trial is pruned
 DEFAULT_REGIME_OPT_MIN_TRADES = 15
@@ -94,6 +114,144 @@ def _objective_short_name(objective: str) -> str:
         "calmar_ratio": "calmar",
         "profit_factor": "pf",
     }.get(objective, objective)
+
+
+def _is_infeasible_trial(trial: Any) -> bool:
+    """Return True when a trial was pruned as structurally infeasible.
+
+    Args:
+        trial: An Optuna trial (or any object with ``user_attrs``).
+
+    Returns:
+        True if the trial's outcome attr is ``infeasible_config``.
+    """
+    attrs = getattr(trial, "user_attrs", None) or {}
+    return attrs.get("outcome") == TrialOutcome.INFEASIBLE_CONFIG.value
+
+
+def _funnel_for_result(result: Any) -> SignalFunnel:
+    """Return the signal funnel for a backtest result.
+
+    Instrumented runs carry ``result.diagnostics``. Uninstrumented ones
+    (stubs, older callers) are reconstructed conservatively: a run that
+    produced closed trades is classified as ``traded``, anything else as
+    ``no_data`` - never as a confident zero-signal diagnosis we did not
+    actually observe.
+
+    Args:
+        result: A BacktestResult (or anything exposing diagnostics /
+            closed_trades).
+
+    Returns:
+        A SignalFunnel.
+    """
+    payload = getattr(result, "diagnostics", None) or {}
+    if payload:
+        return SignalFunnel.from_dict(payload)
+
+    funnel = SignalFunnel(label="uninstrumented")
+    closed = int(getattr(result, "closed_trades", 0) or 0)
+    if closed > 0:
+        funnel.set_stage(STAGE_BARS_EVALUATED, 1)
+        funnel.set_stage(STAGE_STRATEGY_INVOKED, 1)
+        funnel.set_stage(STAGE_RAW_SIGNALS, closed)
+        funnel.set_stage(STAGE_ORDERS_PLACED, closed)
+        funnel.set_stage(STAGE_CLOSED_TRADES, closed)
+    return funnel
+
+
+def _assert_scoring_schema(study: Any) -> None:
+    """Stamp or verify a study's scoring schema.
+
+    Trial values written under different scoring schemes are not
+    comparable: a raw Sharpe of 0.4 and a banded -99.5 in the same study
+    would make ``best_trial`` meaningless. A study that already has
+    trials but no schema stamp predates banded scoring and must not be
+    appended to.
+
+    Args:
+        study: The Optuna study.
+
+    Raises:
+        ValueError: If the study was scored under another schema.
+    """
+    attrs = getattr(study, "user_attrs", None) or {}
+    existing = attrs.get("scoring_schema")
+    if existing is None:
+        if getattr(study, "trials", None):
+            raise ValueError(
+                f"Study '{getattr(study, 'study_name', '?')}' has trials "
+                f"scored under an older scheme (no scoring_schema attr). "
+                f"Refusing to append banded scores to it - start a new "
+                f"study instead."
+            )
+        study.set_user_attr("scoring_schema", SCORING_SCHEMA)
+        return
+    if existing != SCORING_SCHEMA:
+        raise ValueError(
+            f"Study '{getattr(study, 'study_name', '?')}' uses scoring "
+            f"schema {existing}, this runner writes {SCORING_SCHEMA}. "
+            f"Start a new study instead of mixing schemes."
+        )
+
+
+class _FailRateGuard:
+    """Optuna callback that stops a study whose trials mostly crash.
+
+    Attributes:
+        study_name: Name used in the abort message.
+        aborted: Set once the threshold was breached.
+    """
+
+    def __init__(self, study_name: str) -> None:
+        """Initialize the guard.
+
+        Args:
+            study_name: Study name, for the error message.
+        """
+        self.study_name = study_name
+        self.aborted = False
+        self._message = ""
+
+    def __call__(self, study: Any, trial: Any) -> None:
+        """Check the running fail rate after each trial.
+
+        Args:
+            study: The running study.
+            trial: The trial that just finished (unused).
+        """
+        if self.aborted:
+            return
+        state = optuna.trial.TrialState
+        finished = [
+            t
+            for t in study.trials
+            if t.state in (state.COMPLETE, state.PRUNED, state.FAIL)
+        ]
+        if len(finished) < FAIL_RATE_MIN_TRIALS:
+            return
+        failed = sum(1 for t in finished if t.state == state.FAIL)
+        rate = failed / len(finished)
+        if rate <= FAIL_RATE_ABORT_THRESHOLD:
+            return
+        self.aborted = True
+        self._message = (
+            f"Aborting study '{self.study_name}': {failed}/{len(finished)} "
+            f"trials failed ({rate:.0%} > "
+            f"{FAIL_RATE_ABORT_THRESHOLD:.0%}). The backtest is broken, not "
+            f"the parameters - fix the error before burning more budget."
+        )
+        logger.error(self._message)
+        study.stop()
+
+    def raise_if_aborted(self) -> None:
+        """Raise the abort error, if the guard tripped.
+
+        Raises:
+            RuntimeError: When the fail-rate threshold was breached.
+        """
+        if self.aborted:
+            raise RuntimeError(self._message)
 
 
 class OptunaRunner:
@@ -248,6 +406,7 @@ class OptunaRunner:
             direction="maximize",
             sampler=optuna_sampler,
         )
+        _assert_scoring_schema(study)
 
         logger.info(
             f"Starting optimization: strategy={strategy}, trials={n_trials}, "
@@ -276,7 +435,14 @@ class OptunaRunner:
                 min_regime_trades=min_regime_trades,
             )
 
-        # Run optimization
+        # Run optimization.
+        #
+        # catch=(Exception,) records a crashing trial as FAIL and keeps
+        # the study going. Previously the objective swallowed every
+        # exception and returned float("-inf"), which recorded the
+        # failure as COMPLETE (indistinguishable from a real score) and
+        # poisoned study.best_value.
+        abort = _FailRateGuard(study_name)
         try:
             study.optimize(
                 objective_fn,
@@ -284,10 +450,13 @@ class OptunaRunner:
                 timeout=timeout,
                 n_jobs=n_jobs,
                 show_progress_bar=True,
+                catch=(Exception,),
+                callbacks=[abort],
             )
         except Exception as e:
             logger.error(f"Optimization failed: {e}")
             raise
+        abort.raise_if_aborted()
 
         # Log results. best_trial raises ValueError when every trial was
         # pruned (possible in regime mode with min-trades pruning).
@@ -326,8 +495,17 @@ class OptunaRunner:
         """Record this study's trial count in the trial_registry (P5).
 
         Counts COMPLETE + PRUNED trials (both explored a configuration;
-        FAIL/RUNNING/WAITING did not produce a scored config). When the
-        objective is sharpe_ratio, also stores the sample variance
+        FAIL/RUNNING/WAITING did not produce a scored config), MINUS
+        trials pruned as ``infeasible_config``.
+
+        Excluding infeasible configs matters: validation/gate.py feeds
+        this N to the deflated Sharpe ratio, which deflates harder as N
+        grows. Pre-backtest feasibility pruning rejects params that never
+        explored anything - counting them would make the gate harder to
+        pass for no reason, purely as a side effect of adding the
+        pre-check.
+
+        When the objective is sharpe_ratio, also stores the sample variance
         (ddof=1) of the completed trials' objective values as an
         sr-variance proxy for DSR benchmarks; for other objectives the
         variance column stays NULL.
@@ -347,8 +525,17 @@ class OptunaRunner:
         from ..database import DatabaseManager
 
         state = optuna.trial.TrialState
-        completed = [t for t in study.trials if t.state == state.COMPLETE]
-        pruned = [t for t in study.trials if t.state == state.PRUNED]
+        completed = [
+            t
+            for t in study.trials
+            if t.state == state.COMPLETE and not _is_infeasible_trial(t)
+        ]
+        pruned = [
+            t
+            for t in study.trials
+            if t.state == state.PRUNED and not _is_infeasible_trial(t)
+        ]
+        infeasible = sum(1 for t in study.trials if _is_infeasible_trial(t))
         n_trials = len(completed) + len(pruned)
         if n_trials == 0:
             return
@@ -376,7 +563,8 @@ class OptunaRunner:
         )
         logger.info(
             f"Trial registry: recorded {n_trials} trials "
-            f"(completed={len(completed)}, pruned={len(pruned)}) "
+            f"(completed={len(completed)}, pruned={len(pruned)}, "
+            f"infeasible_excluded={infeasible}) "
             f"for {strategy}"
             + (f"/{regime}" if regime else "")
             + f" as row {row_id}"
@@ -418,11 +606,16 @@ class OptunaRunner:
             min_regime_trades: Pruning threshold for regime mode
 
         Returns:
-            Objective value (higher is better)
+            Objective value (higher is better). A trial that ran but
+            never traded returns a banded score (see
+            diagnostics/outcomes.py), never 0 and never -inf.
 
         Raises:
             optuna.TrialPruned: In regime mode, when fewer than
-                min_regime_trades matching trades were produced.
+                min_regime_trades matching trades were produced, or when
+                the sampled params are structurally infeasible.
+            Exception: Any backtest failure propagates so Optuna records
+                the trial as FAIL (see catch= in optimize()).
         """
         # Suggest parameters. Combinations that could never produce a
         # tradeable signal (e.g. a constant RRR below the strategy's gate)
@@ -431,6 +624,13 @@ class OptunaRunner:
         try:
             params = suggest_params(trial, strategy)
         except InfeasibleParamsError as e:
+            trial.set_user_attr("outcome", TrialOutcome.INFEASIBLE_CONFIG.value)
+            trial.set_user_attr("headline", str(e))
+            trial.set_user_attr(
+                "suggested_fix",
+                "reparameterize the search space so this region is "
+                "unrepresentable, or widen the bounds",
+            )
             logger.debug(f"Trial {trial.number} pruned as infeasible: {e}")
             raise optuna.TrialPruned(str(e))
 
@@ -452,7 +652,13 @@ class OptunaRunner:
                 )
 
                 if not results:
-                    return float("-inf")
+                    # A window-less walk-forward is a setup failure, not a
+                    # score. Raising records it as FAIL instead of the old
+                    # float("-inf") COMPLETE.
+                    raise RuntimeError(
+                        f"walk-forward produced no windows for {strategy} "
+                        f"{start}..{end}"
+                    )
 
                 if regime is not None:
                     # Per-window objective on the regime-filtered subset
@@ -496,7 +702,16 @@ class OptunaRunner:
                     if std_dev > 1.0:
                         avg_value -= (std_dev - 1.0) * 0.2
 
-                return avg_value
+                funnel = SignalFunnel(label=f"{strategy}/{symbol}")
+                for window in results:
+                    funnel.merge(_funnel_for_result(window))
+                return self._score_trial(
+                    trial,
+                    funnel,
+                    avg_value,
+                    params,
+                    traded_override=regime is not None,
+                )
 
             else:
                 # Single period backtest
@@ -509,6 +724,13 @@ class OptunaRunner:
                     initial_capital=initial_capital,
                 )
 
+                funnel = _funnel_for_result(result)
+                # Regime mode scores a regime-filtered subset of the
+                # trades, so clearing min_regime_trades is direct
+                # evidence the trial traded regardless of what the
+                # (possibly uninstrumented) funnel carries.
+                traded_override = False
+
                 if regime is not None:
                     trades = self.adapter.get_regime_trades(result, regime)
                     trial.set_user_attr("regime_trade_count", len(trades))
@@ -517,21 +739,95 @@ class OptunaRunner:
                             f"Only {len(trades)} {regime} trades "
                             f"(< {min_regime_trades})"
                         )
-                    return self.adapter.calculate_objective_from_trades(
+                    value = self.adapter.calculate_objective_from_trades(
                         trades=trades,
                         objective=objective,
                         initial_capital=initial_capital,
                         start=start,
                         end=end,
                     )
+                    traded_override = True
+                else:
+                    value = self.adapter.calculate_objective(result, objective)
 
-                return self.adapter.calculate_objective(result, objective)
+                return self._score_trial(
+                    trial,
+                    funnel,
+                    value,
+                    params,
+                    traded_override=traded_override,
+                )
 
         except optuna.TrialPruned:
             raise
         except Exception as e:
+            # No float("-inf") here: swallowing the exception recorded a
+            # crash as a COMPLETE trial. Re-raise so Optuna's catch=
+            # records it as FAIL and the study keeps going.
             logger.warning(f"Trial {trial.number} failed: {e}")
-            return float("-inf")
+            raise
+
+    def _score_trial(
+        self,
+        trial: "optuna.Trial",
+        funnel: SignalFunnel,
+        objective_value: float,
+        params: Dict[str, Any],
+        traded_override: bool = False,
+    ) -> float:
+        """Map a finished trial's funnel to a banded score and annotate it.
+
+        A trial that traded keeps its objective, clamped at
+        TRADED_SCORE_FLOOR so it can never fall into a zero-trade band.
+        A trial that ran but never traded gets a reserved band plus its
+        funnel depth, so TPE can rank "fired but was blocked at the last
+        gate" above "never fired at all".
+
+        Args:
+            trial: The running Optuna trial (user_attrs are written here).
+            funnel: Merged signal funnel for the trial's backtest(s).
+            objective_value: The raw objective the adapter computed.
+            params: Sampled parameters (used for the suggested fix).
+            traded_override: Direct evidence of closed trades that the
+                funnel may not carry (regime mode scores a filtered
+                subset of trades, so the caller already knows).
+
+        Returns:
+            The trial value to report to Optuna.
+        """
+        payload = funnel.to_dict()
+        if traded_override:
+            outcome = TrialOutcome.TRADED
+        else:
+            outcome = TrialOutcome.from_diagnosis(funnel.diagnose())
+
+        if outcome is TrialOutcome.TRADED:
+            value = score_for_outcome(outcome, objective_value=objective_value)
+        else:
+            value = score_for_outcome(outcome, progress=funnel.progress())
+
+        fix = suggest_fix(payload, params)
+        trial.set_user_attr("outcome", outcome.value)
+        trial.set_user_attr("headline", payload.get("headline", ""))
+        trial.set_user_attr("binding_stage", payload.get("binding_stage", ""))
+        trial.set_user_attr("funnel", payload.get("stages", {}))
+        trial.set_user_attr("top_reasons", payload.get("top_reasons", []))
+        trial.set_user_attr("by_strategy", payload.get("by_strategy", {}))
+        trial.set_user_attr("regimes", payload.get("regimes", {}))
+        trial.set_user_attr("progress", payload.get("progress", 0.0))
+        trial.set_user_attr("suggested_fix", fix)
+        # gate_metrics only exists once a strategy declares one (the
+        # calibration phase). Omitted entirely when unavailable.
+        gate_metrics = (payload.get("notes") or {}).get("gate_metrics")
+        if gate_metrics:
+            trial.set_user_attr("gate_metrics", gate_metrics)
+
+        if outcome is not TrialOutcome.TRADED:
+            logger.info(
+                f"Trial {trial.number} scored {value:.2f} "
+                f"[{outcome.value}]: {payload.get('headline', '')}"
+            )
+        return value
 
     def get_best_params(self, strategy: str) -> Dict[str, Any]:
         """
