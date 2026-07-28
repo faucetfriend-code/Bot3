@@ -13,6 +13,11 @@ The SimulatedExchange:
   - Records realised PnL per trade for accurate win/loss metrics
   - Tags each trade with the strategy that generated it
   - Randomises SL/TP fill priority when both trigger in the same candle
+
+Costs are resolved through ``cost_model.CostTable``, which is per-symbol
+and per-liquidity-role. Resting limit orders pay the maker fee and take
+no slippage; market and stop orders pay the taker fee plus slippage. See
+cost_model.py for where the rates come from and which profile is active.
 """
 
 import random
@@ -20,6 +25,8 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from loguru import logger
+
+from .cost_model import CostTable, LiquidityRole
 
 
 @dataclass
@@ -82,13 +89,31 @@ class SimulatedExchange:
         taker_fee_pct: float = 0.0006,
         maker_fee_pct: float = 0.0002,
         funding_hourly_pct: float = 0.0001,
+        cost_table: Optional[CostTable] = None,
     ):
+        """Build a simulated exchange.
+
+        Args:
+            initial_capital: Starting cash balance.
+            slippage_pct: Global flat slippage (legacy cost profile).
+            taker_fee_pct: Global taker fee before per-symbol overrides.
+            maker_fee_pct: Global maker fee before per-symbol overrides.
+            funding_hourly_pct: Hourly funding rate (Pacifica pays 24x/day).
+            cost_table: Pre-built cost table. When omitted one is built
+                from the environment with the three rates above as the
+                global bases, so the default behaviour is unchanged.
+        """
         self.balance = initial_capital
         self.initial_capital = initial_capital
         self.slippage_pct = slippage_pct
         self.taker_fee_pct = taker_fee_pct
         self.maker_fee_pct = maker_fee_pct
         self.funding_hourly_pct = funding_hourly_pct
+        self.costs = cost_table or CostTable.from_env(
+            slippage_pct=slippage_pct,
+            taker_fee_pct=taker_fee_pct,
+            maker_fee_pct=maker_fee_pct,
+        )
 
         self._orders: Dict[str, SimulatedOrder] = {}
         self._positions: Dict[str, SimulatedPosition] = {}
@@ -97,6 +122,9 @@ class SimulatedExchange:
         self._order_counter: int = 0
         self._current_strategy: str = ""  # Set by engine before each order for attribution
         self._current_regime: str = ""    # Set by engine each bar (regime value, P4)
+        # Latest bar context, used by the dynamic slippage model.
+        self._bar_range_pct: float = 0.0
+        self._bar_notional: float = 0.0
 
         self.trade_log: List[Dict] = []
 
@@ -197,6 +225,7 @@ class SimulatedExchange:
     def advance(self, candle: Dict, timestamp: str) -> None:
         self._current_price = float(candle["close"])
         self._current_timestamp = timestamp
+        self._capture_bar_context(candle)
         self._check_pending_orders(candle)
         self._update_unrealised_pnl()
         if self._is_funding_hour(timestamp):
@@ -206,19 +235,55 @@ class SimulatedExchange:
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _capture_bar_context(self, candle: Dict) -> None:
+        """Record the current bar's volatility and traded notional.
+
+        Both feed the dynamic slippage model: a wide bar means the market
+        is moving away from an in-flight order, and a thin bar means the
+        order is a larger share of the flow. Malformed bars degrade to
+        zero, which drops the corresponding term rather than guessing.
+
+        Args:
+            candle: OHLCV dict for the bar just closed.
+        """
+        try:
+            high = float(candle["high"])
+            low = float(candle["low"])
+            close = float(candle["close"])
+            volume = float(candle.get("volume", 0.0) or 0.0)
+        except (KeyError, TypeError, ValueError):
+            self._bar_range_pct = 0.0
+            self._bar_notional = 0.0
+            return
+        self._bar_range_pct = (high - low) / close if close > 0 else 0.0
+        # Candle volume is in base units; convert to quote notional.
+        self._bar_notional = max(volume, 0.0) * close
+
+    def _slippage_pct_for(self, order: SimulatedOrder, price: float) -> float:
+        """Return the slippage fraction an aggressive fill of ``order`` pays."""
+        return self.costs.slippage_pct(
+            order.symbol,
+            notional=abs(price * order.quantity),
+            bar_range_pct=self._bar_range_pct,
+            bar_notional=self._bar_notional,
+        )
+
     def _fill_order(self, order: SimulatedOrder, is_taker: bool) -> None:
         direction = 1 if order.side == "bid" else -1
         if order.order_type == "market":
             # Market orders fill at current price with slippage (taker)
-            slippage = self._current_price * self.slippage_pct * direction
+            slippage_pct = self._slippage_pct_for(order, self._current_price)
+            slippage = self._current_price * slippage_pct * direction
             fill_price = self._current_price + slippage
         elif order.order_type == "stop":
             # Stop orders fill at the stop price with adverse slippage (taker)
-            fill_price = order.price * (1 + self.slippage_pct * direction)
+            slippage_pct = self._slippage_pct_for(order, order.price)
+            fill_price = order.price * (1 + slippage_pct * direction)
         else:
-            # Limit orders fill at the limit price — no adverse slippage.
+            # Limit orders fill at the limit price - no adverse slippage.
             fill_price = order.price
-        fee_pct = self.taker_fee_pct if is_taker else self.maker_fee_pct
+        role = LiquidityRole.TAKER if is_taker else LiquidityRole.MAKER
+        fee_pct = self.costs.fee_pct(order.symbol, role)
         fee = fill_price * order.quantity * fee_pct
 
         order.fill_price = fill_price
@@ -244,7 +309,9 @@ class SimulatedExchange:
 
         if order.status == "filled":  # may have been cancelled by balance guard
             self.balance -= fee
-            self._log_trade(order, fill_price, fee, realised_pnl, regime_tag)
+            self._log_trade(
+                order, fill_price, fee, realised_pnl, regime_tag, role.value
+            )
 
     def _open_or_add_position(
         self, symbol: str, side: str, qty: float, price: float
@@ -397,6 +464,7 @@ class SimulatedExchange:
         fee: float,
         realised_pnl: float = 0.0,
         regime: str = "",
+        role: str = "",
     ) -> None:
         """
         Fix 2 — PnL tracking:
@@ -412,6 +480,11 @@ class SimulatedExchange:
             Records the regime tag supplied by _fill_order — the regime
             at position ENTRY for closing fills, the current regime for
             opening fills. Enables regime-conditional optimization.
+
+        Liquidity role:
+            "maker" for resting limit fills, "taker" for market and stop
+            fills. Makes fee attribution auditable - a strategy whose
+            fills are all resting limits should never show a taker bill.
         """
         self.trade_log.append({
             "order_id": order.order_id,
@@ -425,4 +498,5 @@ class SimulatedExchange:
             "balance_after": round(self.balance, 4),
             "strategy": self._current_strategy,
             "regime": regime,
+            "role": role,
         })
