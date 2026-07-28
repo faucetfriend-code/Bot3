@@ -109,6 +109,42 @@ containing invented API references. The real guide now lives at
 `docs/BACKTESTING_GUIDE.md`. The duplicate is confusable and probably should be
 deleted, but it was left alone pending a decision from the owner.
 
+## 8a. Calibration's hard criterion should probably not be `max`
+
+Phase 4 shipped (commit 9cbc86b) and works, but calibrating over 2.5 years qualified the
+rule this plan specified. The original VWAP investigation measured a 6-month window and
+found `deviation_sd` maxing at 3.95, which made the configured 4.037 look mathematically
+unreachable. Over 2.5 years the extreme tail actually reaches **4.16-4.56** across all
+three symbols. So against the shipped artifacts, 4.037 produces a **warning, not a
+prune** — the `max`-based hard rule as designed would NOT have caught the original bug
+on a long calibration window.
+
+What does catch it is the p99 warning: 4.037 sits far above p99.9 (~3.1). The threshold
+is not literally unreachable, it is merely useless — it would fire a handful of times in
+years.
+
+Consider changing the hard criterion to `p999`, or better, to a minimum absolute
+**pass count** over the calibration window (e.g. "fewer than N bars in 2.5 years could
+ever pass this gate"), which expresses the thing we actually care about rather than a
+proxy for it.
+
+Two live thresholds worth watching, from the same calibration:
+
+- **`momentum` `rrr` = 1.53 against `min_rrr` = 1.5 is the tightest margin in the
+  system**, and because RRR is a constant (`atr_target_mult / atr_stop_mult`) there is no
+  distribution — every signal sits exactly 0.03 above its gate. Dropping
+  `MOMENTUM_ATR_TARGET_MULTIPLIER` from 3.825 to 3.75 puts it at exactly 1.50, where
+  float representation (`1.4999999999999998`) starts failing a `>=` — the precise failure
+  that silently discarded all 136 signals in the 2026-07-28 campaign.
+- **`bars_since_cross` has a structural ceiling of 29**, not a market-derived one: with
+  `BACKTEST_HISTORY_LOOKBACK=60` and `slow_ma_period=30`, the crossover bar scrolls out of
+  the window after 29 bars. The search space caps `max_entry_bars` at 24 so it fits today,
+  but raising either without raising the lookback truncates silently.
+
+Also unhooked (one line each, in a file that agent did not own): `near_miss()` is
+implemented but nothing calls it from `optuna_runner`, and `calibration_warnings()` is not
+attached to trial `user_attrs`.
+
 ## 8b. Config bugs surfaced by the provenance audit (2026-07-28)
 
 Found while auditing, reported not fixed. See `docs/PARAMETER-PROVENANCE.md`.
