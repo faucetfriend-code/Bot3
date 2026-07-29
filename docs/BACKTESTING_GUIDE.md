@@ -120,10 +120,29 @@ python -m trading_bot_v2.backtesting.run_backtest --symbol BTC-USDC \
 ```
 
   It prints `Candle store: <path>` so you can see which store a run actually read.
-  `data_manager` has had `--data-dir` all along. Other entry points
-  (`run_strategy_sweep`, `validation.runner`, `optimization`) do not yet, so for those
-  the workaround is still to edit `.env`, or set `config.backtest_data_dir` in-process
-  after importing `trading_bot_v2.config`.
+  `data_manager` has had `--data-dir` all along; `validation.runner` and
+  `optimization` (added 2026-07-29) have it too, and all of them print the store they
+  resolved. `run_strategy_sweep` does not, so for that one the workaround is still to
+  edit `.env`, or set `config.backtest_data_dir` in-process after importing
+  `trading_bot_v2.config`.
+
+**Varying a parameter `.env` DOES set, without editing `.env`.** Import
+`trading_bot_v2.config` first - that is what runs `load_dotenv(override=True)` - then
+mutate `os.environ`, then import and call the entry point. Strategy parameters are read
+by `StrategyManager.__init__` at construction time, which is after that:
+
+```python
+import os
+import trading_bot_v2.config  # runs load_dotenv(override=True)
+
+os.environ["VWAP_SD_ENTRY_THRESHOLD"] = "2.5"
+
+from trading_bot_v2.validation.runner import main
+main(["--strategies", "vwap_scalping", "--symbols", "BTC-USDC", "--once"])
+```
+
+This is how the threshold curve in `docs/VWAP-LEVERS.md` was produced from a git
+worktree without touching the main checkout's `.env`.
 
 To see what your `.env` actually resolves to rather than guessing, print it:
 
@@ -947,7 +966,14 @@ backtested, so every trial scores identically.
 Useful flags: `--sampler tpe|random`, `--objective` (default `sharpe_ratio`),
 `--walk-forward`, `--regime RANGING_CALM` (score only trades entered in that regime),
 `--min-trades`, `--save-overlay` (persist best params as the active overlay for a
-`(strategy, regime)` pair; requires `--regime`), `--export results.csv`.
+`(strategy, regime)` pair; requires `--regime`), `--export results.csv`,
+`--data-dir` (absolute path to the candle store - required from a worktree).
+
+`--chunked` cuts its windows with `resolve_chunk_windows`, which reads
+`VALIDATION_WINDOW_MODE` (not set in `.env`, so a shell export works). Export
+`VALIDATION_WINDOW_MODE=recent` for a **contiguous** series; the default `spread`
+samples a fraction of the calendar and will understate any strategy that trades
+slowly.
 
 Studies persist in `trading_bot_v2/optimization/optimization_studies.db` (untracked).
 

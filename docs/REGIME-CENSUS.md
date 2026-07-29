@@ -171,6 +171,17 @@ pass. The three cells with a positive profit factor are:
 | vwap_scalping / indecisive | 337 | 1.05 | 3 |
 | grid_trading / ranging_volatile | 75 | 1.06 | 3 |
 
+> **Superseded for `vwap_scalping / indecisive` (2026-07-29).** That cell's
+> PF 1.05 is a spread-layout artifact and does **not** reproduce. Re-measured
+> on BTC-USDC's full contiguous history (48 x 2mo, 2018-07 .. 2026-07) with
+> the mapping restricted to `indecisive`, it is **PF 0.78 on 909 closed
+> trades** - 7.6x the sample this census had for BTC in that cell, and within
+> noise of the pooled 0.74. The census's own subtractive recommendation
+> (drop the `RANGING_CALM` mapping) is the best of four variants tested and
+> reaches only **PF 0.81 on 1308 trades**. See `docs/VWAP-LEVERS.md`; the
+> lesson is the same one the momentum re-run taught, applied in the opposite
+> direction.
+
 Two of those are **new information the pooled campaign hid**:
 
 - `vwap_scalping` graded PF 0.75 pooled and was written off. Its
@@ -192,6 +203,11 @@ candidates, in order:
 1. **Stop mapping VWAPScalping into RANGING_CALM.** 1246 trades at PF 0.65,
    -293.8 pooled pnl. What remains is 563 trades at a blended PF near 0.94,
    with the indecisive subset above 1.
+   **TESTED 2026-07-29 AND REJECTED.** On BTC's full contiguous history the
+   remainder is PF 0.81 on 1308 trades, not 0.94, and the indecisive subset is
+   0.78 rather than above 1. The change is a real but small improvement
+   (+0.07 PF for 73% of the sample) on a strategy that needs +0.5.
+   `docs/VWAP-LEVERS.md` has the four-way comparison.
 2. **Stop mapping GridTrading into RANGING_CALM.** 464 trades at PF 0.81.
    What remains is 75 trades at PF 1.06 - above the 33 floor, but only just,
    so this one must be validated rather than assumed.

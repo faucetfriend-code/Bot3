@@ -275,6 +275,15 @@ Examples:
         type=str,
         help="Path to SQLite database for study persistence",
     )
+    parser.add_argument(
+        "--data-dir",
+        type=str,
+        help="Candle store to read. MUST be absolute when running from a "
+             "git worktree: BACKTEST_DATA_DIR in .env is relative and "
+             "config.py loads it with override=True, so exporting the "
+             "variable does nothing. Matches run_backtest and "
+             "validation.runner.",
+    )
 
     # Performance options
     parser.add_argument(
@@ -782,6 +791,15 @@ def main() -> int:
     """Main entry point."""
     args = parse_args()
     setup_logging(args.verbose, args.quiet)
+
+    if args.data_dir:
+        # Both the window cutter (resolve_chunk_windows) and the engine's
+        # data loader read config.backtest_data_dir, so setting it here is
+        # what makes the flag take effect for every path below.
+        from ..config import config as cfg
+
+        cfg.backtest_data_dir = args.data_dir
+        print(f"Candle store: {args.data_dir}")
 
     # Handle --list
     if args.list:

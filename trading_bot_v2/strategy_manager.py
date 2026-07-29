@@ -63,6 +63,85 @@ from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
 from .strategies.calendar_flow import CalendarFlowStrategy
 
 
+# VWAPScalping is a mean-reversion strategy, so it is gated away from the
+# trending regimes where its SELL signals fight the trend. Which of the
+# remaining regimes it is allowed into is a MAPPING decision, not a strategy
+# parameter, and `docs/REGIME-CENSUS.md` measured the three cells separately:
+# ranging_calm PF 0.65 (n=1246), ranging_volatile PF 0.77 (n=226),
+# indecisive PF 1.05 (n=337). Making the list configurable is what allows a
+# losing mapping to be removed and the removal to be falsified, at zero
+# search-budget cost.
+DEFAULT_VWAP_ACTIVE_REGIMES = (
+    MarketRegime.RANGING_VOLATILE,
+    MarketRegime.RANGING_CALM,
+    MarketRegime.INDECISIVE,
+)
+
+# Regimes VWAP is never admitted to, whatever the env asks for. Its entries
+# are counter-trend by construction.
+_VWAP_FORBIDDEN_REGIMES = (
+    MarketRegime.TRENDING_STRONG,
+    MarketRegime.TRENDING_MODERATE,
+)
+
+
+def resolve_vwap_active_regimes(
+    value: Optional[str] = None,
+) -> List[MarketRegime]:
+    """Resolve which regimes VWAPScalping is admitted to.
+
+    Reads ``VWAP_ACTIVE_REGIMES`` (comma-separated regime names, case
+    insensitive) when ``value`` is None. Unknown names and the trending
+    regimes are dropped with a warning rather than taking the run down,
+    matching the warn-and-fall-back convention used by
+    :func:`~trading_bot_v2.strategies.vwap_scalping.validate_sd_entry_threshold`.
+
+    Args:
+        value: Explicit comma-separated regime list. ``None`` reads the
+            environment.
+
+    Returns:
+        The regimes VWAPScalping may trade in, in a stable order. Falls
+        back to :data:`DEFAULT_VWAP_ACTIVE_REGIMES` when nothing usable
+        is configured.
+    """
+    raw = value if value is not None else os.getenv("VWAP_ACTIVE_REGIMES")
+    if raw is None or not str(raw).strip():
+        return list(DEFAULT_VWAP_ACTIVE_REGIMES)
+
+    by_name = {regime.value.upper(): regime for regime in MarketRegime}
+    resolved: List[MarketRegime] = []
+    for token in str(raw).split(","):
+        name = token.strip().upper()
+        if not name:
+            continue
+        regime = by_name.get(name)
+        if regime is None:
+            logger.warning(
+                f"VWAP_ACTIVE_REGIMES contains unknown regime {token.strip()!r} "
+                f"- ignoring it. Valid names: {sorted(by_name)}"
+            )
+            continue
+        if regime in _VWAP_FORBIDDEN_REGIMES:
+            logger.warning(
+                f"VWAP_ACTIVE_REGIMES asks for {regime.value}, but VWAPScalping "
+                f"is counter-trend and is never admitted to a trending regime "
+                f"- ignoring it."
+            )
+            continue
+        if regime not in resolved:
+            resolved.append(regime)
+
+    if not resolved:
+        logger.warning(
+            f"VWAP_ACTIVE_REGIMES={raw!r} resolved to no usable regime - "
+            f"falling back to the shipped mapping "
+            f"{[r.value for r in DEFAULT_VWAP_ACTIVE_REGIMES]}."
+        )
+        return list(DEFAULT_VWAP_ACTIVE_REGIMES)
+    return resolved
+
+
 class StrategyManager:
     """
     Orchestrates multiple trading strategies with regime-based filtering.
@@ -160,6 +239,8 @@ class StrategyManager:
                 "ENABLE_VWAP_SCALPING", True
             )  # Default to True - overlay strategy
         )
+        # Which regimes VWAPScalping is admitted to (VWAP_ACTIVE_REGIMES).
+        self.vwap_active_regimes = resolve_vwap_active_regimes()
         self.enable_funding_arb = (
             enable_funding_arb
             if enable_funding_arb is not None
@@ -405,7 +486,8 @@ class StrategyManager:
             logger.info(
                 f"VWAP Scalping strategy enabled: SD threshold="
                 f"{effective_sd_threshold} (configured {vwap_sd_threshold}), "
-                f"ATR stop={vwap_atr_stop_mult}x, min_confidence={vwap_min_confidence:.0%}"
+                f"ATR stop={vwap_atr_stop_mult}x, min_confidence={vwap_min_confidence:.0%}, "
+                f"regimes={[r.value for r in self.vwap_active_regimes]}"
             )
 
         if self.enable_funding_arb:
@@ -905,14 +987,12 @@ class StrategyManager:
                     f"{symbol}: Added LiquidationCapture (runs in all regimes)"
                 )
 
-            # Step 2.6: Add VWAPScalping only in RANGING / INDECISIVE regimes.
-            # VWAP is a mean-reversion strategy — SELL signals fight the trend in
+            # Step 2.6: Add VWAPScalping only in the regimes it is mapped to.
+            # VWAP is a mean-reversion strategy - SELL signals fight the trend in
             # TRENDING_STRONG / TRENDING_MODERATE and consistently hit SL, dragging PF below 1.
-            _vwap_regimes = [
-                MarketRegime.RANGING_VOLATILE,
-                MarketRegime.RANGING_CALM,
-                MarketRegime.INDECISIVE,
-            ]
+            # The remaining set is configurable (VWAP_ACTIVE_REGIMES); see
+            # resolve_vwap_active_regimes and docs/REGIME-CENSUS.md.
+            _vwap_regimes = self.vwap_active_regimes
             if (
                 "VWAPScalping" in self.strategies
                 and "VWAPScalping" not in active_strategy_names

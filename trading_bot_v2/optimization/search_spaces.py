@@ -502,9 +502,15 @@ def _vwap_scalping_space() -> SearchSpace:
         # sampled value scored identically. It was a pure noise dimension.
         # ATR stop loss
         "atr_stop_multiplier": (1.0, 2.5),       # ATR multiplier for stop
-        # RSI confirmation
-        "rsi_oversold": (30.0, 40.0),            # RSI buy gate
-        "rsi_overbought": (60.0, 70.0),          # RSI sell gate
+        # NOTE: "rsi_oversold" and "rsi_overbought" were removed on
+        # 2026-07-29, for the same reason "sd_exit_threshold" was. The
+        # constructor accepts and stores them (vwap_scalping.py:265-274)
+        # and the docstring already calls them RESERVED, but
+        # generate_signals() only ever interpolates the RSI value into a
+        # note string - no branch reads either threshold. Every sampled
+        # value scored identically, so they were two more pure noise
+        # dimensions in a six-dimensional space, and every trial spent on
+        # them was still charged to the strategy's deflated Sharpe.
         # Confidence
         "min_confidence": (0.55, 0.75),
         # Cooldown

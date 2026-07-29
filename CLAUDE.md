@@ -208,6 +208,13 @@ Key variables:
   `VOLATILITY_HIGH_PERCENTILE=65.0` (all four were documented but unwired
   before 2026-07-28), plus `ADX_EXIT_TRENDING`, `VOL_SCORE_ENTER`,
   `VOL_SCORE_EXIT`, `MIN_REGIME_DWELL_HOURS`.
+- `VWAP_ACTIVE_REGIMES` - Which regimes VWAPScalping is admitted to. Unset means
+  the shipped `RANGING_VOLATILE,RANGING_CALM,INDECISIVE`; trending regimes are
+  refused whatever you set, because VWAP's entries are counter-trend. It exists so
+  a regime mapping can be falsified without editing code, and it has been: all four
+  reachable subsets were measured over BTC's full contiguous history and the best is
+  PF 0.81. **VWAP has no edge under any mapping** - see `docs/VWAP-LEVERS.md` before
+  spending time here.
 - `CIRCUIT_BREAKER_LOSS_PCT=0.10` - 10% portfolio loss stop
 - `KELLY_FRACTION=0.5` / `KELLY_MIN_TRADES=50`
 - `LOG_LEVEL=INFO`

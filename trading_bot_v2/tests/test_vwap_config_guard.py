@@ -25,6 +25,7 @@ import random
 
 import pytest
 
+from trading_bot_v2.market_regime import MarketRegime
 from trading_bot_v2.models import OrderSide
 from trading_bot_v2.optimization.search_spaces import get_search_space
 from trading_bot_v2.strategies.vwap_scalping import (
@@ -36,7 +37,11 @@ from trading_bot_v2.strategies.vwap_scalping import (
     validate_sd_entry_threshold,
     warn_unsupported_env_vars,
 )
-from trading_bot_v2.strategy_manager import StrategyManager
+from trading_bot_v2.strategy_manager import (
+    DEFAULT_VWAP_ACTIVE_REGIMES,
+    StrategyManager,
+    resolve_vwap_active_regimes,
+)
 
 # The historical bad value from .env, kept as a literal so this test keeps
 # failing if anyone reintroduces it.
@@ -324,3 +329,124 @@ class TestUnsupportedEnvVars:
 
     def test_nothing_reported_when_env_is_clean(self, clean_vwap_env):
         assert warn_unsupported_env_vars() == []
+
+
+# ---------------------------------------------------------------------------
+# 6. The regime mapping is configurable, and its bounds hold
+# ---------------------------------------------------------------------------
+
+
+class TestActiveRegimeMapping:
+    """``VWAP_ACTIVE_REGIMES`` decides which regimes VWAP is admitted to.
+
+    ``docs/REGIME-CENSUS.md`` measured the three shipped cells separately
+    and they disagree by a factor of 1.6 in profit factor, so which cells
+    are mapped is a decision that has to be falsifiable rather than a
+    literal buried in ``generate_signals_for_market``.
+    """
+
+    def test_default_is_the_shipped_mapping(self, monkeypatch):
+        monkeypatch.delenv("VWAP_ACTIVE_REGIMES", raising=False)
+        assert resolve_vwap_active_regimes() == list(DEFAULT_VWAP_ACTIVE_REGIMES)
+
+    def test_default_excludes_every_trending_regime(self):
+        assert MarketRegime.TRENDING_STRONG not in DEFAULT_VWAP_ACTIVE_REGIMES
+        assert MarketRegime.TRENDING_MODERATE not in DEFAULT_VWAP_ACTIVE_REGIMES
+
+    def test_explicit_subset_is_honoured(self):
+        assert resolve_vwap_active_regimes("INDECISIVE") == [MarketRegime.INDECISIVE]
+
+    def test_parsing_is_case_and_space_insensitive(self):
+        assert resolve_vwap_active_regimes(" indecisive , Ranging_Volatile ") == [
+            MarketRegime.INDECISIVE,
+            MarketRegime.RANGING_VOLATILE,
+        ]
+
+    def test_duplicates_collapse(self):
+        assert resolve_vwap_active_regimes("INDECISIVE,INDECISIVE") == [
+            MarketRegime.INDECISIVE
+        ]
+
+    def test_unknown_names_are_dropped_not_fatal(self):
+        assert resolve_vwap_active_regimes("INDECISIVE,NOT_A_REGIME") == [
+            MarketRegime.INDECISIVE
+        ]
+
+    def test_trending_regimes_are_refused(self):
+        """VWAP is counter-trend; the env may not re-admit it to a trend."""
+        assert resolve_vwap_active_regimes(
+            "TRENDING_STRONG,TRENDING_MODERATE,INDECISIVE"
+        ) == [MarketRegime.INDECISIVE]
+
+    def test_empty_resolution_falls_back_to_the_shipped_mapping(self):
+        assert resolve_vwap_active_regimes("TRENDING_STRONG") == list(
+            DEFAULT_VWAP_ACTIVE_REGIMES
+        )
+        assert resolve_vwap_active_regimes("") == list(DEFAULT_VWAP_ACTIVE_REGIMES)
+
+    def test_manager_reads_the_env(self, monkeypatch):
+        monkeypatch.setenv("VWAP_ACTIVE_REGIMES", "INDECISIVE")
+        manager = StrategyManager(
+            enable_mean_reversion=False,
+            enable_ma_crossover=False,
+            enable_trend_following=False,
+            enable_grid_trading=False,
+            enable_liquidation_capture=False,
+            enable_vwap_scalping=True,
+            enable_funding_arb=False,
+            enable_momentum_scalping=False,
+            enable_orderbook_imbalance=False,
+            enable_session_range_breakout=False,
+            enable_calendar_flow=False,
+        )
+        assert manager.vwap_active_regimes == [MarketRegime.INDECISIVE]
+
+
+# ---------------------------------------------------------------------------
+# 7. The search space carries no parameter the strategy cannot read
+# ---------------------------------------------------------------------------
+
+
+class TestSearchSpaceHasNoDeadDimensions:
+    """Every searched key must reach a branch, not merely an attribute.
+
+    ``sd_exit_threshold`` was removed on 2026-07-28 for describing a
+    mechanism VWAP does not have. ``rsi_oversold`` / ``rsi_overbought``
+    followed on 2026-07-29: the constructor stores them, but
+    ``generate_signals`` only ever formats the RSI *value* into a note
+    string, so no sampled value could change a single decision.
+    """
+
+    INERT_KEYS = ("sd_exit_threshold", "rsi_oversold", "rsi_overbought")
+
+    def test_inert_parameters_are_not_searched(self):
+        space = get_search_space("vwap_scalping")
+        for key in self.INERT_KEYS:
+            assert key not in space, (
+                f"{key} is back in the VWAP search space; it is stored but "
+                f"never read, so every trial spent on it is charged to the "
+                f"deflated Sharpe for nothing"
+            )
+
+    def test_rsi_thresholds_are_still_inert(self):
+        """Fail loudly if RSI ever becomes a real gate.
+
+        That would make the two dimensions legitimate again, and this
+        test is what tells the next reader to put them back.
+        """
+        import inspect
+
+        from trading_bot_v2.strategies import vwap_scalping
+
+        source = inspect.getsource(vwap_scalping.VWAPScalpingStrategy.generate_signals)
+        assert "self.rsi_oversold" not in source
+        assert "self.rsi_overbought" not in source
+
+    def test_every_searched_key_is_a_strategy_attribute(self):
+        space = get_search_space("vwap_scalping")
+        strategy = VWAPScalpingStrategy()
+        for key in space:
+            assert hasattr(strategy, key), (
+                f"{key} is searched but VWAPScalpingStrategy has no such "
+                f"attribute, so the optimizer's setattr is a silent no-op"
+            )

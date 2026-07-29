@@ -692,6 +692,66 @@ class TestCLI:
         assert args.symbol == "BTC-USDC"
         assert args.capital == 50000.0
 
+    def test_data_dir_defaults_to_none(self):
+        """Unset means "use config", which is the shipped behaviour."""
+        import sys
+
+        sys.argv = ["run_optimize", "--strategy", "mean_reversion"]
+
+        from trading_bot_v2.optimization.run_optimize import parse_args
+
+        assert parse_args().data_dir is None
+
+    def test_data_dir_is_parsed(self):
+        """`.env` pins BACKTEST_DATA_DIR to a RELATIVE path and config.py
+        loads it with override=True, so a shell export cannot redirect the
+        candle store. An explicit flag is the only reliable route, and
+        run_backtest / validation.runner already have one.
+        """
+        import sys
+
+        sys.argv = [
+            "run_optimize",
+            "--strategy", "vwap_scalping",
+            "--data-dir", "/abs/store",
+        ]
+
+        from trading_bot_v2.optimization.run_optimize import parse_args
+
+        assert parse_args().data_dir == "/abs/store"
+
+    def test_main_pins_the_data_dir_on_config(self, monkeypatch):
+        """The flag has to reach config.backtest_data_dir: both the window
+        cutter and the engine's loader read it from there."""
+        import sys
+
+        from trading_bot_v2.config import config
+        from trading_bot_v2.optimization import run_optimize
+
+        original = config.backtest_data_dir
+        seen = {}
+
+        def _fake_single(args, strategy):
+            seen["dir"] = config.backtest_data_dir
+            return object()
+
+        monkeypatch.setattr(run_optimize, "run_single_strategy", _fake_single)
+        monkeypatch.setattr(
+            sys,
+            "argv",
+            [
+                "run_optimize",
+                "--strategy", "vwap_scalping",
+                "--data-dir", "/abs/store",
+            ],
+        )
+        try:
+            assert run_optimize.main() == 0
+        finally:
+            config.backtest_data_dir = original
+
+        assert seen["dir"] == "/abs/store"
+
 
 # ---------------------------------------------------------------------------
 # Integration Tests
