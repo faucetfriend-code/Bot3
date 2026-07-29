@@ -39,6 +39,7 @@ from .pacifica_client import PacificaClient, PacificaEnvironment
 from .strategy_manager import StrategyManager
 from .multi_timeframe_fetcher import MultiTimeframeFetcher
 from .market_regime import MarketRegimeDetector
+from .volatility_regime import make_regime_detector
 from .risk_manager import RiskManager, RiskProfile
 
 # Import StrategyType from local config (re-exported from core_logic)
@@ -215,7 +216,9 @@ class TradingBot:
         # Initialize market regime detector (uses default thresholds).
         # Wired with the global event bus + db so confirmed regime
         # transitions publish REGIME_CHANGED and persist to regime_history.
-        self.market_regime = MarketRegimeDetector(
+        # REGIME_MODE selects the taxonomy: 'adx' (default, shipped) or
+        # 'volatility' (docs/REGIME-VOLATILITY.md).
+        self.market_regime = make_regime_detector(
             event_bus=get_event_bus(), db=self.db
         )
 

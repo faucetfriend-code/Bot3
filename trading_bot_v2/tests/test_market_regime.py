@@ -8,6 +8,17 @@ import pytest
 from unittest.mock import patch
 from trading_bot_v2.market_regime import MarketRegimeDetector, MarketRegime
 
+#: The five values this detector can emit. MarketRegime also carries the
+#: VOL_* values of the realized-volatility taxonomy, which only
+#: VolatilityRegimeDetector produces (REGIME_MODE=volatility).
+ADX_REGIMES = (
+    MarketRegime.TRENDING_STRONG,
+    MarketRegime.TRENDING_MODERATE,
+    MarketRegime.RANGING_VOLATILE,
+    MarketRegime.RANGING_CALM,
+    MarketRegime.INDECISIVE,
+)
+
 
 class TestMarketRegimeDetector:
     """Test suite for MarketRegimeDetector."""
@@ -307,11 +318,23 @@ class TestMarketRegimeDetector:
             "CalendarFlow": 0.1,
         }
 
-        # SessionRangeBreakout and CalendarFlow are overlays in ALL regimes
-        for regime in MarketRegime:
+        # SessionRangeBreakout and CalendarFlow are overlays in all five
+        # ADX regimes. MarketRegime also carries the VOL_* values of the
+        # realized-volatility taxonomy (REGIME_MODE=volatility), which
+        # this detector never emits and has no weights for - see
+        # volatility_regime.VolatilityRegimeDetector.
+        for regime in ADX_REGIMES:
             regime_weights = regime_detector.get_strategy_weights(regime)
             assert "SessionRangeBreakout" in regime_weights
             assert "CalendarFlow" in regime_weights
+
+    def test_foreign_taxonomy_regimes_get_no_weights(self, regime_detector):
+        """The ADX detector does not claim to map another taxonomy."""
+        for regime in MarketRegime:
+            if regime in ADX_REGIMES:
+                continue
+            assert regime_detector.get_strategy_weights(regime) == {}
+            assert regime_detector.get_active_strategies(regime) == []
 
     def test_hash_market_data(self, regime_detector, sample_market_data):
         """Test market data hashing for cache invalidation."""

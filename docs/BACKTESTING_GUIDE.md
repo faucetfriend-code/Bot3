@@ -60,6 +60,11 @@ python -m trading_bot_v2.optimization --strategy mean_reversion --trials 100
 # Which (strategy, regime) pairs have the sample to be tuned separately?
 python -m trading_bot_v2.validation.regime_census --quiet
 
+# Does the regime label mean anything, and does a volatility taxonomy do better?
+# (--data-dir must be ABSOLUTE from a worktree; see docs/REGIME-VOLATILITY.md)
+DATA_AUTODOWNLOAD=false python -m trading_bot_v2.analysis.regime_discrimination \
+    --mode taxonomy --iterations 2000 --quiet --data-dir /abs/path/to/backtesting/data
+
 # Why did those trials not trade?
 python -m trading_bot_v2.diagnostics.explain --strategy mean_reversion
 

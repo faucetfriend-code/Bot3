@@ -724,6 +724,11 @@ class TestStrategyManagerRegimeRouting:
         detector.detect_regime_cached.return_value = regime
         detector.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(regime)
         detector.get_strategy_weights.return_value = {"MACrossover": 0.5, "MomentumScalping": 0.3}
+        # StrategyManager asks the detector whether grid may run in this
+        # regime (so the rule follows the active taxonomy). A bare
+        # MagicMock would answer "yes" to everything, which would silently
+        # disable the grid-gating assertions below.
+        detector.is_grid_allowed.side_effect = MarketRegimeDetector().is_grid_allowed
 
         sm = StrategyManager(
             regime_detector=detector,

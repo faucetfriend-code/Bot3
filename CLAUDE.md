@@ -48,7 +48,8 @@ Bot3/
     api_server.py            # FastAPI + serves interface.html + REST/WebSocket
     trading_bot.py           # Core loop (COORDINATOR - delegates everything)
     strategy_manager.py      # Regime->strategy mapping, conflict resolution
-    market_regime.py         # ADX-based regime detection (4h timeframe)
+    market_regime.py         # ADX-based regime detection (4h timeframe, default)
+    volatility_regime.py     # Realized-volatility regime detection (REGIME_MODE=volatility)
     risk_manager.py          # AUTHORITATIVE for position sizing/exposure
     grid_lifecycle_manager.py # Grid state machine (in-memory, lost on restart)
     execution_layer.py       # 1m/5m entry timing refinement
@@ -97,6 +98,13 @@ Market Data -> Regime Detection (ADX 4h) -> Strategy Selection -> Signal Generat
 | INDECISIVE | 20-25 | Stay flat |
 
 **Overlay strategies** (run in ALL regimes independently): LiquidationCapture, FundingArb, OrderBookImbalance
+
+Under `REGIME_MODE=volatility` the taxonomy is three terciles of trailing
+realized volatility instead, with a **proposed** mapping grounded in what each
+strategy needs mechanically (VOL_LOW -> MeanReversion, VOL_MID -> GridTrading +
+VWAPScalping, VOL_HIGH -> MomentumScalping + MACrossover, VOL_WARMUP -> flat).
+`docs/REGIME-VOLATILITY.md` has the measurement and the argument, including why
+the ADX mapping above looks inverted against it.
 
 ## Critical Gotchas
 
@@ -177,6 +185,17 @@ Key variables:
 - `AGENT_WALLET_PRIVATE_KEY` / `ACCOUNT_PUBLIC_KEY` - Pacifica auth (Ed25519)
 - `TESTNET=true` - Testnet mode
 - `ENABLE_MEAN_REVERSION=true` (one per strategy)
+- `REGIME_MODE=adx` - Which regime taxonomy the detector uses. `adx` (default,
+  shipped) or `volatility` (trailing-realized-volatility terciles,
+  `trading_bot_v2/volatility_regime.py`). The volatility scheme measures 2.6-6x
+  better on forward-volatility discrimination than the ADX label
+  (`docs/REGIME-VOLATILITY.md`), but switching it on re-gates every strategy on
+  every symbol and invalidates the campaign, the census, every stored overlay
+  and every per-regime study. Tunables:
+  `REGIME_VOL_WINDOW=14`, `REGIME_VOL_REFERENCE_DAYS=120`,
+  `REGIME_VOL_MIN_OBSERVATIONS=40`, plus the proposed strategy mapping
+  `REGIME_VOL_STRATEGIES_{LOW,MID,HIGH,WARMUP}` and
+  `REGIME_VOL_WEIGHTS_{LOW,MID,HIGH,WARMUP}`.
 - `ADX_TRENDING_THRESHOLD=25.0` - Regime detection. **Do not turn this without
   reading `docs/REGIME-DISCRIMINATION.md`**: it is one global parameter that
   re-gates every strategy on every symbol, and the measured answer is that the

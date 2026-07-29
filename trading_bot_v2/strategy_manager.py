@@ -45,6 +45,7 @@ from .diagnostics.funnel import (
     STAGE_VALIDITY_DROPPED,
 )
 from .market_regime import MarketRegimeDetector, MarketRegime
+from .volatility_regime import make_regime_detector
 from .strategies.mean_reversion import MeanReversionStrategy
 from .strategies.ma_crossover import MACrossoverStrategy
 from .strategies.grid_trading import GridTradingStrategy
@@ -108,7 +109,8 @@ class StrategyManager:
                 neutral (1.0) and static regime weights apply unchanged.
         """
         # Initialize regime detector
-        self.regime_detector = regime_detector or MarketRegimeDetector()
+        # REGIME_MODE selects the taxonomy (ADX by default).
+        self.regime_detector = regime_detector or make_regime_detector()
 
         # Read strategy enable flags from environment if not explicitly passed
         # This ensures .env configuration is respected (fixes parameter audit issue)
@@ -877,9 +879,12 @@ class StrategyManager:
             active_strategy_names = self.regime_detector.get_active_strategies(regime)
 
             # Step 2.25: ENFORCE GRID REGIME CONSTRAINTS (MANDATORY per Grid Trading Brief)
-            # Grid trading ONLY allowed in: RANGING_CALM, RANGING_VOLATILE, INDECISIVE
-            # HARD DISABLE in: TRENDING_MODERATE, TRENDING_STRONG
-            if regime in [MarketRegime.TRENDING_STRONG, MarketRegime.TRENDING_MODERATE]:
+            # Delegated to the detector so the rule follows the active
+            # taxonomy. For the ADX detector is_grid_allowed() is True for
+            # exactly RANGING_CALM / RANGING_VOLATILE / INDECISIVE, i.e. the
+            # hard disable still fires on TRENDING_STRONG / TRENDING_MODERATE
+            # and nothing about ADX-mode behaviour changes.
+            if not self.regime_detector.is_grid_allowed(regime):
                 if "GridTrading" in active_strategy_names:
                     active_strategy_names = [
                         name for name in active_strategy_names if name != "GridTrading"
@@ -1537,14 +1542,13 @@ class StrategyManager:
             logger.error("Grid handler: Missing stop loss on one or both signals")
             return None
 
-        # Additional regime-specific validation
-        if regime not in [
-            MarketRegime.RANGING_CALM,
-            MarketRegime.RANGING_VOLATILE,
-            MarketRegime.INDECISIVE,
-        ]:
+        # Additional regime-specific validation. Same delegation as the
+        # Step 2.25 hard disable - identical behaviour under the ADX
+        # taxonomy, correct under any other.
+        if not self.regime_detector.is_grid_allowed(regime):
             logger.warning(
-                f"Grid handler: Grid signals in non-ranging regime ({regime.value}) - rejecting"
+                f"Grid handler: Grid signals not allowed in {regime.value} "
+                f"regime - rejecting"
             )
             return None
 

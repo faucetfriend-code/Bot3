@@ -437,3 +437,31 @@ The falsifiable version of item 1: re-run the census with the regime gate
 **removed** (every strategy allowed in every regime) and compare. If the
 gate is carrying real information, removing it should hurt. Given the
 effect sizes above, the prior is that it mostly changes trade counts.
+
+---
+
+## Follow-up (2026-07-28): item 2 was acted on
+
+`docs/REGIME-VOLATILITY.md` builds the volatility taxonomy this document
+argues for - quantile terciles of the same 14-bar trailing realized
+volatility, computed from a trailing reference window only - and runs it
+through **this harness** (`--mode taxonomy`, same rotation null, same
+horizons, same symbols). Headline:
+
+| | adx_5way | vol_q3 | trailing vol (continuous) |
+|---|---|---|---|
+| fwd_vol eps^2 / rho^2 | 0.0129 - 0.0321 | **0.0780 - 0.0822** | 0.1593 - 0.2934 |
+| d(highest bucket) | +0.13 / +0.20 | **+0.32 on all three symbols** | - |
+| smallest bucket's share of tape | 2.5% | 30.3% | - |
+| forward direction | nothing | nothing | nothing |
+
+So the taxonomy improves 2.6-6x on the one axis anything discriminates,
+and still recovers only 27-51% of what the continuous variable already
+knows - which is item 2 of this section restated as a measurement rather
+than a prediction. It ships behind `REGIME_MODE=volatility`, default
+off. Two of this document's findings replicated with the new instrument:
+the calmest bucket is again the one with above-random-walk forward
+efficiency, and a 2-D scheme using trailing directional efficiency as a
+second axis moves forward-efficiency eps^2 from 0.0038 to 0.0051 - i.e.
+trend persistence is not forecastable from the trailing path, and ADX
+was not the reason.

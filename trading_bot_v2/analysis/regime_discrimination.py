@@ -59,13 +59,23 @@ import random
 import statistics as st
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
 from ..backtesting.data_loader import BacktestDataLoader
 from ..indicators import calculate_adx
-from ..market_regime import MarketRegimeDetector
+from ..market_regime import MarketRegime, MarketRegimeDetector
+from ..volatility_regime import (
+    BUCKET_REGIMES,
+    DEFAULT_MIN_OBSERVATIONS,
+    DEFAULT_REFERENCE_DAYS,
+    DEFAULT_VOL_WINDOW,
+    SHIPPED_BUCKETS,
+    VolatilityRegimeClassifier,
+    trailing_efficiency,
+    trailing_realized_vol,
+)
 
 #: Regime values, ordered by prevalence over the 8-year campaign.
 REGIME_ORDER: Tuple[str, ...] = (
@@ -334,37 +344,46 @@ def hourly_grid(start: datetime, end: datetime) -> List[datetime]:
     return out
 
 
-def replay_labels(
-    bars: Sequence[BarFeatures],
+def replay_confirmed(
     hours: Sequence[datetime],
-    params: RegimeParams,
+    detect: Callable[[Optional[str], datetime], Optional[str]],
+    dwell_hours: float,
+    confirm: bool,
 ) -> List[Optional[str]]:
-    """Replay the confirmed-regime state machine over an hourly grid.
+    """Replay the confirmed-regime state machine over a detection grid.
 
     Mirrors ``MarketRegimeDetector._detect_regime_with_confirmation``,
     including the ordering quirk that the dwell check runs BEFORE the
     2-count confirmation and clears any pending candidate when it fires.
 
+    Factored out of ``replay_labels`` so a second taxonomy runs through
+    the SAME anti-flap machinery rather than a lookalike - otherwise a
+    comparison between taxonomies would also be comparing two different
+    confirmation state machines.
+
     Args:
-        bars: Precomputed features, oldest first.
         hours: Detection times (the engine's 1h cache-refresh cadence).
-        params: Threshold and anti-flap configuration.
+        detect: ``(confirmed_state, now) -> candidate label``. Returning
+            None means "nothing classifiable at this time" (no bar yet,
+            or the classifier is still warming up); the confirmed state
+            is left untouched and None is recorded.
+        dwell_hours: Switches suppressed for this long after a confirmed
+            switch. 0 disables the mechanism.
+        confirm: Whether a candidate must be detected twice in a row.
 
     Returns:
-        The confirmed regime at each hour; None before the first bar.
+        The confirmed label at each detection time, or None.
     """
-    times = [b.time for b in bars]
     state: Optional[str] = None
     pending: Optional[Tuple[str, int]] = None
     last_switch: Optional[datetime] = None
     labels: List[Optional[str]] = []
 
     for now in hours:
-        idx = bisect.bisect_right(times, now) - 1
-        if idx < 0:
+        detected = detect(state, now)
+        if detected is None:
             labels.append(None)
             continue
-        detected = classify(params, bars[idx], state)
 
         if state is None:
             state = detected
@@ -374,11 +393,11 @@ def replay_labels(
             suppressed = False
             if last_switch is not None:
                 elapsed = (now - last_switch).total_seconds() / 3600.0
-                if elapsed < params.dwell_hours:
+                if elapsed < dwell_hours:
                     pending = None
                     suppressed = True
             if not suppressed:
-                if not params.confirm:
+                if not confirm:
                     state, last_switch, pending = detected, now, None
                 elif pending is not None and pending[0] == detected:
                     if pending[1] >= 1:
@@ -389,6 +408,174 @@ def replay_labels(
                     pending = (detected, 1)
         labels.append(state)
     return labels
+
+
+def replay_labels(
+    bars: Sequence[BarFeatures],
+    hours: Sequence[datetime],
+    params: RegimeParams,
+) -> List[Optional[str]]:
+    """Replay the ADX classifier + confirmation over an hourly grid.
+
+    Args:
+        bars: Precomputed features, oldest first.
+        hours: Detection times (the engine's 1h cache-refresh cadence).
+        params: Threshold and anti-flap configuration.
+
+    Returns:
+        The confirmed regime at each hour; None before the first bar.
+    """
+    times = [b.time for b in bars]
+
+    def detect(state: Optional[str], now: datetime) -> Optional[str]:
+        idx = bisect.bisect_right(times, now) - 1
+        if idx < 0:
+            return None
+        return classify(params, bars[idx], state)
+
+    return replay_confirmed(hours, detect, params.dwell_hours, params.confirm)
+
+
+#: Label the quantile classifier emits before its trailing reference
+#: window is long enough to rank against. It is a confirmed state inside
+#: the replay (exactly as in the live detector) and is mapped to None -
+#: "unlabelled" - on the way out.
+WARMUP_LABEL = MarketRegime.VOL_WARMUP.value
+
+
+def bucket_names(buckets: int) -> Tuple[str, ...]:
+    """Label strings for a k-bucket quantile scheme.
+
+    k = 3 uses the shipped enum values so the harness's labels are
+    literally the strings the detector persists.
+
+    Args:
+        buckets: Number of buckets.
+
+    Returns:
+        One label per bucket, lowest first.
+    """
+    if buckets == SHIPPED_BUCKETS:
+        return tuple(r.value for r in BUCKET_REGIMES)
+    return tuple(f"vol_{i + 1}of{buckets}" for i in range(buckets))
+
+
+def label_bars_quantile(
+    bars: Sequence[BarFeatures],
+    params: RegimeParams,
+    buckets: int = SHIPPED_BUCKETS,
+    metric: Any = trailing_realized_vol,
+    names: Optional[Sequence[str]] = None,
+    vol_window: int = DEFAULT_VOL_WINDOW,
+    reference_days: float = DEFAULT_REFERENCE_DAYS,
+    min_observations: int = DEFAULT_MIN_OBSERVATIONS,
+    lookback: int = ENGINE_LOOKBACK,
+) -> List[Optional[str]]:
+    """Label each bar by trailing-quantile bucket of a trailing metric.
+
+    Runs the SHIPPED ``VolatilityRegimeClassifier`` - not a
+    re-implementation of it - over the same hourly detection grid and
+    through the same confirmation state machine the ADX labels use. The
+    classifier only ever sees closes up to and including the bar being
+    labelled, so this is trailing-only by construction; the seeding path
+    excludes the current bar for the same reason.
+
+    Warmup is a REAL state inside the replay - the detector confirms
+    ``VOL_WARMUP`` and needs the usual 2-count confirmation to leave it,
+    so the harness must too or the two would disagree on the first bars
+    of every symbol. It is mapped to None on the way out, which is how
+    the statistics below already treat "no label yet" for ADX.
+
+    Args:
+        bars: Precomputed features, oldest first.
+        params: Supplies the dwell/confirm anti-flap settings only.
+        buckets: Number of quantile buckets.
+        metric: ``(closes, window) -> value``; trailing-only.
+        names: Bucket label strings; defaults to ``bucket_names``.
+        vol_window: Bars in the trailing metric.
+        reference_days: Calendar span of the trailing reference window.
+        min_observations: Observations required before ranking.
+        lookback: Candles handed to the classifier per call, matching the
+            backtest engine's history slice.
+
+    Returns:
+        One label per bar, aligned with ``bars``.
+    """
+    if not bars:
+        return []
+    labels_for = tuple(names) if names is not None else bucket_names(buckets)
+    times = [b.time for b in bars]
+    closes = [b.close for b in bars]
+    classifier = VolatilityRegimeClassifier(
+        buckets=buckets,
+        vol_window=vol_window,
+        reference_days=reference_days,
+        min_observations=min_observations,
+        metric=metric,
+    )
+
+    def detect(state: Optional[str], now: datetime) -> Optional[str]:
+        idx = bisect.bisect_right(times, now) - 1
+        if idx < 0:
+            return None
+        window = closes[max(0, idx - lookback + 1) : idx + 1]
+        result = classifier.classify("_", now, window)
+        if result is None:
+            return WARMUP_LABEL
+        return labels_for[result.index]
+
+    hours = hourly_grid(bars[0].time, bars[-1].time)
+    labels = replay_confirmed(hours, detect, params.dwell_hours, params.confirm)
+    at_hour = {h: lab for h, lab in zip(hours, labels)}
+    return [
+        None if at_hour.get(b.time) in (None, WARMUP_LABEL) else at_hour[b.time]
+        for b in bars
+    ]
+
+
+def label_bars_two_axis(
+    bars: Sequence[BarFeatures],
+    params: RegimeParams,
+    vol_buckets: int = 3,
+    eff_buckets: int = 2,
+    **kwargs: Any,
+) -> List[Optional[str]]:
+    """Label each bar by (volatility bucket, efficiency bucket).
+
+    The second axis is TRAILING directional efficiency - net move over
+    path length - which is a more direct measure of "is this trending"
+    than ADX is. Both axes are ranked against their own trailing
+    distributions by the same machinery, so the 2-D scheme inherits the
+    no-lookahead property from the 1-D one.
+
+    Args:
+        bars: Precomputed features, oldest first.
+        params: Supplies the dwell/confirm anti-flap settings.
+        vol_buckets: Buckets on the volatility axis.
+        eff_buckets: Buckets on the efficiency axis.
+        **kwargs: Forwarded to ``label_bars_quantile``.
+
+    Returns:
+        Combined labels like ``"vol_high|eff_hi"``; None where either
+        axis is unlabelled.
+    """
+    vol = label_bars_quantile(bars, params, buckets=vol_buckets, **kwargs)
+    eff_names = (
+        ("eff_lo", "eff_hi")
+        if eff_buckets == 2
+        else tuple(f"eff_{i + 1}of{eff_buckets}" for i in range(eff_buckets))
+    )
+    eff = label_bars_quantile(
+        bars,
+        params,
+        buckets=eff_buckets,
+        metric=trailing_efficiency,
+        names=eff_names,
+        **kwargs,
+    )
+    return [
+        None if v is None or e is None else f"{v}|{e}" for v, e in zip(vol, eff)
+    ]
 
 
 def label_bars(
@@ -804,6 +991,293 @@ def run_baselines(
     return out
 
 
+# ----------------------------------------------------------------------
+# Taxonomy comparison (new scheme vs ADX vs the raw continuous variable)
+# ----------------------------------------------------------------------
+
+
+def epsilon_squared_coded(
+    codes: Any, ranks: Any, n: int, n_groups: int
+) -> float:
+    """Vectorised Kruskal-Wallis epsilon-squared over integer group codes.
+
+    Arithmetically identical to ``epsilon_squared`` - the same H statistic
+    divided by ``n - 1`` - but ~100x faster, which is what makes a
+    rotation null over six taxonomies x four outcomes x three symbols
+    affordable. ``tests/test_volatility_regime.py`` pins the two against
+    each other.
+
+    Args:
+        codes: int array of group codes, one per observation.
+        ranks: float array of average ranks, same order.
+        n: Number of observations.
+        n_groups: Number of distinct group codes.
+
+    Returns:
+        Epsilon-squared in [0, 1]; 0 when fewer than two groups.
+    """
+    import numpy as np
+
+    if n_groups < 2 or n < 2:
+        return 0.0
+    counts = np.bincount(codes, minlength=n_groups).astype(float)
+    totals = np.bincount(codes, weights=ranks, minlength=n_groups)
+    live = counts > 0
+    if int(live.sum()) < 2:
+        return 0.0
+    grand = (n + 1) / 2.0
+    means = totals[live] / counts[live]
+    h_stat = (
+        12.0 / (n * (n + 1)) * float(np.sum(counts[live] * (means - grand) ** 2))
+    )
+    return h_stat / (n - 1)
+
+
+def rotation_pvalue_coded(
+    codes: Any,
+    ranks: Any,
+    n_groups: int,
+    observed: float,
+    iterations: int,
+    rng: random.Random,
+) -> float:
+    """Circular-rotation p-value over integer-coded labels.
+
+    Same null as ``rotation_pvalue`` - rotate the label series against
+    the outcome series, preserving the autocorrelation of both exactly
+    and destroying only their alignment.
+
+    Args:
+        codes: int array of group codes, in time order.
+        ranks: float array of average ranks.
+        n_groups: Number of distinct group codes.
+        observed: The unrotated epsilon-squared.
+        iterations: Number of rotations to draw.
+        rng: Seeded RNG.
+
+    Returns:
+        (hits + 1) / (iterations + 1).
+    """
+    import numpy as np
+
+    n = len(codes)
+    hits = 0
+    for _ in range(iterations):
+        k = rng.randrange(n)
+        rotated = np.roll(codes, k)
+        if epsilon_squared_coded(rotated, ranks, n, n_groups) >= observed:
+            hits += 1
+    return (hits + 1) / (iterations + 1)
+
+
+def _partial(fn: Callable[..., Any], **kwargs: Any) -> Callable[..., Any]:
+    """Bind keyword arguments to a labeller.
+
+    Args:
+        fn: The labelling function.
+        **kwargs: Bound keyword arguments.
+
+    Returns:
+        A two-argument callable ``(bars, params) -> labels``.
+    """
+
+    def bound(bars: Sequence[BarFeatures], params: RegimeParams) -> List[
+        Optional[str]
+    ]:
+        return fn(bars, params, **kwargs)
+
+    return bound
+
+
+def default_schemes() -> List[Tuple[str, Callable[..., Any]]]:
+    """The taxonomies compared side by side, in report order.
+
+    Returns:
+        (name, labeller) pairs. ``adx_5way`` is the shipped taxonomy the
+        discrimination study condemned; ``vol_qK`` are quantile buckets
+        of trailing realized volatility; ``vol_q3xeff2`` is the 2-D
+        (volatility x trailing directional efficiency) scheme.
+    """
+    return [
+        ("adx_5way", label_bars),
+        ("vol_q2", _partial(label_bars_quantile, buckets=2)),
+        ("vol_q3", _partial(label_bars_quantile, buckets=3)),
+        ("vol_q4", _partial(label_bars_quantile, buckets=4)),
+        ("vol_q5", _partial(label_bars_quantile, buckets=5)),
+        ("vol_q3xeff2", _partial(label_bars_two_axis)),
+    ]
+
+
+def run_taxonomy_comparison(
+    features: Dict[str, List[BarFeatures]],
+    params: RegimeParams,
+    horizon: int,
+    iterations: int,
+    seed: int,
+    schemes: Optional[Sequence[Tuple[str, Callable[..., Any]]]] = None,
+    trailing_window: int = DEFAULT_VOL_WINDOW,
+    outcomes: Sequence[str] = ("fwd_vol", "efficiency", "abs_ret", "fwd_ret"),
+) -> Dict[str, Any]:
+    """Score several taxonomies on the SAME bars, the same null, one table.
+
+    Every scheme is evaluated on the intersection of bars that all of
+    them label and for which the outcome and every continuous predictor
+    exists. Without that common mask the comparison would silently be
+    across different samples - the ADX labels start at bar 0 while a
+    trailing-quantile scheme needs a reference window first.
+
+    Args:
+        features: Symbol -> precomputed bars.
+        params: Threshold configuration for the ADX labels, and the
+            dwell/confirm settings every scheme shares.
+        horizon: Forward horizon in 4h bars.
+        iterations: Rotation-null draws per test.
+        seed: RNG seed.
+        schemes: (name, labeller) pairs; defaults to ``default_schemes``.
+        trailing_window: Bars of trailing realized volatility used as the
+            continuous baseline.
+        outcomes: Forward outcomes to score.
+
+    Returns:
+        Dict with "schemes", "by_symbol" (per outcome: n, per-scheme
+        epsilon-squared and rotation p, continuous rho^2 baselines) and
+        "shares" (per scheme, share of the common sample per label).
+    """
+    import numpy as np
+
+    rng = random.Random(seed)
+    scheme_list = list(schemes) if schemes is not None else default_schemes()
+    result: Dict[str, Any] = {
+        "horizon": horizon,
+        "iterations": iterations,
+        "trailing_window": trailing_window,
+        "schemes": [name for name, _ in scheme_list],
+        "by_symbol": {},
+        "shares": {},
+    }
+
+    for symbol, bars in features.items():
+        logger.info(f"taxonomy comparison: labelling {symbol}")
+        labelings = {name: fn(bars, params) for name, fn in scheme_list}
+        outcome_series = forward_outcomes(bars, horizon)
+        closes = [b.close for b in bars]
+        log_rets = [0.0] + [
+            math.log(closes[i] / closes[i - 1]) for i in range(1, len(closes))
+        ]
+        trailing: List[Optional[float]] = [None] * len(bars)
+        for i in range(trailing_window, len(bars)):
+            trailing[i] = st.pstdev(log_rets[i - trailing_window + 1 : i + 1])
+
+        per_outcome: Dict[str, Any] = {}
+        shares: Dict[str, Dict[str, float]] = {}
+        for name in outcomes:
+            series = outcome_series[name]
+            keep = [
+                i
+                for i in range(len(bars))
+                if series[i] is not None
+                and trailing[i] is not None
+                and bars[i].vol_score is not None
+                and all(labelings[s][i] is not None for s in labelings)
+            ]
+            if len(keep) < 100:
+                continue
+            values = [series[i] for i in keep]
+            n = len(values)
+            ranks_list = average_ranks(values)
+            ranks = np.asarray(ranks_list, dtype=float)
+            entry: Dict[str, Any] = {"n": n, "by_scheme": {}}
+            for scheme_name in result["schemes"]:
+                labels = [labelings[scheme_name][i] for i in keep]
+                order = sorted(set(labels))
+                code_of = {lab: k for k, lab in enumerate(order)}
+                codes = np.asarray([code_of[lab] for lab in labels], dtype=np.int64)
+                observed = epsilon_squared_coded(codes, ranks, n, len(order))
+                p_value = rotation_pvalue_coded(
+                    codes, ranks, len(order), observed, iterations, rng
+                )
+                entry["by_scheme"][scheme_name] = {
+                    "epsilon_squared": observed,
+                    "rotation_p": p_value,
+                    "groups": len(order),
+                }
+                if scheme_name not in shares:
+                    shares[scheme_name] = {
+                        lab: 100.0 * labels.count(lab) / n for lab in order
+                    }
+            for key, column in (
+                ("adx", [bars[i].adx for i in keep]),
+                ("vol_score", [bars[i].vol_score for i in keep]),
+                ("trailing_vol", [trailing[i] for i in keep]),
+            ):
+                rho = _spearman(column, values)
+                entry[f"{key}_rho_squared"] = rho * rho
+            per_outcome[name] = entry
+        result["by_symbol"][symbol] = per_outcome
+        result["shares"][symbol] = shares
+
+    return result
+
+
+def run_bucket_detail(
+    features: Dict[str, List[BarFeatures]],
+    params: RegimeParams,
+    horizon: int,
+    scheme: str = "vol_q3",
+) -> Dict[str, Any]:
+    """Per-bucket medians and Cliff's deltas for one taxonomy.
+
+    Args:
+        features: Symbol -> precomputed bars.
+        params: Threshold / anti-flap configuration.
+        horizon: Forward horizon in 4h bars.
+        scheme: Name of the scheme in ``default_schemes``.
+
+    Returns:
+        Symbol -> outcome -> label -> {n, share, median, ratio, delta}.
+    """
+    labeller = dict(default_schemes())[scheme]
+    out: Dict[str, Any] = {"scheme": scheme, "horizon": horizon, "by_symbol": {}}
+    for symbol, bars in features.items():
+        labels_all = labeller(bars, params)
+        outcomes = forward_outcomes(bars, horizon)
+        per_outcome: Dict[str, Any] = {}
+        for name in ("fwd_vol", "efficiency", "abs_ret", "fwd_ret"):
+            paired = [
+                (lab, val)
+                for lab, val in zip(labels_all, outcomes[name])
+                if lab is not None and val is not None
+            ]
+            if len(paired) < 100:
+                continue
+            labels = [p[0] for p in paired]
+            values = [p[1] for p in paired]
+            n = len(values)
+            ranks = average_ranks(values)
+            unconditional = st.median(values)
+            positions: Dict[str, List[int]] = {}
+            for i, lab in enumerate(labels):
+                positions.setdefault(lab, []).append(i)
+            per_outcome[name] = {
+                lab: {
+                    "n": len(idxs),
+                    "share": 100.0 * len(idxs) / n,
+                    "median": st.median([values[i] for i in idxs]),
+                    "ratio_to_unconditional": (
+                        st.median([values[i] for i in idxs]) / unconditional
+                        if unconditional
+                        else None
+                    ),
+                    "cliffs_delta": cliffs_delta(
+                        [ranks[i] for i in idxs], len(idxs), n - len(idxs)
+                    ),
+                }
+                for lab, idxs in sorted(positions.items())
+            }
+        out["by_symbol"][symbol] = per_outcome
+    return out
+
+
 #: Mechanism-decomposition configurations. Each disables exactly one
 #: anti-flap or hysteresis mechanism, so the delta against the baseline
 #: is that mechanism's contribution.
@@ -1169,6 +1643,90 @@ def print_discrimination(result: Dict[str, Any], baselines: Dict[str, Any]) -> N
         print(f"  All {surviving} tests survive Holm at alpha={alpha}.")
 
 
+def print_taxonomy(result: Dict[str, Any], detail: Dict[str, Any]) -> None:
+    """Print the side-by-side taxonomy comparison.
+
+    Args:
+        result: Output of run_taxonomy_comparison.
+        detail: Output of run_bucket_detail.
+    """
+    horizon = result["horizon"]
+    schemes = result["schemes"]
+    floor = 1 / (result["iterations"] + 1)
+    print("\n" + "=" * 78)
+    print(
+        f"TAXONOMY COMPARISON - same bars, same null, same effect size "
+        f"(forward {horizon} x 4h = {horizon * 4}h)"
+    )
+    print("=" * 78)
+    print(
+        f"Rotation null: {result['iterations']} circular rotations "
+        f"(p floor = {floor:.4f})."
+    )
+    print(
+        "Every scheme is scored on the SAME masked sample (bars every "
+        "scheme labels).\n"
+        "eps^2 and rho^2 are both shares of explained forward RANK "
+        "variance, so the\n"
+        "last three columns are the bar the taxonomies have to clear, on "
+        "the same scale."
+    )
+
+    for symbol, per_outcome in result["by_symbol"].items():
+        print(f"\n--- {symbol} ---")
+        header = (
+            f"  {'outcome':<11}{'n':>7}"
+            + "".join(f"{s:>13}" for s in schemes)
+            + f"{'trailvol':>11}{'ADX':>9}{'volscore':>10}"
+        )
+        print(header)
+        print("  " + "-" * (len(header) - 2))
+        for name, entry in per_outcome.items():
+            row = f"  {name:<11}{entry['n']:>7}"
+            for scheme in schemes:
+                cell = entry["by_scheme"].get(scheme)
+                row += f"{cell['epsilon_squared']:>13.4f}" if cell else f"{'-':>13}"
+            row += (
+                f"{entry['trailing_vol_rho_squared']:>11.4f}"
+                f"{entry['adx_rho_squared']:>9.4f}"
+                f"{entry['vol_score_rho_squared']:>10.4f}"
+            )
+            print(row)
+        print("  rotation-p:")
+        for name, entry in per_outcome.items():
+            cells = "  ".join(
+                f"{s}={entry['by_scheme'][s]['rotation_p']:.4f}"
+                for s in schemes
+                if s in entry["by_scheme"]
+            )
+            print(f"    {name:<11}{cells}")
+
+    print("\n\nShare of the common sample per label (non-degeneracy check):")
+    for symbol, shares in result["shares"].items():
+        print(f"  {symbol}")
+        for scheme in schemes:
+            cells = shares.get(scheme, {})
+            joined = ", ".join(f"{k} {v:.1f}%" for k, v in sorted(cells.items()))
+            print(f"    {scheme:<13}{joined}")
+
+    print(f"\n\nPer-bucket detail for {detail['scheme']}:")
+    rw = RANDOM_WALK_EFFICIENCY.get(detail["horizon"])
+    if rw:
+        print(f"  (random-walk median efficiency at this horizon: {rw:.3f})")
+    for symbol, per_outcome in detail["by_symbol"].items():
+        print(f"\n  --- {symbol} ---")
+        for name, cells in per_outcome.items():
+            print(f"    {name}")
+            for label, cell in cells.items():
+                print(
+                    f"      {label:<22} n={cell['n']:>6}  "
+                    f"share={cell['share']:>5.1f}%  "
+                    f"median={cell['median']:>10.5f}  "
+                    f"x{cell['ratio_to_unconditional']:>5.2f}  "
+                    f"cliff_d={cell['cliffs_delta']:>+6.3f}"
+                )
+
+
 def print_decomposition(result: Dict[str, Any]) -> None:
     """Print the Task 2 mechanism-decomposition table.
 
@@ -1294,7 +1852,7 @@ def main() -> None:
     parser.add_argument(
         "--mode",
         default="all",
-        choices=("all", "discriminate", "decompose", "knee"),
+        choices=("all", "discriminate", "decompose", "knee", "taxonomy"),
     )
     parser.add_argument("--symbols", default="BTC-USDC,ETH-USDC,SUI-USDC")
     parser.add_argument("--start", default="2010-01-01")
@@ -1333,6 +1891,15 @@ def main() -> None:
         print_discrimination(discrimination, baselines)
         payload["discrimination"] = discrimination
         payload["baselines"] = baselines
+
+    if args.mode in ("all", "taxonomy"):
+        comparison = run_taxonomy_comparison(
+            features, params, args.horizon, args.iterations, args.seed
+        )
+        detail = run_bucket_detail(features, params, args.horizon)
+        print_taxonomy(comparison, detail)
+        payload["taxonomy"] = comparison
+        payload["bucket_detail"] = detail
 
     if args.mode in ("all", "decompose"):
         windows = _resolve_windows(symbols, args.data_dir)

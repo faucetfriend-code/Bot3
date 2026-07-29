@@ -85,13 +85,38 @@ def _env_threshold(name: str, default: float) -> float:
 
 
 class MarketRegime(Enum):
-    """Market regime classification based on ADX and volatility."""
+    """Market regime classification.
+
+    The first five values are the ADX taxonomy (the shipped default). The
+    ``VOL_*`` values are the realized-volatility taxonomy produced by
+    ``volatility_regime.VolatilityRegimeDetector`` when
+    ``REGIME_MODE=volatility``.
+
+    The two taxonomies deliberately use DISJOINT value strings rather
+    than redefining the ADX names. Regime values are persisted - trades
+    are tagged with the regime confirmed at entry, ``validation_runs``
+    stores per-chunk regime histograms, and ``regime_param_overlays`` is
+    keyed by regime - so redefining ``trending_strong`` to mean "top
+    volatility tercile" would silently corrupt every stored record and
+    every census table that already exists. Disjoint values mean a row
+    always says which taxonomy produced it, and an overlay tuned for
+    ``ranging_calm`` simply never matches under volatility mode instead
+    of being applied to a regime that no longer means the same thing.
+    """
 
     TRENDING_STRONG = "trending_strong"  # ADX > 25 (held until ADX < 22)
     TRENDING_MODERATE = "trending_moderate"  # 20 < ADX <= 25, ADX flat/rising
     RANGING_VOLATILE = "ranging_volatile"  # ADX <= 20, vol score > 65 (enter 68 / exit 60 bands)
     RANGING_CALM = "ranging_calm"  # ADX <= 20, low volatility
     INDECISIVE = "indecisive"  # 20 < ADX <= 25 with falling ADX slope
+
+    # Realized-volatility taxonomy (REGIME_MODE=volatility). Terciles of
+    # trailing 14-bar realized volatility against its own TRAILING
+    # distribution - see docs/REGIME-VOLATILITY.md.
+    VOL_LOW = "vol_low"  # bottom tercile of trailing realized volatility
+    VOL_MID = "vol_mid"  # middle tercile
+    VOL_HIGH = "vol_high"  # top tercile
+    VOL_WARMUP = "vol_warmup"  # not enough trailing history to rank yet
 
 
 class MarketRegimeDetector:

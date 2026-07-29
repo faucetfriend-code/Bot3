@@ -147,6 +147,15 @@ on 4h crypto is 26.4. The `vwap_scalping / indecisive` cell being the
 census's best performer is what that predicts - the residual bucket wins
 when the taxonomy is not doing work.
 
+**Follow-up (2026-07-28):** `docs/REGIME-VOLATILITY.md` ships a
+replacement taxonomy - terciles of trailing realized volatility, behind
+`REGIME_MODE=volatility`, default off - which discriminates forward
+volatility 2.6-6x better and has no bucket smaller than 30% of the tape
+(the ADX taxonomy's `ranging_volatile`, grid trading's nominal home, is
+2.5% of BTC's). **Every number in this document is void under that
+flag**, and re-running this census under it is the falsifiable test of
+the strategy mapping proposed there.
+
 ---
 
 ## What the census says about per-regime tuning

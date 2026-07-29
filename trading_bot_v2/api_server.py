@@ -31,6 +31,7 @@ try:
     from .pacifica_client import PacificaClient
     from .strategy_manager import StrategyManager
     from .market_regime import MarketRegimeDetector, MarketRegime
+    from .volatility_regime import make_regime_detector
     from .multi_timeframe_fetcher import MultiTimeframeFetcher
     from .grid_lifecycle_manager import GridLifecycleManager
     from .risk_manager import RiskManager
@@ -250,8 +251,11 @@ class BotIntegration:
                 self.ws_client = None
 
             # Initialize regime detector
-            self.regime_detector = MarketRegimeDetector()
-            logger.info("MarketRegimeDetector initialized")
+            self.regime_detector = make_regime_detector()
+            logger.info(
+                f"Regime detector initialized: "
+                f"{type(self.regime_detector).__name__}"
+            )
 
             # Initialize multi-timeframe fetcher (requires pacifica_client)
             if self.pacifica_client:

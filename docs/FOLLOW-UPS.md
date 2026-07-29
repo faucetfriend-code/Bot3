@@ -290,6 +290,36 @@ addresses.
 run_walk_forward` just skips the first `train_months`). Either point it at
 `optimize_chunked(regime=...)` or retire it.
 
+## 11. The volatility taxonomy is built and measured but not adopted (2026-07-28)
+
+`trading_bot_v2/volatility_regime.py` ships a realized-volatility regime
+detector behind `REGIME_MODE=volatility` (default `adx`, so nothing changed).
+`docs/REGIME-VOLATILITY.md` has the side-by-side discrimination table. Open:
+
+**a. Nothing has been re-run under it.** Adopting it invalidates the 8-year
+campaign, every cell of `docs/REGIME-CENSUS.md`, every stored overlay in
+`regime_param_overlays` and every per-regime study. That is the cost of the
+switch and it has not been paid, so the flag stays off.
+
+**b. The strategy mapping is a proposal, not a measurement.** It is argued
+from strategy mechanics (see the document) and is deliberately NOT tuned
+against P&L, because a regime map is one global object that gates every
+strategy at once and the deflated Sharpe never sees that search. Testing it
+means re-running the census under `REGIME_MODE=volatility` and comparing
+per-cell PF - not sweeping the map.
+
+**c. The bucketed regime still scores well below its own input.** Trailing
+realized volatility as a CONTINUOUS variable explains 0.159-0.294 of forward
+volatility rank variance; the tercile label explains 0.078-0.082. The gating
+decision is what forces the discretisation. Feeding the continuous percentile
+(already exposed as `_last_volatility_score` under volatility mode) into
+position sizing would capture more than any partition can, and gates nothing.
+
+**d. `regime_shadow` mislabels its column under volatility mode.**
+`_record_shadow_observation` stores the authoritative regime in a column named
+`adx_regime`. Harmless today (shadow mode needs a trained ML artifact and a
+db), wrong if both are ever true at once.
+
 ## 8. Only 1m has a hard coverage guard
 
 The engine raises a clear error when 1m execution data does not cover the
