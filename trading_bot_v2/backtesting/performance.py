@@ -77,6 +77,7 @@ class BacktestResult:
         print(f"  Total Fills     : {self.total_trades}")
         print(f"  Closed Trades   : {self.closed_trades}")
         print(f"  Total Fees      : ${self.total_fees:,.2f}")
+        print(f"  Funding Paid    : ${self.total_funding_paid:,.2f}")
         print(f"{'='*60}\n")
 
     def save_html(self, path: str) -> None:
@@ -105,7 +106,23 @@ class PerformanceTracker:
         symbol: str,
         start: str,
         end: str,
+        total_funding: Optional[float] = None,
     ) -> BacktestResult:
+        """Assemble the run's metrics.
+
+        Args:
+            final_equity: Cash + unrealised at the last bar.
+            trade_log: Every fill the exchange recorded.
+            symbol: Symbol replayed.
+            start: Window start (ISO date).
+            end: Window end (ISO date).
+            total_funding: Net funding cash-flow over the run, negative
+                when funding was paid. Reported as ``total_funding_paid``
+                (positive = paid out). Left at 0.0 when the caller does
+                not supply it, which is what happened for the whole
+                pre-2026-07 campaign - funding WAS charged to the
+                balance but never surfaced in any report.
+        """
         equity_series = [s["equity"] for s in self._snapshots]
         result = BacktestResult(
             symbol=symbol,
@@ -121,6 +138,8 @@ class PerformanceTracker:
         result.total_return_pct = (final_equity / self.initial_capital - 1) * 100
         result.total_fees = sum(t.get("fee", 0) for t in trade_log)
         result.avg_fee_per_trade = result.total_fees / max(1, result.total_trades)
+        if total_funding is not None:
+            result.total_funding_paid = -float(total_funding)
 
         # Days in backtest
         try:

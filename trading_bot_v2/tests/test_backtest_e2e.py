@@ -118,7 +118,11 @@ class TestNonBacktestableExclusion:
         assert "not backtestable" in joined
 
     def test_all_strategy_run_emits_exclusion_warnings(self, warning_log):
-        """A no-filter run force-disables both overlays and says so."""
+        """A no-filter run force-disables the L2 overlay and says so.
+
+        FundingArb was excluded alongside it until real funding history
+        was ingested; it is no longer on the list.
+        """
         engine = BacktestEngine()
         result = engine.run(
             start="2024-03-01",
@@ -127,11 +131,9 @@ class TestNonBacktestableExclusion:
             initial_capital=10000.0,
         )
         assert isinstance(result, BacktestResult)
-        for name in ("OrderBookImbalance", "FundingArb"):
-            assert name not in result.by_strategy
+        assert "OrderBookImbalance" not in result.by_strategy
         joined = "\n".join(warning_log)
         assert "OrderBookImbalance" in joined
-        assert "FundingArb" in joined
         assert "not backtestable" in joined
 
 

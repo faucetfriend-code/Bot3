@@ -58,6 +58,9 @@ Bot3/
     pacifica_client.py       # REST API wrapper (Ed25519 auth)
     pacifica_ws_client.py    # WebSocket client (singleton, real-time data)
     multi_timeframe_fetcher.py # 15m/1h/4h candle fetcher with 60s TTL cache
+    data_manager.py          # Candle + perpetual-funding store manager (CLI: --coverage,
+                             # --funding, --funding-only, --data-dir)
+    backtesting/funding.py   # Binance 8h -> venue 1h funding mapping (the assumption)
     kelly_position_sizer.py  # Kelly Criterion (activates at 50+ trades)
     database.py              # SQLite (trading_bot.db, auto-created)
     config.py                # .env loader (override=True), all enums
@@ -68,7 +71,8 @@ Bot3/
       grid_trading.py        # ATR-spaced grid (RANGING_VOLATILE)
       liquidation_capture.py # Cascade detection (ALL regimes, overlay)
       vwap_scalping.py       # VWAP deviation (RANGING regimes)
-      funding_arb.py         # Funding rate exploit (ALL regimes, overlay)
+      funding_arb.py         # Funding rate exploit (ALL regimes, overlay; backtestable
+                             # since 2026-07-29 against real funding history)
       momentum_scalping.py   # EMA 9/21 cross (TRENDING regimes)
       orderbook_imbalance.py # L2 bid/ask analysis (ALL regimes, overlay)
     tests/                   # Primary test directory
@@ -207,6 +211,23 @@ Key variables:
 - `CIRCUIT_BREAKER_LOSS_PCT=0.10` - 10% portfolio loss stop
 - `KELLY_FRACTION=0.5` / `KELLY_MIN_TRADES=50`
 - `LOG_LEVEL=INFO`
+- `BACKTEST_FUNDING_MODEL=flat` - How the backtest charges perpetual funding.
+  `flat` (default, shipped) charges the constant `BACKTEST_FUNDING_HOURLY_PCT=0.0001`
+  at every hourly settlement, longs always paying. That constant is the mean Binance
+  **8-hour** BTC rate applied **hourly**, i.e. an 87.6%/yr carry against a measured
+  11.66%/yr, and it can never go negative. `historical` charges the real ingested
+  series instead (`{SYMBOL}_funding.parquet`, Binance USD-M, BTC from 2019-09-10);
+  `funding_arb` is meaningless without it. The default stays `flat` only so the
+  existing campaign remains comparable. Related: `BACKTEST_FUNDING_CONVERSION`
+  (`prorata` default / `identity`), `BACKTEST_FUNDING_SCALE=1.0` (unmeasured
+  cross-venue basis), `BACKTEST_FUNDING_INTERVAL_HOURS` (defaults to the exchange
+  adapter's capability: Pacifica 1, Blofin 8). **Binance 8h rates as a proxy for
+  Pacifica hourly funding is a modelling assumption** - see `docs/BACKTESTING_GUIDE.md`.
+- `BACKTEST_SEED=0` - Seeds the SL/TP same-candle tie-break. Before it existed the
+  shuffle used the global `random` module and identical runs could disagree
+  (vwap_scalping/BTC 2022-06..08: PF 0.9485 vs 1.0287). Runs now reproduce exactly.
+- `VALIDATION_ANCHOR_END` / `--anchor-end` - Pin the validation runner's newest window
+  to a fixed date instead of the store's advancing trailing edge (FOLLOW-UPS 8e).
 - `BACKTEST_HISTORY_LOOKBACK=60` - Candles of rolling history the backtest engine
   hands each strategy per timeframe. Must exceed the longest indicator lookback
   in play (a 200-period slow MA needs 201) or that strategy generates nothing.

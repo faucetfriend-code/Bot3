@@ -396,6 +396,25 @@ it comes from `get_exchange_capabilities().funding_interval_hours`
 (`strategy_manager.py:420`), giving 1 for Pacifica and 8 for Blofin. That is the
 pattern the rest of the config should follow.
 
+**Update 2026-07-29 - `min_funding_rate` is mis-scaled against that very interval.**
+Now that real funding history is ingested, the number can be checked instead of
+guessed. `min_funding_rate` is compared against a rate PER SETTLEMENT INTERVAL. On
+Pacifica that interval is one hour, and the pro-rata mapping of Binance's measured
+history puts the mean hourly BTC rate at **0.0000133** (mean 8h rate 0.00010651 / 8).
+So a 0.0001 hourly threshold demands an 87.6% annualized carry - roughly the top 1%
+of all settlements since 2019. Measured consequence: over six 2-month windows spread
+across eight years, `funding_arb` fired in exactly one of them (March 2020) for 9
+closed trades.
+
+0.0001 is almost certainly an **8-hour** number - it is within 6% of the mean Binance
+8h rate - written into a strategy whose venue settles hourly. Same root cause as
+`BACKTEST_FUNDING_HOURLY_PCT=0.0001` in the simulator, which charged the 8h mean once
+an hour and so modelled an 87.6%/yr carry (see BACKTESTING_GUIDE, "Funding").
+
+Class D remains correct: the value has no artifact behind it. Rescaling it is a
+defensible fix, but it must be done as a stated hypothesis and re-validated, not
+tuned until the verdict improves.
+
 ### SessionRangeBreakout (ORB)
 
 Constructor `strategies/session_range_breakout.py:45-105`. Disabled

@@ -55,15 +55,27 @@ from ..regime_param_overlay import (
 from ..strategy_manager import StrategyManager
 from ..risk_manager import RiskManager
 from .data_loader import BacktestDataLoader, autodownload_lever
+from .funding import (
+    FUNDING_MODEL_HISTORICAL,
+    load_funding_schedule,
+    validate_funding_model,
+)
 from .simulated_exchange import SimulatedExchange
 from .performance import PerformanceTracker, BacktestResult
 from .cost_model import CostModel
 
-# These overlays depend on live-only surfaces (real L2 orderbook depth,
-# funding-history API) that SimulatedExchange cannot provide, so they can
-# never produce meaningful signals in a backtest. Keys are the snake_case
-# optimization identifiers (see regime_param_overlay.STRATEGY_KEY_TO_DISPLAY).
-NON_BACKTESTABLE_STRATEGIES = frozenset({"orderbook_imbalance", "funding_arb"})
+# Overlays that depend on live-only surfaces SimulatedExchange cannot
+# provide, so they can never produce meaningful signals in a backtest.
+# Keys are the snake_case optimization identifiers (see
+# regime_param_overlay.STRATEGY_KEY_TO_DISPLAY).
+#
+# ``funding_arb`` was here until real funding history was ingested
+# (data_manager.BinanceFundingSource) and SimulatedExchange grew
+# get_market_data / get_funding_history / get_balance. It is now
+# backtestable - under an explicit cross-venue modelling assumption
+# documented in backtesting/funding.py. ``orderbook_imbalance`` stays:
+# L2 depth is genuinely absent from the store.
+NON_BACKTESTABLE_STRATEGIES = frozenset({"orderbook_imbalance"})
 
 # StrategyManager display name -> constructor enable-flag kwarg.
 STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
@@ -531,6 +543,163 @@ class BacktestEngine:
                 + "\n".join(failures)
             )
 
+    # ------------------------------------------------------------------
+    # Funding policy
+    # ------------------------------------------------------------------
+
+    def _venue_funding_interval_hours(self) -> int:
+        """Settlement cadence of the venue being simulated, in hours.
+
+        Read from the selected exchange adapter's capabilities
+        (Pacifica 1, Blofin 8) so the interval is a property of the
+        venue and not a constant baked into the simulator. Falls back to
+        1 (Pacifica) if the adapter registry cannot be consulted, which
+        preserves the behaviour that shipped.
+        """
+        raw = _env_or_cfg(
+            self.cfg,
+            "backtest_funding_interval_hours",
+            "BACKTEST_FUNDING_INTERVAL_HOURS",
+        )
+        if raw is not None:
+            try:
+                parsed = int(float(raw))
+                if parsed > 0:
+                    return parsed
+                logger.warning(
+                    f"BACKTEST_FUNDING_INTERVAL_HOURS={raw!r} must be "
+                    f"positive; falling back to the venue capability."
+                )
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"BACKTEST_FUNDING_INTERVAL_HOURS={raw!r} is not a "
+                    f"number; falling back to the venue capability."
+                )
+        try:
+            from ..exchanges import get_exchange_capabilities
+
+            hours = int(get_exchange_capabilities().funding_interval_hours)
+            return hours if hours > 0 else 1
+        except Exception as e:  # adapter registry unavailable
+            logger.debug(f"Falling back to 1h funding interval: {e}")
+            return 1
+
+    @staticmethod
+    def _funding_shortfall(schedule, start: str, end: str) -> str:
+        """Describe the part of [start, end] the funding series misses.
+
+        Args:
+            schedule: Loaded FundingSchedule.
+            start: Window start (ISO date).
+            end: Window end (ISO date).
+
+        Returns:
+            A human-readable range string, or "" when fully covered.
+        """
+        if not start or not schedule.times:
+            return ""
+        try:
+            win_start = datetime.fromisoformat(str(start)[:19])
+            win_end = datetime.fromisoformat(str(end)[:19]) if end else None
+        except (TypeError, ValueError):
+            return ""
+        first = schedule.times[0]
+        if win_start >= first:
+            return ""
+        cut = min(first, win_end) if win_end else first
+        return f"{win_start.date()}..{cut.date()}"
+
+    def _resolve_funding_schedule(
+        self, symbol: str, funnel: Any, start: str = "", end: str = ""
+    ):
+        """Resolve the funding model for this run and log it loudly.
+
+        Two models exist and the difference is large enough that no run
+        should be readable without knowing which one produced it:
+
+        * ``flat`` - a constant ``BACKTEST_FUNDING_HOURLY_PCT`` charged
+          every venue settlement, longs always paying and shorts always
+          receiving. Every backtest published by this repo before real
+          funding was ingested used it.
+        * ``historical`` - the ingested Binance series mapped onto the
+          venue's settlement clock (see backtesting/funding.py). Sign
+          and level are the market's.
+
+        Args:
+            symbol: Symbol being replayed.
+            funnel: Run funnel, annotated with the resolved model.
+            start: Window start (ISO date), for the coverage check.
+            end: Window end (ISO date), for the coverage check.
+
+        Returns:
+            A FundingSchedule, or None to use the flat model.
+        """
+        model = validate_funding_model(
+            _env_or_cfg(self.cfg, "backtest_funding_model", "BACKTEST_FUNDING_MODEL")
+        )
+        interval = self._venue_funding_interval_hours()
+        note: Dict[str, Any] = {
+            "model": model,
+            "venue_interval_hours": interval,
+        }
+        if model != FUNDING_MODEL_HISTORICAL:
+            logger.warning(
+                f"Funding model: FLAT {self.cfg.backtest_funding_hourly_pct:.6g} "
+                f"per {interval}h settlement, sign-locked (longs always pay). "
+                f"Real BTC funding averaged ~1/8 of this per hour and was "
+                f"NEGATIVE on ~14% of settlements. Set "
+                f"BACKTEST_FUNDING_MODEL=historical to charge the ingested "
+                f"series instead."
+            )
+            note["flat_rate"] = float(self.cfg.backtest_funding_hourly_pct)
+            funnel.note("funding_model", note)
+            return None
+        schedule = load_funding_schedule(
+            symbol,
+            self.cfg.backtest_data_dir,
+            venue_interval_hours=interval,
+        )
+        if schedule is None:
+            logger.error(
+                f"BACKTEST_FUNDING_MODEL=historical but no funding store "
+                f"for {symbol}; falling back to the flat model. Results "
+                f"are NOT comparable with a historical-funding run."
+            )
+            note["model"] = "flat_fallback"
+            funnel.note("funding_model", note)
+            return None
+        note.update(
+            {
+                "settlements": len(schedule),
+                "conversion": schedule.conversion,
+                "scale": schedule.scale,
+                "factor": schedule.factor,
+                "source_interval_hours": schedule.source_interval_hours,
+                "funding_start": schedule.times[0].isoformat(),
+                "funding_end": schedule.times[-1].isoformat(),
+            }
+        )
+        # A window that predates the funding series is not "zero funding",
+        # it is NO DATA - the schedule serves None and nothing is charged.
+        # That silently looks like a costless run, so say it out loud.
+        uncovered = self._funding_shortfall(schedule, start, end)
+        if uncovered:
+            note["window_uncovered"] = uncovered
+            logger.error(
+                f"Funding history does NOT cover {uncovered} of the "
+                f"requested window ({start} .. {end}); the series starts "
+                f"{schedule.times[0].date()}. Nothing is charged there and "
+                f"FundingArb sees no rate - those bars are silently "
+                f"funding-free. Shorten the span or accept the hole."
+            )
+        funnel.note("funding_model", note)
+        logger.warning(
+            "Funding model: HISTORICAL. Binance 8h rates are a PROXY for "
+            "Pacifica hourly funding; the cross-venue basis is unmeasured "
+            f"(BACKTEST_FUNDING_SCALE={schedule.scale:g})."
+        )
+        return schedule
+
     def run(
         self,
         start: str,
@@ -572,12 +741,17 @@ class BacktestEngine:
         )
 
         # --- Build components ---
+        funding_schedule = self._resolve_funding_schedule(
+            symbol, funnel, start, end
+        )
         exchange = SimulatedExchange(
             initial_capital=initial_capital,
             slippage_pct=self.cfg.backtest_slippage_pct,
             taker_fee_pct=self.cfg.backtest_taker_fee_pct,
             maker_fee_pct=self.cfg.backtest_maker_fee_pct,
             funding_hourly_pct=self.cfg.backtest_funding_hourly_pct,
+            funding_schedule=funding_schedule,
+            funding_interval_hours=self._venue_funding_interval_hours(),
         )
         loader = BacktestDataLoader(symbol=symbol, data_dir=self.cfg.backtest_data_dir)
         risk_manager = RiskManager(client=exchange)
@@ -799,6 +973,7 @@ class BacktestEngine:
             symbol=symbol,
             start=start,
             end=end,
+            total_funding=exchange.total_funding,
         )
         # Terminal funnel stages are only known once the exchange has
         # been finalised.
@@ -881,7 +1056,8 @@ class BacktestEngine:
             Dropped unless ``opposing_closes_position`` is set. The name
             "hedge mode" is historical and misleading: enabling it never opens
             a hedge, it sizes the order to the existing position and exits it.
-            Off means positions leave only via SL/TP or a time exit.
+            Off means positions leave only via SL/TP, a time exit, or an
+            explicit ``indicators["close_position"]`` exit signal.
 
         Min hold (``exec:min_hold_block``):
             Counted in 5m replay candles from the bar the position was first
@@ -918,8 +1094,21 @@ class BacktestEngine:
                     return False
                 is_pyramid_add = True
             else:
+                # An EXPLICIT exit is not the same thing as an opposing
+                # entry. `opposing_closes_position` decides whether a
+                # fresh entry signal in the other direction should be
+                # REINTERPRETED as an exit; a signal that declares
+                # indicators["close_position"] is not asking to be
+                # reinterpreted, it is the owning strategy retiring its
+                # own position. Time exits already bypass this gate for
+                # the same reason. No strategy that shipped before
+                # FundingArb sets the flag, so the default path is
+                # untouched.
+                explicit_close = bool(
+                    (signal.indicators or {}).get("close_position")
+                )
                 # Opposing direction - signal-driven close, if permitted
-                if not self._opposing_closes_position:
+                if not self._opposing_closes_position and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
                     funnel.reject(REASON_EXEC_HEDGE_MODE)
                     logger.debug(
@@ -932,7 +1121,7 @@ class BacktestEngine:
                     signal.asset, candle_idx
                 )
                 candles_held = candle_idx - open_candle
-                if candles_held < self._min_hold_candles:
+                if candles_held < self._min_hold_candles and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
                     funnel.reject(REASON_EXEC_MIN_HOLD)
                     logger.debug(

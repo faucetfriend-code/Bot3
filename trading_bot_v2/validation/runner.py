@@ -857,6 +857,7 @@ def validate_strategy(
     mode: Optional[str] = None,
     span_years: Optional[int] = None,
     per_symbol: Optional[bool] = None,
+    anchor_end: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Chunk-validate one strategy across symbols and gate the result.
 
@@ -871,6 +872,10 @@ def validate_strategy(
         span_years: Years the spread series reaches back (default: env).
         per_symbol: Cut each symbol's series over its own coverage
             instead of the intersected one (default: env, else True).
+        anchor_end: Pin the newest window to this ISO date instead of
+            the store's trailing edge. Only ever moves the anchor
+            EARLIER. Without it a re-run months later evaluates
+            different windows and is not reproducible.
 
     Returns:
         Dict with strategy, symbols, window_spec, windows, chunks,
@@ -899,6 +904,7 @@ def validate_strategy(
         mode=mode,
         span_years=span_years,
         per_symbol=per_symbol,
+        anchor_end=anchor_end,
     )
     window_spec = build_window_spec(
         n_windows,
@@ -1314,6 +1320,7 @@ def run_once(
     mode: Optional[str] = None,
     span_years: Optional[int] = None,
     per_symbol: Optional[bool] = None,
+    anchor_end: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Run one full validation cycle and persist every verdict.
 
@@ -1333,6 +1340,8 @@ def run_once(
         span_years: Years the spread series reaches back (default: env).
         per_symbol: Cut each symbol's series over its own coverage
             (default: env, else True).
+        anchor_end: Pin the newest window to this ISO date so the run is
+            reproducible against a store whose trailing edge advances.
 
     Returns:
         List of per-strategy result dicts (with "row_id" added).
@@ -1381,6 +1390,7 @@ def run_once(
                 mode=mode,
                 span_years=span_years,
                 per_symbol=per_symbol,
+                anchor_end=anchor_end,
             )
         except Exception as e:
             logger.warning(
@@ -1418,6 +1428,7 @@ def print_plan(
     mode: Optional[str] = None,
     span_years: Optional[int] = None,
     per_symbol: Optional[bool] = None,
+    anchor_end: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Resolve and print the window plan without running any backtest.
 
@@ -1434,6 +1445,7 @@ def print_plan(
         mode: Window mode, "spread" or "recent" (default: env).
         span_years: Years the spread series reaches back (default: env).
         per_symbol: Per-symbol window series (default: env, else True).
+        anchor_end: Pin the newest window to this ISO date.
 
     Returns:
         The resolve_chunk_windows payload (also printed).
@@ -1455,6 +1467,7 @@ def print_plan(
         mode=mode,
         span_years=span_years,
         per_symbol=per_symbol,
+        anchor_end=anchor_end,
     )
     spec = build_window_spec(
         n_windows,
@@ -1624,6 +1637,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Run a single cycle and exit (default behavior)",
     )
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help=(
+            "Candle/funding store to read. MUST be absolute when running "
+            "from a git worktree: BACKTEST_DATA_DIR in .env is relative "
+            "and config.py loads it with override=True, so exporting the "
+            "variable does nothing"
+        ),
+    )
+    parser.add_argument(
+        "--anchor-end",
+        default=os.getenv("VALIDATION_ANCHOR_END") or None,
+        help=(
+            "Pin the newest window to this ISO date instead of the "
+            "store's trailing edge, so the same command evaluates the "
+            "same windows next month (env: VALIDATION_ANCHOR_END). Only "
+            "ever moves the anchor earlier"
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.strategies.strip().lower() == "all":
@@ -1648,9 +1681,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             symbols,
             args.window_months,
             args.windows,
+            data_dir=args.data_dir,
             mode=args.window_mode,
             span_years=args.span_years,
             per_symbol=per_symbol,
+            anchor_end=args.anchor_end,
         )
         return 0
 
@@ -1676,10 +1711,12 @@ def main(argv: Optional[List[str]] = None) -> int:
             args.window_months,
             args.windows,
             capital=args.capital,
+            data_dir=args.data_dir,
             refresh_data=args.refresh_data,
             mode=args.window_mode,
             span_years=args.span_years,
             per_symbol=per_symbol,
+            anchor_end=args.anchor_end,
         )
         if loop_hours is None:
             break

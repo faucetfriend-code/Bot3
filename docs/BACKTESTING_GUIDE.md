@@ -18,13 +18,14 @@ quoted in this guide is real, captured from actual runs — see
 2. [Rules that will bite you first](#rules-that-will-bite-you-first)
 3. [Step 1 — Check data coverage](#step-1--check-data-coverage)
 4. [Step 2 — Run a single backtest](#step-2--run-a-single-backtest)
-5. [Step 3 — Read the signal funnel](#step-3--read-the-signal-funnel)
-6. [Step 4 — Sweep every strategy](#step-4--sweep-every-strategy)
-7. [Step 5 — Chunked validation and the promotion gate](#step-5--chunked-validation-and-the-promotion-gate)
-8. [Step 6 — Optimize, then explain](#step-6--optimize-then-explain)
-9. [Reading the results](#reading-the-results)
-10. [Tuning parameters](#tuning-parameters)
-11. [Troubleshooting](#troubleshooting)
+5. [Funding: the one structural cost in the model](#funding-the-one-structural-cost-in-the-model)
+6. [Step 3 — Read the signal funnel](#step-3--read-the-signal-funnel)
+7. [Step 4 — Sweep every strategy](#step-4--sweep-every-strategy)
+8. [Step 5 — Chunked validation and the promotion gate](#step-5--chunked-validation-and-the-promotion-gate)
+9. [Step 6 — Optimize, then explain](#step-6--optimize-then-explain)
+10. [Reading the results](#reading-the-results)
+11. [Tuning parameters](#tuning-parameters)
+12. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -226,10 +227,35 @@ python -m trading_bot_v2.data_manager --symbols SUI-USDC --timeframes 1m --start
 
 # Ingest an external read-only parquet store (BTV2 layout, e.g. BTCUSDT_5m.parquet)
 python -m trading_bot_v2.data_manager --ingest-dir "G:/Candle Data"
+
+# Perpetual funding history (separate store, see the Funding section)
+python -m trading_bot_v2.data_manager --symbols BTC-USDC --funding-only --start 2019-09-01
+python -m trading_bot_v2.data_manager --symbols BTC-USDC --coverage --funding
 ```
 
 Sources are public and keyless: Binance spot klines, Bitstamp (pre-Binance 1h/4h),
 Coinbase (1h). Spot is used as a proxy for Pacifica perp prices.
+
+### The funding store
+
+`--funding` adds a `{SYMBOL}_funding.parquet` store to the same directory, with the same
+canonical timestamp convention as the candles. It is reported under the pseudo-timeframe
+`fund` so it shows up in the ordinary coverage table:
+
+```
+symbol     tf   first                last                   candles  gaps  largest_gap
+--------------------------------------------------------------------------------------
+BTC-USDC   fund 2019-09-10T08:00:00  2026-07-29T00:00:00       7542     0  -
+```
+
+7542 settlements, zero gaps, 2019-09-10 to now. Columns are `timestamp`,
+`funding_rate`, `mark_price`, `rate_type`. `mark_price` is null for the early years
+(Binance did not publish it then); `rate_type` is `Regular` for every BTC row so far and
+exists so a special settlement can never be mistaken for a scheduled one.
+
+The source is Binance USD-M perpetual funding
+(`fapi.binance.com/fapi/v1/fundingRate`, keyless, 1000 settlements per page). Rates are
+stored **exactly as published, per 8-hour interval**. No rescaling happens at ingest.
 
 ### Auto-download during a run
 
@@ -268,11 +294,11 @@ Strategy display names: `MeanReversion`, `MACrossover`, `GridTrading`,
 `LiquidationCapture`, `VWAPScalping`, `MomentumScalping`, `FundingArb`,
 `OrderBookImbalance`, `SessionRangeBreakout`, `CalendarFlow`.
 
-### Two strategies cannot be backtested at all
+### One strategy cannot be backtested at all
 
-`OrderBookImbalance` and `FundingArb` are **force-excluded** from every backtest. They
-depend on live-only surfaces (real L2 orderbook depth, the funding-history API) that
-`SimulatedExchange` cannot provide. The engine logs:
+`OrderBookImbalance` is **force-excluded** from every backtest. It depends on real L2
+orderbook depth, which the candle store does not contain and `SimulatedExchange` cannot
+invent. The engine logs:
 
 ```
 SKIPPING OrderBookImbalance in backtest mode: not backtestable (depends on
@@ -280,8 +306,13 @@ live-only data surfaces - real L2 orderbook depth / funding-history API - that
 SimulatedExchange cannot provide)
 ```
 
-The sweep reports them as `N/A (not backtestable)` rather than a zero row. **Do not
-spend time chasing their zeros, and do not include them in optimization runs.**
+The sweep reports it as `N/A (not backtestable)` rather than a zero row. **Do not spend
+time chasing its zeros, and do not include it in optimization runs.**
+
+`FundingArb` was excluded alongside it until 2026-07-29. It is now backtestable against
+real ingested funding history — see [Funding](#funding-the-one-structural-cost-in-the-model)
+below, and read that section before believing any FundingArb number, because the rates
+come from a **different venue on a different settlement clock**.
 
 ### The 1m coverage guard
 
@@ -329,6 +360,105 @@ first. Note that lookback applies per timeframe and increases memory and runtime
 4h regime detection needs about 29 candles (~4.8 days) before it classifies anything.
 Combined with warmup, **windows shorter than about a week can legitimately produce zero
 trades.** Use at least a month for anything you intend to interpret.
+
+---
+
+## Funding: the one structural cost in the model
+
+### It has always been charged, and it was always the wrong number
+
+`SimulatedExchange._apply_funding` has debited open positions since the simulator was
+written — it is not a stub. Every backtest this project has ever run charged funding.
+What it charged was a **flat constant** `BACKTEST_FUNDING_HOURLY_PCT=0.0001` at every
+hourly settlement, with a fixed sign: longs always pay, shorts always receive.
+
+Measured against the real series now in the store (BTC, 7542 settlements, 2019-09 to
+2026-07):
+
+| | flat model | real BTC funding |
+|---|---|---|
+| Mean rate per Binance 8h settlement | — | 0.00010651 |
+| Implied hourly rate (pro-rata) | 0.0001 | 0.0000133 |
+| Annualized carry | **87.6%** | **11.66%** |
+| Sign | always positive | negative on 14.5% of settlements |
+
+`0.0001` is the mean Binance **8-hour** rate applied as an **hourly** one. The flat model
+is therefore ~7.5x too expensive and cannot express a funding flip at all.
+
+**How much did that distort the 8-year campaign? Almost nothing.** A/B on BTC-USDC over
+three 2-month windows (2021-03, 2022-06, 2024-03), flat vs historical, seeded engine:
+closed-trade counts and profit factors were **identical to three decimal places for all
+six chart strategies**; total return moved by at most 0.02 percentage points. The reason
+is sizing, not luck — the engine risks 2% of balance per trade and holds for hours, so
+funding on a $200 notional is cents either way. The overcharge only bites a strategy that
+holds a large position for a long time, which is exactly `funding_arb`: under the flat
+model it lost 1.25-2.20% per 2-month window purely to carry.
+
+### The interval mismatch (read this before trusting any funding number)
+
+Binance settles every **8 hours**. Pacifica settles every **1 hour**
+(`exchanges/base.py::ExchangeCapabilities.funding_interval_hours`: Pacifica 1, Blofin 8).
+Binance is the only source with deep keyless history, so it is the best available
+**signal** — but it is not the cash Pacifica would actually move.
+
+`backtesting/funding.py` makes the mapping explicit instead of burying it in a constant:
+
+```
+venue_rate = observed_8h_rate * BACKTEST_FUNDING_SCALE * factor(conversion)
+```
+
+| `BACKTEST_FUNDING_CONVERSION` | factor | Assumes |
+|---|---|---|
+| `prorata` (default) | `venue_hours / source_hours` = 1/8 | Both venues carry the same **annualized** cost and differ only in slice size. Funding is a rate per unit time, so this is the economically neutral reading. |
+| `identity` | 1 | Pacifica quotes the same *number* hourly that Binance quotes 8-hourly, i.e. 8x the carry. Almost certainly wrong — but it is exactly what the shipped flat default assumed, so it is kept to reproduce and bound that error. |
+
+`BACKTEST_FUNDING_SCALE` (default 1.0) is the knob for the cross-venue basis. **It is 1.0
+because nobody has measured it, not because it is known to be 1.0.** Using Binance rates
+to price Pacifica funding is a MODELLING ASSUMPTION with an unmeasured error term. Every
+`funding_arb` result carries that caveat.
+
+The venue interval itself is read from the selected exchange adapter's capabilities, not
+hardcoded, so switching `EXCHANGE=blofin` moves settlement to 8h and the pro-rata factor
+to 1. `BACKTEST_FUNDING_INTERVAL_HOURS` overrides it for experiments.
+
+### Causality
+
+A settlement stamped `T` is the rate that was **paid** at `T`. For a bar at time `t` the
+schedule serves the last settlement with `fundingTime <= t`. That lags the true accrual by
+up to one source interval, and that is deliberate: using the settlement that *covers* the
+bar is lookahead, and a funding strategy that only works with lookahead is not a strategy.
+
+### Switching models
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `BACKTEST_FUNDING_MODEL` | `flat` | `flat` = the shipped constant; `historical` = the ingested series |
+| `BACKTEST_FUNDING_CONVERSION` | `prorata` | Source-to-venue rate mapping |
+| `BACKTEST_FUNDING_SCALE` | `1.0` | Unmeasured cross-venue basis multiplier |
+| `BACKTEST_FUNDING_INTERVAL_HOURS` | venue capability | Override the settlement cadence |
+| `BACKTEST_FUNDING_HOURLY_PCT` | `0.0001` | Flat-model rate (ignored under `historical`) |
+
+**The default is `flat` only because every published number in this repo was produced
+under it**, and changing the default silently would invalidate the campaign without anyone
+noticing. It is not the better model. `historical` is, and `funding_arb` is meaningless
+without it.
+
+A run under `historical` whose window predates 2019-09-10 logs an ERROR naming the
+uncovered range. Nothing is charged there and `FundingArb` sees no rate — those bars are
+silently funding-free, which is a hole, not a zero.
+
+`BacktestResult.total_funding_paid` is now populated (positive = paid out) and printed in
+the summary. It was declared and never assigned before, so funding was invisible in every
+report even though it was hitting the balance.
+
+### Backtests are now seeded
+
+`SimulatedExchange` randomises SL/TP fill order when both trigger in one candle. That draw
+used to come from the process-global `random` module, so **the same window over the same
+data could give different results**: measured on `vwap_scalping`/BTC-USDC 2022-06..08,
+PF 0.9485 vs 1.0287 on consecutive runs in one process. It now draws from a per-exchange
+`random.Random(BACKTEST_SEED)` (default 0) and reproduces exactly. This corrects
+`docs/FOLLOW-UPS.md` 8e, which asserted the engine was deterministic.
 
 ---
 
@@ -559,7 +689,15 @@ python -m trading_bot_v2.validation.runner --strategies all --loop-hours 24
 | `--dry-run` | off | — |
 | `--capital` | `10000` | — |
 | `--refresh-data` | off | `VALIDATION_REFRESH_DATA` |
+| `--data-dir` | config | — |
+| `--anchor-end` | store trailing edge | `VALIDATION_ANCHOR_END` |
 | `--loop-hours` / `--once` | `--once` | — |
+
+`--anchor-end` pins the newest window to a fixed date instead of the store's advancing
+trailing edge, which is the fix for the reproducibility problem in FOLLOW-UPS 8e. It only
+ever moves the anchor earlier. `--data-dir` **must be absolute when running from a git
+worktree** — `BACKTEST_DATA_DIR` in `.env` is relative and `config.py` loads it with
+`override=True`, so exporting the variable does nothing.
 
 ### Window modes
 
@@ -722,6 +860,60 @@ score identically. Setting `GATE_PF_CONFIDENCE=true` switches check 2 to a one-s
 bootstrap lower bound on the PF (deterministic, fixed seed), which shrinks toward 1.0 as
 the sample shrinks. It is **off by default because it is materially stricter** — a true
 PF of 1.5 needs several hundred trades before its 95% lower bound clears 1.3.
+
+### The first honest measurement of `funding_arb`
+
+Run 2026-07-29, shipped parameters, nothing tuned:
+
+```bash
+DATA_AUTODOWNLOAD=false BACKTEST_FUNDING_MODEL=historical \
+python -m trading_bot_v2.validation.runner --strategies funding_arb \
+    --symbols BTC-USDC --data-dir <abs path> --anchor-end 2026-07-01 --once
+```
+
+```
+  Strategy                 Verdict   Trades   PF       PSR/DSR                        Consistent
+  funding_arb              FAIL      9        0.57     PSR 0.2925 / DSR n/a           0
+                           regimes: trending_strong 70%, ranging_calm 15%, ...
+  windows: 6x2mo@8y | symbols: BTC-USDC | shared span: 2018-01-01 .. 2026-07-01
+
+OVERALL: INSUFFICIENT_DATA   (the summary line prints non-PASS as FAIL)
+  sample_adequacy   FAIL   9 pooled / 1 eligible symbols   >= 33 and >= 2 symbols
+  profit_factor     FAIL*  0.57                            > 1.3        [advisory]
+  psr_or_dsr        FAIL*  PSR 0.2925                      >= 0.95      [advisory]
+  cross_symbol      FAIL*  0                               >= 2 symbols [advisory]
+```
+
+Per-window funnel — this is the finding, not the PF:
+
+```
+window                     bars    raw orders   closed       PF    funding
+2018-07-01..2018-09-01    17765      0      0        0        -      -0.00   <- no funding data
+2020-02-01..2020-04-01    17173     18     18        9    0.569      -4.24
+2021-09-01..2021-11-01    17544      0      0        0        -      -0.00
+2023-03-01..2023-05-01    17552      0      0        0        -      -0.00
+2024-10-01..2024-12-01    17568      0      0        0        -      -0.00
+2026-05-01..2026-07-01    17568      0      0        0        -      -0.00
+
+POOLED: bars_evaluated 105170 | raw_signals 18 | orders_placed 18 | fills 18 | closed 9
+```
+
+**Five of six windows produced zero signals.** Nothing was dropped — attrition is empty,
+18 raw signals became 18 orders became 18 fills. The strategy simply never fired. Its own
+threshold `FUNDING_ARB_MIN_RATE=0.0001` is compared against a **per-settlement** rate, and
+under the pro-rata mapping Pacifica's hourly rate averages 0.0000133. Requiring 0.0001
+hourly is requiring an 87.6% annualized carry — roughly the top 1% of all settlements
+since 2019. Every trade it made came from one window: the COVID crash of March 2020.
+
+Two separate conclusions, and they must not be merged:
+
+1. **Measurable now**: `funding_arb` is no longer silently excluded, and the exception
+   that used to swallow its signals is gone.
+2. **Not validated**: 9 trades from a single regime epoch cannot support a verdict in
+   either direction. The remedy is more data (and one symbol can never clear check 4),
+   not a lower bar. The threshold/interval mismatch above is a real parameter-provenance
+   bug worth fixing *before* re-measuring — but fixing it to make the verdict look better
+   is exactly the kind of tuning this gate exists to catch.
 
 You can run the gate standalone against a single window:
 

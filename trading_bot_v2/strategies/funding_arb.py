@@ -10,6 +10,22 @@ RISK NOTES:
 - Delta-neutral reduces directional risk but not basis risk
 - Funding rates can flip quickly during volatility
 - All sizing delegated to RiskManager
+
+BACKTESTING
+-----------
+The strategy is time-driven, not price-driven, so it needs a clock and a
+position view that both follow SIMULATED time:
+
+* ``_now()`` prefers ``self._sim_time`` (set per bar by
+  ``StrategyManager.set_sim_time``). Using wall-clock time in a replay
+  froze the 300s rate cache after the first bar, so every later bar
+  re-read a stale rate.
+* ``sync_positions_from_client()`` rebuilds ``active_positions`` from the
+  exchange. ``register_position`` is not called by ANY caller in this
+  repo - live or backtest - so without the sync the close path was dead
+  code and a position, once opened, could never be retired.
+* Close signals carry ``indicators["close_position"]``, which the
+  backtest engine honours as an explicit exit.
 """
 
 import os
@@ -68,10 +84,84 @@ class FundingArbStrategy:
         self._last_cache_update: Optional[datetime] = None
         self._cache_ttl_seconds = 300  # 5 minutes
 
+        # Simulated clock, injected per bar by StrategyManager.set_sim_time
+        # during a backtest. None in live trading.
+        self._sim_time: Optional[datetime] = None
+
         logger.info(
             f"FundingArbStrategy initialized: min_rate={min_funding_rate:.4%}, "
             f"max_alloc={max_allocation_pct:.0%}, rebalance_threshold={rebalance_threshold:.1%}"
         )
+
+    def _now(self) -> datetime:
+        """Current time: simulated during a backtest, wall-clock live.
+
+        Returns:
+            Simulated bar time when ``_sim_time`` has been injected,
+            otherwise the real UTC time.
+        """
+        return self._sim_time or datetime.now(timezone.utc)
+
+    def sync_positions_from_client(self, symbol: Optional[str] = None) -> None:
+        """Rebuild ``active_positions`` from the exchange's position list.
+
+        ``register_position`` has no caller anywhere in this repo, so
+        ``active_positions`` was permanently empty and
+        ``_should_close_position`` was unreachable - the strategy could
+        open but never retire. Deriving the state from the venue is both
+        the fix and the more robust source of truth: a position closed
+        by anything else (SL, liquidation, a manual exit) disappears
+        from here automatically.
+
+        Args:
+            symbol: Restrict the sync to one symbol. When None, every
+                symbol the client reports is synced.
+        """
+        if not self.client or not hasattr(self.client, "get_positions"):
+            return
+        try:
+            positions = self.client.get_positions() or []
+        except Exception as e:
+            logger.debug(f"FundingArb: position sync failed: {e}")
+            return
+        seen = set()
+        for pos in positions:
+            try:
+                asset = pos.get("symbol") if isinstance(pos, dict) else None
+                side = str(pos.get("side", "")).lower() if isinstance(pos, dict) else ""
+                qty = float(pos.get("quantity", 0) or 0) if isinstance(pos, dict) else 0.0
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if not asset or qty <= 0 or side not in ("long", "short"):
+                continue
+            if symbol is not None and asset != symbol:
+                continue
+            seen.add(asset)
+            arb_side = "short_funding" if side == "short" else "long_funding"
+            existing = self.active_positions.get(asset)
+            if existing is None:
+                self.active_positions[asset] = {
+                    "side": arb_side,
+                    "perp_side": (
+                        OrderSide.SELL if side == "short" else OrderSide.BUY
+                    ),
+                    "size": qty,
+                    "entry_rate": self.funding_cache.get(asset, {}).get(
+                        "current_rate", 0.0
+                    ),
+                    "opened_at": self._now(),
+                }
+            else:
+                existing["size"] = qty
+                existing["side"] = arb_side
+                existing["perp_side"] = (
+                    OrderSide.SELL if side == "short" else OrderSide.BUY
+                )
+        for asset in list(self.active_positions):
+            if symbol is not None and asset != symbol:
+                continue
+            if asset not in seen:
+                del self.active_positions[asset]
 
     def update_funding_rates(self, symbols: Optional[List[str]] = None) -> None:
         """
@@ -82,8 +172,10 @@ class FundingArbStrategy:
             logger.warning("FundingArb: No client available for funding rate updates")
             return
 
-        # Check cache freshness
-        now = datetime.now(timezone.utc)
+        # Check cache freshness. The clock is `_now()`, not wall-clock:
+        # a replay would otherwise blow past the TTL only once and then
+        # serve the first bar's rate for the whole run.
+        now = self._now()
         if self._last_cache_update:
             age = (now - self._last_cache_update).total_seconds()
             if age < self._cache_ttl_seconds:
@@ -108,9 +200,11 @@ class FundingArbStrategy:
 
                     # Calculate 8h average from history if available
                     try:
-                        history = self.client.get_funding_history(symbol, limit=8)
+                        history = self.client.get_funding_history(
+                            symbol, limit=self.lookback_hours
+                        )
                         if history and len(history) > 0:
-                            rates = [h.get("funding_rate", 0) for h in history]
+                            rates = [float(h.get("funding_rate", 0)) for h in history]
                             avg_rate = sum(rates) / len(rates) if rates else funding_rate
                             self.funding_cache[symbol]["avg_rate_8h"] = avg_rate
                     except Exception:
@@ -194,26 +288,37 @@ class FundingArbStrategy:
 
         Unlike other strategies, this doesn't use price action.
         It monitors funding rates and suggests delta-neutral positions.
+
+        Order of business matters here: the OPEN-POSITION branch is
+        evaluated BEFORE the "no opportunity, give up" return. It used
+        to be after, which meant a position whose funding edge had
+        simply evaporated (no opportunity at all) never produced a close
+        signal - the exact case ``_should_close_position(..., None)``
+        was written to handle.
         """
         signals = []
 
         # Update cache if needed
         self.update_funding_rates([symbol])
 
+        # Reconcile our view of open positions with the venue's.
+        self.sync_positions_from_client(symbol)
+
         # Analyze opportunity
         opportunity = self.analyze_funding_opportunity(symbol)
-        if not opportunity:
-            return signals
 
         # Check if we already have a position
         if symbol in self.active_positions:
             existing = self.active_positions[symbol]
-            # Check if we need to close (rate flipped or dropped)
+            # Check if we need to close (rate flipped, dropped, or gone)
             if self._should_close_position(symbol, existing, opportunity):
                 # Generate close signal
                 close_signal = self._create_close_signal(symbol, existing, current_price)
                 if close_signal:
                     signals.append(close_signal)
+            return signals
+
+        if not opportunity:
             return signals
 
         # Check confidence threshold
@@ -322,6 +427,9 @@ class FundingArbStrategy:
             notes="Closing funding arb position",
             indicators={
                 "arb_type": "funding_rate_close",
+                # Explicit exit: the backtest engine honours this even
+                # when signal-driven opposing closes are disabled.
+                "close_position": True,
             },
             # All validation flags true for close
             volume_confirmation=True,
@@ -341,7 +449,7 @@ class FundingArbStrategy:
             "perp_side": OrderSide.SELL if side == "short_funding" else OrderSide.BUY,
             "size": size,
             "entry_rate": rate,
-            "opened_at": datetime.now(timezone.utc)
+            "opened_at": self._now(),
         }
         logger.info(f"FundingArb: Registered {symbol} position - {side}, size={size:.2f}")
 
@@ -374,5 +482,9 @@ class FundingArbStrategy:
         return {
             "opportunities": opportunities,
             "active_positions": len(self.active_positions),
-            "cache_age_seconds": (datetime.now(timezone.utc) - self._last_cache_update).total_seconds() if self._last_cache_update else None
+            "cache_age_seconds": (
+                (self._now() - self._last_cache_update).total_seconds()
+                if self._last_cache_update
+                else None
+            ),
         }

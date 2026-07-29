@@ -20,13 +20,15 @@ no slippage; market and stop orders pay the taker fee plus slippage. See
 cost_model.py for where the rates come from and which profile is active.
 """
 
+import os
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 from loguru import logger
 
 from .cost_model import CostTable, LiquidityRole
+from .funding import FundingSchedule
 
 
 @dataclass
@@ -80,6 +82,8 @@ class SimulatedExchange:
         When both a stop and a take-profit order trigger within the same
         candle's high/low range, the processing order is randomised so
         neither is systematically favoured (removes pessimistic SL bias).
+        The draw comes from a per-exchange seeded RNG (``BACKTEST_SEED``)
+        so the same window over the same data reproduces exactly.
     """
 
     def __init__(
@@ -90,6 +94,9 @@ class SimulatedExchange:
         maker_fee_pct: float = 0.0002,
         funding_hourly_pct: float = 0.0001,
         cost_table: Optional[CostTable] = None,
+        funding_schedule: Optional[FundingSchedule] = None,
+        funding_interval_hours: int = 1,
+        seed: Optional[int] = None,
     ):
         """Build a simulated exchange.
 
@@ -98,10 +105,28 @@ class SimulatedExchange:
             slippage_pct: Global flat slippage (legacy cost profile).
             taker_fee_pct: Global taker fee before per-symbol overrides.
             maker_fee_pct: Global maker fee before per-symbol overrides.
-            funding_hourly_pct: Hourly funding rate (Pacifica pays 24x/day).
+            funding_hourly_pct: Flat per-interval funding rate used when
+                no ``funding_schedule`` is supplied. Sign-locked: longs
+                always pay it and shorts always receive it, which real
+                funding does not do (BTC funding was negative on ~14% of
+                settlements 2019-2026).
             cost_table: Pre-built cost table. When omitted one is built
                 from the environment with the three rates above as the
                 global bases, so the default behaviour is unchanged.
+            funding_schedule: Real ingested funding series mapped onto
+                this venue's settlement clock. When present it replaces
+                the flat rate entirely, including its sign.
+            funding_interval_hours: Venue settlement cadence in hours
+                (Pacifica 1, Blofin 8). Only consulted for the flat
+                model; a schedule carries its own.
+            seed: Seed for the SL/TP tie-break RNG. Defaults to
+                ``BACKTEST_SEED`` (0). Before this existed the shuffle
+                drew from the process-global ``random`` module, so two
+                runs of the SAME window over the SAME data could differ
+                - measured on vwap_scalping/BTC-USDC 2022-06..08, PF
+                0.9485 vs 1.0287 across consecutive runs. Every backtest
+                number this repo produced before the seed existed is
+                therefore reproducible only to within that noise.
         """
         self.balance = initial_capital
         self.initial_capital = initial_capital
@@ -109,6 +134,22 @@ class SimulatedExchange:
         self.taker_fee_pct = taker_fee_pct
         self.maker_fee_pct = maker_fee_pct
         self.funding_hourly_pct = funding_hourly_pct
+        self.funding_schedule = funding_schedule
+        self.funding_interval_hours = max(1, int(funding_interval_hours or 1))
+        if seed is None:
+            try:
+                seed = int(os.getenv("BACKTEST_SEED", "0"))
+            except ValueError:
+                logger.warning("BACKTEST_SEED is not an integer; using 0")
+                seed = 0
+        self.seed = seed
+        #: Private RNG so a backtest never depends on - or perturbs -
+        #: the process-global random state.
+        self._rng = random.Random(seed)
+        #: Total funding cash-flow applied over the run (negative = paid).
+        self.total_funding = 0.0
+        #: Number of settlements actually applied to a live position.
+        self.funding_events = 0
         self.costs = cost_table or CostTable.from_env(
             slippage_pct=slippage_pct,
             taker_fee_pct=taker_fee_pct,
@@ -214,9 +255,80 @@ class SimulatedExchange:
     def get_funding_rate(self, symbol: str) -> Dict:
         return {
             "symbol": symbol,
-            "funding_rate": str(self.funding_hourly_pct),
-            "next_funding_time": self._current_timestamp,
+            "funding_rate": str(self._current_funding_rate()),
+            "next_funding_time": self._next_funding_time(),
         }
+
+    def get_market_data(self, symbol: str) -> Dict:
+        """PacificaClient-shaped market snapshot.
+
+        FundingArbStrategy reads ``funding_rate`` and
+        ``next_funding_time`` from here. The rate is the one PER VENUE
+        SETTLEMENT INTERVAL that was last SETTLED at or before the
+        current bar - never a future one.
+
+        Args:
+            symbol: Bot symbol.
+
+        Returns:
+            Dict with symbol, mark/last price, funding_rate and
+            next_funding_time.
+        """
+        return {
+            "symbol": symbol,
+            "mark_price": str(self._current_price),
+            "last": str(self._current_price),
+            "funding_rate": self._current_funding_rate(),
+            "next_funding_time": self._next_funding_time(),
+            "funding_interval_hours": self._venue_interval_hours(),
+        }
+
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict]:
+        """Recent funding settlements on the venue's own grid.
+
+        Returns an empty list when no real schedule is loaded: a
+        strategy must not be able to average a constant that the flat
+        cost model invented and call it market information.
+
+        Args:
+            symbol: Bot symbol.
+            limit: Maximum records, oldest first.
+
+        Returns:
+            List of ``{"funding_time", "funding_rate", "rate_source"}``.
+        """
+        if self.funding_schedule is None:
+            return []
+        dt = self._parse_ts(self._current_timestamp)
+        if dt is None:
+            return []
+        return self.funding_schedule.venue_history(dt, limit=limit)
+
+    def get_balance(self) -> Dict:
+        """Balance in the shape live clients return (``equity`` key)."""
+        unrealised = sum(p.unrealised_pnl for p in self._positions.values())
+        equity = self.balance + unrealised
+        return {
+            "balance": round(self.balance, 4),
+            "equity": round(equity, 4),
+            "available": round(self.balance, 4),
+        }
+
+    def _venue_interval_hours(self) -> int:
+        """Venue settlement cadence currently in force."""
+        if self.funding_schedule is not None:
+            return self.funding_schedule.venue_interval_hours
+        return self.funding_interval_hours
+
+    def _next_funding_time(self) -> str:
+        """Next venue settlement boundary strictly after the current bar."""
+        dt = self._parse_ts(self._current_timestamp)
+        if dt is None:
+            return self._current_timestamp
+        step = self._venue_interval_hours()
+        floor = dt.replace(minute=0, second=0, microsecond=0)
+        floor -= timedelta(hours=floor.hour % step)
+        return (floor + timedelta(hours=step)).isoformat()
 
     # ------------------------------------------------------------------
     # Engine-facing interface
@@ -426,8 +538,10 @@ class SimulatedExchange:
                 elif order.side == "ask" and high >= order.price:
                     triggered.append((order, False))
 
-        # Randomise processing order to remove systematic SL-before-TP bias
-        random.shuffle(triggered)
+        # Randomise processing order to remove systematic SL-before-TP
+        # bias. Drawn from this exchange's own seeded RNG so the run is
+        # reproducible; the global random module is never touched.
+        self._rng.shuffle(triggered)
 
         for order, is_taker in triggered:
             if order.status == "open":  # May have been cancelled by OCO
@@ -437,19 +551,52 @@ class SimulatedExchange:
         for pos in self._positions.values():
             pos.unrealised_pnl = self._calculate_pnl(pos, self._current_price, pos.quantity)
 
+    def _current_funding_rate(self) -> float:
+        """Rate charged per venue settlement at the current timestamp.
+
+        With a real schedule the sign is the market's: a positive rate
+        means longs pay shorts, a negative one means the reverse. With
+        the flat model the rate is a constant and longs always pay.
+        """
+        if self.funding_schedule is None:
+            return self.funding_hourly_pct
+        dt = self._parse_ts(self._current_timestamp)
+        if dt is None:
+            return 0.0
+        rate = self.funding_schedule.venue_rate_at(dt)
+        return 0.0 if rate is None else rate
+
     def _apply_funding(self) -> None:
+        """Debit/credit every open position for one settlement."""
+        rate = self._current_funding_rate()
+        if rate == 0.0:
+            return
         for pos in self._positions.values():
-            funding = pos.quantity * self._current_price * self.funding_hourly_pct
+            funding = pos.quantity * self._current_price * rate
             cost = -funding if pos.side == "long" else funding
             pos.funding_paid += cost
             self.balance += cost
+            self.total_funding += cost
+            self.funding_events += 1
+
+    @staticmethod
+    def _parse_ts(timestamp: str) -> Optional[datetime]:
+        """Parse a replay timestamp, or None when it is unusable."""
+        try:
+            return datetime.fromisoformat(timestamp)
+        except (TypeError, ValueError):
+            return None
 
     def _is_funding_hour(self, timestamp: str) -> bool:
-        try:
-            dt = datetime.fromisoformat(timestamp)
-            return dt.minute == 0
-        except Exception:
+        """Whether this bar closes on a venue settlement boundary."""
+        dt = self._parse_ts(timestamp)
+        if dt is None:
             return False
+        if self.funding_schedule is not None:
+            return self.funding_schedule.is_settlement_time(dt)
+        if dt.minute != 0:
+            return False
+        return dt.hour % self.funding_interval_hours == 0
 
     def _cancel_open_orders(self, symbol: str) -> None:
         """Cancel all open orders for a symbol (used for OCO SL/TP cleanup)."""

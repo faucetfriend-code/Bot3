@@ -1288,8 +1288,16 @@ class TestFundingArbE2E:
         assert signals == []
 
     def test_existing_position_blocks_new_signal(self):
-        """Already holding a position in same direction -> no new signal."""
+        """Already holding a position in same direction -> no new signal.
+
+        The venue is the source of truth for open positions, so the mock
+        client has to report the position too - a locally "registered"
+        position the exchange does not have is now (correctly) pruned.
+        """
         client = self._make_client_with_funding(rate=0.0005)
+        client.get_positions = MagicMock(return_value=[
+            {"symbol": "BTC", "side": "short", "quantity": "100.0"},
+        ])
         strategy = self._make_strategy(client=client)
         strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
 
@@ -1298,6 +1306,50 @@ class TestFundingArbE2E:
         # Should not open new position (returns empty or close if rate changed)
         # With same rate, should return empty
         assert signals == []
+
+    def test_position_gone_from_venue_is_pruned(self):
+        """A locally tracked position the venue does not report is dropped."""
+        client = self._make_client_with_funding(rate=0.0005)
+        client.get_positions = MagicMock(return_value=[])
+        strategy = self._make_strategy(client=client)
+        strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
+
+        strategy.sync_positions_from_client("BTC")
+        assert strategy.get_active_positions() == {}
+
+    def test_close_signal_when_opportunity_disappears(self):
+        """Rate collapses to nothing -> explicit close signal, not silence."""
+        client = self._make_client_with_funding(rate=0.0)
+        client.get_positions = MagicMock(return_value=[
+            {"symbol": "BTC", "side": "short", "quantity": "100.0"},
+        ])
+        strategy = self._make_strategy(client=client)
+
+        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
+
+        assert len(signals) == 1
+        assert signals[0].side == OrderSide.BUY  # closes the short
+        assert signals[0].indicators["close_position"] is True
+
+    def test_sim_time_drives_the_rate_cache(self):
+        """With _sim_time injected the cache expires on simulated time."""
+        client = self._make_client_with_funding(rate=0.0005)
+        strategy = self._make_strategy(client=client)
+        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+        strategy._sim_time = base
+        strategy.update_funding_rates(["BTC"])
+        assert client.get_market_data.call_count == 1
+
+        # Wall-clock has barely moved, but simulated time has not either.
+        strategy._sim_time = base + timedelta(seconds=60)
+        strategy.update_funding_rates(["BTC"])
+        assert client.get_market_data.call_count == 1
+
+        strategy._sim_time = base + timedelta(seconds=600)
+        strategy.update_funding_rates(["BTC"])
+        assert client.get_market_data.call_count == 2
 
 
 # ===========================================================================

@@ -47,11 +47,31 @@ its per-symbol genesis-floor concept (BINANCE_GENESIS), generalized
 here to multiple sources, gap-driven range downloads and resampling.
 BTV2/ itself is treated as read-only reference.
 
+Funding-rate store (separate from candles, same conventions):
+    columns  : timestamp, funding_rate, mark_price, rate_type
+    filename : {SYMBOL}_funding.parquet
+    source   : Binance USD-M perpetual funding history
+               (fapi.binance.com/fapi/v1/fundingRate, keyless, 1000
+               settlements per page). BTCUSDT reaches back to
+               2019-09-10T08:00:00Z.
+    cadence  : Binance settles every 8 HOURS. The rate is stored exactly
+               as published, per 8h interval. Pacifica settles HOURLY,
+               so a venue mapping is required before these numbers mean
+               anything about Pacifica P&L - that mapping lives in
+               backtesting/funding.py and is deliberately NOT applied
+               here.
+
 CLI:
     python -m trading_bot_v2.data_manager \\
         --symbols BTC-USDC,ETH-USDC,SUI-USDC \\
         --timeframes 5m,15m,1h,4h --start 2015-01-01 [--update]
-        [--coverage] [--ingest-dir "G:/Candle Data"]
+        [--coverage] [--ingest-dir "G:/Candle Data"] [--funding]
+
+    # Funding history only, and its coverage
+    python -m trading_bot_v2.data_manager --symbols BTC-USDC \\
+        --funding-only --start 2019-09-01 --data-dir <abs path>
+    python -m trading_bot_v2.data_manager --symbols BTC-USDC \\
+        --coverage --funding --data-dir <abs path>
 """
 
 import argparse
@@ -73,6 +93,40 @@ TF_MINUTES = {"1m": 1, "5m": 5, "15m": 15, "1h": 60, "4h": 240}
 RESAMPLE_RULES = {"1m": "1min", "5m": "5min", "15m": "15min", "1h": "1h", "4h": "4h"}
 USER_AGENT = {"User-Agent": "Bot3-candle-manager/1.0"}
 _EPOCH = datetime(1970, 1, 1)
+
+# --- Funding-rate store -------------------------------------------------
+#: Pseudo-timeframe key the funding store is reported under in coverage
+#: tables. It is not a candle timeframe and never appears in TF_MINUTES.
+FUNDING_KEY = "fund"
+#: Canonical funding store columns. ``funding_rate`` is the rate PER
+#: SOURCE INTERVAL exactly as the venue published it - no rescaling
+#: happens at ingest time. ``rate_type`` preserves the venue's own label
+#: ("Regular", and on Binance occasionally a special settlement) so an
+#: off-schedule row can always be told apart from a regular one.
+FUNDING_COLUMNS = ["timestamp", "funding_rate", "mark_price", "rate_type"]
+#: Hours between settlements on the ingest source (Binance USD-M: 8).
+#: This is the SOURCE cadence, not the trading venue's - see
+#: backtesting/funding.py for the venue mapping.
+FUNDING_SOURCE_INTERVAL_HOURS = 8
+FUNDING_INTERVAL_MINUTES = FUNDING_SOURCE_INTERVAL_HOURS * 60
+#: Seconds a published settlement may sit off the 8h grid and still be
+#: snapped onto it. Binance stamps some settlements at HH:00:00.001;
+#: that is a clock artifact, not a different settlement time.
+FUNDING_GRID_TOLERANCE_S = 60
+
+
+def _step_minutes(tf: str) -> int:
+    """Grid step in minutes for a candle timeframe or the funding key."""
+    if tf == FUNDING_KEY:
+        return FUNDING_INTERVAL_MINUTES
+    return TF_MINUTES[tf]
+
+
+def _freq_rule(tf: str) -> str:
+    """pandas offset alias for a candle timeframe or the funding key."""
+    if tf == FUNDING_KEY:
+        return f"{FUNDING_SOURCE_INTERVAL_HOURS}h"
+    return RESAMPLE_RULES[tf]
 
 
 def _parse_dt(value) -> datetime:
@@ -96,7 +150,7 @@ def _parse_dt(value) -> datetime:
 
 def _floor_dt(dt: datetime, tf: str) -> datetime:
     """Floor a datetime to the timeframe grid (epoch-aligned)."""
-    step_min = TF_MINUTES[tf]
+    step_min = _step_minutes(tf)
     total_min = int((dt - _EPOCH).total_seconds() // 60)
     return _EPOCH + timedelta(minutes=(total_min // step_min) * step_min)
 
@@ -106,7 +160,7 @@ def _ceil_dt(dt: datetime, tf: str) -> datetime:
     floored = _floor_dt(dt, tf)
     if floored == dt:
         return dt
-    return floored + timedelta(minutes=TF_MINUTES[tf])
+    return floored + timedelta(minutes=_step_minutes(tf))
 
 
 def normalize_candles(df: pd.DataFrame) -> pd.DataFrame:
@@ -154,6 +208,75 @@ def merge_candles(*frames: pd.DataFrame) -> pd.DataFrame:
     return merged.sort_values("timestamp").reset_index(drop=True)
 
 
+def _snap_funding_grid(ts: pd.Series) -> pd.Series:
+    """Snap near-grid funding timestamps onto the exact 8h grid.
+
+    Binance publishes most settlements at exactly 00:00/08:00/16:00 UTC
+    but stamps a minority one millisecond late ("16:00:00.001"). Those
+    are the same settlement, and leaving them off-grid would make every
+    gap check report a spurious hole. Rows further than
+    ``FUNDING_GRID_TOLERANCE_S`` from a grid point are left alone, so a
+    genuinely off-schedule settlement stays visible.
+
+    Args:
+        ts: tz-naive UTC datetime series.
+
+    Returns:
+        Series with near-grid values replaced by the grid point.
+    """
+    step = pd.Timedelta(minutes=FUNDING_INTERVAL_MINUTES)
+    nearest = ts.dt.round(step)
+    within = (nearest - ts).abs() <= pd.Timedelta(seconds=FUNDING_GRID_TOLERANCE_S)
+    return ts.where(~within, nearest)
+
+
+def normalize_funding(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a raw funding frame to the canonical store format.
+
+    Timestamps become tz-naive UTC canonical strings on the 8h grid,
+    rates and mark prices become floats, duplicates are dropped (first
+    wins) and rows are sorted ascending.
+
+    Args:
+        df: Frame with at least ``timestamp`` and ``funding_rate``.
+
+    Returns:
+        Normalized copy with canonical funding columns only.
+    """
+    if df is None or df.empty:
+        return pd.DataFrame(columns=FUNDING_COLUMNS)
+    out = df.copy()
+    if "mark_price" not in out.columns:
+        out["mark_price"] = float("nan")
+    if "rate_type" not in out.columns:
+        out["rate_type"] = "Regular"
+    out = out[FUNDING_COLUMNS]
+    try:
+        ts = pd.to_datetime(out["timestamp"], utc=True, format="ISO8601")
+    except (ValueError, TypeError):
+        ts = pd.to_datetime(out["timestamp"], utc=True, format="mixed")
+    ts = ts.dt.tz_localize(None)
+    ts = _snap_funding_grid(ts)
+    out["timestamp"] = ts.dt.strftime(CANONICAL_TS_FORMAT)
+    out["funding_rate"] = out["funding_rate"].astype(float)
+    out["mark_price"] = pd.to_numeric(out["mark_price"], errors="coerce")
+    out["rate_type"] = out["rate_type"].fillna("Regular").astype(str)
+    out = out.drop_duplicates(subset="timestamp", keep="first")
+    return out.sort_values("timestamp").reset_index(drop=True)
+
+
+def merge_funding(*frames: pd.DataFrame) -> pd.DataFrame:
+    """Merge funding frames; earlier frames win on duplicate timestamps."""
+    non_empty = [
+        normalize_funding(f) for f in frames if f is not None and not f.empty
+    ]
+    if not non_empty:
+        return pd.DataFrame(columns=FUNDING_COLUMNS)
+    merged = pd.concat(non_empty, ignore_index=True)
+    merged = merged.drop_duplicates(subset="timestamp", keep="first")
+    return merged.sort_values("timestamp").reset_index(drop=True)
+
+
 @dataclass
 class Coverage:
     """Coverage summary for one (symbol, timeframe) store.
@@ -176,27 +299,19 @@ class Coverage:
     gaps: List[Tuple[str, str]] = field(default_factory=list)
 
 
-class CandleSource:
-    """Base class for a public keyless candle source."""
+class _ThrottledHttpSource:
+    """Shared polite-HTTP behaviour for every public keyless source.
+
+    One throttle between requests, five attempts, exponential backoff on
+    transport errors and on 429/5xx.
+    """
 
     name = "base"
-    supported_timeframes: Set[str] = set()
     pair_map: Dict[str, str] = {}
-    floor_hints: Dict[str, datetime] = {}
 
     def __init__(self, throttle_s: float = 0.15):
         self.throttle_s = throttle_s
         self._session = requests.Session()
-
-    def supports(self, symbol: str, tf: str) -> bool:
-        """Whether this source can serve the given symbol/timeframe."""
-        return symbol in self.pair_map and tf in self.supported_timeframes
-
-    def fetch(
-        self, symbol: str, tf: str, start_dt: datetime, end_dt: datetime
-    ) -> pd.DataFrame:
-        """Fetch candles in [start_dt, end_dt] (naive UTC, inclusive)."""
-        raise NotImplementedError
 
     def _get_json(self, url: str, params: dict):
         """GET with throttle and exponential backoff on 429/5xx."""
@@ -219,6 +334,122 @@ class CandleSource:
             resp.raise_for_status()
             return resp.json()
         raise RuntimeError(f"{self.name}: request failed after retries: {last_err}")
+
+
+class CandleSource(_ThrottledHttpSource):
+    """Base class for a public keyless candle source."""
+
+    name = "base"
+    supported_timeframes: Set[str] = set()
+    pair_map: Dict[str, str] = {}
+    floor_hints: Dict[str, datetime] = {}
+
+    def supports(self, symbol: str, tf: str) -> bool:
+        """Whether this source can serve the given symbol/timeframe."""
+        return symbol in self.pair_map and tf in self.supported_timeframes
+
+    def fetch(
+        self, symbol: str, tf: str, start_dt: datetime, end_dt: datetime
+    ) -> pd.DataFrame:
+        """Fetch candles in [start_dt, end_dt] (naive UTC, inclusive)."""
+        raise NotImplementedError
+
+
+class FundingSource(_ThrottledHttpSource):
+    """Base class for a public keyless perpetual-funding source."""
+
+    name = "base-funding"
+    #: Hours between settlements as this source publishes them.
+    interval_hours = FUNDING_SOURCE_INTERVAL_HOURS
+    floor_hints: Dict[str, datetime] = {}
+
+    def supports(self, symbol: str) -> bool:
+        """Whether this source can serve the given bot symbol."""
+        return symbol in self.pair_map
+
+    def fetch(
+        self, symbol: str, start_dt: datetime, end_dt: datetime
+    ) -> pd.DataFrame:
+        """Fetch settlements in [start_dt, end_dt] (naive UTC, inclusive)."""
+        raise NotImplementedError
+
+
+class BinanceFundingSource(FundingSource):
+    """Binance USD-M perpetual funding history (fapi, keyless).
+
+    ``GET /fapi/v1/fundingRate`` returns up to 1000 settlements per page
+    as ``{symbol, fundingTime, fundingRate, markPrice, rateType}``, in
+    ascending time order, paged with ``startTime``. BTCUSDT history
+    reaches back to 2019-09-10T08:00:00Z (probed 2026-07).
+
+    IMPORTANT: Binance settles every 8 HOURS. Pacifica settles every
+    hour. This class ingests the SOURCE rate untouched; the venue
+    mapping lives in ``backtesting/funding.py`` so the assumption is
+    made once, in the open, and is configurable.
+    """
+
+    name = "binance-funding"
+    interval_hours = 8
+    pair_map = {
+        "BTC-USDC": "BTCUSDT",
+        "ETH-USDC": "ETHUSDT",
+        "SUI-USDC": "SUIUSDT",
+        "SOL-USDC": "SOLUSDT",
+        "BNB-USDC": "BNBUSDT",
+    }
+    #: Earliest settlement Binance serves, probed per pair. Requests
+    #: before it return the first available page anyway, so this is an
+    #: efficiency hint and a documentation of the real floor.
+    floor_hints = {"BTC-USDC": datetime(2019, 9, 10, 8, 0, 0)}
+    urls = [
+        "https://fapi.binance.com/fapi/v1/fundingRate",
+    ]
+    page_limit = 1000
+
+    def fetch(
+        self, symbol: str, start_dt: datetime, end_dt: datetime
+    ) -> pd.DataFrame:
+        """Page through funding settlements covering [start_dt, end_dt]."""
+        pair = self.pair_map[symbol]
+        start_ms = int(start_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        end_ms = int(end_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
+        rows: List[dict] = []
+        cur = start_ms
+        while cur <= end_ms:
+            page = self._get_json(
+                self.urls[0],
+                {
+                    "symbol": pair,
+                    "startTime": cur,
+                    "endTime": end_ms,
+                    "limit": self.page_limit,
+                },
+            )
+            if not page:
+                break
+            rows.extend(page)
+            nxt = int(page[-1]["fundingTime"]) + 1
+            if nxt <= cur:
+                break
+            cur = nxt
+            if len(page) < self.page_limit:
+                break
+        if not rows:
+            return pd.DataFrame(columns=FUNDING_COLUMNS)
+        df = pd.DataFrame(
+            [
+                {
+                    "timestamp": datetime.fromtimestamp(
+                        int(r["fundingTime"]) / 1000, tz=timezone.utc
+                    ).replace(tzinfo=None),
+                    "funding_rate": float(r["fundingRate"]),
+                    "mark_price": float(r.get("markPrice") or "nan"),
+                    "rate_type": str(r.get("rateType") or "Regular"),
+                }
+                for r in rows
+            ]
+        )
+        return normalize_funding(df)
 
 
 class BinanceSource(CandleSource):
@@ -469,6 +700,7 @@ class CandleDownloadManager:
         data_dir: Optional[str] = None,
         sources: Optional[List[CandleSource]] = None,
         throttle_s: float = 0.15,
+        funding_sources: Optional[List[FundingSource]] = None,
     ):
         self.data_dir = Path(
             data_dir
@@ -482,6 +714,9 @@ class CandleDownloadManager:
                 CoinbaseSource(throttle_s),
             ]
         self.sources = sources
+        if funding_sources is None:
+            funding_sources = [BinanceFundingSource(throttle_s)]
+        self.funding_sources = funding_sources
 
     # ------------------------------------------------------------------
     # Store I/O
@@ -503,6 +738,153 @@ class CandleDownloadManager:
         """Write a canonical frame to the parquet store."""
         df = normalize_candles(df)
         df.to_parquet(self.store_path(symbol, tf), index=False)
+
+    # ------------------------------------------------------------------
+    # Funding store I/O
+    # ------------------------------------------------------------------
+
+    def funding_store_path(self, symbol: str) -> Path:
+        """Canonical funding parquet path for a symbol."""
+        return self.data_dir / f"{symbol.replace('/', '_')}_funding.parquet"
+
+    def load_funding_store(self, symbol: str) -> pd.DataFrame:
+        """Load the canonical funding store (empty frame if absent)."""
+        path = self.funding_store_path(symbol)
+        if not path.exists():
+            return pd.DataFrame(columns=FUNDING_COLUMNS)
+        return pd.read_parquet(path)
+
+    def save_funding_store(self, symbol: str, df: pd.DataFrame) -> None:
+        """Write a canonical funding frame to the parquet store."""
+        normalize_funding(df).to_parquet(
+            self.funding_store_path(symbol), index=False
+        )
+
+    def funding_coverage(self, symbol: str) -> Coverage:
+        """Coverage summary for a symbol's funding store.
+
+        Reported under the ``FUNDING_KEY`` pseudo-timeframe so it can be
+        printed in the same table as the candle stores. Gaps are missing
+        settlements on the source's 8h grid.
+
+        Args:
+            symbol: Bot symbol.
+
+        Returns:
+            Coverage with bounds, settlement count and internal gaps.
+        """
+        df = self.load_funding_store(symbol)
+        if df.empty:
+            return Coverage(symbol, FUNDING_KEY, None, None, 0, [])
+        first = df["timestamp"].iloc[0]
+        last = df["timestamp"].iloc[-1]
+        gaps = self.missing_ranges(
+            df, FUNDING_KEY, _parse_dt(first), _parse_dt(last)
+        )
+        gap_strs = [
+            (a.strftime(CANONICAL_TS_FORMAT), b.strftime(CANONICAL_TS_FORMAT))
+            for a, b in gaps
+        ]
+        return Coverage(symbol, FUNDING_KEY, first, last, len(df), gap_strs)
+
+    def _download_funding_range(
+        self, symbol: str, start_dt: datetime, end_dt: datetime
+    ) -> pd.DataFrame:
+        """Download funding in [start_dt, end_dt] chaining sources."""
+        frames: List[pd.DataFrame] = []
+        for source in self.funding_sources:
+            if not source.supports(symbol):
+                continue
+            eff_start = start_dt
+            hint = source.floor_hints.get(symbol)
+            if hint is not None and hint > eff_start:
+                eff_start = hint
+            if eff_start > end_dt:
+                continue
+            try:
+                part = source.fetch(symbol, eff_start, end_dt)
+            except (RuntimeError, requests.RequestException) as e:
+                logger.warning(
+                    f"{source.name} funding fetch failed for {symbol} "
+                    f"{eff_start}..{end_dt}: {e}"
+                )
+                continue
+            if part.empty:
+                continue
+            frames.append(part)
+            logger.info(
+                f"{source.name}: {len(part)} settlements for {symbol} "
+                f"({part['timestamp'].iloc[0]} .. {part['timestamp'].iloc[-1]})"
+            )
+            break
+        return merge_funding(*frames)
+
+    def ensure_funding(
+        self,
+        symbol: str,
+        start,
+        end=None,
+        include_internal_gaps: bool = True,
+    ) -> Dict[str, object]:
+        """Ensure the funding store covers [start, end].
+
+        Mirrors :meth:`ensure` for candles: only missing ranges on the
+        source's 8h grid are requested, progress is saved after every
+        filled range, and the requested end is clamped to the last
+        settlement that can already have happened.
+
+        Args:
+            symbol: Bot symbol.
+            start: Range start (date/datetime/ISO string).
+            end: Range end (defaults to now).
+            include_internal_gaps: Also attempt to fill internal gaps.
+
+        Returns:
+            Summary dict: added (int), requested_ranges (list),
+            unfilled_ranges (list).
+        """
+        step = timedelta(minutes=FUNDING_INTERVAL_MINUTES)
+        start_dt = _parse_dt(start)
+        now_clamp = _floor_dt(
+            datetime.now(timezone.utc).replace(tzinfo=None), FUNDING_KEY
+        )
+        end_dt = _parse_dt(end) if end is not None else now_clamp
+        end_dt = min(end_dt, now_clamp)
+        df = self.load_funding_store(symbol)
+        ranges = self.missing_ranges(df, FUNDING_KEY, start_dt, end_dt)
+        if not include_internal_gaps and not df.empty:
+            first = _parse_dt(df["timestamp"].iloc[0])
+            last = _parse_dt(df["timestamp"].iloc[-1])
+            ranges = [(a, b) for a, b in ranges if b < first or a > last]
+        summary: Dict[str, object] = {
+            "added": 0,
+            "requested_ranges": [],
+            "unfilled_ranges": [],
+        }
+        if not ranges:
+            return summary
+        added_total = 0
+        for gap_start, gap_end in ranges:
+            summary["requested_ranges"].append((gap_start, gap_end))
+            fetched = self._download_funding_range(
+                symbol, gap_start, gap_end + step
+            )
+            if fetched.empty:
+                summary["unfilled_ranges"].append((gap_start, gap_end))
+                continue
+            before = len(df)
+            df = merge_funding(df, fetched)
+            added = len(df) - before
+            added_total += added
+            if added > 0:
+                self.save_funding_store(symbol, df)
+        summary["added"] = added_total
+        logger.info(
+            f"ensure_funding({symbol}, {start_dt.date()}..{end_dt.date()}): "
+            f"added {added_total} settlements across "
+            f"{len(summary['requested_ranges'])} missing range(s)"
+        )
+        return summary
 
     def consolidate_csvs(self, symbol: str, tf: str) -> int:
         """Merge legacy CSV files for (symbol, tf) into the parquet store.
@@ -605,12 +987,12 @@ class CandleDownloadManager:
             List of (first_missing, last_missing) datetime pairs,
             covering leading, internal and trailing gaps.
         """
-        step = timedelta(minutes=TF_MINUTES[tf])
+        step = timedelta(minutes=_step_minutes(tf))
         grid_start = _ceil_dt(start_dt, tf)
         grid_end = _floor_dt(end_dt, tf)
         if grid_start > grid_end:
             return []
-        expected = pd.date_range(grid_start, grid_end, freq=RESAMPLE_RULES[tf])
+        expected = pd.date_range(grid_start, grid_end, freq=_freq_rule(tf))
         if df.empty:
             present = pd.DatetimeIndex([])
         else:
@@ -854,7 +1236,7 @@ def _format_coverage_table(coverages: List[Coverage]) -> str:
             continue
         largest = "-"
         if cov.gaps:
-            step = timedelta(minutes=TF_MINUTES[cov.timeframe])
+            step = timedelta(minutes=_step_minutes(cov.timeframe))
 
             def _gap_len(g):
                 return _parse_dt(g[1]) - _parse_dt(g[0]) + step
@@ -914,7 +1296,23 @@ def main(argv: Optional[List[str]] = None) -> int:
         "G:/Candle Data) for the given symbols/timeframes, print the "
         "coverage table and exit. The external dir is read-only.",
     )
+    parser.add_argument(
+        "--funding",
+        action="store_true",
+        help="Also operate on the perpetual funding-rate store "
+        "({SYMBOL}_funding.parquet). With --coverage it adds a 'fund' "
+        "row per symbol; otherwise it backfills funding history "
+        "alongside the candles.",
+    )
+    parser.add_argument(
+        "--funding-only",
+        action="store_true",
+        help="Operate ONLY on the funding store (implies --funding); "
+        "no candle download or resampling happens.",
+    )
     args = parser.parse_args(argv)
+    if args.funding_only:
+        args.funding = True
 
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     timeframes = [t.strip() for t in args.timeframes.split(",") if t.strip()]
@@ -924,11 +1322,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     mgr = CandleDownloadManager(data_dir=args.data_dir, throttle_s=args.throttle)
 
+    def _coverages() -> List[Coverage]:
+        """Coverage rows for the requested stores, funding last."""
+        rows: List[Coverage] = []
+        for sym in symbols:
+            if not args.funding_only:
+                rows.extend(mgr.coverage(sym, tf) for tf in timeframes)
+            if args.funding:
+                rows.append(mgr.funding_coverage(sym))
+        return rows
+
     if args.coverage:
-        coverages = [
-            mgr.coverage(sym, tf) for sym in symbols for tf in timeframes
-        ]
-        print(_format_coverage_table(coverages))
+        print(_format_coverage_table(_coverages()))
         return 0
 
     if args.ingest_dir:
@@ -958,41 +1363,56 @@ def main(argv: Optional[List[str]] = None) -> int:
         tf for tf in ("15m", "1h", "4h") if tf in timeframes
     ]
     for symbol in symbols:
-        # 1. Consolidate legacy CSVs (incl. 5m/1h resample bases).
-        consolidate_tfs = sorted(
-            set(timeframes) | {"5m", "1h"}, key=lambda t: TF_MINUTES[t]
-        )
-        for tf in consolidate_tfs:
-            self_added = mgr.consolidate_csvs(symbol, tf)
-            if self_added:
-                logger.info(f"{symbol} {tf}: consolidated +{self_added} from CSVs")
+        if not args.funding_only:
+            # 1. Consolidate legacy CSVs (incl. 5m/1h resample bases).
+            consolidate_tfs = sorted(
+                set(timeframes) | {"5m", "1h"}, key=lambda t: TF_MINUTES[t]
+            )
+            for tf in consolidate_tfs:
+                self_added = mgr.consolidate_csvs(symbol, tf)
+                if self_added:
+                    logger.info(
+                        f"{symbol} {tf}: consolidated +{self_added} from CSVs"
+                    )
 
-        # 2. Cheap pre-pass: build higher TFs from 5m (complete buckets
-        #    only) before touching the network.
-        for tf in resample_targets:
-            mgr.resample_fill(symbol, "5m", tf, min_fraction=1.0)
+            # 2. Cheap pre-pass: build higher TFs from 5m (complete buckets
+            #    only) before touching the network.
+            for tf in resample_targets:
+                mgr.resample_fill(symbol, "5m", tf, min_fraction=1.0)
 
-        # 3. Download what is still missing.
-        for tf in timeframes:
+            # 3. Download what is still missing.
+            for tf in timeframes:
+                if args.update:
+                    cov = mgr.coverage(symbol, tf)
+                    upd_start = cov.end or args.start
+                    mgr.ensure(
+                        symbol, tf, upd_start, args.end,
+                        include_internal_gaps=False,
+                    )
+                else:
+                    mgr.ensure(symbol, tf, args.start, args.end)
+
+            # 4. Post-pass: fill 4h holes from 1h (pre-Binance eras where no
+            #    native 4h source exists, e.g. ETH via Coinbase 1h). Lenient
+            #    threshold because thin early markets have missing hours.
+            if "4h" in timeframes:
+                mgr.resample_fill(symbol, "1h", "4h", min_fraction=0.5)
+            for tf in resample_targets:
+                mgr.resample_fill(symbol, "5m", tf, min_fraction=0.5)
+
+        # 5. Funding history (opt-in): same gap-driven contract, on the
+        #    source's own 8h settlement grid.
+        if args.funding:
             if args.update:
-                cov = mgr.coverage(symbol, tf)
+                cov = mgr.funding_coverage(symbol)
                 upd_start = cov.end or args.start
-                mgr.ensure(
-                    symbol, tf, upd_start, args.end, include_internal_gaps=False
+                mgr.ensure_funding(
+                    symbol, upd_start, args.end, include_internal_gaps=False
                 )
             else:
-                mgr.ensure(symbol, tf, args.start, args.end)
+                mgr.ensure_funding(symbol, args.start, args.end)
 
-        # 4. Post-pass: fill 4h holes from 1h (pre-Binance eras where no
-        #    native 4h source exists, e.g. ETH via Coinbase 1h). Lenient
-        #    threshold because thin early markets have missing hours.
-        if "4h" in timeframes:
-            mgr.resample_fill(symbol, "1h", "4h", min_fraction=0.5)
-        for tf in resample_targets:
-            mgr.resample_fill(symbol, "5m", tf, min_fraction=0.5)
-
-    coverages = [mgr.coverage(sym, tf) for sym in symbols for tf in timeframes]
-    print(_format_coverage_table(coverages))
+    print(_format_coverage_table(_coverages()))
     return 0
 
 

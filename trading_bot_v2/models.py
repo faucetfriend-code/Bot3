@@ -515,16 +515,29 @@ class Signal:
 
     @property
     def rrr(self) -> float:
-        """Calculate reward-to-risk ratio."""
+        """Reward-to-risk ratio, or 0.0 when the signal carries no stop.
+
+        A stopless signal has no risk denominator, so the ratio is
+        undefined rather than infinite. FundingArb is the strategy that
+        emits them (a funding position is retired when the rate turns,
+        not at a price level); before this guard the None stop raised a
+        TypeError inside StrategyManager's own log line, which the broad
+        handler there swallowed - so every FundingArb signal ever
+        generated was discarded without a trace.
+        """
+        if self.stop_loss is None or self.take_profit is None:
+            return 0.0
         risk = abs(self.entry_price - self.stop_loss)
-        if risk == 0 or self.take_profit is None:
-            return 0
+        if risk == 0:
+            return 0.0
         reward = abs(self.take_profit - self.entry_price)
         return reward / risk
 
     @property
     def stop_distance_pct(self) -> float:
-        """Stop distance as percentage."""
+        """Stop distance as percentage, or 0.0 for a stopless signal."""
+        if self.stop_loss is None or not self.entry_price:
+            return 0.0
         return abs(self.entry_price - self.stop_loss) / self.entry_price
 
     def failed_validity_flags(self) -> List[str]:

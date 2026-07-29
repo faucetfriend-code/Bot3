@@ -111,6 +111,23 @@ deleted, but it was left alone pending a decision from the owner.
 
 ## 8e. Campaign runs are not reproducible unless the end date is pinned
 
+> **CORRECTION, 2026-07-29.** The claim below that "this is NOT engine nondeterminism"
+> was wrong. `SimulatedExchange._check_pending_orders` shuffled same-candle SL/TP
+> triggers using the **process-global** `random` module with no seed, so two runs of the
+> same window over the same data could genuinely differ. Measured directly:
+> `vwap_scalping`/BTC-USDC 2022-06-01..2022-08-01, three consecutive runs in one process
+> gave PF 0.9485 / 1.0287 / 1.0287. The single-window grid check that "verified"
+> determinism apparently never hit an ambiguous candle.
+>
+> Fixed: the shuffle now draws from a per-exchange `random.Random(BACKTEST_SEED)`
+> (default 0) and the global RNG is never touched. Runs reproduce exactly. This is
+> almost certainly also the cause of item **(a)** in the census section below
+> (`grid_trading` 578/539/516) — grid places the most resting orders, so it hits the
+> ambiguous-candle path most often. Worth re-running that check now.
+>
+> The data-drift cause described below is real and additional; `--anchor-end` /
+> `VALIDATION_ANCHOR_END` on the validation runner now pins the window series.
+
 The regime census reported grid_trading yielding 578 / 539 / 516 trades across three
 "identical" campaign runs. This is NOT engine nondeterminism — a single-window grid
 backtest reproduces exactly (verified: 17 trades, PF 1.79, three consecutive runs).
