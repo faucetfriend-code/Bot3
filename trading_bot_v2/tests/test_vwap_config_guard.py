@@ -29,12 +29,24 @@ from trading_bot_v2.market_regime import MarketRegime
 from trading_bot_v2.models import OrderSide
 from trading_bot_v2.optimization.search_spaces import get_search_space
 from trading_bot_v2.strategies.vwap_scalping import (
+    DEFAULT_ENTRY_CONFIRMATION,
     DEFAULT_SD_ENTRY_THRESHOLD,
+    DEFAULT_STOP_SOURCE,
+    ENTRY_CONFIRMATION_ADVERSE,
+    ENTRY_CONFIRMATION_NONE,
+    ENTRY_CONFIRMATION_TURNING,
     SD_ENTRY_THRESHOLD_MAX,
     SD_ENTRY_THRESHOLD_MIN,
+    STOP_SOURCE_ATR_EXECUTION,
+    STOP_SOURCE_ATR_STRUCTURE,
+    STOP_SOURCE_SD_BAND,
     UNSUPPORTED_ENV_VARS,
+    VALID_ENTRY_CONFIRMATIONS,
+    VALID_STOP_SOURCES,
     VWAPScalpingStrategy,
+    validate_entry_confirmation,
     validate_sd_entry_threshold,
+    validate_stop_source,
     warn_unsupported_env_vars,
 )
 from trading_bot_v2.strategy_manager import (
@@ -90,6 +102,8 @@ def clean_vwap_env(monkeypatch):
         monkeypatch.delenv(name, raising=False)
     for name in (
         "VWAP_SD_ENTRY_THRESHOLD",
+        "VWAP_STOP_SOURCE",
+        "VWAP_ENTRY_CONFIRMATION",
         "VWAP_ATR_PERIOD",
         "VWAP_ATR_STOP_MULTIPLIER",
         "VWAP_MACD_FAST",
@@ -400,6 +414,218 @@ class TestActiveRegimeMapping:
             enable_calendar_flow=False,
         )
         assert manager.vwap_active_regimes == [MarketRegime.INDECISIVE]
+
+
+# ---------------------------------------------------------------------------
+# 6b. Stop placement and entry confirmation are switchable and measurable
+# ---------------------------------------------------------------------------
+
+
+class TestStopSourceAndEntryConfirmation:
+    """Both switches default to the shipped behaviour.
+
+    docs/VWAP-LEVERS.md measured the shipped configuration at an 18.1% win
+    rate with 82% of exits via the stop. The two defects that produce it are
+    a stop taken from the 1m ATR (~5x tighter than the 15m setup implies)
+    and a MACD gate that requires momentum to still run against the trade.
+    These tests pin both as *choices* so an A/B can replace them.
+    """
+
+    # -- validators ----------------------------------------------------
+
+    @pytest.mark.parametrize("value", VALID_STOP_SOURCES)
+    def test_valid_stop_sources_pass_through(self, value):
+        assert validate_stop_source(value) == value
+
+    @pytest.mark.parametrize("value", VALID_ENTRY_CONFIRMATIONS)
+    def test_valid_confirmations_pass_through(self, value):
+        assert validate_entry_confirmation(value) == value
+
+    def test_parsing_is_case_and_space_insensitive(self):
+        assert validate_stop_source("  SD_Band ") == STOP_SOURCE_SD_BAND
+        assert validate_entry_confirmation(" Turning ") == ENTRY_CONFIRMATION_TURNING
+
+    @pytest.mark.parametrize("value", ["", None, "atr", "1m", "nonsense"])
+    def test_unknown_stop_source_falls_back(self, value):
+        assert validate_stop_source(value) == DEFAULT_STOP_SOURCE
+
+    @pytest.mark.parametrize("value", ["", None, "macd", "exhausted"])
+    def test_unknown_confirmation_falls_back(self, value):
+        assert validate_entry_confirmation(value) == DEFAULT_ENTRY_CONFIRMATION
+
+    def test_defaults_reproduce_shipped_behaviour(self):
+        """The A/B is only honest if the control is genuinely the control."""
+        assert DEFAULT_STOP_SOURCE == STOP_SOURCE_ATR_EXECUTION
+        assert DEFAULT_ENTRY_CONFIRMATION == ENTRY_CONFIRMATION_ADVERSE
+
+    def test_env_is_read(self, clean_vwap_env):
+        clean_vwap_env.setenv("VWAP_STOP_SOURCE", "atr_structure")
+        clean_vwap_env.setenv("VWAP_ENTRY_CONFIRMATION", "turning")
+        strategy = VWAPScalpingStrategy()
+        assert strategy.stop_source == STOP_SOURCE_ATR_STRUCTURE
+        assert strategy.entry_confirmation == ENTRY_CONFIRMATION_TURNING
+
+    def test_strategy_manager_honours_the_env(self, clean_vwap_env):
+        """The construction path that broke `sd_entry_threshold` before.
+
+        StrategyManager passes most VWAP parameters as explicit kwargs, which
+        is why the constructor's own env fallback never applied to them. These
+        two are deliberately NOT in that kwarg list, so a shell export reaches
+        them - which is what the A/B sweep depends on.
+        """
+        clean_vwap_env.setenv("VWAP_STOP_SOURCE", "sd_band")
+        clean_vwap_env.setenv("VWAP_ENTRY_CONFIRMATION", "turning")
+
+        manager = StrategyManager(
+            enable_mean_reversion=False,
+            enable_ma_crossover=False,
+            enable_trend_following=False,
+            enable_grid_trading=False,
+            enable_liquidation_capture=False,
+            enable_vwap_scalping=True,
+            enable_funding_arb=False,
+            enable_momentum_scalping=False,
+            enable_orderbook_imbalance=False,
+            enable_session_range_breakout=False,
+            enable_calendar_flow=False,
+        )
+
+        strategy = manager.strategies["VWAPScalping"]
+        assert strategy.stop_source == STOP_SOURCE_SD_BAND
+        assert strategy.entry_confirmation == ENTRY_CONFIRMATION_TURNING
+
+    def test_kwarg_beats_env(self, clean_vwap_env):
+        clean_vwap_env.setenv("VWAP_STOP_SOURCE", "atr_structure")
+        strategy = VWAPScalpingStrategy(stop_source="sd_band")
+        assert strategy.stop_source == STOP_SOURCE_SD_BAND
+
+    # -- entry confirmation truth table --------------------------------
+
+    def test_adverse_requires_momentum_against_the_trade(self):
+        """The shipped gate, stated plainly so its oddity is visible."""
+        s = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_ADVERSE)
+        assert s._entry_confirmed(OrderSide.BUY, -0.5, None) is True
+        assert s._entry_confirmed(OrderSide.BUY, 0.5, None) is False
+        assert s._entry_confirmed(OrderSide.SELL, 0.5, None) is True
+        assert s._entry_confirmed(OrderSide.SELL, -0.5, None) is False
+
+    def test_turning_requires_momentum_inflecting_toward_the_trade(self):
+        s = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_TURNING)
+        # Still negative, but rising: the case `adverse` calls a late entry.
+        assert s._entry_confirmed(OrderSide.BUY, -0.3, -0.5) is True
+        assert s._entry_confirmed(OrderSide.BUY, -0.7, -0.5) is False
+        assert s._entry_confirmed(OrderSide.SELL, 0.3, 0.5) is True
+        assert s._entry_confirmed(OrderSide.SELL, 0.7, 0.5) is False
+
+    def test_turning_refuses_without_a_previous_histogram(self):
+        s = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_TURNING)
+        assert s._entry_confirmed(OrderSide.BUY, -0.3, None) is False
+
+    def test_none_admits_everything(self):
+        s = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_NONE)
+        for side in (OrderSide.BUY, OrderSide.SELL):
+            for hist in (-1.0, 0.0, 1.0):
+                assert s._entry_confirmed(side, hist, None) is True
+
+    def test_adverse_and_turning_disagree_on_the_rejected_case(self):
+        """`turning` exists precisely to take the trade `adverse` skips."""
+        adverse = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_ADVERSE)
+        turning = VWAPScalpingStrategy(entry_confirmation=ENTRY_CONFIRMATION_TURNING)
+        # Histogram has crossed up: adverse calls this "late", turning takes it.
+        assert adverse._entry_confirmed(OrderSide.BUY, 0.1, -0.2) is False
+        assert turning._entry_confirmed(OrderSide.BUY, 0.1, -0.2) is True
+
+    # -- stop placement ------------------------------------------------
+
+    def test_atr_modes_use_the_atr_they_are_given(self):
+        for source in (STOP_SOURCE_ATR_EXECUTION, STOP_SOURCE_ATR_STRUCTURE):
+            s = VWAPScalpingStrategy(stop_source=source, atr_stop_multiplier=1.5)
+            buy = s._resolve_stop_loss(
+                OrderSide.BUY, 100.0, atr=2.0, vwap=105.0, stddev=2.0, deviation_sd=2.5
+            )
+            assert buy == pytest.approx(97.0)
+            sell = s._resolve_stop_loss(
+                OrderSide.SELL, 100.0, atr=2.0, vwap=95.0, stddev=2.0, deviation_sd=2.5
+            )
+            assert sell == pytest.approx(103.0)
+
+    def test_sd_band_stop_sits_beyond_the_next_whole_band(self):
+        s = VWAPScalpingStrategy(stop_source=STOP_SOURCE_SD_BAND)
+        # Price 2.5 SD below a VWAP of 105 with sigma 2 -> next band out is 3SD.
+        stop = s._resolve_stop_loss(
+            OrderSide.BUY, 100.0, atr=0.1, vwap=105.0, stddev=2.0, deviation_sd=2.5
+        )
+        assert stop == pytest.approx(105.0 - 3 * 2.0)
+        assert stop < 100.0, "a long's stop must sit below the entry"
+
+    def test_sd_band_stop_ignores_the_atr_entirely(self):
+        s = VWAPScalpingStrategy(stop_source=STOP_SOURCE_SD_BAND)
+        args = dict(vwap=105.0, stddev=2.0, deviation_sd=2.5)
+        wide = s._resolve_stop_loss(OrderSide.BUY, 100.0, atr=99.0, **args)
+        narrow = s._resolve_stop_loss(OrderSide.BUY, 100.0, atr=0.01, **args)
+        assert wide == narrow
+
+    def test_execution_atr_produces_a_materially_tighter_stop(self):
+        """THE regression test for the geometry defect.
+
+        Measured on BTC 2022-07..2024-07, ATR(15m) is 5.08x ATR(1m), so the
+        shipped `atr_execution` stop is about a fifth of the distance the 15m
+        setup implies - and smaller than the entry bar's own high-low range on
+        99.3% of signals. This asserts the two modes really do differ, so the
+        defect cannot silently return by the two paths converging.
+        """
+        atr_1m, atr_15m = 0.055, 0.278  # median % of price, from the parquets
+
+        execution = VWAPScalpingStrategy(stop_source=STOP_SOURCE_ATR_EXECUTION)
+        structure = VWAPScalpingStrategy(stop_source=STOP_SOURCE_ATR_STRUCTURE)
+        args = dict(vwap=101.0, stddev=0.5, deviation_sd=2.0)
+
+        tight = 100.0 - execution._resolve_stop_loss(
+            OrderSide.BUY, 100.0, atr=atr_1m, **args
+        )
+        wide = 100.0 - structure._resolve_stop_loss(
+            OrderSide.BUY, 100.0, atr=atr_15m, **args
+        )
+        assert wide > 4 * tight
+
+    # -- end to end ----------------------------------------------------
+
+    def test_switches_are_reported_on_the_signal(self):
+        """The A/B is only readable if each fill records its configuration."""
+        strategy = VWAPScalpingStrategy(
+            sd_entry_threshold=DEFAULT_SD_ENTRY_THRESHOLD,
+            min_confidence=0.30,
+            cooldown_minutes=0,
+            stop_source=STOP_SOURCE_SD_BAND,
+            entry_confirmation=ENTRY_CONFIRMATION_NONE,
+        )
+        data = _below_vwap_data()
+        signals = strategy.generate_signals("BTC", {"15m": data}, data["close"][-1])
+
+        assert len(signals) == 1
+        assert signals[0].indicators["stop_source"] == STOP_SOURCE_SD_BAND
+        assert signals[0].indicators["entry_confirmation"] == ENTRY_CONFIRMATION_NONE
+
+    def test_none_confirmation_admits_a_bar_adverse_rejects(self):
+        """End-to-end proof the gate is really removed, not merely renamed."""
+        data = _below_vwap_data()
+        # Flip the tape so the MACD histogram is positive at a price *below*
+        # VWAP, which is exactly what the shipped BUY branch refuses.
+        closes = list(data["close"])
+        closes[-1] += 0.55
+        closes[-2] += 0.35
+        flipped = _make_ohlcv(closes)
+
+        def run(mode):
+            return VWAPScalpingStrategy(
+                sd_entry_threshold=DEFAULT_SD_ENTRY_THRESHOLD,
+                min_confidence=0.30,
+                cooldown_minutes=0,
+                entry_confirmation=mode,
+            ).generate_signals("BTC", {"15m": flipped}, flipped["close"][-1])
+
+        assert run(ENTRY_CONFIRMATION_NONE), "none must admit the bar"
+        assert not run(ENTRY_CONFIRMATION_ADVERSE), "adverse must still refuse it"
 
 
 # ---------------------------------------------------------------------------

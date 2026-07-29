@@ -173,12 +173,44 @@ class SimulatedExchange:
     # PacificaClient-compatible interface
     # ------------------------------------------------------------------
 
-    def get_account_balance(self) -> Dict:
+    def open_cost_basis(self) -> float:
+        """
+        Cash currently tied up in open positions.
+
+        ``self.balance`` is a pure cash account: ``_open_or_add_position``
+        debits ``quantity * entry_price`` when a position is opened and
+        credits the same amount back, plus realised P&L, when it is closed.
+        That debit is **side-independent** - a short pays its notional out of
+        cash exactly as a long does - so this reverses it for both.
+
+        Without adding it back, equity reads as though opening a position
+        instantly lost its whole notional. See ``equity()``.
+
+        Returns:
+            Sum of ``quantity * entry_price`` over all open positions.
+        """
+        return sum(
+            p.quantity * p.entry_price for p in self._positions.values()
+        )
+
+    def equity(self) -> float:
+        """
+        Mark-to-market account value: cash + open cost basis + unrealised.
+
+        Returns:
+            Total account equity.
+        """
         unrealised = sum(p.unrealised_pnl for p in self._positions.values())
+        return self.balance + self.open_cost_basis() + unrealised
+
+    def get_account_balance(self) -> Dict:
+        # "available" is free cash and deliberately excludes open positions -
+        # that is margin, not equity, and the engine's balance guard depends
+        # on it staying bare cash.
         return {
-            "balance": str(round(self.balance + unrealised, 4)),
+            "balance": str(round(self.equity(), 4)),
             "available": str(round(self.balance, 4)),
-            "locked": "0.00",
+            "locked": str(round(self.open_cost_basis(), 4)),
         }
 
     def get_positions(self) -> List[Dict]:
@@ -306,11 +338,9 @@ class SimulatedExchange:
 
     def get_balance(self) -> Dict:
         """Balance in the shape live clients return (``equity`` key)."""
-        unrealised = sum(p.unrealised_pnl for p in self._positions.values())
-        equity = self.balance + unrealised
         return {
             "balance": round(self.balance, 4),
-            "equity": round(equity, 4),
+            "equity": round(self.equity(), 4),
             "available": round(self.balance, 4),
         }
 
