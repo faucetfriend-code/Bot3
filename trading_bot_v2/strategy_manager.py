@@ -304,6 +304,17 @@ class StrategyManager:
             os.getenv("DIRECTIONAL_GATE")
         )
         self.directional_gate_exempt = resolve_gate_exempt()
+        # Strategies not admitted when the combined bias is NEUTRAL.
+        # Measured (composite tuning, 2026-07-30): mean_reversion loses
+        # in every vol tercile's neutral state under both gate arms,
+        # while all three trend states are positive under enforce.
+        # Default empty - each strategy earns its exclusion by
+        # measurement. Only consulted in enforce mode.
+        self.directional_neutral_exclude = {
+            name.strip()
+            for name in os.getenv("DIRECTIONAL_NEUTRAL_EXCLUDE", "").split(",")
+            if name.strip()
+        }
         self.directional_bias_engine = DirectionalBiasEngine(client=client)
         if self.directional_gate_mode != GATE_OFF:
             logger.info(
@@ -1555,6 +1566,18 @@ class StrategyManager:
                     f"(trend={bias.trend}, funding={bias.funding}, "
                     f"combined={bias.combined}) - failing "
                     f"multi_timeframe_alignment"
+                )
+            elif (
+                bias.combined == "neutral"
+                and display_name in self.directional_neutral_exclude
+            ):
+                # Neutral-state exclusion (DIRECTIONAL_NEUTRAL_EXCLUDE):
+                # this strategy measured as a net loser whenever no
+                # directional bias exists, so it stands aside in chop.
+                signal.multi_timeframe_alignment = False
+                logger.info(
+                    f"Directional gate: {display_name} {symbol} excluded "
+                    f"in neutral bias state (DIRECTIONAL_NEUTRAL_EXCLUDE)"
                 )
 
         return signals

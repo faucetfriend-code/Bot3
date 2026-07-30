@@ -324,3 +324,26 @@ class TestGateWiring:
             "FundingArb",
             "LiquidationCapture",
         }
+
+    def test_neutral_exclusion_gates_listed_strategy_in_chop(self, monkeypatch):
+        monkeypatch.setenv("DIRECTIONAL_NEUTRAL_EXCLUDE", "MomentumScalping")
+        sm = _manager(monkeypatch, "enforce")
+        flat = [100.0] * 60  # neutral bias
+        sig = _signal(OrderSide.BUY)
+        out = sm._apply_directional_gate([sig], "BTC-USDC", _tf_data(flat))
+        assert out[0].multi_timeframe_alignment is False
+
+    def test_neutral_exclusion_inactive_outside_neutral(self, monkeypatch):
+        monkeypatch.setenv("DIRECTIONAL_NEUTRAL_EXCLUDE", "MomentumScalping")
+        sm = _manager(monkeypatch, "enforce")
+        closes = [100.0 + i for i in range(60)]  # long bias
+        sig = _signal(OrderSide.BUY)  # aligned
+        out = sm._apply_directional_gate([sig], "BTC-USDC", _tf_data(closes))
+        assert out[0].multi_timeframe_alignment is True
+
+    def test_neutral_exclusion_default_empty(self, monkeypatch):
+        sm = _manager(monkeypatch, "enforce")
+        flat = [100.0] * 60
+        sig = _signal(OrderSide.BUY)
+        out = sm._apply_directional_gate([sig], "BTC-USDC", _tf_data(flat))
+        assert out[0].multi_timeframe_alignment is True
