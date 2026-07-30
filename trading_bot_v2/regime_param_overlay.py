@@ -54,6 +54,7 @@ STRATEGY_KEY_TO_DISPLAY: Dict[str, str] = {
     "orderbook_imbalance": "OrderBookImbalance",
     "session_range_breakout": "SessionRangeBreakout",
     "calendar_flow": "CalendarFlow",
+    "vwap_pullback": "VWAPPullback",
 }
 
 DISPLAY_TO_STRATEGY_KEY: Dict[str, str] = {

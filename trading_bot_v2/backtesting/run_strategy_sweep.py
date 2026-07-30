@@ -59,6 +59,7 @@ ALL_STRATEGIES: List[str] = [
     "OrderBookImbalance",
     "SessionRangeBreakout",
     "CalendarFlow",
+    "VWAPPullback",
 ]
 
 

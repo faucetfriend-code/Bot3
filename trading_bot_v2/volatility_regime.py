@@ -492,6 +492,7 @@ DEFAULT_VOL_WEIGHTS: Dict[MarketRegime, Dict[str, float]] = {
         "OrderBookImbalance": 0.2,
         "SessionRangeBreakout": 0.15,
         "CalendarFlow": 0.1,
+        "VWAPPullback": 0.15,
     },
     MarketRegime.VOL_MID: {
         "GridTrading": 0.5,
@@ -499,6 +500,7 @@ DEFAULT_VOL_WEIGHTS: Dict[MarketRegime, Dict[str, float]] = {
         "OrderBookImbalance": 0.2,
         "SessionRangeBreakout": 0.15,
         "CalendarFlow": 0.1,
+        "VWAPPullback": 0.15,
     },
     MarketRegime.VOL_HIGH: {
         "MomentumScalping": 0.4,
@@ -507,6 +509,7 @@ DEFAULT_VOL_WEIGHTS: Dict[MarketRegime, Dict[str, float]] = {
         "OrderBookImbalance": 0.2,
         "SessionRangeBreakout": 0.15,
         "CalendarFlow": 0.1,
+        "VWAPPullback": 0.25,
     },
     MarketRegime.VOL_WARMUP: {},
 }

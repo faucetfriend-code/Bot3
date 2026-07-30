@@ -89,6 +89,7 @@ STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
     "OrderBookImbalance": "enable_orderbook_imbalance",
     "SessionRangeBreakout": "enable_session_range_breakout",
     "CalendarFlow": "enable_calendar_flow",
+    "VWAPPullback": "enable_vwap_pullback",
 }
 
 # ---------------------------------------------------------------------------

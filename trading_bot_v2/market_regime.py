@@ -1084,6 +1084,7 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.25,  # Trend-side continuation at VWAP
             },
             MarketRegime.TRENDING_MODERATE: {
                 "MACrossover": 0.4,  # Balanced with momentum
@@ -1091,12 +1092,14 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.25,  # Trend-side continuation at VWAP
             },
             MarketRegime.RANGING_VOLATILE: {
                 "GridTrading": 0.8,
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
             MarketRegime.RANGING_CALM: {
                 "MeanReversion": 0.6,
@@ -1104,12 +1107,14 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
             MarketRegime.INDECISIVE: {
                 "LiquidationCapture": 0.6,  # Conservative approach
                 "OrderBookImbalance": 0.4,  # Flow-based (best in choppy markets)
                 "SessionRangeBreakout": 0.2,  # ORB thrives on post-chop expansion
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
         }
 

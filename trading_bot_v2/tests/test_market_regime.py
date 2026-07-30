@@ -287,7 +287,7 @@ class TestMarketRegimeDetector:
         assert not regime_detector.is_grid_allowed(MarketRegime.TRENDING_MODERATE)
 
     def test_get_strategy_weights(self, regime_detector):
-        """Test strategy weight allocation by regime (Jul 2026 weights with OrderBookImbalance + SessionRangeBreakout + CalendarFlow overlays)."""
+        """Test strategy weight allocation by regime (Jul 2026 weights with OrderBookImbalance + SessionRangeBreakout + CalendarFlow + VWAPPullback overlays)."""
         weights_volatile = regime_detector.get_strategy_weights(
             MarketRegime.RANGING_VOLATILE
         )
@@ -296,6 +296,7 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.15,
         }
 
         weights_calm = regime_detector.get_strategy_weights(MarketRegime.RANGING_CALM)
@@ -305,6 +306,7 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.15,
         }
 
         weights_trending = regime_detector.get_strategy_weights(
@@ -316,17 +318,19 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.25,
         }
 
-        # SessionRangeBreakout and CalendarFlow are overlays in all five
-        # ADX regimes. MarketRegime also carries the VOL_* values of the
-        # realized-volatility taxonomy (REGIME_MODE=volatility), which
-        # this detector never emits and has no weights for - see
-        # volatility_regime.VolatilityRegimeDetector.
+        # SessionRangeBreakout, CalendarFlow and VWAPPullback are overlays
+        # in all five ADX regimes. MarketRegime also carries the VOL_*
+        # values of the realized-volatility taxonomy
+        # (REGIME_MODE=volatility), which this detector never emits and
+        # has no weights for - see volatility_regime.VolatilityRegimeDetector.
         for regime in ADX_REGIMES:
             regime_weights = regime_detector.get_strategy_weights(regime)
             assert "SessionRangeBreakout" in regime_weights
             assert "CalendarFlow" in regime_weights
+            assert "VWAPPullback" in regime_weights
 
     def test_foreign_taxonomy_regimes_get_no_weights(self, regime_detector):
         """The ADX detector does not claim to map another taxonomy."""

@@ -35,6 +35,7 @@ class StrategyType(str, Enum):
     ORDERBOOK_IMBALANCE = "orderbook_imbalance"
     SESSION_RANGE_BREAKOUT = "session_range_breakout"
     CALENDAR_FLOW = "calendar_flow"
+    VWAP_PULLBACK = "vwap_pullback"
 
 
 class AssetClass(str, Enum):
