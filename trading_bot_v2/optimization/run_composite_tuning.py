@@ -90,6 +90,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--report", default=None, help="Write JSON report here")
     p.add_argument(
+        "--log-level", default="WARNING",
+        help=(
+            "loguru sink level for this run (default: WARNING). "
+            "Deliberately NOT read from LOG_LEVEL: .env pins that to "
+            "INFO via load_dotenv(override=True), and INFO wrote "
+            "~750 MB/hour over a multi-hour tuning arm."
+        ),
+    )
+    p.add_argument(
         "--directional-gate", default=None,
         choices=("off", "log", "enforce"),
         help=(
@@ -174,15 +183,15 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
 
-    # Cap loguru at LOG_LEVEL. loguru's default sink is stderr at DEBUG
-    # and this driver replays years of 5m bars per trial - the first
-    # full arm wrote 18 GB of DEBUG stderr in 4 hours and filled the
-    # volume (2026-07-30). Same scoped fix as validation/runner.py.
+    # Cap loguru explicitly. Its default sink is stderr at DEBUG and
+    # this driver replays years of 5m bars per trial - the first full
+    # arm wrote 18 GB of DEBUG stderr in 4 hours and filled the volume
+    # (2026-07-30). LOG_LEVEL is NOT consulted: .env pins it to INFO
+    # through load_dotenv(override=True), and INFO still writes
+    # ~750 MB/hour here.
     try:
         logger.remove()
-        logger.add(
-            sys.stderr, level=os.getenv("LOG_LEVEL", "WARNING").upper() or "WARNING"
-        )
+        logger.add(sys.stderr, level=args.log_level.upper())
     except Exception:
         pass
 
