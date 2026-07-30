@@ -60,6 +60,14 @@ from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
 from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
+from .strategies.vwap_pullback import VWAPPullbackStrategy
+from .directional_bias import (
+    GATE_ENFORCE,
+    GATE_OFF,
+    DirectionalBiasEngine,
+    resolve_gate_exempt,
+    validate_gate_mode,
+)
 from .strategies.calendar_flow import CalendarFlowStrategy
 
 
@@ -163,6 +171,7 @@ class StrategyManager:
         enable_orderbook_imbalance: Optional[bool] = None,
         enable_session_range_breakout: Optional[bool] = None,
         enable_calendar_flow: Optional[bool] = None,
+        enable_vwap_pullback: Optional[bool] = None,
         risk_manager=None,
         client=None,  # Pacifica client for funding arb API calls
         ws_client=None,  # WebSocket client for orderbook data
@@ -276,9 +285,37 @@ class StrategyManager:
                 "ENABLE_CALENDAR_FLOW", False
             )  # Default to False - ships disabled until validated
         )
+        self.enable_vwap_pullback = (
+            enable_vwap_pullback
+            if enable_vwap_pullback is not None
+            else _get_env_bool(
+                "ENABLE_VWAP_PULLBACK", False
+            )  # Default to False - ships disabled until validated
+        )
         self.risk_manager = risk_manager
         self.client = client  # Store client for funding arb
         self.ws_client = ws_client  # Store websocket client for orderbook
+
+        # Directional bias gate (HTF trend stack + funding extremes).
+        # Default "off" = shipped behaviour; "log" annotates signals only;
+        # "enforce" fails multi_timeframe_alignment on signals fighting the
+        # bias. See directional_bias.py for the full rationale.
+        self.directional_gate_mode = validate_gate_mode(
+            os.getenv("DIRECTIONAL_GATE")
+        )
+        self.directional_gate_exempt = resolve_gate_exempt()
+        self.directional_bias_engine = DirectionalBiasEngine(client=client)
+        if self.directional_gate_mode != GATE_OFF:
+            logger.info(
+                f"Directional gate: mode={self.directional_gate_mode}, "
+                f"exempt={sorted(self.directional_gate_exempt)}, "
+                f"trend={self.directional_bias_engine.trend_timeframe} "
+                f"EMA {self.directional_bias_engine.ema_fast}/"
+                f"{self.directional_bias_engine.ema_slow}, "
+                f"funding lookback={self.directional_bias_engine.funding_lookback} "
+                f"pct [{self.directional_bias_engine.funding_low_pct}, "
+                f"{self.directional_bias_engine.funding_high_pct}]"
+            )
 
         # Regime-conditional minimum-confidence gate. Signals below
         # (MIN_SIGNAL_CONFIDENCE_FLOOR + per-regime adjustment) are dropped
@@ -355,7 +392,8 @@ class StrategyManager:
             f"VWAPScalping={self.enable_vwap_scalping}, FundingArb={self.enable_funding_arb}, "
             f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}, "
             f"SessionRangeBreakout={self.enable_session_range_breakout}, "
-            f"CalendarFlow={self.enable_calendar_flow}"
+            f"CalendarFlow={self.enable_calendar_flow}, "
+            f"VWAPPullback={self.enable_vwap_pullback}"
         )
 
         # Initialize trade cooldown and feedback tracking
@@ -684,6 +722,52 @@ class StrategyManager:
                 f"[{calflow_long_entry:+d}, {calflow_long_exit:+d}] days around "
                 f"month boundary, short={calflow_enable_short}, "
                 f"stop={calflow_atr_stop}x ATR(14) 4h"
+            )
+
+        if self.enable_vwap_pullback:
+            # Load VWAP Pullback (trend-side continuation) parameters
+            def _get_env_vpb_bool(var_name: str, default: bool) -> bool:
+                value = os.getenv(var_name, "").lower()
+                if value in ("true", "1", "yes", "on"):
+                    return True
+                elif value in ("false", "0", "no", "off"):
+                    return False
+                return default
+
+            vpb_ema_fast = int(os.getenv("VWAP_PB_EMA_FAST", "20"))
+            vpb_ema_slow = int(os.getenv("VWAP_PB_EMA_SLOW", "50"))
+            vpb_band_sd = float(os.getenv("VWAP_PB_BAND_SD", "0.25"))
+            vpb_extension = float(os.getenv("VWAP_PB_EXTENSION_MIN_SD", "1.0"))
+            vpb_min_session_bars = int(os.getenv("VWAP_PB_MIN_SESSION_BARS", "8"))
+            vpb_rvol_min = float(os.getenv("VWAP_PB_RVOL_MIN", "0.0"))
+            vpb_rvol_window = int(os.getenv("VWAP_PB_RVOL_WINDOW", "96"))
+            vpb_atr_buffer = float(os.getenv("VWAP_PB_ATR_STOP_BUFFER", "0.5"))
+            vpb_tp_rr = float(os.getenv("VWAP_PB_TP_RR", "2.0"))
+            vpb_time_exit = float(os.getenv("VWAP_PB_TIME_EXIT_HOURS", "24"))
+            vpb_cooldown = float(os.getenv("VWAP_PB_COOLDOWN_HOURS", "4"))
+            vpb_min_rrr = float(os.getenv("VWAP_PB_MIN_RRR", "1.5"))
+            vpb_enable_short = _get_env_vpb_bool("VWAP_PB_ENABLE_SHORT", True)
+
+            self.strategies["VWAPPullback"] = VWAPPullbackStrategy(
+                ema_fast=vpb_ema_fast,
+                ema_slow=vpb_ema_slow,
+                band_sd=vpb_band_sd,
+                extension_min_sd=vpb_extension,
+                min_session_bars=vpb_min_session_bars,
+                rvol_min=vpb_rvol_min,
+                rvol_window=vpb_rvol_window,
+                atr_stop_buffer=vpb_atr_buffer,
+                tp_rr=vpb_tp_rr,
+                time_exit_hours=vpb_time_exit,
+                cooldown_hours=vpb_cooldown,
+                min_rrr=vpb_min_rrr,
+                enable_short=vpb_enable_short,
+            )
+            logger.info(
+                f"VWAP Pullback strategy enabled: 4h EMA {vpb_ema_fast}/"
+                f"{vpb_ema_slow}, band={vpb_band_sd} SD, "
+                f"extension>={vpb_extension} SD, tp={vpb_tp_rr}R, "
+                f"time_exit={vpb_time_exit}h"
             )
 
         # Simulated time (set by backtest engine for accurate cooldown tracking)
@@ -1066,6 +1150,19 @@ class StrategyManager:
                     f"{symbol}: Added CalendarFlow (calendar-gated overlay, runs in all regimes)"
                 )
 
+            # Step 2.12: Always add VWAPPullback if enabled (self-gated by
+            # its own 4h EMA stack, so regime admission is redundant)
+            if (
+                "VWAPPullback" in self.strategies
+                and "VWAPPullback" not in active_strategy_names
+            ):
+                active_strategy_names = list(active_strategy_names) + [
+                    "VWAPPullback"
+                ]
+                logger.debug(
+                    f"{symbol}: Added VWAPPullback (trend-gated overlay, runs in all regimes)"
+                )
+
             if not active_strategy_names:
                 funnel.count(STAGE_REGIME_BLOCKED)
                 funnel.reject(REASON_NO_ACTIVE_STRATEGIES)
@@ -1166,6 +1263,15 @@ class StrategyManager:
                     funnel.reject(REASON_STRATEGY_EXCEPTION, strategy=funnel_key)
                     logger.error(f"Error in {strategy_name} for {symbol}: {e}")
                     continue
+
+            # Step 3.4: Directional bias gate (HTF trend + funding extremes).
+            # In "log" mode this only stamps the bias into each signal's
+            # indicators; in "enforce" mode signals fighting the combined
+            # bias additionally fail multi_timeframe_alignment and are
+            # dropped (and attributed) by the existing 8-flag validation.
+            all_signals = self._apply_directional_gate(
+                all_signals, symbol, multi_tf_data
+            )
 
             # Step 3.5: Regime-conditional minimum-confidence gate
             all_signals = self._apply_regime_confidence_gate(all_signals, regime)
@@ -1391,6 +1497,67 @@ class StrategyManager:
         self._signal_generated_counts.clear()
         self._signal_discarded_counts.clear()
         self._signal_discard_flags.clear()
+
+    def _apply_directional_gate(
+        self,
+        signals: List[Signal],
+        symbol: str,
+        multi_tf_data: Dict[str, Dict[str, List[float]]],
+    ) -> List[Signal]:
+        """
+        Apply the directional bias gate (DIRECTIONAL_GATE env).
+
+        "off": returns the signals untouched without computing anything.
+        "log": computes the bias once per call and stamps it into every
+        signal's indicators["directional_bias"] so the census can measure
+        how the gate WOULD have voted, without changing a single trade.
+        "enforce": as "log", plus non-exempt signals whose side fights the
+        combined bias get multi_timeframe_alignment=False - the existing
+        validation then drops them with per-flag discard attribution.
+
+        Args:
+            signals: Generated signals for a symbol.
+            symbol: Trading symbol.
+            multi_tf_data: Per-timeframe OHLCV bundles (trend leg input).
+
+        Returns:
+            The same signal list (enforce mode marks, never removes -
+            removal happens downstream in the 8-flag validation).
+        """
+        mode = self.directional_gate_mode
+        if mode == GATE_OFF or not signals:
+            return signals
+
+        try:
+            bias = self.directional_bias_engine.compute(
+                symbol, multi_tf_data, now=self._sim_time
+            )
+        except Exception as e:
+            logger.warning(f"{symbol}: directional bias computation failed: {e}")
+            return signals
+
+        stamp = bias.to_indicator()
+        for signal in signals:
+            if signal.indicators is None:
+                signal.indicators = {}
+            signal.indicators["directional_bias"] = dict(stamp)
+
+            if mode != GATE_ENFORCE:
+                continue
+            display_name = self._get_strategy_display_name(signal.strategy)
+            if display_name in self.directional_gate_exempt:
+                continue
+            if not bias.allows(signal.side):
+                signal.multi_timeframe_alignment = False
+                logger.info(
+                    f"Directional gate: {display_name} {signal.side.value} "
+                    f"{symbol} fights bias "
+                    f"(trend={bias.trend}, funding={bias.funding}, "
+                    f"combined={bias.combined}) - failing "
+                    f"multi_timeframe_alignment"
+                )
+
+        return signals
 
     def _apply_regime_confidence_gate(
         self, signals: List[Signal], regime: MarketRegime
@@ -1883,6 +2050,7 @@ class StrategyManager:
             StrategyType.ORDERBOOK_IMBALANCE: "OrderBookImbalance",
             StrategyType.SESSION_RANGE_BREAKOUT: "SessionRangeBreakout",
             StrategyType.CALENDAR_FLOW: "CalendarFlow",
+            StrategyType.VWAP_PULLBACK: "VWAPPullback",
         }
         fallback = strategy_type.value if strategy_type.value else str(strategy_type)
         return mapping.get(strategy_type, fallback)
@@ -1914,6 +2082,7 @@ class StrategyManager:
             "OrderBookImbalance": StrategyType.ORDERBOOK_IMBALANCE,
             "SessionRangeBreakout": StrategyType.SESSION_RANGE_BREAKOUT,
             "CalendarFlow": StrategyType.CALENDAR_FLOW,
+            "VWAPPullback": StrategyType.VWAP_PULLBACK,
         }
 
         result = {}
