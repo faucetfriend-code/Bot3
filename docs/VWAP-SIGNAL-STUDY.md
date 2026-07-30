@@ -175,3 +175,33 @@ Mine is that it fails the holdout. +7.78 bp net per trade is thin, the t is
 1.90 after ~200 looks, and two of six design-slice years are already negative.
 The four structural findings are the durable result of this study; the
 candidate is a lottery ticket that costs one clean test to settle.
+
+---
+
+## HOLDOUT RESULT (2026-07-30): the candidate FAILS. File closed.
+
+The single pre-registered test was run exactly as specified: BTC-USDC 15m,
+2024-01-01..2026-07-01 (87,552 bars), long only, `deviation_sd >= 2.0`,
+`rvol < 1.5`, 8h horizon, no stop, net of 14.1 bp.
+
+| | design slice (2018-2023) | holdout (2024-2026) |
+|---|---|---|
+| setups | 2,685 | 1,202 |
+| gross | +21.88 bp | **+6.05 bp** |
+| net of 14.1 bp | +7.78 bp | **-8.05 bp** |
+
+| year | n | gross bp | drift bp | excess bp | net bp |
+|---|---|---|---|---|---|
+| 2024 | 430 | 17.69 | 8.46 | +9.23 | +3.59 |
+| 2025 | 488 | 4.75 | 0.28 | +4.47 | -9.35 |
+| 2026 | 285 | -9.55 | -6.52 | **-3.03** | -23.65 |
+
+The excess-over-drift decays monotonically across the holdout years and goes
+negative in 2026 - the first negative-excess year in the nine measured. The
+signal is not pure noise (excess positive in 2024/2025), but it is far too
+thin to pay a 14.1 bp round trip, and it is weakening.
+
+Per pre-registration the file is closed: the candidate is NOT being built as
+a strategy, and ETH/SUI were not tested (running them after a BTC failure
+would be fishing). The four structural findings above stand - they were
+never conditional on the candidate surviving.
