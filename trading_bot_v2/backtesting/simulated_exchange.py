@@ -56,6 +56,7 @@ class SimulatedPosition:
     realised_pnl: float = 0.0
     funding_paid: float = 0.0
     entry_regime: str = ""  # Confirmed regime at position open (P4)
+    entry_direction: str = ""  # Directional-bias state at open (bull/bear/neutral)
 
 
 class SimulatedExchange:
@@ -163,6 +164,11 @@ class SimulatedExchange:
         self._order_counter: int = 0
         self._current_strategy: str = ""  # Set by engine before each order for attribution
         self._current_regime: str = ""    # Set by engine each bar (regime value, P4)
+        # Directional-bias state ("bull"/"bear"/"neutral"), set by the
+        # engine each bar alongside _current_regime. Combined with the
+        # regime it forms the composite state (vol tercile x direction)
+        # the regime-variant tuner keys on.
+        self._current_direction: str = ""
         # Latest bar context, used by the dynamic slippage model.
         self._bar_range_pct: float = 0.0
         self._bar_notional: float = 0.0
@@ -442,8 +448,10 @@ class SimulatedExchange:
         fill_side = "long" if order.side == "bid" else "short"
         if prior_pos is not None and prior_pos.side != fill_side:
             regime_tag = prior_pos.entry_regime or self._current_regime
+            direction_tag = prior_pos.entry_direction or self._current_direction
         else:
             regime_tag = self._current_regime
+            direction_tag = self._current_direction
 
         realised_pnl = self._open_or_add_position(
             symbol, fill_side, order.quantity, fill_price
@@ -452,7 +460,8 @@ class SimulatedExchange:
         if order.status == "filled":  # may have been cancelled by balance guard
             self.balance -= fee
             self._log_trade(
-                order, fill_price, fee, realised_pnl, regime_tag, role.value
+                order, fill_price, fee, realised_pnl, regime_tag,
+                direction_tag, role.value
             )
 
     def _open_or_add_position(
@@ -497,6 +506,7 @@ class SimulatedExchange:
                         self._positions[symbol] = SimulatedPosition(
                             symbol=symbol, side=side, quantity=remaining,
                             entry_price=price, entry_regime=self._current_regime,
+                            entry_direction=self._current_direction,
                         )
             # partial close: existing.quantity already reduced above
 
@@ -528,6 +538,7 @@ class SimulatedExchange:
             self._positions[symbol] = SimulatedPosition(
                 symbol=symbol, side=side, quantity=qty, entry_price=price,
                 entry_regime=self._current_regime,
+                entry_direction=self._current_direction,
             )
 
         return realised_pnl
@@ -641,6 +652,7 @@ class SimulatedExchange:
         fee: float,
         realised_pnl: float = 0.0,
         regime: str = "",
+        direction: str = "",
         role: str = "",
     ) -> None:
         """
@@ -657,6 +669,12 @@ class SimulatedExchange:
             Records the regime tag supplied by _fill_order — the regime
             at position ENTRY for closing fills, the current regime for
             opening fills. Enables regime-conditional optimization.
+
+        Direction tagging (regime-variant tuning):
+            Records the directional-bias state ("bull"/"bear"/"neutral")
+            on the same entry-attribution rule as the regime tag. The
+            (regime, direction) pair is the composite state the
+            vol-tercile x direction variant tuner scores on.
 
         Liquidity role:
             "maker" for resting limit fills, "taker" for market and stop
@@ -675,5 +693,6 @@ class SimulatedExchange:
             "balance_after": round(self.balance, 4),
             "strategy": self._current_strategy,
             "regime": regime,
+            "direction": direction,
             "role": role,
         })

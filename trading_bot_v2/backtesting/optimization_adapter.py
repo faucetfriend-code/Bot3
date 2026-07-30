@@ -267,21 +267,39 @@ class OptimizationAdapter:
         self, result: BacktestResult, regime: str
     ) -> List[Dict[str, Any]]:
         """
-        Filter closed trades whose entry regime matches the target.
+        Filter closed trades whose entry state matches the target.
+
+        Accepts a plain regime ("RANGING_CALM", "vol_low") or a
+        composite "REGIME:DIRECTION" key ("VOL_LOW:TREND") matching the
+        trade log's (regime, direction) tags. Direction "trend" matches
+        bull OR bear; "bull"/"bear"/"neutral" match exactly.
 
         Args:
-            result: BacktestResult with a regime-tagged trade_log
-            regime: Target regime (enum value or name, case-insensitive)
+            result: BacktestResult with a regime/direction-tagged trade_log
+            regime: Target state (enum value or name, case-insensitive)
 
         Returns:
-            List of closed-trade dicts (pnl != 0) tagged with the regime
+            List of closed-trade dicts (pnl != 0) matching the state
         """
         target = str(getattr(regime, "value", regime)).strip().lower()
+        direction = None
+        if ":" in target:
+            target, direction = target.split(":", 1)
+
+        def _direction_matches(trade: Dict[str, Any]) -> bool:
+            if direction is None:
+                return True
+            tag = str(trade.get("direction", "")).strip().lower()
+            if direction == "trend":
+                return tag in ("bull", "bear")
+            return tag == direction
+
         return [
             t
             for t in result.trade_log
             if t.get("pnl", 0) != 0
             and str(t.get("regime", "")).strip().lower() == target
+            and _direction_matches(t)
         ]
 
     def calculate_objective_from_trades(

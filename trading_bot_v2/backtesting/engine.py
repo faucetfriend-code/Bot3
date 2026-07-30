@@ -940,6 +940,24 @@ class BacktestEngine:
             )
             exchange._current_regime = getattr(regime_obj, "value", "") or ""
 
+            # Expose the directional-bias state the same way, so every
+            # fill carries the (regime, direction) composite state the
+            # regime-variant tuner scores on. Computed regardless of
+            # DIRECTIONAL_GATE mode - tagging is observation, not
+            # enforcement. Cheap: the trend leg is two EMAs over the
+            # history slice and the funding leg is cached per hour.
+            try:
+                bias = strategy_manager.directional_bias_engine.compute(
+                    symbol, multi_tf_data, now=sim_dt
+                )
+                exchange._current_direction = {
+                    "long": "bull",
+                    "short": "bear",
+                }.get(bias.combined, "neutral")
+            except Exception as e:
+                exchange._current_direction = ""
+                logger.debug(f"Direction tagging skipped at {ts}: {e}")
+
             # --- Execute signals ---
             for signal in signals:
                 try:

@@ -122,27 +122,51 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+#: Direction buckets a composite regime key may carry after the colon.
+#: "bull"/"bear"/"neutral" match the trade log's direction tag exactly;
+#: "trend" matches bull OR bear (mean-reversion-style strategies fade
+#: symmetrically, so splitting their sample by trend side would halve
+#: it for no modelled reason).
+COMPOSITE_DIRECTIONS = ("bull", "bear", "neutral", "trend")
+
+
 def normalize_regime_value(regime: Any) -> str:
-    """Normalize a regime identifier to its lowercase enum value.
+    """Normalize a regime identifier to its lowercase value.
+
+    Accepts a plain regime (MarketRegime, "ranging_calm", or
+    "RANGING_CALM") or a composite "REGIME:DIRECTION" key
+    (e.g. "VOL_LOW:TREND") whose direction part is one of
+    COMPOSITE_DIRECTIONS. Composite keys are what the vol-tercile x
+    direction variant tuner passes; every pre-existing caller sends
+    plain regimes and is unaffected.
 
     Args:
-        regime: MarketRegime, enum value string ("ranging_calm"), or
-            enum name string ("RANGING_CALM").
+        regime: Regime identifier, optionally "REGIME:DIRECTION".
 
     Returns:
-        Lowercase regime value (e.g. "ranging_calm").
+        Lowercase value ("ranging_calm", "vol_low:trend").
 
     Raises:
-        ValueError: If the input does not map to a known MarketRegime.
+        ValueError: If either part does not map to a known value.
     """
     raw = getattr(regime, "value", regime)
     value = str(raw).strip().lower()
+
+    direction = None
+    if ":" in value:
+        value, direction = value.split(":", 1)
+        if direction not in COMPOSITE_DIRECTIONS:
+            raise ValueError(
+                f"Unknown direction in composite regime: {direction!r}. "
+                f"Valid: {sorted(COMPOSITE_DIRECTIONS)}"
+            )
+
     valid = {r.value for r in MarketRegime}
     if value not in valid:
         raise ValueError(
             f"Unknown regime: {regime!r}. Valid values: {sorted(valid)}"
         )
-    return value
+    return value if direction is None else f"{value}:{direction}"
 
 
 def resolve_strategy_display_name(name: str) -> Optional[str]:
