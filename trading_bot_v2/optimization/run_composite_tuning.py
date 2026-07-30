@@ -38,6 +38,7 @@ Usage:
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -88,6 +89,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--capital", type=float, default=10000.0)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--report", default=None, help="Write JSON report here")
+    p.add_argument(
+        "--directional-gate", default=None,
+        choices=("off", "log", "enforce"),
+        help=(
+            "Force DIRECTIONAL_GATE for this run. Set via os.environ "
+            "AFTER config import, because load_dotenv(override=True) "
+            "clobbers shell exports whenever the key exists in .env - "
+            "the only reliable way to run the off/enforce A/B arms."
+        ),
+    )
     return p.parse_args(argv)
 
 
@@ -162,6 +173,23 @@ def run(argv: Optional[List[str]] = None) -> int:
     import optuna
 
     optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+    # Cap loguru at LOG_LEVEL. loguru's default sink is stderr at DEBUG
+    # and this driver replays years of 5m bars per trial - the first
+    # full arm wrote 18 GB of DEBUG stderr in 4 hours and filled the
+    # volume (2026-07-30). Same scoped fix as validation/runner.py.
+    try:
+        logger.remove()
+        logger.add(
+            sys.stderr, level=os.getenv("LOG_LEVEL", "WARNING").upper() or "WARNING"
+        )
+    except Exception:
+        pass
+
+    if args.directional_gate is not None:
+        # After config import, so this wins over the .env-loaded value.
+        os.environ["DIRECTIONAL_GATE"] = args.directional_gate
+        print(f"  DIRECTIONAL_GATE forced to '{args.directional_gate}'")
 
     states = [s.strip().lower() for s in args.states.split(",") if s.strip()]
     step_m = args.step_months or args.test_months
