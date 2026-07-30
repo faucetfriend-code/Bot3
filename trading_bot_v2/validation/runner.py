@@ -1533,6 +1533,22 @@ def _sleep_interruptible(seconds: float) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point for the standalone validation runner."""
+    # Cap loguru at LOG_LEVEL for this service. loguru ships a default
+    # stderr sink at DEBUG and no module in this repo ever configures
+    # one, so LOG_LEVEL only ever governed stdlib logging - a full
+    # campaign at DEBUG once wrote ~275 MB per validation cell and
+    # filled the volume (2026-07-29). Scoped to the CLI entry so
+    # importing this module never touches global logging state.
+    try:
+        from loguru import logger as _loguru_logger
+
+        _loguru_logger.remove()
+        _loguru_logger.add(
+            sys.stderr, level=os.getenv("LOG_LEVEL", "INFO").upper() or "INFO"
+        )
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description=(
             "Standalone strategy validation service (chunked windows, "
