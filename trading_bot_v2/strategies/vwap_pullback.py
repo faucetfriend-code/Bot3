@@ -76,6 +76,9 @@ class VWAPPullbackStrategy:
         entry_mode: str = "market",
         maker_offset_bp: float = 15.0,
         entry_ttl_candles: int = 12,
+        exit_mode: str = "fixed",
+        trail_activation_r: float = 1.0,
+        trail_r: float = 1.0,
     ):
         """
         Initialize VWAPPullbackStrategy.
@@ -120,6 +123,17 @@ class VWAPPullbackStrategy:
                 orders (carried via indicators["entry_ttl_candles"]).
                 Without this a never-filled entry leaves naked exit
                 orders that can fill as an inverted position.
+            exit_mode: "fixed" (shipped: SL + fixed tp_rr target) or
+                "trailing" (no fixed target; initial SL until the trade
+                reaches trail_activation_r x risk in favour, then the
+                stop ratchets to peak - trail_r x risk. Motivated by
+                the 2026-07-31 excursion study: MFE/|MAE| 1.65 at 4h
+                decaying with hold time, median peak ~10h, profits
+                tail-driven - a fixed 2R target caps the tail).
+            trail_activation_r: Favourable multiple of the entry risk
+                at which trailing arms (trailing mode only).
+            trail_r: Trail distance behind the peak, in entry-risk
+                multiples (trailing mode only).
         """
         self.strategy_type = StrategyType.VWAP_PULLBACK
 
@@ -143,6 +157,11 @@ class VWAPPullbackStrategy:
         )
         self.maker_offset_bp = maker_offset_bp
         self.entry_ttl_candles = entry_ttl_candles
+        self.exit_mode = (
+            exit_mode if exit_mode in ("fixed", "trailing") else "fixed"
+        )
+        self.trail_activation_r = trail_activation_r
+        self.trail_r = trail_r
 
         # symbol -> last signal time (sim time in backtest)
         self._last_signal_time: Dict[str, datetime] = {}
@@ -389,13 +408,31 @@ class VWAPPullbackStrategy:
 
         if risk <= 0:
             return signals
+
+        # Trailing mode drops the fixed target: initial SL protects until
+        # +trail_activation_r x risk, then the engine ratchets the stop
+        # behind the peak. The excursion study showed profits are
+        # tail-driven (mean MFE 259 bp vs the ~2R cap), so the target is
+        # the mechanism being removed, not resized.
+        if self.exit_mode == "trailing":
+            take_profit = None
+
         # Geometry sanity: entry must sit between stop and target
-        if side == OrderSide.BUY and not (stop_loss < entry_price < take_profit):
+        if side == OrderSide.BUY and not (
+            stop_loss < entry_price
+            and (take_profit is None or entry_price < take_profit)
+        ):
             return signals
-        if side == OrderSide.SELL and not (take_profit < entry_price < stop_loss):
+        if side == OrderSide.SELL and not (
+            entry_price < stop_loss
+            and (take_profit is None or take_profit < entry_price)
+        ):
             return signals
 
-        rrr = self.tp_rr  # by construction
+        # Fixed mode: rrr is tp_rr by construction. Trailing mode has no
+        # fixed target, so rrr is undefined; the flag passes by design
+        # (the trail itself enforces the reward geometry).
+        rrr = self.tp_rr
         confidence = self.min_confidence
         if extension >= 1.5 * self.extension_min_sd:
             confidence += 0.05
@@ -447,6 +484,18 @@ class VWAPPullbackStrategy:
                     if self.entry_mode == "maker"
                     else None
                 ),
+                # Engine ratchets the stop behind the peak (trailing
+                # mode only): arms at +activation_r x risk, trails at
+                # trail_r x risk behind the favourable extreme
+                "trailing": (
+                    {
+                        "activation_r": self.trail_activation_r,
+                        "trail_r": self.trail_r,
+                        "risk": risk,
+                    }
+                    if self.exit_mode == "trailing"
+                    else None
+                ),
             },
             # Validation flags (RiskManager re-validates downstream).
             # multi_timeframe_alignment is TRUE BY MEASUREMENT here: the
@@ -464,9 +513,13 @@ class VWAPPullbackStrategy:
         signals.append(signal)
         self._last_signal_time[symbol] = now
 
+        tp_text = (
+            f"${take_profit:.4f}" if take_profit is not None
+            else f"trail {self.trail_r}R after +{self.trail_activation_r}R"
+        )
         logger.info(
             f"{symbol}: VWAP pullback signal - {direction.upper()} @ "
-            f"${entry_price:.4f}, SL=${stop_loss:.4f}, TP=${take_profit:.4f}, "
+            f"${entry_price:.4f}, SL=${stop_loss:.4f}, TP={tp_text}, "
             f"conf={confidence:.0%}, ext={extension:.2f} SD"
         )
         return signals

@@ -313,6 +313,13 @@ class BacktestEngine:
         # are cancelled. Without this, a never-filled entry leaves naked
         # exit orders that can fill as an inverted position.
         self._pending_entry_ttl: Dict[str, int] = {}
+        # Trailing-stop tracking for signals carrying
+        # indicators["trailing"] = {activation_r, trail_r, risk}: the
+        # stop ratchets behind the favourable extreme once the trade is
+        # activation_r x risk in profit. The ratchet replaces the REAL
+        # resting stop order, so fills keep the exchange's stop
+        # semantics (tie-breaks, fees, roles).
+        self._position_trailing: Dict[str, Dict] = {}
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
         self._position_time_exit: Dict[str, Dict] = {}
@@ -726,6 +733,7 @@ class BacktestEngine:
         self._position_last_entry_candle = {}
         self._position_time_exit = {}
         self._pending_entry_ttl = {}
+        self._position_trailing = {}
         self._sim_dt = None
         # Signal funnel: a backtest always wants diagnostics (the cost is
         # a handful of dict increments per bar - see the <3% benchmark in
@@ -926,6 +934,10 @@ class BacktestEngine:
             # --- Expire unfilled maker entries past their TTL ---
             if self._pending_entry_ttl:
                 self._expire_stale_entries(exchange, i)
+
+            # --- Ratchet trailing stops behind the favourable extreme ---
+            if self._position_trailing:
+                self._apply_trailing_stops(exchange, candle_5m)
 
             # --- Time-based exits (signals carrying time_exit_hours) ---
             if sim_dt is not None and self._position_time_exit:
@@ -1254,6 +1266,21 @@ class BacktestEngine:
         if entry_ttl and position_after is None:
             self._pending_entry_ttl[signal.asset] = candle_idx + int(entry_ttl)
 
+        # Track trailing-stop config if the signal requests one
+        trailing = (signal.indicators or {}).get("trailing")
+        if trailing and float(trailing.get("risk", 0)) > 0:
+            self._position_trailing[signal.asset] = {
+                "activation_r": float(trailing.get("activation_r", 1.0)),
+                "trail_r": float(trailing.get("trail_r", 1.0)),
+                "risk": float(trailing.get("risk")),
+                "side": "long" if side == "bid" else "short",
+                "strategy": signal.strategy.value,
+                "peak": None,          # set from bars once a position exists
+                "active": False,
+                "placed_stop": signal.stop_loss,
+                "seen_position": position_after is not None,
+            }
+
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
         if time_exit_hours and self._sim_dt is not None:
@@ -1323,6 +1350,98 @@ class BacktestEngine:
             logger.debug(
                 f"entry_ttl: cancelled unfilled entry + exits for {asset} "
                 f"at candle {candle_idx}"
+            )
+
+    def _apply_trailing_stops(
+        self, exchange: SimulatedExchange, candle_5m: Dict
+    ) -> None:
+        """Ratchet trailing stops behind each tracked position's peak.
+
+        Once a position is activation_r x risk in favour, its resting
+        stop order is cancelled and re-placed at peak - trail_r x risk
+        (mirrored for shorts). The stop only ever tightens, and a
+        replacement placed this bar can first fill on the NEXT bar -
+        a deliberate one-bar lag that avoids peeking inside the bar
+        that set the peak. Trailing-mode signals carry no take-profit,
+        so cancel_all_orders only ever touches the stop.
+        """
+        high = float(candle_5m.get("high", 0) or 0)
+        low = float(candle_5m.get("low", 0) or 0)
+        if high <= 0 or low <= 0:
+            return
+
+        # Minimum improvement before replacing the resting stop, to
+        # avoid cancelling/re-placing on every bar of a slow grind.
+        RATCHET_EPS_R = 0.05
+
+        for asset in list(self._position_trailing):
+            cfg = self._position_trailing[asset]
+            pos = exchange._positions.get(asset)
+
+            if pos is None:
+                if cfg["seen_position"]:
+                    # Position closed (stop/time exit) - done
+                    del self._position_trailing[asset]
+                elif not any(
+                    o.symbol == asset and o.status == "open"
+                    for o in exchange._orders.values()
+                ):
+                    # Entry never filled and its orders are gone (TTL)
+                    del self._position_trailing[asset]
+                continue
+
+            cfg["seen_position"] = True
+            risk = cfg["risk"]
+            entry = pos.entry_price
+
+            if cfg["side"] == "long":
+                cfg["peak"] = max(cfg["peak"] or high, high)
+                if not cfg["active"]:
+                    cfg["active"] = (
+                        cfg["peak"] >= entry + cfg["activation_r"] * risk
+                    )
+                if not cfg["active"]:
+                    continue
+                new_stop = cfg["peak"] - cfg["trail_r"] * risk
+                improves = (
+                    cfg["placed_stop"] is None
+                    or new_stop
+                    >= cfg["placed_stop"] + RATCHET_EPS_R * risk
+                )
+                stop_side = "ask"
+            else:
+                cfg["peak"] = min(cfg["peak"] or low, low)
+                if not cfg["active"]:
+                    cfg["active"] = (
+                        cfg["peak"] <= entry - cfg["activation_r"] * risk
+                    )
+                if not cfg["active"]:
+                    continue
+                new_stop = cfg["peak"] + cfg["trail_r"] * risk
+                improves = (
+                    cfg["placed_stop"] is None
+                    or new_stop
+                    <= cfg["placed_stop"] - RATCHET_EPS_R * risk
+                )
+                stop_side = "bid"
+
+            if not improves:
+                continue
+
+            exchange.cancel_all_orders(asset)
+            # Keep the owning strategy's attribution on the ratcheted stop
+            exchange._current_strategy = cfg.get("strategy", "")
+            exchange.place_order(
+                symbol=asset,
+                side=stop_side,
+                quantity=str(pos.quantity),
+                order_type="stop",
+                price=new_stop,
+            )
+            cfg["placed_stop"] = new_stop
+            logger.debug(
+                f"trailing: {asset} {cfg['side']} stop ratcheted to "
+                f"{new_stop:.4f} (peak {cfg['peak']:.4f})"
             )
 
     def _apply_time_exits(self, exchange: SimulatedExchange, sim_dt: datetime) -> None:
