@@ -307,6 +307,12 @@ class BacktestEngine:
         self._position_entry_count: Dict[str, int] = {}
         # symbol -> replay index of the most recent entry into the position
         self._position_last_entry_candle: Dict[str, int] = {}
+        # Entry-TTL tracking for resting limit entries carrying
+        # indicators["entry_ttl_candles"] (maker-mode entries): asset ->
+        # replay index after which an UNFILLED entry and its exit orders
+        # are cancelled. Without this, a never-filled entry leaves naked
+        # exit orders that can fill as an inverted position.
+        self._pending_entry_ttl: Dict[str, int] = {}
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
         self._position_time_exit: Dict[str, Dict] = {}
@@ -719,6 +725,7 @@ class BacktestEngine:
         self._position_entry_count = {}
         self._position_last_entry_candle = {}
         self._position_time_exit = {}
+        self._pending_entry_ttl = {}
         self._sim_dt = None
         # Signal funnel: a backtest always wants diagnostics (the cost is
         # a handful of dict increments per bar - see the <3% benchmark in
@@ -915,6 +922,10 @@ class BacktestEngine:
             # analysis/regime_stability.py.
             if sim_dt is not None:
                 strategy_manager.regime_detector._clock = lambda dt=sim_dt: dt
+
+            # --- Expire unfilled maker entries past their TTL ---
+            if self._pending_entry_ttl:
+                self._expire_stale_entries(exchange, i)
 
             # --- Time-based exits (signals carrying time_exit_hours) ---
             if sim_dt is not None and self._position_time_exit:
@@ -1236,6 +1247,13 @@ class BacktestEngine:
             self._position_entry_count[signal.asset] = 1
         self._position_last_entry_candle[signal.asset] = candle_idx
 
+        # Track entry TTL for resting maker entries. Only armed when the
+        # entry did NOT fill inside place_order (position_after is None):
+        # a filled market/limit entry needs no expiry.
+        entry_ttl = (signal.indicators or {}).get("entry_ttl_candles")
+        if entry_ttl and position_after is None:
+            self._pending_entry_ttl[signal.asset] = candle_idx + int(entry_ttl)
+
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
         if time_exit_hours and self._sim_dt is not None:
@@ -1280,6 +1298,32 @@ class BacktestEngine:
     # ------------------------------------------------------------------
     # Time-based exits
     # ------------------------------------------------------------------
+
+    def _expire_stale_entries(
+        self, exchange: SimulatedExchange, candle_idx: int
+    ) -> None:
+        """Cancel unfilled maker entries (and their exits) past their TTL.
+
+        Armed by _execute_signal when a resting limit entry carries
+        indicators["entry_ttl_candles"]. If the entry filled meanwhile
+        (a position exists) the tracking is simply dropped; otherwise
+        every open order for the asset is cancelled together - entry and
+        exit set - so no naked exit order can outlive its entry.
+        """
+        for asset in list(self._pending_entry_ttl):
+            if asset in exchange._positions:
+                # Entry filled - the exits are live and legitimate now
+                del self._pending_entry_ttl[asset]
+                continue
+            if candle_idx < self._pending_entry_ttl[asset]:
+                continue
+            exchange.cancel_all_orders(asset)
+            del self._pending_entry_ttl[asset]
+            self._position_time_exit.pop(asset, None)
+            logger.debug(
+                f"entry_ttl: cancelled unfilled entry + exits for {asset} "
+                f"at candle {candle_idx}"
+            )
 
     def _apply_time_exits(self, exchange: SimulatedExchange, sim_dt: datetime) -> None:
         """

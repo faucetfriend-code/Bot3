@@ -222,3 +222,35 @@ class TestGuards:
         )
         assert len(signals) == 1
         assert signals[0].indicators["rvol"] == pytest.approx(2.0)
+
+
+class TestMakerEntry:
+    def test_market_mode_enters_at_current_price(self):
+        strategy = _strategy()  # entry_mode defaults to market
+        sig = strategy.generate_signals(
+            "BTC-USDC", {"15m": _long_session(), "4h": BULL_4H}, 108.0
+        )[0]
+        assert sig.entry_price == 108.0
+        assert sig.indicators["entry_ttl_candles"] is None
+
+    def test_maker_long_rests_below_market_with_ttl(self):
+        strategy = _strategy(entry_mode="maker", maker_offset_bp=20.0)
+        sig = strategy.generate_signals(
+            "BTC-USDC", {"15m": _long_session(), "4h": BULL_4H}, 108.0
+        )[0]
+        assert sig.entry_price == pytest.approx(108.0 * (1 - 0.002))
+        # Offset must clear the engine's 0.1% market-order threshold
+        assert abs(sig.entry_price - 108.0) / 108.0 > 0.001
+        assert sig.indicators["entry_ttl_candles"] == 12
+        assert sig.indicators["entry_mode"] == "maker"
+
+    def test_maker_short_rests_above_market(self):
+        strategy = _strategy(entry_mode="maker", maker_offset_bp=20.0)
+        sig = strategy.generate_signals(
+            "BTC-USDC", {"15m": _short_session(), "4h": BEAR_4H}, 92.0
+        )[0]
+        assert sig.entry_price == pytest.approx(92.0 * (1 + 0.002))
+
+    def test_unknown_mode_falls_back_to_market(self):
+        strategy = _strategy(entry_mode="banana")
+        assert strategy.entry_mode == "market"

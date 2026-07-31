@@ -73,6 +73,9 @@ class VWAPPullbackStrategy:
         min_confidence: float = 0.6,
         min_rrr: float = 1.5,
         enable_short: bool = True,
+        entry_mode: str = "market",
+        maker_offset_bp: float = 15.0,
+        entry_ttl_candles: int = 12,
     ):
         """
         Initialize VWAPPullbackStrategy.
@@ -101,6 +104,22 @@ class VWAPPullbackStrategy:
                 tp_rr, so the flag only fails on misconfiguration).
             enable_short: Whether to mirror the setup under a bearish
                 stack.
+            entry_mode: "market" (shipped: enter at current price,
+                taker fees) or "maker" (rest a limit maker_offset_bp
+                inside the move: below market for longs, above for
+                shorts - maker fees and better fills, at the cost of
+                some entries never filling).
+            maker_offset_bp: Limit offset from current price in basis
+                points (maker mode only). Must exceed the engine's 0.1%
+                market-order threshold to actually rest; 5 bp does not,
+                so the engine treats <=10 bp as market - use >10 to rest.
+                Kept configurable because the offset IS the tradeoff:
+                bigger = better price + more maker fills, fewer trades.
+            entry_ttl_candles: 5m replay candles an unfilled maker entry
+                may rest before the engine cancels it AND its exit
+                orders (carried via indicators["entry_ttl_candles"]).
+                Without this a never-filled entry leaves naked exit
+                orders that can fill as an inverted position.
         """
         self.strategy_type = StrategyType.VWAP_PULLBACK
 
@@ -119,6 +138,11 @@ class VWAPPullbackStrategy:
         self.min_confidence = min_confidence
         self.min_rrr = min_rrr
         self.enable_short = enable_short
+        self.entry_mode = (
+            entry_mode if entry_mode in ("market", "maker") else "market"
+        )
+        self.maker_offset_bp = maker_offset_bp
+        self.entry_ttl_candles = entry_ttl_candles
 
         # symbol -> last signal time (sim time in backtest)
         self._last_signal_time: Dict[str, datetime] = {}
@@ -339,7 +363,19 @@ class VWAPPullbackStrategy:
         if atr_value <= 0:
             return signals
 
-        entry_price = current_price
+        # Maker mode rests a limit inside the move; market mode (shipped)
+        # enters at the current price. The engine turns any entry more
+        # than 0.1% from market into a resting limit, which fills as a
+        # maker order in the sim and live alike.
+        if self.entry_mode == "maker":
+            offset = self.maker_offset_bp / 10_000.0
+            if direction == "long":
+                entry_price = current_price * (1.0 - offset)
+            else:
+                entry_price = current_price * (1.0 + offset)
+        else:
+            entry_price = current_price
+
         if direction == "long":
             side = OrderSide.BUY
             stop_loss = lows[last_i] - self.atr_stop_buffer * atr_value
@@ -403,6 +439,14 @@ class VWAPPullbackStrategy:
                 "rvol": rvol,
                 "time_exit_hours": self.time_exit_hours,
                 "direction": direction,
+                "entry_mode": self.entry_mode,
+                # Engine cancels the unfilled entry + its exits after
+                # this many replay candles (maker mode only)
+                "entry_ttl_candles": (
+                    self.entry_ttl_candles
+                    if self.entry_mode == "maker"
+                    else None
+                ),
             },
             # Validation flags (RiskManager re-validates downstream).
             # multi_timeframe_alignment is TRUE BY MEASUREMENT here: the

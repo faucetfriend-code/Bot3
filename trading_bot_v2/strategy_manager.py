@@ -758,6 +758,9 @@ class StrategyManager:
             vpb_cooldown = float(os.getenv("VWAP_PB_COOLDOWN_HOURS", "4"))
             vpb_min_rrr = float(os.getenv("VWAP_PB_MIN_RRR", "1.5"))
             vpb_enable_short = _get_env_vpb_bool("VWAP_PB_ENABLE_SHORT", True)
+            vpb_entry_mode = os.getenv("VWAP_PB_ENTRY_MODE", "market").strip().lower()
+            vpb_maker_offset = float(os.getenv("VWAP_PB_MAKER_OFFSET_BP", "15.0"))
+            vpb_entry_ttl = int(os.getenv("VWAP_PB_ENTRY_TTL_CANDLES", "12"))
 
             self.strategies["VWAPPullback"] = VWAPPullbackStrategy(
                 ema_fast=vpb_ema_fast,
@@ -773,6 +776,9 @@ class StrategyManager:
                 cooldown_hours=vpb_cooldown,
                 min_rrr=vpb_min_rrr,
                 enable_short=vpb_enable_short,
+                entry_mode=vpb_entry_mode,
+                maker_offset_bp=vpb_maker_offset,
+                entry_ttl_candles=vpb_entry_ttl,
             )
             logger.info(
                 f"VWAP Pullback strategy enabled: 4h EMA {vpb_ema_fast}/"
