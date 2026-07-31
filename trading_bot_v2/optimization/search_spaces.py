@@ -332,6 +332,7 @@ def get_search_space(strategy_name: str) -> SearchSpace:
         "grid_trading": _grid_trading_space,
         "liquidation_capture": _liquidation_capture_space,
         "vwap_scalping": _vwap_scalping_space,
+        "vwap_pullback": _vwap_pullback_space,
         "funding_arb": _funding_arb_space,
         "momentum_scalping": _momentum_scalping_space,
         "orderbook_imbalance": _orderbook_imbalance_space,
@@ -354,6 +355,7 @@ def list_strategies() -> List[str]:
         "grid_trading",
         "liquidation_capture",
         "vwap_scalping",
+        "vwap_pullback",
         "funding_arb",
         "momentum_scalping",
         "orderbook_imbalance",
@@ -442,6 +444,30 @@ def _ma_crossover_space() -> SearchSpace:
         # Strategy default is 0.50; the score is
         # 0.3*volume + 0.4*macd + 0.3*pullback, which rarely clears 0.6.
         "min_confidence": (0.20, 0.60),
+    }
+
+
+def _vwap_pullback_space() -> SearchSpace:
+    """
+    VWAP Pullback (trend-side continuation) search space.
+
+    Shipped defaults passed the gate untuned (PF 1.61, 2026-07-30
+    campaign), so ranges bracket the defaults rather than exploring far
+    from them - the tuner must beat a known-good baseline out-of-sample.
+    Params are applied by setattr; every key matches an instance
+    attribute of VWAPPullbackStrategy.
+    """
+    return {
+        # Entry geometry
+        "band_sd": (0.1, 0.5),               # Pullback band half-width (sigma)
+        "extension_min_sd": (0.5, 2.0),      # Required prior extension (sigma)
+        # Exit geometry
+        "atr_stop_buffer": (0.25, 1.25),     # Stop beyond pullback extreme (ATR)
+        "tp_rr": (1.0, 3.0),                 # Target as multiple of risk
+        "time_exit_hours": (8, 48),          # Max hold (int hours)
+        # Filters
+        "rvol_min": (0.0, 2.0),              # Resumption-bar rvol floor (0 = off)
+        "cooldown_hours": (2.0, 8.0),        # Per-symbol entry spacing
     }
 
 
@@ -640,6 +666,15 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
         "rsi_overbought": "float",
         "min_confidence": "float",
         "cooldown_minutes": "int",
+    },
+    "vwap_pullback": {
+        "band_sd": "float",
+        "extension_min_sd": "float",
+        "atr_stop_buffer": "float",
+        "tp_rr": "float",
+        "time_exit_hours": "int",
+        "rvol_min": "float",
+        "cooldown_hours": "float",
     },
     "funding_arb": {
         "min_funding_rate": "float",
