@@ -46,7 +46,7 @@ from .risk_manager import RiskManager, RiskProfile
 from .config import StrategyType
 
 # Import WebSocket client for real-time price data
-from .pacifica_ws_client import get_ws_client
+from .ws_factory import get_market_ws_client as get_ws_client
 
 # Import GridLifecycleManager for authoritative grid state management
 from .grid_lifecycle_manager import GridLifecycleManager, GridState

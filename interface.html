@@ -642,6 +642,16 @@
                     <div class="stat-item"><strong>Trades:</strong> <span id="trades-count">0</span></div>
                     <div class="stat-item"><strong>P&L:</strong> $<span id="pnl">0</span></div>
                     <div class="stat-item"><strong>Regime:</strong> <span id="current-regime" class="regime">Unknown</span></div>
+                    <div class="stat-item"><strong>Exchange:</strong>
+                        <span id="active-exchange" style="font-weight:bold;">-</span>
+                        <span id="exchange-mode" style="padding:2px 6px;border-radius:4px;background:#444;color:#fff;font-size:0.85em;">-</span>
+                        <select id="exchange-selector" onchange="switchExchange(this.value)" style="margin-left:6px;">
+                            <option value="">switch...</option>
+                            <option value="pacifica">pacifica</option>
+                            <option value="blofin-demo">blofin (demo)</option>
+                            <option value="blofin-live">blofin (LIVE)</option>
+                        </select>
+                    </div>
                     <div class="stat-item"><strong>Grids:</strong> <span id="active-grids">0</span></div>
                     <div class="stat-item"><strong>Hub:</strong> <span id="ws-status" class="ws-status">Connecting...</span></div>
                     <span id="circuit-breaker" class="circuit-breaker-warning" style="display:none">CIRCUIT BREAKER</span>
@@ -1014,6 +1024,17 @@
                 const regime = data.current_regime || 'unknown';
                 regimeEl.textContent = regime.replace(/_/g, ' ');
                 regimeEl.className = 'regime regime-' + regime.replace(/_/g, '-');
+
+                // Active exchange + mode badge
+                const exEl = document.getElementById('active-exchange');
+                const modeEl = document.getElementById('exchange-mode');
+                if (exEl && data.exchange) {
+                    exEl.textContent = data.exchange;
+                    const mode = data.exchange_mode || '';
+                    modeEl.textContent = mode;
+                    modeEl.style.background =
+                        (mode === 'live' || mode === 'mainnet') ? '#c0392b' : '#27ae60';
+                }
 
                 // Active grids
                 document.getElementById('active-grids').textContent = data.active_grids || 0;
@@ -1698,6 +1719,25 @@
                 setLoadingState('signals-table', false);
             }
         }
+        async function switchExchange(choice) {
+            if (!choice) return;
+            const selector = document.getElementById('exchange-selector');
+            const label = selector.options[selector.selectedIndex].text;
+            if (!confirm('Switch exchange to ' + label + '? The bot will be ' +
+                         'stopped and a manual restart is required.')) {
+                selector.value = '';
+                return;
+            }
+            try {
+                const response = await apiCall('/exchange/select', 'POST',
+                                               { choice: choice });
+                showToast(response.message, response.success ? 'success' : 'error');
+            } catch (error) {
+                showToast('Exchange switch failed: ' + error.message, 'error');
+            }
+            selector.value = '';
+        }
+
         async function startBot() {
             const button = document.querySelector('button[onclick="startBot()"]');
             const originalText = button.textContent;

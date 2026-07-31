@@ -37,7 +37,7 @@ try:
     from .risk_manager import RiskManager
     from .indicators import calculate_rsi, calculate_adx
     from .config import config
-    from .pacifica_ws_client import get_ws_client
+    from .ws_factory import get_market_ws_client as get_ws_client
     from .backup_scheduler import BackupScheduler
     from .exchanges import get_exchange_client
 except ImportError:
@@ -52,7 +52,7 @@ except ImportError:
     from risk_manager import RiskManager
     from indicators import calculate_rsi, calculate_adx
     from config import config
-    from pacifica_ws_client import get_ws_client
+    from ws_factory import get_market_ws_client as get_ws_client
     from backup_scheduler import BackupScheduler
 
     try:
@@ -329,6 +329,22 @@ class BotIntegration:
         with self._lock:
             try:
                 # Base status
+                import os as _os
+
+                _exchange = (
+                    _os.getenv("EXCHANGE", "pacifica").strip().lower()
+                    or "pacifica"
+                )
+                _mode = (
+                    (
+                        "demo"
+                        if _os.getenv("BLOFIN_DEMO", "true").strip().lower()
+                        == "true"
+                        else "live"
+                    )
+                    if _exchange == "blofin"
+                    else ("testnet" if _os.getenv("TESTNET", "true").strip().lower() == "true" else "mainnet")
+                )
                 status = {
                     "is_running": self._is_running,
                     "positions_count": 0,
@@ -338,6 +354,8 @@ class BotIntegration:
                     "active_grids": 0,
                     "current_regime": "unknown",
                     "circuit_breaker_triggered": False,
+                    "exchange": _exchange,
+                    "exchange_mode": _mode,
                 }
 
                 if not self._initialized:
@@ -2012,17 +2030,41 @@ async def get_validation_latest():
 
 @app.get("/api/debug/key-config")
 async def check_key_configuration():
-    """Debug endpoint to check Pacifica API key configuration."""
+    """Debug endpoint to check the active exchange's key configuration.
+
+    Adapter-aware: Pacifica reports its two wallet pubkeys; Blofin
+    reports which credential set is loaded and the mode, never the
+    values themselves.
+    """
     try:
+        import os as _os
+
+        exchange = _os.getenv("EXCHANGE", "pacifica").strip().lower() or "pacifica"
         client = bot_integration.pacifica_client
         if not client:
-            return {"success": False, "error": "Pacifica client not available"}
+            return {"success": False, "error": "Exchange client not available"}
+
+        if exchange == "blofin":
+            demo = bool(getattr(client, "demo", False))
+            return {
+                "success": True,
+                "exchange": "blofin",
+                "mode": "demo" if demo else "live",
+                "api_key_set": bool(getattr(client, "api_key", "")),
+                "api_secret_set": bool(getattr(client, "api_secret", "")),
+                "passphrase_set": bool(getattr(client, "passphrase", "")),
+                "base_url": getattr(client, "base_url", ""),
+                "note": (
+                    "demo mode reads BLOFIN_DEMO_* (falls back to "
+                    "BLOFIN_*); live mode reads BLOFIN_* only"
+                ),
+            }
 
         agent_wallet_pubkey = client.agent_wallet_public_key
         account_pubkey = client.account_public_key
-
         return {
             "success": True,
+            "exchange": "pacifica",
             "agent_wallet_public_key": agent_wallet_pubkey,
             "account_public_key": account_pubkey,
             "keys_match": agent_wallet_pubkey == account_pubkey,
@@ -2031,6 +2073,74 @@ async def check_key_configuration():
     except Exception as e:
         import traceback
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+
+
+@app.post("/api/exchange/select")
+async def select_exchange(payload: dict):
+    """Switch the configured exchange (dashboard selector).
+
+    Rewrites only the EXCHANGE= and BLOFIN_DEMO= lines in .env and stops
+    the trading loop. Clients are constructed at startup and the server
+    runs with reload=False, so a manual restart is required for the
+    switch to take effect - the response says so explicitly.
+    """
+    import os as _os
+    import re as _re
+
+    choice = str(payload.get("choice", "")).strip().lower()
+    mapping = {
+        "pacifica": ("pacifica", None),
+        "blofin-demo": ("blofin", "true"),
+        "blofin-live": ("blofin", "false"),
+    }
+    if choice not in mapping:
+        return {"success": False, "message": f"Unknown choice: {choice!r}"}
+    exchange, demo = mapping[choice]
+
+    # Stop the trading loop before touching config
+    try:
+        if bot_integration._is_running:
+            await bot_integration.stop()
+    except Exception as e:
+        logger.warning(f"Exchange switch: stop failed: {e}")
+
+    env_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+
+        def _set_key(all_lines, key, value):
+            # Rewrite EVERY matching line, not just the first: .env has
+            # carried duplicate keys (e.g. BLOFIN_DEMO twice) and
+            # python-dotenv resolves duplicates last-wins, so a
+            # first-line-only rewrite could be silently overridden.
+            pattern = _re.compile(rf"^{key}=")
+            found = False
+            for i, line in enumerate(all_lines):
+                if pattern.match(line):
+                    all_lines[i] = f"{key}={value}\n"
+                    found = True
+            if not found:
+                all_lines.append(f"{key}={value}\n")
+            return all_lines
+
+        lines = _set_key(lines, "EXCHANGE", exchange)
+        if demo is not None:
+            lines = _set_key(lines, "BLOFIN_DEMO", demo)
+
+        with open(env_path, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+    except Exception as e:
+        return {"success": False, "message": f".env update failed: {e}"}
+
+    mode_note = "" if demo is None else f" (BLOFIN_DEMO={demo})"
+    return {
+        "success": True,
+        "message": (
+            f"EXCHANGE={exchange}{mode_note} written to .env and bot "
+            f"stopped. RESTART the server (run_bot.bat) to apply."
+        ),
+    }
 
 
 @app.get("/api/debug/test-order")
