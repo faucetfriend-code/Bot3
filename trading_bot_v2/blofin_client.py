@@ -78,10 +78,12 @@ BAR_MAP = {
 }
 
 _MISSING_KEYS_MSG = (
-    "Blofin API credentials are not configured. Add BLOFIN_API_KEY, "
-    "BLOFIN_API_SECRET and BLOFIN_PASSPHRASE to .env (create the keys "
-    "at blofin.com -> API Management; start with DEMO trading keys and "
-    "BLOFIN_DEMO=true), then restart the bot."
+    "Blofin API credentials are not configured. Live mode reads "
+    "BLOFIN_API_KEY / BLOFIN_API_SECRET / BLOFIN_PASSPHRASE from .env; "
+    "demo mode (BLOFIN_DEMO=true) prefers BLOFIN_DEMO_API_KEY / "
+    "BLOFIN_DEMO_API_SECRET / BLOFIN_DEMO_PASSPHRASE and falls back to "
+    "the live set. Create keys at blofin.com -> API Management (each "
+    "key has its own passphrase), then restart the bot."
 )
 
 
@@ -152,14 +154,21 @@ class BlofinClient:
         margin_mode: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
-        self.api_key = api_key if api_key is not None else os.getenv("BLOFIN_API_KEY", "")
-        self.api_secret = (
-            api_secret if api_secret is not None else os.getenv("BLOFIN_API_SECRET", "")
-        )
-        self.passphrase = (
-            passphrase if passphrase is not None else os.getenv("BLOFIN_PASSPHRASE", "")
-        )
         self.demo = demo if demo is not None else _env_bool("BLOFIN_DEMO", "true")
+        # Two credential sets live side by side so switching between
+        # demo and live trading is a BLOFIN_DEMO flip, never a paste-over
+        # of the live keys: demo mode prefers BLOFIN_DEMO_* and falls
+        # back to BLOFIN_*; live mode reads BLOFIN_* only.
+        def _cred(name: str) -> str:
+            if self.demo:
+                demo_value = os.getenv(f"BLOFIN_DEMO_{name}", "")
+                if demo_value:
+                    return demo_value
+            return os.getenv(f"BLOFIN_{name}", "")
+
+        self.api_key = api_key if api_key is not None else _cred("API_KEY")
+        self.api_secret = api_secret if api_secret is not None else _cred("API_SECRET")
+        self.passphrase = passphrase if passphrase is not None else _cred("PASSPHRASE")
         self.margin_mode = (
             margin_mode
             if margin_mode is not None
