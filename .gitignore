@@ -22,3 +22,5 @@ trading_bot_v2/.kline_cache/
 .claude/worktrees/pensive-dhawan-3512b2/
 .claude/worktrees/wonderful-lichterman-e45158/
 .claude/worktrees/strange-bhabha-8f4a1f/
+.env.backup*
+.env.bak*
