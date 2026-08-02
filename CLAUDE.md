@@ -24,21 +24,42 @@ taskkill /F /PID <pid>
 
 ## Testing
 
+**There is one test location: `trading_bot_v2/tests/`.** Nothing under
+`trading_bot_v2/` outside that directory is collected. The old root-level
+`trading_bot_v2/test_*.py` surface was retired on 2026-08-02 (see below).
+
 ```bash
 # All tests (from Bot3 directory)
 pytest trading_bot_v2/tests/ -v
+
+# Equivalent - the package has no other test location
+pytest trading_bot_v2/ -q
 
 # Key test files:
 pytest trading_bot_v2/tests/test_signal_routing.py -v      # Signal pipeline
 pytest trading_bot_v2/tests/test_strategy_e2e.py -v         # Strategy end-to-end
 pytest trading_bot_v2/tests/test_component_orchestration.py -v  # Component integration
 
-# Legacy tests also exist at trading_bot_v2/test_*.py (root level)
-pytest trading_bot_v2/test_strategy_manager.py -v
-
 # By pattern
 pytest trading_bot_v2/ -k "mean_reversion"
+
+# Timing-sensitive tests are excluded by default (addopts = -m 'not perf')
+pytest trading_bot_v2/ -m perf
 ```
+
+`tests/conftest.py` has a session-scoped autouse fixture that repoints
+`DATABASE_PATH` at a throwaway file, so the suite can never write to the
+live `trading_bot.db`. **That protection only covers tests collected under
+`tests/`** - which is the main reason the root-level files were retired
+rather than left in place. Put new tests in `tests/`.
+
+Retired 2026-08-02: 17 root-level files. Most were print-only scripts with
+zero assertions; the rest were actively unsafe (one wrote a real BTC-PERP
+trade into the live database on every run, one hit the live Pacifica API
+with real credentials, three drove Playwright against a spawned server and
+POSTed `/api/bot/start`), or tested `_archive/hub_system.py`, which was
+deleted with them. Seven files with genuine coverage were migrated into
+`tests/`. Git history has all of it.
 
 ## Architecture
 

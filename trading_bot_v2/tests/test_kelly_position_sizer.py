@@ -16,9 +16,9 @@ store's get_closed_trades() (returning trade dicts) instead of raw SQL.
 import pytest
 from datetime import datetime
 from unittest.mock import MagicMock, patch
-from .kelly_position_sizer import KellyPositionSizer
-from core_logic.models import Signal, OrderSide
-from .config import StrategyType, AssetClass, TradeQuality, MarketState
+from trading_bot_v2.kelly_position_sizer import KellyPositionSizer
+from trading_bot_v2.models import Signal, OrderSide
+from trading_bot_v2.config import StrategyType, AssetClass, TradeQuality, MarketState
 
 
 def _trades(pnls):

@@ -16,8 +16,8 @@ import random
 
 import pytest
 
-from .models import OrderSide
-from .strategies.mean_reversion import MeanReversionStrategy
+from trading_bot_v2.models import OrderSide
+from trading_bot_v2.strategies.mean_reversion import MeanReversionStrategy
 
 
 @pytest.fixture

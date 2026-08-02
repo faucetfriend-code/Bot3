@@ -16,7 +16,7 @@ import random
 
 import pytest
 
-from .market_regime import MarketRegimeDetector, MarketRegime
+from trading_bot_v2.market_regime import MarketRegimeDetector, MarketRegime
 
 
 # Regimes whose weight tables allocate to directional "core" strategies.

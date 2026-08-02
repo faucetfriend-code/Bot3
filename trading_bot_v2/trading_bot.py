@@ -156,11 +156,16 @@ class TradingBot:
         self.signal_logger = SignalLogger(db_manager=self.db)
         logger.info("Signal logger initialized - logging to signals_log.csv")
 
-        # Initialize client
+        # Initialize client.
+        # NOTE: the Config attributes are named pacifica_*; the AGENT_WALLET_*
+        # / ACCOUNT_* spellings are the .env variable names, not attributes.
+        # Using the env spellings here raised AttributeError and made this
+        # whole branch dead - api_server always injects a client, so it went
+        # unnoticed.
         if client is None:
             self.client = PacificaClient(
-                agent_wallet_private_key=config.agent_wallet_private_key,
-                account_public_key=config.account_public_key,
+                agent_wallet_private_key=config.pacifica_private_key,
+                account_public_key=config.pacifica_public_key,
                 testnet=config.testnet,
             )
         else:

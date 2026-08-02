@@ -1,5 +1,5 @@
 import pytest
-from .config import Config
+from trading_bot_v2.config import Config
 
 
 class TestConfig:
@@ -38,7 +38,10 @@ class TestConfig:
     def test_missing_private_key(self, monkeypatch):
         """Test that ValueError is raised when AGENT_WALLET_PRIVATE_KEY is missing."""
         monkeypatch.setenv("ACCOUNT_PUBLIC_KEY", "public_key_456")
-        # Don't set AGENT_WALLET_PRIVATE_KEY
+        # config.py calls load_dotenv(override=True) at import, so the
+        # operator's .env is already in os.environ. Not setting the key is
+        # not the same as it being absent - it has to be removed.
+        monkeypatch.delenv("AGENT_WALLET_PRIVATE_KEY", raising=False)
 
         config = Config()
         with pytest.raises(
@@ -50,7 +53,7 @@ class TestConfig:
     def test_missing_public_key(self, monkeypatch):
         """Test that ValueError is raised when ACCOUNT_PUBLIC_KEY is missing."""
         monkeypatch.setenv("AGENT_WALLET_PRIVATE_KEY", "private_key_123")
-        # Don't set ACCOUNT_PUBLIC_KEY
+        monkeypatch.delenv("ACCOUNT_PUBLIC_KEY", raising=False)
 
         config = Config()
         with pytest.raises(
@@ -59,18 +62,32 @@ class TestConfig:
             config.validate()
 
     def test_default_values(self, monkeypatch):
-        """Test default values when environment variables are not set."""
-        # Set required vars
+        """Test the defaults Config falls back to when nothing is set.
+
+        This asserts what config.py itself declares, not what the
+        operator's .env happens to say. Every optional key is removed
+        first because load_dotenv(override=True) has already populated
+        os.environ from .env by the time this runs.
+        """
         monkeypatch.setenv("AGENT_WALLET_PRIVATE_KEY", "private_key_123")
         monkeypatch.setenv("ACCOUNT_PUBLIC_KEY", "public_key_456")
-        # Don't set others
+        for key in (
+            "DATABASE_PATH",
+            "TESTNET",
+            "MAX_POSITIONS",
+            "DEFAULT_LEVERAGE",
+            "MAX_RISK_PER_TRADE",
+            "LOG_LEVEL",
+        ):
+            monkeypatch.delenv(key, raising=False)
 
         config = Config()
         config.validate()
 
         assert config.database_path == "trading_bot.db"
         assert config.testnet is True
-        assert config.max_positions == 5
+        # config.py declares 15, not 5; .env happens to agree.
+        assert config.max_positions == 15
         assert config.default_leverage == 10
         assert config.max_risk_per_trade == 0.02
         assert config.log_level == "INFO"
