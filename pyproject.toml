@@ -10,7 +10,7 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core_logic*"]
+include = ["trading_bot_v2*"]
 
 [tool.pytest.ini_options]
 markers = [
