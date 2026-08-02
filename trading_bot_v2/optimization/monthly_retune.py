@@ -60,6 +60,20 @@ RETUNE_SYMBOL = "BTC-USDC"
 # The currently adopted composite-state variants (frozen medians from
 # the 2026-07-30 walk-forward run, cross-validated on ETH + SUI).
 # Update this dict ONLY when an adoption decision is made and recorded.
+#
+# PROVENANCE CAVEAT (2026-08-02). These values come from
+# out/composite_mr_gateenforce.json, which was produced when each fold's
+# Optuna seed was `--seed + fold_no` - the fold's ordinal POSITION in the
+# sequence. That was a bug and is fixed (run_composite_tuning.fold_seed
+# now derives the seed from the fold's window/strategy/symbol). The
+# values below are NOT wrong and are deliberately left untouched, but
+# they are no longer re-derivable: re-running that command today draws a
+# different trial sequence and would produce different medians. The
+# consequence for this driver is that the tuned arm of a post-fix
+# re-tune must never be compared against a pre-fix tuned number - only
+# against the adopted-baseline, default and prequential-median arms of
+# the SAME run, which is what the adoption rule already does. See
+# docs/NEUTRAL-STATE-WINDOW-CHECK.md, "Consequence of the seeding fix".
 ADOPTED_PARAMS: Dict[str, Dict[str, Dict[str, float]]] = {
     "mean_reversion": {
         "vol_low:trend": {

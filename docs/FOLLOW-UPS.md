@@ -151,6 +151,66 @@ Worth doing: have the runner record the resolved anchor and the store's trailing
 `validation_runs`, so a result carries the data state that produced it. Consider defaulting
 campaigns to a pinned anchor with an explicit `--to-now` opt-in.
 
+## 8f. Composite walk-forward tuning was not reproducible across runs (FIXED 2026-08-02)
+
+Same family as 8e, different mechanism, and it hit the tuned arm rather than the
+engine.
+
+`run_composite_tuning` seeded each fold's Optuna sampler with
+`TPESampler(seed=args.seed + fold_no)`, where `fold_no` is the fold's **ordinal
+position in the sequence**. The sampler and the study were both created fresh
+inside the fold loop, so no Optuna state ever crossed a fold boundary — the
+carry was entirely through the seed. A fold covering train 2021-07..2022-07 /
+test 2022-07..2023-01 was seed `0+2` when it was fold 2 of a five-fold run and
+seed `0+3` when it was fold 3 of a ten-fold run. Different seed, different trial
+sequence, different winner, different tuned score, with the run's fold count as
+the only input that changed.
+
+Measured directly, `mean_reversion`/BTC-USDC, `--trials 2`, `--seed 0`, gate
+enforce, two runs offset by six months so the shared window sits at a different
+ordinal in each:
+
+| state | tuned as fold 2/2 | tuned as fold 1/1 | default (both) |
+|---|---|---|---|
+| vol_low:trend | +1.780 (n=96) | -0.574 (n=123) | -1.006 (n=57) |
+| vol_low:neutral | -1.044 (n=103) | -1.931 (n=112) | -2.873 (n=60) |
+| vol_mid:trend | -2.808 (n=52) | -2.362 (n=57) | -2.075 (n=36) |
+| vol_mid:neutral | -4.138 (n=50) | -2.483 (n=73) | -1.118 (n=35) |
+| vol_high:trend | +0.689 (n=23) | +0.158 (n=27) | +1.335 (n=19) |
+| vol_high:neutral | -3.280 (n=32) | -3.410 (n=34) | -5.259 (n=21) |
+
+All six default arms match to the last digit; not one tuned arm does. This made
+month-over-month tuned comparison — the entire purpose of the monthly re-tune
+cadence — invalid whenever the fold count moved.
+
+Fixed: `run_composite_tuning.fold_seed` derives the seed from the fold's
+**identity** instead —
+`sha256("composite-fold-seed/v1" | --seed | strategy | symbol | train_start |
+train_end | test_start | test_end)`, first four bytes, masked to 32 bits.
+`hashlib` and not builtin `hash()`, which is salted per process by
+`PYTHONHASHSEED`. `--seed` still moves every fold together. The resolved seed is
+now written into each fold record in the report JSON, so an artifact is
+self-describing. After the fix both ordinals resolve to seed `3027525560` and the
+same table reproduces exactly - all six tuned scores, all six trade counts and
+all six winner parameter vectors identical, with the default column unchanged
+from the table above.
+
+**What it invalidates:** every tuned-arm number in `out/composite_*.json` and
+`out/monthly/*.json` predates the fix and will not reproduce. That includes
+`out/composite_mr_gateenforce.json`, the provenance of `ADOPTED_PARAMS` in
+`monthly_retune.py` — those values are left untouched but are no longer
+re-derivable. Default and adopted-baseline arms are unaffected (their parameters
+are fixed inputs, not search output); the prequential-median arm is built from
+fold winners and moves with them. Never compare a pre-fix tuned number with a
+post-fix one. Full write-up: `docs/NEUTRAL-STATE-WINDOW-CHECK.md`.
+
+**Related, not fixed:** `optuna_runner._build_sampler` hard-codes `seed=42` for
+every study regardless of strategy, symbol, regime or objective. That is stable
+and reproducible, so it is not the same defect, but it does mean every regime
+study opens with the identical draw of startup trials — so "N symbols agree" is
+weaker evidence there than it looks. Changing it would shift every regime-study
+number, so it is left alone deliberately.
+
 ## 8a. Calibration's hard criterion should probably not be `max`
 
 Phase 4 shipped (commit 9cbc86b) and works, but calibrating over 2.5 years qualified the

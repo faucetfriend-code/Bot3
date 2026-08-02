@@ -1,10 +1,21 @@
 # Neutral-state result: window-dependent, or fold-alignment artifact?
 
-Date: 2026-08-01
+Date: 2026-08-01 (seeding correction appended 2026-08-02)
 Status: **complete**. Main question answered from the existing artifacts; one
 confirmatory run finished (ETH cross-symbol), one was killed partway and its
 completed folds were salvaged from its log. Both are reported below.
-Scope: measurement only. No source file, config, or `.env` was modified.
+Scope: measurement only. No source file, config, or `.env` was modified *by this
+investigation*; the follow-up on 2026-08-02 did change
+`run_composite_tuning.py`, see "Consequence of the seeding fix" below.
+
+> **Read this before comparing any tuned number in this document to a fresh
+> run.** Every tuned-arm figure here was produced under position-derived
+> per-fold seeding, which was a bug and was fixed on 2026-08-02. Post-fix tuned
+> numbers will differ for reasons that have nothing to do with markets. The
+> **default** and **adopted-baseline** arms are unaffected and stay comparable;
+> the **prequential-median** arm is built out of fold winners and therefore
+> moves with them. Details: finding (a), item 3c, and the dedicated section
+> below.
 
 ---
 
@@ -490,17 +501,34 @@ leaving that state on defaults.
 
 Two things came out of the four completed folds.
 
-**(a) The step inference is confirmed, and the tuned arm is not reproducible.**
+**(a) The step inference is confirmed, and the tuned arm was not reproducible.**
 Fold 1 (train 2020-07..2021-07, test 2021-07..2022-01) reproduces run A's fold
 1 to three decimals in both arms, including trade counts. Fold 3 has the
 identical train and test windows as run A's fold 2, and its **default** arm
 reproduces exactly (`vol_low:trend` -1.006, n=57) while its **tuned** arm does
 not (+1.082 on n=84 here versus +3.011 on n=55 in A). The difference is that
-fold 3 is preceded by two folds here and one fold in A. The Optuna sampler
-state evidently carries across folds within a run, so **tuned scores depend on
-how many folds ran before them** and are not comparable across runs with
-different fold sequences, even at the same seed. Default-arm comparisons are
-sound; tuned-arm comparisons between runs A and B are not.
+fold 3 is preceded by two folds here and one fold in A, so **tuned scores
+depended on how many folds ran before them** and were not comparable across
+runs with different fold sequences, even at the same seed. Default-arm
+comparisons are sound; tuned-arm comparisons between runs A and B are not.
+
+**Mechanism - corrected 2026-08-02.** The paragraph above originally attributed
+this to "the Optuna sampler state carrying across folds within a run". That is
+wrong, and the wrong diagnosis is recorded here rather than deleted because it
+was load-bearing for item 3c below. Both the sampler and the study were
+constructed fresh inside the fold loop, so no Optuna state ever crossed a fold
+boundary. The real cause was the seed: `TPESampler(seed=args.seed + fold_no)`,
+where `fold_no` is the fold's **ordinal position in the sequence**. The same
+calendar window was seed 0+2 as fold 2 of a five-fold run and seed 0+3 as fold
+3 of a ten-fold run - a different seed, hence a different trial sequence, a
+different winner and a different tuned score, with the run's fold count as the
+only input that changed. **Fixed 2026-08-02**: the per-fold seed is now derived
+from the fold's identity, `sha256("composite-fold-seed/v1" | --seed | strategy
+| symbol | train_start | train_end | test_start | test_end)` truncated to 32
+bits (`run_composite_tuning.fold_seed`), so a given window reproduces at any
+position in any fold sequence. The resolved seed is written into each fold
+record in the report JSON. See "Consequence of the seeding fix" below for what
+this invalidates.
 
 **(b) Early-era H1 folds are negative too, so there is no seasonal effect.**
 The two new test windows, neither of which any prior run scored:
@@ -603,14 +631,21 @@ State these plainly before anyone ships a change.
    2025-01..2025-07 on n=17, the thinnest sample of the ten, which is what the
    monthly re-tune's short window was picking up.
 
-3c. **Tuned-arm scores are path-dependent.** Fold 3 of the probe and fold 2 of
-   run A have identical train and test windows and identical seeds, and their
-   default arms match exactly while their tuned arms do not (+1.082 vs +3.011).
-   The Optuna sampler state carries across folds within a run. Any comparison of
-   tuned scores between runs with different fold counts or orderings - which
-   includes the entire A-versus-B comparison that started this - is invalid.
-   Only the default arm is comparable across runs. This deserves its own
-   investigation and probably a fix (per-fold sampler seeding).
+3c. ~~**Tuned-arm scores are path-dependent.**~~ **RESOLVED 2026-08-02, and the
+   stated mechanism was wrong.** Fold 3 of the probe and fold 2 of run A have
+   identical train and test windows, and their default arms match exactly while
+   their tuned arms do not (+1.082 vs +3.011). The claim that "the Optuna
+   sampler state carries across folds within a run" was incorrect - the sampler
+   and the study are both created inside the fold loop, so nothing carried. The
+   two folds also did **not** have identical seeds, which is the whole problem:
+   the seed was `--seed + fold_no`, the fold's ordinal position, so the same
+   window drew seed 2 in a five-fold run and seed 3 in a ten-fold run. Fixed by
+   deriving each fold's seed from the fold's identity instead (finding (a)
+   above, `run_composite_tuning.fold_seed`). The verdict on the historical
+   artifacts is unchanged: **tuned-arm comparisons between runs A and B remain
+   invalid**, because both were produced under the broken scheme. Only the
+   default arm is comparable across those runs. Runs performed after
+   2026-08-02 are comparable to each other, and to nothing before it.
 4. **The step used in the original run is not recorded.** It is inferred from
    fold dates and confirmed by re-running the same window at the default step.
    Nothing in `out/`, `docs/`, or the artifact JSON records the CLI invocation.
@@ -644,6 +679,124 @@ what is missing is the commitment made before the number is seen.
 
 ---
 
+## Consequence of the seeding fix (2026-08-02)
+
+This section exists so that nobody later compares a pre-fix tuned number to a
+post-fix one and reads the difference as a finding about markets.
+
+### What was wrong
+
+`trading_bot_v2/optimization/run_composite_tuning.py` seeded each fold's Optuna
+sampler with `TPESampler(seed=args.seed + fold_no)`. `fold_no` is the fold's
+**ordinal position in the sequence**, so the seed depended on how many folds
+happened to precede it in that particular invocation. The same calendar window
+drew seed `0+2` as fold 2 of a five-fold run and `0+3` as fold 3 of a ten-fold
+run: different trial sequence, different winner, different tuned score, with the
+run's fold count as the only input that changed.
+
+Note the mechanism recorded earlier in this document — "the Optuna sampler state
+carries across folds within a run" — was **wrong**. Both the sampler and the
+study were constructed inside the fold loop, so nothing carried. The seed was
+the whole of it.
+
+### What was measured
+
+`mean_reversion` / BTC-USDC, `--trials 2`, `--seed 0`, `--train-months 12
+--test-months 6 --step-months 6`, `--objective sharpe_ratio`,
+`--directional-gate enforce`, the mandated `REGIME_MODE=volatility` env. Two
+runs whose fold sequences overlap but are offset by six months, so the shared
+window `train 2021-07-01..2022-07-01 / test 2022-07-01..2023-01-01` is **fold 2
+of 2** in run A (start 2021-01-01) and **fold 1 of 1** in run B (start
+2021-07-01).
+
+**Before the fix** — every default arm identical, not one tuned arm identical:
+
+| state | tuned as fold 2/2 | tuned as fold 1/1 | default, both runs |
+|---|---|---|---|
+| vol_low:trend | +1.780 (n=96) | -0.574 (n=123) | -1.006 (n=57) |
+| vol_low:neutral | -1.044 (n=103) | -1.931 (n=112) | -2.873 (n=60) |
+| vol_mid:trend | -2.808 (n=52) | -2.362 (n=57) | -2.075 (n=36) |
+| vol_mid:neutral | -4.138 (n=50) | -2.483 (n=73) | -1.118 (n=35) |
+| vol_high:trend | +0.689 (n=23) | +0.158 (n=27) | +1.335 (n=19) |
+| vol_high:neutral | -3.280 (n=32) | -3.410 (n=34) | -5.259 (n=21) |
+
+That `vol_low:trend` default of -1.006 on n=57 is the same number reported in
+finding (a) above, from an unrelated run a day earlier - the default arm has
+always been reproducible, and still is.
+
+**After the fix** — the shared window resolves to seed `3027525560` at both
+ordinals, and every tuned score, trade count and winner parameter matches:
+
+| state | tuned as fold 2/2 | tuned as fold 1/1 | match | default, both runs |
+|---|---|---|---|---|
+| vol_low:trend | +2.485 (n=69) | +2.485 (n=69) | yes | -1.006 (n=57) |
+| vol_low:neutral | -0.019 (n=121) | -0.019 (n=121) | yes | -2.873 (n=60) |
+| vol_mid:trend | -0.524 (n=72) | -0.524 (n=72) | yes | -2.075 (n=36) |
+| vol_mid:neutral | -3.217 (n=56) | -3.217 (n=56) | yes | -1.118 (n=35) |
+| vol_high:trend | +1.369 (n=22) | +1.369 (n=22) | yes | +1.335 (n=19) |
+| vol_high:neutral | -3.254 (n=36) | -3.254 (n=36) | yes | -5.259 (n=21) |
+
+Winner parameter vectors are identical for all six states as well, not just the
+resulting scores. Note the default column is unchanged from the BEFORE table -
+that arm never depended on the seed and is the control for this experiment.
+
+Note also that the post-fix tuned column is *different from both* pre-fix
+columns. That is expected and is exactly the point of the "what this
+invalidates" list below: the seed changed, so the search path changed. It says
+nothing about which parameters are better.
+
+### The fix
+
+`run_composite_tuning.fold_seed` derives the seed from the fold's **identity**:
+
+    canonical = "composite-fold-seed/v1|{--seed}|{strategy}|{symbol}"
+                "|{train_start}|{train_end}|{test_start}|{test_end}"
+    seed = int.from_bytes(sha256(canonical.encode()).digest()[:4], "big")
+
+`hashlib`, not the builtin `hash()`, which is salted per process by
+`PYTHONHASHSEED` and would have made the problem total rather than positional.
+`--seed` still moves every fold together. Strategy and symbol are in the
+derivation on purpose: they are treated in this repo as independent
+replications, and keying only on the window would hand BTC, ETH and SUI the
+identical opening parameter draw, so "N symbols agree" would partly measure the
+shared draw. The objective and the gate arm are deliberately *out*, because
+gate-off-vs-enforce is a paired A/B over identical folds where a shared opening
+draw removes nuisance variance instead of manufacturing agreement.
+
+Each fold record in the report JSON now carries `seed`, `base_seed` and
+`seed_namespace`, so a future artifact states its own reproducibility contract
+and a reader can recompute the seed by hand without rerunning anything.
+
+### What this invalidates
+
+- **Every tuned-arm number in every existing `out/composite_*.json` and
+  `out/monthly/*.json` artifact.** All of them were produced under
+  position-derived seeding. They will not reproduce under the current code, and
+  the difference will be pure seeding, not signal.
+- **`out/composite_mr_gateenforce.json` specifically**, which is the provenance
+  of `ADOPTED_PARAMS` in `trading_bot_v2/optimization/monthly_retune.py`. Those
+  values are left exactly as they are - this task made no adoption decision -
+  but they are no longer re-derivable from a fresh run of that command.
+- **Every tuned figure in this document**, including the whole A-versus-B
+  comparison that motivated it. Item 3c said as much already; the reason has
+  changed, the verdict has not.
+- **The prequential-median arm**, which is the coordinate-wise median of fold
+  winners and therefore moves when the winners move.
+
+What is **not** invalidated: the **default** arm and the **adopted-baseline**
+arm. Their parameters are fixed inputs rather than search output, so no seed
+touches them; they reproduce across the fix and remain comparable to every
+historical number. The headline conclusions of this document rest on default-arm
+evidence and are unaffected.
+
+The monthly re-tune's adoption rule is also unaffected in structure: it compares
+the fresh tuned arm against the default and adopted-baseline arms **scored on
+the same test windows within the same run**, never against a stored number from
+a previous month. Post-fix runs are comparable to each other, and to nothing
+before 2026-08-02.
+
+---
+
 ## Artifacts
 
 Existing, read only, unmodified:
@@ -670,3 +823,20 @@ Produced by this investigation:
 Both probes used the mandated env and flags, seed 0, no parameter variation.
 No source file, config, or `.env` was modified. Nothing was committed. The live
 bot and its API server were not touched.
+
+Produced by the 2026-08-02 seeding follow-up, all under
+`G:\Candle Data\Temp Test holding\seed_repro\`:
+
+- `run_pair.sh` - the probe. Two offset runs (start 2021-01-01 and 2021-07-01,
+  both ending 2023-01-01) so the window `train 2021-07..2022-07 / test
+  2022-07..2023-01` lands at a different ordinal in each.
+- `before_runA.json` / `before_runB.json` (+ `.log`) - run at the pre-fix commit
+  state, position-derived seeding. Tuned arms disagree, default arms agree.
+- `after_runA.json` / `after_runB.json` (+ `.log`) - identical commands at the
+  post-fix state. Tuned arms, trade counts and winner parameters all agree, and
+  each fold record carries its resolved seed.
+
+Unlike the 2026-08-01 investigation, this follow-up **did** modify source:
+`run_composite_tuning.py` (the seed derivation, the report field, docstrings)
+and a provenance comment in `monthly_retune.py`. No `.env` change, no commit, no
+adoption decision, `ADOPTED_PARAMS` values untouched, live bot untouched.

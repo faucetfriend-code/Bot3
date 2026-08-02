@@ -40,6 +40,20 @@ Design, and why it is cheap enough to run:
   not the fold-winner arm - is the number that describes the deployed
   object. It shares the test-window backtest cache, so a median that
   coincides with a winner or the baseline costs nothing extra.
+- REPRODUCIBLE ACROSS RUNS (2026-08-02): each fold's Optuna seed is
+  derived from the fold's IDENTITY - ``sha256(--seed | strategy |
+  symbol | train/test dates)``, see ``fold_seed`` - not from its ordinal
+  position in the sequence. A fold covering a given calendar window now
+  yields the same trial sequence, the same winner and the same tuned
+  score in any run that contains it, whatever else the run contains.
+  The resolved seed is written into every fold record in the report, so
+  an artifact is self-describing. NOTE: this CHANGED tuned results.
+  Every tuned-arm number in ``out/`` predates the fix and was produced
+  under position-derived seeding; it will not reproduce and must not be
+  compared with a post-fix tuned number. The DEFAULT and BASELINE arms
+  are unaffected (their parameters are fixed inputs, not search output)
+  and stay comparable across the fix; the PREQUENTIAL MEDIAN arm is
+  built from fold winners, so it moves with them.
 
 Required environment (the caller exports these; none are in .env):
     REGIME_MODE=volatility
@@ -69,6 +83,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import statistics
@@ -96,6 +111,11 @@ DEFAULT_STATES = (
 #: eligible to be that state's winner (same floor as regime studies).
 DEFAULT_MIN_STATE_TRADES = 10
 
+#: Version tag mixed into every per-fold seed (see ``fold_seed``). It
+#: exists so a future change to the derivation is an explicit, greppable
+#: version bump rather than a silent shift in every tuned result.
+_FOLD_SEED_NAMESPACE = "composite-fold-seed/v1"
+
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
@@ -120,7 +140,15 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Canonical long-form metric name (default: sharpe_ratio)",
     )
     p.add_argument("--capital", type=float, default=10000.0)
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument(
+        "--seed", type=int, default=0,
+        help=(
+            "Run-level seed. Each fold's Optuna seed is derived from it "
+            "plus the fold's own window/strategy/symbol (see fold_seed), "
+            "so the same window reproduces at any position in any fold "
+            "sequence, and changing this moves every fold together."
+        ),
+    )
     p.add_argument("--report", default=None, help="Write JSON report here")
     p.add_argument(
         "--baseline-params", default=None,
@@ -174,6 +202,92 @@ def _folds(start: str, end: str, train_m: int, test_m: int, step_m: int):
             return
         yield cursor, train_end, train_end, test_end
         cursor = _add_months(cursor, step_m)
+
+
+def fold_seed(
+    base_seed: int,
+    strategy: str,
+    symbol: str,
+    train_start: str,
+    train_end: str,
+    test_start: str,
+    test_end: str,
+) -> int:
+    """Derive a fold's Optuna seed from the fold's IDENTITY, not its position.
+
+    Until 2026-08-02 the per-fold seed was ``base_seed + fold_no``, i.e.
+    it depended on the fold's ORDINAL POSITION in the sequence. The same
+    calendar window therefore got a different seed in a 5-fold run than
+    in a 10-fold run, a different trial sequence, a different winner and
+    a different tuned score - so tuned-arm numbers were never comparable
+    across runs with different fold counts, which is exactly what the
+    monthly cadence does month over month. Measured instance: train
+    2021-07..2022-07 / test 2022-07..2023-01 scored ``vol_low:trend``
+    +1.082 (n=84) as fold 3 and +3.011 (n=55) as fold 2, at the same
+    ``--seed 0``, while the default arm reproduced exactly
+    (docs/NEUTRAL-STATE-WINDOW-CHECK.md, finding (a)).
+
+    Derivation, recomputable by hand::
+
+        canonical = "|".join([
+            "composite-fold-seed/v1", str(base_seed), strategy, symbol,
+            train_start, train_end, test_start, test_end,
+        ])
+        seed = int.from_bytes(
+            hashlib.sha256(canonical.encode("utf-8")).digest()[:4], "big"
+        ) & 0xFFFFFFFF
+
+    ``hashlib`` and not the builtin ``hash()``: ``hash()`` of a str is
+    salted per process by PYTHONHASHSEED, which would make the seed
+    differ between two invocations of the same command and turn a
+    positional bug into a total one. SHA-256 is stable across processes,
+    interpreter versions and platforms. The 32-bit mask keeps the value
+    inside the range Optuna's samplers accept.
+
+    Why ``strategy`` and ``symbol`` are in the derivation, and the
+    objective and directional-gate arm are not: symbols and strategies
+    are treated in this repo as INDEPENDENT REPLICATIONS - a finding is
+    credited when several symbols agree (e.g. the ETH+SUI 4/4 sweep).
+    Optuna's startup trials are drawn from the seed alone, so keying
+    only on the window would hand BTC, ETH and SUI the identical opening
+    parameter vectors; an unlucky opening draw would then push every
+    symbol the same way and cross-symbol agreement would partly measure
+    the shared draw rather than the market. Keying on symbol and
+    strategy keeps those replications genuinely independent. The
+    objective and the gate arm are the opposite case: gate off vs
+    enforce is a deliberately PAIRED A/B over identical folds, where
+    sharing the opening draw removes nuisance variance from the
+    comparison rather than manufacturing agreement. So they stay out and
+    both arms of a paired comparison keep the same seed.
+
+    Args:
+        base_seed: The run-level ``--seed`` value. Changing it moves
+            every fold's seed together, so the global knob still works.
+        strategy: Strategy identifier being tuned.
+        symbol: Symbol being tuned.
+        train_start: Fold train window start (ISO date).
+        train_end: Fold train window end (ISO date).
+        test_start: Fold test window start (ISO date).
+        test_end: Fold test window end (ISO date).
+
+    Returns:
+        A 32-bit non-negative seed, identical for the same inputs in any
+        process, on any platform, at any position in a fold sequence.
+    """
+    canonical = "|".join(
+        [
+            _FOLD_SEED_NAMESPACE,
+            str(int(base_seed)),
+            strategy,
+            symbol,
+            train_start,
+            train_end,
+            test_start,
+            test_end,
+        ]
+    )
+    digest = hashlib.sha256(canonical.encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0xFFFFFFFF
 
 
 def _suggest(trial, space: Dict[str, Any]) -> Dict[str, Any]:
@@ -610,8 +724,15 @@ def run(argv: Optional[List[str]] = None) -> int:
     prior_winners: Dict[str, List[Dict[str, Any]]] = {}
 
     for fold_no, (tr_s, tr_e, te_s, te_e) in enumerate(folds, 1):
+        # Seed from the fold's IDENTITY (window + strategy + symbol),
+        # never its ordinal position: the same window must produce the
+        # same trial sequence whether it is fold 2 of five or fold 3 of
+        # ten. See ``fold_seed``.
+        seed = fold_seed(
+            args.seed, args.strategy, args.symbol, tr_s, tr_e, te_s, te_e
+        )
         print(f"\nFOLD {fold_no}/{len(folds)}: train {tr_s}..{tr_e} "
-              f"-> test {te_s}..{te_e}", flush=True)
+              f"-> test {te_s}..{te_e} (seed {seed})", flush=True)
 
         trial_records: List[Dict[str, Any]] = []
 
@@ -631,13 +752,16 @@ def run(argv: Optional[List[str]] = None) -> int:
             ]
             return sum(pooled) / len(pooled) if pooled else -1e9
 
-        sampler = optuna.samplers.TPESampler(seed=args.seed + fold_no)
+        sampler = optuna.samplers.TPESampler(seed=seed)
         study = optuna.create_study(direction="maximize", sampler=sampler)
         study.optimize(objective_fn, n_trials=args.trials)
 
         # Per-state winner selection from the shared trial pool
         fold_out: Dict[str, Any] = {
-            "train": [tr_s, tr_e], "test": [te_s, te_e], "states": {},
+            "train": [tr_s, tr_e], "test": [te_s, te_e],
+            "seed": seed, "base_seed": args.seed,
+            "seed_namespace": _FOLD_SEED_NAMESPACE,
+            "states": {},
         }
         default_result = adapter.run_backtest(
             args.strategy, {}, te_s, te_e,
