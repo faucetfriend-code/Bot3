@@ -302,6 +302,15 @@ class WalkForwardAnalyzer:
             )
 
             # --- Optimize on the TRAIN window ---
+            #
+            # Each window's Optuna seed is derived from the study's
+            # identity, which INCLUDES (start, end) - so every window
+            # searches independently. Until 2026-08-02 the runner
+            # hard-coded seed=42, so every window of every walk-forward
+            # opened on the identical parameter vectors and the windows
+            # were not the independent trials the aggregate OOS
+            # statistics (PSR, DSR) assume. See
+            # optimization.optuna_runner.study_seed.
             study = runner.optimize(
                 strategy=strategy,
                 n_trials=n_trials,
@@ -794,6 +803,9 @@ def run_chunked_walk_forward(
             f"{train[0][0]} -> {train[-1][1]}, test {test[0]} -> {test[1]}"
         )
 
+        # Same seeding story as the single-symbol path: the fold's seed
+        # is derived from the TRAIN window series it is given, so folds
+        # search independently rather than all repeating seed=42.
         study = runner.optimize_chunked(
             strategy=strategy,
             symbols=sweep_symbols,

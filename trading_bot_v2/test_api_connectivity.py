@@ -9,17 +9,13 @@ This script tests:
 """
 
 import sys
-import os
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from pacifica_client import PacificaClient
-from config import config
+from .pacifica_client import PacificaClient
+from .config import config
 
 
 def test_api_connectivity():

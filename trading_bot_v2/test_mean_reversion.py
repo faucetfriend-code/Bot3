@@ -1,230 +1,272 @@
+"""Tests for MeanReversionStrategy signal generation.
+
+Covers oversold / overbought entries, the neutral no-signal case, insufficient
+data handling, and what the strategy now does when timeframes disagree.
+
+History: this file spent its whole life as a print-only script that imported
+from a "../Example files/core_logic" directory which does not exist in this
+repo, so it never once collected under pytest. It has been rewritten to assert
+rather than print. One old expectation - that a 15m/1h divergence suppresses
+the signal - is now inverted, because the multi-timeframe gate was removed on
+purpose; see test_divergent_timeframes_still_signal for the citation and the
+caveat that came with it.
 """
-Test script for Mean Reversion Strategy.
 
-Tests signal generation for:
-- Oversold conditions (LONG signal)
-- Overbought conditions (SHORT signal)
-- Multi-timeframe confirmation
-- Edge cases
-"""
-
-import sys
-import os
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
-)
-
-from strategies.mean_reversion import MeanReversionStrategy
-from models import OrderSide
 import random
 
-random.seed(42)
+import pytest
 
-print("=" * 70)
-print("Mean Reversion Strategy Test")
-print("=" * 70)
+from .models import OrderSide
+from .strategies.mean_reversion import MeanReversionStrategy
 
-# Initialize strategy with default parameters
-strategy = MeanReversionStrategy(
-    rsi_oversold=30.0, rsi_overbought=70.0, min_confidence=0.6
-)
 
-# Test 1: Oversold Condition (LONG signal expected)
-print("\nTest 1: Oversold Condition (LONG Signal)")
-print("-" * 70)
+@pytest.fixture
+def strategy():
+    """Build a strategy on the documented default thresholds.
 
-# Create price data with sharp selloff to create oversold RSI
-# Start with consolidation, then sharp drop in last 14 candles
-closes_oversold = [100.0]
-for i in range(85):
-    # Sideways with slight downtrend
-    change = random.uniform(-0.2, 0.2)
-    closes_oversold.append(closes_oversold[-1] + change)
+    A fresh instance per test keeps the per-symbol entry cooldown from
+    coupling one test's outcome to another's.
+    """
+    return MeanReversionStrategy(
+        rsi_oversold=30.0, rsi_overbought=70.0, min_confidence=0.6
+    )
 
-# Sharp selloff in last 14 candles to create RSI < 30
-for i in range(14):
-    change = random.uniform(-1.5, -0.5)  # Strong selling
-    closes_oversold.append(closes_oversold[-1] + change)
 
-highs_oversold = [c + random.uniform(0.05, 0.15) for c in closes_oversold]
-lows_oversold = [c - random.uniform(0.05, 0.15) for c in closes_oversold]
+def _multi_tf(closes, rng, spread=0.15):
+    """Wrap a close series as the 15m and 1h slices the strategy expects."""
+    frame = {
+        "high": [c + rng.uniform(spread / 3, spread) for c in closes],
+        "low": [c - rng.uniform(spread / 3, spread) for c in closes],
+        "close": list(closes),
+    }
+    return {"15m": frame, "1h": frame}
 
-multi_tf_data_oversold = {
-    "15m": {"high": highs_oversold, "low": lows_oversold, "close": closes_oversold},
-    "1h": {"high": highs_oversold, "low": lows_oversold, "close": closes_oversold},
-}
 
-current_price = closes_oversold[-1]
-signals = strategy.generate_signals("SUI-PERP", multi_tf_data_oversold, current_price)
+def _consolidation_then_selloff(rng):
+    """Generate a flat base followed by a sharp drop into oversold RSI."""
+    closes = [100.0]
+    for _ in range(85):
+        closes.append(closes[-1] + rng.uniform(-0.2, 0.2))
+    for _ in range(14):
+        closes.append(closes[-1] + rng.uniform(-1.5, -0.5))
+    return closes
 
-print(f"Price movement: ${closes_oversold[0]:.2f} -> ${closes_oversold[-1]:.2f}")
-print(f"Signals generated: {len(signals)}")
 
-if signals:
+def _consolidation_then_rally(rng):
+    """Generate a flat base followed by a sharp rally into overbought RSI."""
+    closes = [100.0]
+    for _ in range(85):
+        closes.append(closes[-1] + rng.uniform(-0.2, 0.2))
+    for _ in range(14):
+        closes.append(closes[-1] + rng.uniform(0.5, 1.5))
+    return closes
+
+
+# ---------------------------------------------------------------------------
+# Entry signals
+# ---------------------------------------------------------------------------
+
+
+def test_oversold_conditions_produce_a_long_signal(strategy):
+    """A sharp selloff into the lower band must produce a BUY."""
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
+
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
+
+    assert len(signals) == 1
     signal = signals[0]
-    print(f"  Signal Type: {signal.side.value}")
-    print(f"  Entry: ${signal.entry_price:.2f}")
-    print(f"  Stop Loss: ${signal.stop_loss:.2f}")
-    print(f"  Take Profit: ${signal.take_profit:.2f}")
-    print(f"  Confidence: {signal.confidence:.2%}")
-    print(f"  RRR: {signal.rrr:.2f}")
-    print(f"  RSI 15m: {signal.indicators['rsi_15m']:.2f}")
-    print(f"  RSI 1h: {signal.indicators['rsi_1h']:.2f}")
-    print(f"  Pattern: {signal.pattern}")
+    assert signal.side is OrderSide.BUY
+    assert signal.confidence >= 0.6
+    assert signal.pattern == "oversold_mean_reversion"
 
-    if signal.side == OrderSide.BUY and signal.confidence >= 0.6:
-        print("\n[PASS] LONG signal generated for oversold condition")
-    else:
-        print("\n[FAIL] Expected LONG signal with confidence >= 0.6")
-else:
-    print("\n[FAIL] No signal generated for oversold condition")
 
-# Test 2: Overbought Condition (SHORT signal expected)
-print("\nTest 2: Overbought Condition (SHORT Signal)")
-print("-" * 70)
+def test_overbought_conditions_produce_a_short_signal(strategy):
+    """A sharp rally into the upper band must produce a SELL."""
+    rng = random.Random(42)
+    closes = _consolidation_then_rally(rng)
 
-# Create price data with sharp rally to create overbought RSI
-# Start with consolidation, then sharp rally in last 14 candles
-closes_overbought = [100.0]
-for i in range(85):
-    # Sideways with slight uptrend
-    change = random.uniform(-0.2, 0.2)
-    closes_overbought.append(closes_overbought[-1] + change)
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
 
-# Sharp rally in last 14 candles to create RSI > 70
-for i in range(14):
-    change = random.uniform(0.5, 1.5)  # Strong buying
-    closes_overbought.append(closes_overbought[-1] + change)
-
-highs_overbought = [c + random.uniform(0.05, 0.15) for c in closes_overbought]
-lows_overbought = [c - random.uniform(0.05, 0.15) for c in closes_overbought]
-
-multi_tf_data_overbought = {
-    "15m": {
-        "high": highs_overbought,
-        "low": lows_overbought,
-        "close": closes_overbought,
-    },
-    "1h": {
-        "high": highs_overbought,
-        "low": lows_overbought,
-        "close": closes_overbought,
-    },
-}
-
-current_price = closes_overbought[-1]
-signals = strategy.generate_signals("SUI-PERP", multi_tf_data_overbought, current_price)
-
-print(f"Price movement: ${closes_overbought[0]:.2f} -> ${closes_overbought[-1]:.2f}")
-print(f"Signals generated: {len(signals)}")
-
-if signals:
+    assert len(signals) == 1
     signal = signals[0]
-    print(f"  Signal Type: {signal.side.value}")
-    print(f"  Entry: ${signal.entry_price:.2f}")
-    print(f"  Stop Loss: ${signal.stop_loss:.2f}")
-    print(f"  Take Profit: ${signal.take_profit:.2f}")
-    print(f"  Confidence: {signal.confidence:.2%}")
-    print(f"  RRR: {signal.rrr:.2f}")
-    print(f"  RSI 15m: {signal.indicators['rsi_15m']:.2f}")
-    print(f"  RSI 1h: {signal.indicators['rsi_1h']:.2f}")
-    print(f"  Pattern: {signal.pattern}")
+    assert signal.side is OrderSide.SELL
+    assert signal.confidence >= 0.6
+    assert signal.pattern == "overbought_mean_reversion"
 
-    if signal.side == OrderSide.SELL and signal.confidence >= 0.6:
-        print("\n[PASS] SHORT signal generated for overbought condition")
-    else:
-        print("\n[FAIL] Expected SHORT signal with confidence >= 0.6")
-else:
-    print("\n[FAIL] No signal generated for overbought condition")
 
-# Test 3: Neutral Condition (No signal expected)
-print("\nTest 3: Neutral Condition (No Signal)")
-print("-" * 70)
+def test_long_signal_geometry_is_coherent(strategy):
+    """Stop below entry, target above entry, and the RRR must be honest."""
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
 
-# Create neutral price action (RSI around 50)
-closes_neutral = [100.0 + random.uniform(-2, 2) for _ in range(100)]
-highs_neutral = [c + random.uniform(0.1, 0.3) for c in closes_neutral]
-lows_neutral = [c - random.uniform(0.1, 0.3) for c in closes_neutral]
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
+    signal = signals[0]
 
-multi_tf_data_neutral = {
-    "15m": {"high": highs_neutral, "low": lows_neutral, "close": closes_neutral},
-    "1h": {"high": highs_neutral, "low": lows_neutral, "close": closes_neutral},
-}
+    assert signal.stop_loss < signal.entry_price < signal.take_profit
 
-current_price = closes_neutral[-1]
-signals = strategy.generate_signals("SUI-PERP", multi_tf_data_neutral, current_price)
+    risk = signal.entry_price - signal.stop_loss
+    reward = signal.take_profit - signal.entry_price
+    assert signal.rrr == pytest.approx(reward / risk, rel=1e-6)
+    assert signal.rrr >= strategy.min_rrr
 
-print(f"Price range: ${min(closes_neutral):.2f} - ${max(closes_neutral):.2f}")
-print(f"Signals generated: {len(signals)}")
 
-if len(signals) == 0:
-    print("\n[PASS] No signal generated for neutral condition (as expected)")
-else:
-    print("\n[FAIL] Expected no signal for neutral RSI")
+def test_short_signal_geometry_is_coherent(strategy):
+    """Stop above entry, target below entry, and the RRR must be honest."""
+    rng = random.Random(42)
+    closes = _consolidation_then_rally(rng)
 
-# Test 4: Insufficient Data
-print("\nTest 4: Insufficient Data (Error Handling)")
-print("-" * 70)
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
+    signal = signals[0]
 
-# Only 10 candles (insufficient for RSI calculation)
-short_data = {
-    "15m": {"high": [100.0] * 10, "low": [99.0] * 10, "close": [99.5] * 10},
-    "1h": {"high": [100.0] * 10, "low": [99.0] * 10, "close": [99.5] * 10},
-}
+    assert signal.take_profit < signal.entry_price < signal.stop_loss
 
-signals = strategy.generate_signals("SUI-PERP", short_data, 99.5)
+    risk = signal.stop_loss - signal.entry_price
+    reward = signal.entry_price - signal.take_profit
+    assert signal.rrr == pytest.approx(reward / risk, rel=1e-6)
+    assert signal.rrr >= strategy.min_rrr
 
-if len(signals) == 0:
-    print("[PASS] Correctly handled insufficient data")
-else:
-    print("[FAIL] Should not generate signal with insufficient data")
 
-# Test 5: Multi-Timeframe Divergence
-print("\nTest 5: Multi-Timeframe Divergence (No Signal)")
-print("-" * 70)
+def test_confidence_never_exceeds_one(strategy):
+    """The confidence score is a probability-shaped quantity, not a sum."""
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
 
-# 15m oversold, but 1h neutral (no multi-timeframe alignment)
-closes_15m_oversold = [100.0]
-for i in range(99):
-    change = random.uniform(-0.5, -0.1)
-    closes_15m_oversold.append(closes_15m_oversold[-1] + change)
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
 
-closes_1h_neutral = [100.0 + random.uniform(-1, 1) for _ in range(100)]
+    assert 0.0 <= signals[0].confidence <= 1.0
 
-multi_tf_divergence = {
-    "15m": {
-        "high": [c + 0.2 for c in closes_15m_oversold],
-        "low": [c - 0.2 for c in closes_15m_oversold],
-        "close": closes_15m_oversold,
-    },
-    "1h": {
-        "high": [c + 0.2 for c in closes_1h_neutral],
-        "low": [c - 0.2 for c in closes_1h_neutral],
-        "close": closes_1h_neutral,
-    },
-}
 
-signals = strategy.generate_signals(
-    "SUI-PERP", multi_tf_divergence, closes_15m_oversold[-1]
-)
+# ---------------------------------------------------------------------------
+# Cases that must not signal
+# ---------------------------------------------------------------------------
 
-print(f"15m price: ${closes_15m_oversold[0]:.2f} -> ${closes_15m_oversold[-1]:.2f}")
-print(f"1h price range: ${min(closes_1h_neutral):.2f} - ${max(closes_1h_neutral):.2f}")
-print(f"Signals generated: {len(signals)}")
 
-if len(signals) == 0:
-    print("\n[PASS] No signal without multi-timeframe alignment")
-else:
-    print("\n[FAIL] Should require both timeframes to confirm")
+def test_neutral_rsi_produces_no_signal(strategy):
+    """Chop around the mean is not a mean-reversion setup."""
+    rng = random.Random(42)
+    closes = [100.0 + rng.uniform(-2, 2) for _ in range(100)]
 
-print("\n" + "=" * 70)
-print("Mean Reversion Strategy Test Complete!")
-print("=" * 70)
-print("\nSummary:")
-print("- Oversold detection working (LONG signal)")
-print("- Overbought detection working (SHORT signal)")
-print("- Neutral condition handling correct")
-print("- Multi-timeframe confirmation enforced")
-print("- Error handling functional")
-print("\nMean Reversion Strategy ready for Phase 2.2 (MA Crossover)!")
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
+
+    assert signals == []
+
+
+def test_insufficient_history_produces_no_signal(strategy):
+    """Ten candles cannot support a 14-period RSI or a 20-period band."""
+    short = {
+        "15m": {"high": [100.0] * 10, "low": [99.0] * 10, "close": [99.5] * 10},
+        "1h": {"high": [100.0] * 10, "low": [99.0] * 10, "close": [99.5] * 10},
+    }
+
+    assert strategy.generate_signals("SUI-PERP", short, 99.5) == []
+
+
+def test_missing_15m_slice_produces_no_signal(strategy):
+    """The 15m slice carries the structure check and is not optional."""
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
+    data = _multi_tf(closes, rng)
+    del data["15m"]
+
+    assert strategy.generate_signals("SUI-PERP", data, closes[-1]) == []
+
+
+def test_entry_cooldown_suppresses_an_immediate_second_signal():
+    """Back-to-back identical setups must not stack entries on one symbol.
+
+    The cooldown is passed explicitly rather than left to the environment:
+    MEAN_REVERSION_COOLDOWN_MINUTES defaults to 0, which disables the
+    mechanism, so a test that relied on the default would assert nothing.
+    """
+    strategy = MeanReversionStrategy(
+        rsi_oversold=30.0,
+        rsi_overbought=70.0,
+        min_confidence=0.6,
+        cooldown_minutes=60,
+    )
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
+    data = _multi_tf(closes, rng)
+
+    first = strategy.generate_signals("SUI-PERP", data, closes[-1])
+    second = strategy.generate_signals("SUI-PERP", data, closes[-1])
+
+    assert len(first) == 1
+    assert second == []
+
+
+def test_cooldown_is_scoped_per_symbol():
+    """One symbol's cooldown must not mute a different symbol."""
+    strategy = MeanReversionStrategy(
+        rsi_oversold=30.0,
+        rsi_overbought=70.0,
+        min_confidence=0.6,
+        cooldown_minutes=60,
+    )
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
+    data = _multi_tf(closes, rng)
+
+    assert len(strategy.generate_signals("SUI-PERP", data, closes[-1])) == 1
+    assert len(strategy.generate_signals("BTC-PERP", data, closes[-1])) == 1
+
+
+# ---------------------------------------------------------------------------
+# Multi-timeframe behaviour
+# ---------------------------------------------------------------------------
+
+
+def test_divergent_timeframes_still_signal(strategy):
+    """A 15m oversold setup signals even when the 1h slice is neutral.
+
+    The old script asserted the opposite - that both timeframes had to
+    confirm. That gate was removed on purpose: generate_signals carries an
+    explicit "REMOVED: Multi-TF RSI alignment requirement" comment on both the
+    long and short branches, and the emitted log line says "no MTF alignment
+    required". So the script's expectation is the stale side.
+
+    Caveat, reported separately and deliberately NOT asserted here because
+    asserting it would pin a defect: the 1h slice is no longer read at all.
+    generate_signals passes ``rsi_1h=trigger_rsi`` into the signal builders,
+    where trigger_rsi is the 5m RSI when 5m execution data is supplied and the
+    15m RSI otherwise. The confidence formula still contains a
+    ``mtf_alignment`` term worth 30% that is computed from that value, so with
+    no 5m data it is an exact duplicate of the rsi_strength term rather than a
+    cross-timeframe check.
+    """
+    rng = random.Random(42)
+
+    # Same 15m series that test_oversold_conditions_produce_a_long_signal
+    # uses, so the only variable changed here is the 1h slice.
+    closes_15m = _consolidation_then_selloff(rng)
+    aligned = _multi_tf(closes_15m, rng)
+    closes_1h = [100.0 + rng.uniform(-1, 1) for _ in range(100)]
+
+    divergent = {
+        "15m": aligned["15m"],
+        "1h": {
+            "high": [c + 0.2 for c in closes_1h],
+            "low": [c - 0.2 for c in closes_1h],
+            "close": closes_1h,
+        },
+    }
+
+    signals = strategy.generate_signals("SUI-PERP", divergent, closes_15m[-1])
+
+    assert len(signals) == 1
+    assert signals[0].side is OrderSide.BUY
+
+
+def test_signal_carries_the_indicators_downstream_consumers_read(strategy):
+    """SignalLogger and the dashboard read these keys off every signal."""
+    rng = random.Random(42)
+    closes = _consolidation_then_selloff(rng)
+
+    signals = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])
+
+    indicators = signals[0].indicators
+    assert "rsi_15m" in indicators
+    assert "rsi_1h" in indicators
+    for key in ("rsi_15m", "rsi_1h"):
+        assert 0.0 <= indicators[key] <= 100.0

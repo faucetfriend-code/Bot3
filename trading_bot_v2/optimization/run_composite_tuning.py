@@ -83,7 +83,6 @@ Usage:
 """
 
 import argparse
-import hashlib
 import json
 import os
 import statistics
@@ -95,6 +94,7 @@ from loguru import logger
 
 from ..backtesting.optimization_adapter import OptimizationAdapter
 from .search_spaces import get_search_space
+from .seeding import derive_seed
 
 #: The six composite states: three volatility terciles crossed with
 #: directional ("trend" = bull|bear, side-symmetric) vs neutral.
@@ -242,7 +242,9 @@ def fold_seed(
     differ between two invocations of the same command and turn a
     positional bug into a total one. SHA-256 is stable across processes,
     interpreter versions and platforms. The 32-bit mask keeps the value
-    inside the range Optuna's samplers accept.
+    inside the range Optuna's samplers accept. The hashing itself lives
+    in ``seeding.derive_seed``, shared with the OptunaRunner's per-study
+    seed (``optuna_runner.study_seed``) so the scheme exists once.
 
     Why ``strategy`` and ``symbol`` are in the derivation, and the
     objective and directional-gate arm are not: symbols and strategies
@@ -274,20 +276,11 @@ def fold_seed(
         A 32-bit non-negative seed, identical for the same inputs in any
         process, on any platform, at any position in a fold sequence.
     """
-    canonical = "|".join(
-        [
-            _FOLD_SEED_NAMESPACE,
-            str(int(base_seed)),
-            strategy,
-            symbol,
-            train_start,
-            train_end,
-            test_start,
-            test_end,
-        ]
+    return derive_seed(
+        _FOLD_SEED_NAMESPACE,
+        base_seed,
+        [strategy, symbol, train_start, train_end, test_start, test_end],
     )
-    digest = hashlib.sha256(canonical.encode("utf-8")).digest()
-    return int.from_bytes(digest[:4], "big") & 0xFFFFFFFF
 
 
 def _suggest(trial, space: Dict[str, Any]) -> Dict[str, Any]:

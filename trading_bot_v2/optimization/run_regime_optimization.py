@@ -143,6 +143,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Path to SQLite database for study persistence",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Run-level BASE seed. Each study's Optuna seed is derived "
+            "from it plus that study's own identity (strategy, symbol, "
+            "regime, objective, window - see optuna_runner.study_seed), "
+            "so the regimes compared here search independently while "
+            "pinning this still reproduces the whole run exactly."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging",
@@ -258,7 +270,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         logger.error("No regimes given")
         return 1
 
-    runner = OptunaRunner(db_path=args.db_path)
+    runner = OptunaRunner(db_path=args.db_path, seed=args.seed)
     summaries: Dict[str, Dict[str, Any]] = {}
 
     for i, regime in enumerate(regimes, 1):
@@ -300,8 +312,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(f"  Overlay saved for ({args.strategy}, {regime})")
             else:
                 print(
-                    f"  No valid best trial for regime {regime} - "
-                    f"overlay NOT saved"
+                    f"  Overlay NOT saved for regime {regime} - no valid "
+                    f"best trial, or refused because the best trial lost "
+                    f"money (see log for the objective value)"
                 )
 
     if not summaries:

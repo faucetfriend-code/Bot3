@@ -490,6 +490,344 @@ class TestOverlayStore:
         assert payload["active_overlays"][0]["params"] == {"bb_std_dev": 2.25}
 
 
+class TestLosingOverlayGuard:
+    """A study whose best trial lost money must not become an overlay.
+
+    Optuna reports a best trial even when every candidate lost; that
+    "winner" is just the least-bad loser. Storing it active means the
+    strategy silently adopts a measured-losing parameter set the moment
+    ENABLE_REGIME_PARAM_OVERLAYS is turned on. This is exactly how
+    overlay id=1 (mean_reversion / ranging_calm, Sharpe -1.486) came to
+    be stored on 2026-07-20.
+    """
+
+    def test_losing_sharpe_is_refused_and_nothing_is_written(self, tmp_db):
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        with pytest.raises(LosingOverlayRefused) as excinfo:
+            db.save_regime_param_overlay(
+                strategy="mean_reversion",
+                regime="ranging_calm",
+                params={"rsi_oversold": 44.96},
+                objective="sharpe_ratio",
+                objective_value=-1.4860599305891151,
+                trade_count=246,
+                study_name="mean_reversion_RANGING_CALM_sharpe_20260720_070349",
+            )
+
+        # The refusal names the offending value so it cannot be missed
+        message = str(excinfo.value)
+        assert "-1.4860599305891151" in message
+        assert "sharpe_ratio" in message
+        assert "mean_reversion" in message
+        assert excinfo.value.objective_value == pytest.approx(-1.48605993)
+        assert excinfo.value.break_even == 0.0
+
+        # Refusing loudly must also mean refusing completely
+        assert db.get_regime_param_overlays(active_only=False) == []
+
+    def test_zero_sharpe_is_refused_break_even_is_not_an_edge(self, tmp_db):
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        with pytest.raises(LosingOverlayRefused):
+            db.save_regime_param_overlay(
+                strategy="mean_reversion",
+                regime="ranging_calm",
+                params={"rsi_oversold": 30.0},
+                objective="sharpe_ratio",
+                objective_value=0.0,
+            )
+        assert db.get_regime_param_overlays(active_only=False) == []
+
+    def test_winning_study_is_stored(self, tmp_db):
+        db, _ = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+            objective="sharpe_ratio",
+            objective_value=1.42,
+        )
+        assert row_id is not None
+        active = db.get_regime_param_overlays(active_only=True)
+        assert len(active) == 1
+        assert active[0]["objective_value"] == pytest.approx(1.42)
+
+    def test_profit_factor_break_even_is_one_not_zero(self, tmp_db):
+        """PF 0.9 is losing even though it is a positive number."""
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        with pytest.raises(LosingOverlayRefused) as excinfo:
+            db.save_regime_param_overlay(
+                strategy="grid_trading",
+                regime="ranging_volatile",
+                params={"grid_levels": 6},
+                objective="profit_factor",
+                objective_value=0.90,
+            )
+        assert excinfo.value.break_even == 1.0
+
+        # PF above 1.0 stores normally
+        row_id = db.save_regime_param_overlay(
+            strategy="grid_trading",
+            regime="ranging_volatile",
+            params={"grid_levels": 6},
+            objective="profit_factor",
+            objective_value=1.35,
+        )
+        assert row_id is not None
+
+    def test_short_objective_aliases_are_recognised(self, tmp_db):
+        """'pf' must resolve to profit_factor's 1.0 break-even."""
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        with pytest.raises(LosingOverlayRefused) as excinfo:
+            db.save_regime_param_overlay(
+                strategy="grid_trading",
+                regime="ranging_volatile",
+                params={"grid_levels": 6},
+                objective="pf",
+                objective_value=0.95,
+            )
+        assert excinfo.value.break_even == 1.0
+
+    def test_unnamed_objective_still_refuses_a_negative_value(self, tmp_db):
+        """objective=None must not be a hole in the guard."""
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        with pytest.raises(LosingOverlayRefused):
+            db.save_regime_param_overlay(
+                strategy="mean_reversion",
+                regime="ranging_calm",
+                params={"rsi_oversold": 30.0},
+                objective=None,
+                objective_value=-0.5,
+            )
+
+    def test_no_objective_value_is_not_judged(self, tmp_db):
+        """Callers that store params only keep working."""
+        db, _ = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+        )
+        assert row_id is not None
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+    def test_allow_losing_kwarg_overrides(self, tmp_db):
+        db, _ = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 44.96},
+            objective="sharpe_ratio",
+            objective_value=-1.486,
+            allow_losing=True,
+        )
+        assert row_id is not None
+        active = db.get_regime_param_overlays(active_only=True)
+        assert len(active) == 1
+        assert active[0]["objective_value"] == pytest.approx(-1.486)
+
+    def test_env_opt_in_overrides(self, tmp_db, monkeypatch):
+        db, _ = tmp_db
+        monkeypatch.setenv("ALLOW_LOSING_REGIME_OVERLAYS", "true")
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 44.96},
+            objective="sharpe_ratio",
+            objective_value=-1.486,
+        )
+        assert row_id is not None
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+    def test_env_opt_in_defaults_off(self, tmp_db, monkeypatch):
+        from trading_bot_v2.database import LosingOverlayRefused
+
+        db, _ = tmp_db
+        monkeypatch.delenv("ALLOW_LOSING_REGIME_OVERLAYS", raising=False)
+        with pytest.raises(LosingOverlayRefused):
+            db.save_regime_param_overlay(
+                strategy="mean_reversion",
+                regime="ranging_calm",
+                params={"rsi_oversold": 44.96},
+                objective="sharpe_ratio",
+                objective_value=-1.486,
+            )
+
+    def test_guard_sits_at_the_chokepoint_not_the_caller(self, tmp_db):
+        """save_overlay_from_study cannot write past the guard.
+
+        The check lives in save_regime_param_overlay, so the CLI path
+        inherits it rather than reimplementing it. Here the refusal is
+        surfaced as False (the sweep continues) but nothing is stored.
+        """
+        from trading_bot_v2.optimization.run_optimize import (
+            save_overlay_from_study,
+        )
+
+        db, _ = tmp_db
+        best_trial = SimpleNamespace(
+            params={"rsi_oversold": 44.96},
+            user_attrs={"regime_trade_count": 246},
+        )
+        study = SimpleNamespace(
+            best_trial=best_trial,
+            best_value=-1.4860599305891151,
+            study_name="mean_reversion_RANGING_CALM_sharpe_20260720_070349",
+        )
+
+        saved = save_overlay_from_study(
+            study, "mean_reversion", "RANGING_CALM", "sharpe"
+        )
+        assert saved is False
+        assert db.get_regime_param_overlays(active_only=False) == []
+
+        # ...and the same path stores a winner
+        study.best_value = 1.42
+        assert save_overlay_from_study(
+            study, "mean_reversion", "RANGING_CALM", "sharpe"
+        )
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+    def test_save_overlay_from_study_honours_allow_losing(self, tmp_db):
+        from trading_bot_v2.optimization.run_optimize import (
+            save_overlay_from_study,
+        )
+
+        db, _ = tmp_db
+        study = SimpleNamespace(
+            best_trial=SimpleNamespace(
+                params={"rsi_oversold": 44.96},
+                user_attrs={"regime_trade_count": 246},
+            ),
+            best_value=-1.486,
+            study_name="mean_reversion_RANGING_CALM_sharpe_x",
+        )
+        assert save_overlay_from_study(
+            study,
+            "mean_reversion",
+            "RANGING_CALM",
+            "sharpe",
+            allow_losing=True,
+        )
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+
+class TestOverlayDeactivation:
+    """Deactivation neutralises an overlay without losing the record."""
+
+    def test_deactivate_by_id_keeps_history(self, tmp_db):
+        db, _ = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 44.96},
+            objective="sharpe_ratio",
+            objective_value=1.42,
+            trade_count=246,
+            study_name="mean_reversion_RANGING_CALM_sharpe_x",
+        )
+
+        changed = db.deactivate_regime_param_overlay(overlay_id=row_id)
+        assert changed == 1
+
+        # Nothing is applied any more...
+        assert db.get_regime_param_overlays(active_only=True) == []
+
+        # ...but the audit trail is fully intact
+        all_rows = db.get_regime_param_overlays(active_only=False)
+        assert len(all_rows) == 1
+        row = all_rows[0]
+        assert row["active"] == 0
+        assert row["id"] == row_id
+        assert row["params"] == {"rsi_oversold": 44.96}
+        assert row["objective_value"] == pytest.approx(1.42)
+        assert row["trade_count"] == 246
+        assert row["study_name"] == "mean_reversion_RANGING_CALM_sharpe_x"
+        assert row["created_at"] is not None
+
+    def test_deactivate_is_idempotent(self, tmp_db):
+        db, _ = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+        )
+        assert db.deactivate_regime_param_overlay(overlay_id=row_id) == 1
+        assert db.deactivate_regime_param_overlay(overlay_id=row_id) == 0
+        assert len(db.get_regime_param_overlays(active_only=False)) == 1
+
+    def test_deactivate_by_strategy_and_regime_is_targeted(self, tmp_db):
+        db, _ = tmp_db
+        db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+        )
+        db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_volatile",
+            params={"rsi_oversold": 40.0},
+        )
+        db.save_regime_param_overlay(
+            strategy="grid_trading",
+            regime="ranging_calm",
+            params={"grid_levels": 6},
+        )
+
+        changed = db.deactivate_regime_param_overlay(
+            strategy="mean_reversion", regime="ranging_calm"
+        )
+        assert changed == 1
+
+        active = db.get_regime_param_overlays(active_only=True)
+        assert len(active) == 2
+        assert {(r["strategy"], r["regime"]) for r in active} == {
+            ("mean_reversion", "ranging_volatile"),
+            ("grid_trading", "ranging_calm"),
+        }
+        assert len(db.get_regime_param_overlays(active_only=False)) == 3
+
+    def test_deactivate_without_a_selector_is_refused(self, tmp_db):
+        db, _ = tmp_db
+        db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+        )
+        with pytest.raises(ValueError, match="at least one of"):
+            db.deactivate_regime_param_overlay()
+        # The active overlay is untouched
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+    def test_deactivation_rewrites_the_json_mirror(self, tmp_db):
+        """config/regime_param_overlays.json must not drift from the DB."""
+        db, export_path = tmp_db
+        row_id = db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 44.96},
+            objective="sharpe_ratio",
+            objective_value=1.42,
+        )
+        with open(export_path) as f:
+            assert len(json.load(f)["active_overlays"]) == 1
+
+        db.deactivate_regime_param_overlay(overlay_id=row_id)
+
+        with open(export_path) as f:
+            payload = json.load(f)
+        assert payload["active_overlays"] == []
+
+
 # ---------------------------------------------------------------------------
 # 5. Whitelist enforcement
 # ---------------------------------------------------------------------------
@@ -541,11 +879,15 @@ class TestWhitelist:
 
 
 class TestRuntimeManager:
+    # Rows carry the objective/objective_value a real stored overlay has:
+    # the apply-side guard refuses anything that was not measured to win.
     OVERLAY_ROWS = [
         {
             "strategy": "mean_reversion",
             "regime": "ranging_calm",
             "params": {"rsi_oversold": 28.0, "bogus_key": 1.0},
+            "objective": "sharpe_ratio",
+            "objective_value": 1.31,
         }
     ]
 
@@ -881,6 +1223,315 @@ class TestRegimeCensus:
         assert "106*" in table
         assert "3!" in table
         assert "1 tunable cell(s)" in table
+
+
+# ---------------------------------------------------------------------------
+# 12. Apply-side losing-overlay guard (second, independent guard)
+# ---------------------------------------------------------------------------
+
+
+class TestApplySideOverlayGuard:
+    """A losing overlay must never reach a running strategy.
+
+    The write guard in save_regime_param_overlay only sees rows written
+    through the save API. It is blind to a database restored from
+    backups/*.db (restore_backup is a plain shutil.copy2), a hand-edited
+    or externally supplied file, and any row written before it existed -
+    all eleven snapshots under backups/ still carry the -1.486 Sharpe
+    mean_reversion/ranging_calm overlay with active=1. So the decision is
+    taken again at the point of use.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_env_opt_in(self, monkeypatch):
+        monkeypatch.delenv("ALLOW_LOSING_REGIME_OVERLAYS", raising=False)
+
+    @staticmethod
+    def _row(**overrides):
+        row = {
+            "strategy": "mean_reversion",
+            "regime": "ranging_calm",
+            "params": {"rsi_oversold": 28.0},
+            "objective": "sharpe_ratio",
+            "objective_value": 1.2,
+        }
+        row.update(overrides)
+        return row
+
+    def _manager(self, rows, sm=None):
+        sm = sm or DummyStrategyManager()
+        mgr = RegimeParamOverlayManager(
+            strategy_manager=sm,
+            db=FakeOverlayDb(rows),
+            enabled=True,
+            reference_symbol="SUI-USDC",
+        )
+        return mgr, sm
+
+    def test_winning_overlay_is_applied(self):
+        mgr, sm = self._manager([self._row()])
+        mgr.apply_for_regime("ranging_calm")
+        assert sm.strategies["MeanReversion"].rsi_oversold == 28.0
+        assert mgr.get_status()["refused_overlays"] == []
+
+    def test_losing_overlay_is_refused_and_logged(self):
+        """The exact shape of the row that shipped active on 2026-07-20."""
+        from loguru import logger as loguru_logger
+
+        rows = [self._row(objective_value=-1.4860599305891151)]
+        messages = []
+        sink_id = loguru_logger.add(
+            lambda m: messages.append(str(m)), level="ERROR"
+        )
+        try:
+            mgr, sm = self._manager(rows)
+        finally:
+            loguru_logger.remove(sink_id)
+
+        # Not applied - the strategy keeps its normal parameters.
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+        assert mgr.apply_for_regime("ranging_calm") == {}
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+        refused = mgr.get_status()["refused_overlays"]
+        assert len(refused) == 1
+        assert refused[0]["strategy"] == "mean_reversion"
+        assert refused[0]["regime"] == "ranging_calm"
+        assert "break-even" in refused[0]["reason"]
+
+        text = "".join(messages)
+        assert "REFUSED" in text
+        assert "mean_reversion" in text
+        assert "ranging_calm" in text
+        assert "sharpe_ratio" in text
+        assert "-1.486" in text
+
+    def test_exactly_break_even_is_refused(self):
+        """Break-even is not an edge; the write guard refuses it too."""
+        mgr, sm = self._manager([self._row(objective_value=0.0)])
+        assert mgr.apply_for_regime("ranging_calm") == {}
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+    def test_profit_factor_break_even_is_one(self):
+        losing, sm_losing = self._manager(
+            [self._row(objective="profit_factor", objective_value=0.95)]
+        )
+        assert losing.apply_for_regime("ranging_calm") == {}
+        assert sm_losing.strategies["MeanReversion"].rsi_oversold == 35.0
+
+        winning, sm_winning = self._manager(
+            [self._row(objective="profit_factor", objective_value=1.4)]
+        )
+        winning.apply_for_regime("ranging_calm")
+        assert sm_winning.strategies["MeanReversion"].rsi_oversold == 28.0
+
+    def test_null_objective_value_is_refused(self):
+        """Unknown is not the same as good - unscored rows are refused.
+
+        The write guard is permissive about a missing score because it
+        cannot judge a row it was handed without one; applying such a
+        row is a different question, and an unscored overlay is exactly
+        the shape of a row that never went through a measured write.
+        """
+        mgr, sm = self._manager([self._row(objective_value=None)])
+        assert mgr.apply_for_regime("ranging_calm") == {}
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+        reason = mgr.get_status()["refused_overlays"][0]["reason"]
+        assert "no recorded objective value" in reason
+
+    def test_non_numeric_objective_value_is_refused(self):
+        mgr, sm = self._manager([self._row(objective_value="excellent")])
+        assert mgr.apply_for_regime("ranging_calm") == {}
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+    def test_null_or_unknown_objective_uses_zero_break_even(self):
+        """Same treatment the write guard gives an unnamed objective."""
+        for objective in (None, "mystery_metric"):
+            losing, sm_losing = self._manager(
+                [self._row(objective=objective, objective_value=-0.25)]
+            )
+            assert losing.apply_for_regime("ranging_calm") == {}
+            assert sm_losing.strategies["MeanReversion"].rsi_oversold == 35.0
+
+            winning, sm_winning = self._manager(
+                [self._row(objective=objective, objective_value=0.25)]
+            )
+            winning.apply_for_regime("ranging_calm")
+            assert sm_winning.strategies["MeanReversion"].rsi_oversold == 28.0
+
+    def test_apply_side_agrees_with_write_guard(self, tmp_db):
+        """Anything the write guard refuses, the apply guard refuses."""
+        from trading_bot_v2.database import LosingOverlayRefused
+        from trading_bot_v2.regime_param_overlay import refuse_overlay_reason
+
+        db, _ = tmp_db
+        cases = [
+            ("sharpe_ratio", -1.49),
+            ("sharpe_ratio", 0.0),
+            ("sharpe", -0.01),
+            ("profit_factor", 1.0),
+            ("pf", 0.5),
+            (None, -0.3),
+            ("mystery_metric", 0.0),
+        ]
+        for objective, value in cases:
+            with pytest.raises(LosingOverlayRefused):
+                db.save_regime_param_overlay(
+                    strategy="mean_reversion",
+                    regime="ranging_calm",
+                    params={"rsi_oversold": 28.0},
+                    objective=objective,
+                    objective_value=value,
+                )
+            assert (
+                refuse_overlay_reason(
+                    "mean_reversion", "ranging_calm", objective, value
+                )
+                is not None
+            ), f"apply guard accepted what the write guard refused: {objective}={value}"
+
+    def test_refusal_does_not_raise_into_the_trading_loop(self):
+        """A bad stored row must not take the bot down."""
+        mgr, sm = self._manager([self._row(objective_value=-1.0)])
+        mgr.handle_regime_changed(_event("SUI-USDC", "ranging_calm"))
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+    def test_env_opt_in_applies_a_losing_overlay(self, monkeypatch):
+        monkeypatch.setenv("ALLOW_LOSING_REGIME_OVERLAYS", "true")
+        mgr, sm = self._manager([self._row(objective_value=-1.0)])
+        mgr.apply_for_regime("ranging_calm")
+        assert sm.strategies["MeanReversion"].rsi_oversold == 28.0
+
+    def test_overlay_injected_past_reload_is_still_refused(self):
+        """_overlays populated by anything but reload() is unscored."""
+        mgr, sm = self._manager([])
+        mgr._overlays[("mean_reversion", "ranging_calm")] = {"rsi_oversold": 28.0}
+        assert mgr.apply_for_regime("ranging_calm") == {}
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+    def test_previously_applied_strategy_is_restored_on_refusal(self):
+        """A refusal behaves exactly like 'no overlay for this regime'."""
+        rows = [
+            self._row(regime="ranging_calm", objective_value=1.2),
+            self._row(
+                regime="ranging_volatile",
+                params={"rsi_oversold": 20.0},
+                objective_value=-2.0,
+            ),
+        ]
+        mgr, sm = self._manager(rows)
+        strategy = sm.strategies["MeanReversion"]
+
+        mgr.apply_for_regime("ranging_calm")
+        assert strategy.rsi_oversold == 28.0
+
+        mgr.apply_for_regime("ranging_volatile")
+        assert strategy.rsi_oversold == 35.0  # baseline, not the losing 20.0
+
+    def test_row_inserted_straight_into_the_db_is_refused(self, tmp_db):
+        """THE case this guard exists for: a restored backup.
+
+        The row is INSERTed with raw SQL, bypassing
+        save_regime_param_overlay entirely - which is what
+        restore_backup's shutil.copy2 of a backups/*.db snapshot amounts
+        to. The write guard never sees it; the apply guard must.
+        """
+        import trading_bot_v2.database as db_mod
+
+        db, _ = tmp_db
+        with db_mod.get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO regime_param_overlays
+                    (strategy, regime, params_json, objective,
+                     objective_value, trade_count, study_name, active,
+                     created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                """,
+                (
+                    "mean_reversion",
+                    "ranging_calm",
+                    json.dumps({"rsi_oversold": 28.0}),
+                    "sharpe_ratio",
+                    -1.4860599305891151,
+                    246,
+                    "restored_from_backup",
+                    "2026-07-20T07:18:28.256336",
+                ),
+            )
+            conn.commit()
+
+        # The row really is active and readable - the write guard is gone.
+        stored = db.get_regime_param_overlays(active_only=True)
+        assert len(stored) == 1
+        assert stored[0]["objective_value"] == pytest.approx(-1.4860599305891151)
+
+        sm = DummyStrategyManager()
+        mgr = RegimeParamOverlayManager(
+            strategy_manager=sm,
+            db=db,
+            enabled=True,
+            reference_symbol="SUI-USDC",
+        )
+        assert mgr.get_status()["loaded_overlays"] == []
+        assert len(mgr.get_status()["refused_overlays"]) == 1
+
+        mgr.handle_regime_changed(_event("SUI-USDC", "ranging_calm"))
+        assert sm.strategies["MeanReversion"].rsi_oversold == 35.0
+
+
+class TestOverlayQualityRulesAreShared:
+    """One copy of the break-even rules, reachable without a cycle."""
+
+    def test_database_reexports_the_shared_helpers(self):
+        import trading_bot_v2.database as db_mod
+        import trading_bot_v2.overlay_quality as oq
+
+        assert db_mod.LosingOverlayRefused is oq.LosingOverlayRefused
+        assert db_mod.overlay_break_even is oq.overlay_break_even
+        assert (
+            db_mod.OVERLAY_BREAK_EVEN_BY_OBJECTIVE
+            is oq.OVERLAY_BREAK_EVEN_BY_OBJECTIVE
+        )
+
+    def test_apply_guard_uses_the_same_rules(self):
+        import trading_bot_v2.overlay_quality as oq
+        import trading_bot_v2.regime_param_overlay as rpo
+
+        assert rpo.overlay_rejection_reason is oq.overlay_rejection_reason
+
+    def test_overlay_quality_has_no_package_dependencies(self):
+        """It must stay a leaf, or the cycle it dodges comes back."""
+        import ast
+        import pathlib
+
+        import trading_bot_v2.overlay_quality as oq
+
+        source = pathlib.Path(oq.__file__).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        relative = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom) and node.level > 0
+        ]
+        assert not relative, (
+            "overlay_quality must import nothing from the package - both "
+            "database.py and regime_param_overlay.py depend on it"
+        )
+
+    def test_objective_aliases_agree_with_the_optimizer(self):
+        """The mirrored alias table must not contradict optuna_runner."""
+        from trading_bot_v2.optimization.optuna_runner import OBJECTIVE_ALIASES
+        from trading_bot_v2.overlay_quality import OVERLAY_OBJECTIVE_ALIASES
+
+        for short, canonical in OBJECTIVE_ALIASES.items():
+            if short in OVERLAY_OBJECTIVE_ALIASES:
+                assert OVERLAY_OBJECTIVE_ALIASES[short] == canonical, (
+                    f"objective alias {short!r} means {canonical!r} to the "
+                    f"optimizer but "
+                    f"{OVERLAY_OBJECTIVE_ALIASES[short]!r} to the overlay "
+                    f"guard"
+                )
 
 
 if __name__ == "__main__":

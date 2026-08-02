@@ -1,23 +1,4 @@
 {
-  "active_overlays": [
-    {
-      "active": 1,
-      "created_at": "2026-07-20T07:18:28.256336",
-      "id": 1,
-      "objective": "sharpe_ratio",
-      "objective_value": -1.4860599305891151,
-      "params": {
-        "atr_stop_multiplier": 2.2070041003427807,
-        "bb_std_dev": 2.595827507804206,
-        "min_confidence": 0.5280088921463983,
-        "rsi_overbought": 65.13375898106038,
-        "rsi_oversold": 44.96370796924869
-      },
-      "regime": "ranging_calm",
-      "strategy": "mean_reversion",
-      "study_name": "mean_reversion_RANGING_CALM_sharpe_20260720_070349",
-      "trade_count": 246
-    }
-  ],
-  "exported_at": "2026-07-20T07:18:28.259173"
+  "active_overlays": [],
+  "exported_at": "2026-08-02T12:19:36.631690"
 }

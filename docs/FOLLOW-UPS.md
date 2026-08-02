@@ -204,12 +204,83 @@ are fixed inputs, not search output); the prequential-median arm is built from
 fold winners and moves with them. Never compare a pre-fix tuned number with a
 post-fix one. Full write-up: `docs/NEUTRAL-STATE-WINDOW-CHECK.md`.
 
-**Related, not fixed:** `optuna_runner._build_sampler` hard-codes `seed=42` for
-every study regardless of strategy, symbol, regime or objective. That is stable
-and reproducible, so it is not the same defect, but it does mean every regime
-study opens with the identical draw of startup trials — so "N symbols agree" is
-weaker evidence there than it looks. Changing it would shift every regime-study
-number, so it is left alone deliberately.
+**Same class, also fixed (2026-08-02):** `optuna_runner._build_sampler` hard-coded
+`seed=42` for both samplers, for every study it ever built, regardless of strategy,
+symbol, regime, objective or window. A constant seed rather than a positional one,
+but the same failure: searches that are presented as independent were not.
+
+An earlier revision of this item said the constant was "stable and reproducible, so
+not the same defect" and was "left alone deliberately" because changing it "would
+shift every regime-study number." **That rationale was wrong on the first half and
+did not survive an inventory on the second.**
+
+- Wrong on substance: stability is not independence. Optuna draws its startup trials
+  from the seed alone, so every study opened on the identical trial 0 — measured, all
+  13 studies in `optimization_studies.db`: `atr_stop_multiplier 2.397988, bb_std_dev
+  2.597991, min_confidence 0.396806, rsi_overbought 74.014286, rsi_oversold 32.490802`.
+  `n_startup_trials = min(20, n_trials // 5)` is a floor, not a cap: study 2 pruned
+  every trial, TPE acquired no observations, kept drawing from the seeded path, and
+  **11 of its 25 trials are identical to study 1's — a different regime**. Heavy
+  pruning is the *normal* failure mode of a regime study (the `REGIME_OPT_MIN_TRADES`
+  gate), so the shared draw dominated exactly where it hurt most, and
+  `run_regime_optimization.py` loops the regimes in one process and prints them side
+  by side as per-regime findings.
+- Overstated on cost: what the "shift every number" argument protected was 13 stale
+  studies from a single session on 2026-07-20 plus one dormant `regime_param_overlays`
+  row. None is consumed at runtime (`ENABLE_REGIME_PARAM_OVERLAYS` defaults false and
+  is absent from `.env`), none is cited anywhere in `docs/`, and none is the provenance
+  of `ADOPTED_PARAMS` — that comes from `run_composite_tuning`, a disjoint code path.
+  The cost of fixing it was thirteen unreproducible throwaway studies; the cost of
+  deferring it was every future regime comparison.
+
+Fixed: `optuna_runner.study_seed` derives each study's sampler seed from the study's
+**identity** — `sha256("optuna-study-seed/v1" | base_seed | strategy |
+sorted(symbols) | regime | objective | sorted(windows))`, first four bytes, masked to
+32 bits. That is exactly what already distinguishes a study *name* (strategy, regime,
+objective) plus the two things the name omits but that change what is searched: the
+symbols and the window series. Symbols are sorted and joined so `optimize_chunked`,
+which scores several symbols inside one objective, cannot have its seed moved by
+argument ordering; windows are sorted for the same reason. Deliberately excluded:
+sampler kind, trial budget (a 50-trial pilot stays a prefix of the 100-trial run) and
+the walk-forward scoring flags — each of those is a paired comparison over one
+identity, where sharing the opening draw removes nuisance variance instead of
+manufacturing agreement. The hashing itself now lives once, in
+`optimization/seeding.py`, shared with `run_composite_tuning.fold_seed`, which
+continues to produce byte-identical seeds (`3027525560` for the fold above).
+
+`OptunaRunner(seed=...)` is the base, wired to `--seed` on both `run_optimize` and
+`run_regime_optimization`, so deliberate reproduction still works the way the
+composite runner's `--seed` does. The resolved seed is written onto every study as
+the `sampler_seed` / `sampler_seed_base` / `sampler_seed_namespace` user attrs and
+into the run log, so a stored study is self-describing.
+
+This also fixes the same constant in `backtesting/walk_forward.py`: `_run_optimized`
+called `optimize()` once per window and `run_chunked_walk_forward` called
+`optimize_chunked()` once per fold, so every window and every fold repeated seed 42.
+The window (or the fold's train-window series) is part of the identity, so they now
+search independently — which is what the aggregate out-of-sample PSR/DSR already
+assumed they did.
+
+Measured before/after, two studies differing **only** in regime (`mean_reversion`,
+BTC-USDC, 2024-01-01..2024-02-01, 2 trials):
+
+| | before | after |
+|-|-|-|
+| RANGING\_CALM | `rsi_oversold 34.156425, rsi_overbought 55.119944, bb_std_dev 2.699273, atr_stop_multiplier 1.565818, min_confidence 0.449485` (seed 42) | `rsi_oversold 34.105669, rsi_overbought 66.020566, bb_std_dev 2.941006, atr_stop_multiplier 2.905977, min_confidence 0.560802` (seed 2458413708) |
+| RANGING\_VOLATILE | *byte-identical to the row above* | `rsi_oversold 44.340096, rsi_overbought 72.061965, bb_std_dev 2.122105, atr_stop_multiplier 1.619272, min_confidence 0.567565` (seed 3196994939) |
+
+**What it invalidates:** the 13 studies stored in
+`trading_bot_v2/optimization/optimization_studies.db` and the dormant
+`regime_param_overlays` row derived from them will not reproduce — a re-run of the
+same command now explores a different sequence and can elect different winners.
+Any `trial_registry` rows those studies wrote keep their recorded N (the count of
+configurations explored is unchanged in expectation, and the DSR consumes only the
+count), but re-running to regenerate them will not reproduce the same values.
+Not affected: `ADOPTED_PARAMS`, everything in `out/composite_*.json` and
+`out/monthly/*.json`, and every campaign/census/validation artifact — none of them
+comes from `OptunaRunner`. Nothing that was reproducible from a *seeded* base is
+lost going forward: `--seed N` plus the identity reproduces any post-fix study
+exactly.
 
 ## 8a. Calibration's hard criterion should probably not be `max`
 

@@ -132,7 +132,15 @@ class TestSecurityTesting:
             ws.accept = AsyncMock()
 
             try:
-                asyncio.run(manager.connect(ws))
+                # ConnectionManager.connect() gates on an asyncio.Semaphore
+                # sized to max_connections and only releases it on disconnect.
+                # Past the limit, acquire() BLOCKS - it does not raise - so an
+                # unbounded asyncio.run() here deadlocked the whole pytest
+                # process forever (this is what made `pytest trading_bot_v2/`
+                # never terminate). Bounding the wait is what actually proves
+                # the limit is enforced: the timeout firing IS the rate
+                # limiter working.
+                asyncio.run(asyncio.wait_for(manager.connect(ws), timeout=1.0))
                 connections.append(ws)
             except Exception:
                 break  # Expected when limit reached

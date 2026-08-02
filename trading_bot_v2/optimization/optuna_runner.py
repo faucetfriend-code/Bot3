@@ -21,7 +21,7 @@ import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Sequence, Tuple
 from datetime import datetime
 from loguru import logger
 
@@ -55,12 +55,24 @@ from ..diagnostics.outcomes import (
     score_for_outcome,
     suggest_fix,
 )
+from .seeding import derive_seed
 from ..regime_param_overlay import normalize_regime_value
 from ..validation.statistics import closed_trade_returns
 
 
 # Default database path
 DEFAULT_DB_PATH = "optimization_studies.db"
+
+#: Version tag mixed into every per-study sampler seed (see
+#: ``study_seed``). It exists so a future change to the derivation is an
+#: explicit, greppable version bump rather than a silent shift in every
+#: study's opening draw.
+STUDY_SEED_NAMESPACE = "optuna-study-seed/v1"
+
+#: Default run-level seed for OptunaRunner. Every study's sampler seed
+#: is derived from this plus the study's identity; moving it moves every
+#: study together, which is the deliberate-reproduction knob.
+DEFAULT_BASE_SEED = 0
 
 # Version of the trial-scoring scheme. Stored on every study as the
 # "scoring_schema" user attr; resuming a study written under a different
@@ -112,6 +124,92 @@ def regime_opt_min_trades() -> int:
     except Exception as e:  # noqa: BLE001 - never block a run on this
         logger.debug(f"Derived regime min-trades unavailable: {e}")
     return DEFAULT_REGIME_OPT_MIN_TRADES
+
+
+def canonical_windows(
+    windows: Optional[Sequence[Sequence[str]]],
+) -> List[str]:
+    """Canonicalise a window series for seed derivation.
+
+    Sorted, so the same set of windows supplied in a different order
+    cannot change the seed - a window series is a set of periods, not an
+    ordered experiment.
+
+    Args:
+        windows: (start, end) ISO pairs, or None when the search has no
+            window (nothing is contributed then).
+
+    Returns:
+        Sorted ``"start..end"`` strings.
+    """
+    if not windows:
+        return []
+    return sorted(f"{w[0]}..{w[1]}" for w in windows)
+
+
+def study_seed(
+    base_seed: int,
+    strategy: str,
+    symbols: Sequence[str],
+    regime: Optional[str],
+    objective: str,
+    windows: Optional[Sequence[Sequence[str]]] = None,
+) -> int:
+    """Derive a study's Optuna sampler seed from the study's IDENTITY.
+
+    Until 2026-08-02 ``_build_sampler`` hard-coded ``seed=42`` for every
+    study it ever built, for every strategy, symbol, regime, objective
+    and window. Measured consequence across the 13 studies stored in
+    ``optimization_studies.db``: every one opens on the identical trial
+    0. ``n_startup_trials`` is a FLOOR, not a cap - study 2 pruned every
+    trial, so TPE acquired no observations and kept drawing from the
+    seeded path, leaving 11 of its 25 trials identical to study 1's
+    despite being a DIFFERENT REGIME. Heavy pruning is the normal
+    failure mode of a regime study (the min-matching-trades gate), so
+    the shared draw dominated exactly where it hurt most - and
+    ``run_regime_optimization`` loops regimes in one process and prints
+    them side by side as per-regime findings.
+
+    The identity is the set of things that make two studies DIFFERENT
+    EXPERIMENTS. It is exactly what already distinguishes a study name
+    (strategy, regime, objective) plus the two things the name omits but
+    that unambiguously change what is being searched: the symbols and
+    the window series. Deliberately excluded: the sampler kind (tpe vs
+    random over one identity is a paired methodological comparison, and
+    sharing the opening draw removes nuisance variance from it), the
+    trial budget (a 50-trial study must be the 100-trial study's prefix,
+    which is what makes a short pilot informative about a long run), and
+    the walk-forward scoring flags (a scoring variant over the same
+    window, again paired).
+
+    Args:
+        base_seed: Run-level seed (``OptunaRunner(seed=...)``). Changing
+            it moves every study together, so deliberate reproduction
+            and deliberate re-draws both stay possible.
+        strategy: Snake_case strategy key.
+        symbols: Symbols scored inside the objective. Sorted before
+            hashing, so the caller's ordering cannot change the seed -
+            ``optimize_chunked`` scores several symbols per trial and
+            the same sweep must reproduce whatever order they arrive in.
+        regime: Normalized regime value, or None for a pooled study.
+        objective: Canonical objective name.
+        windows: (start, end) ISO pairs the study trains on.
+
+    Returns:
+        A 32-bit non-negative seed, identical for the same identity in
+        any process, on any platform.
+    """
+    return derive_seed(
+        STUDY_SEED_NAMESPACE,
+        base_seed,
+        [
+            strategy,
+            ",".join(sorted(str(s) for s in symbols)),
+            (regime or "").upper(),
+            objective,
+            ";".join(canonical_windows(windows)),
+        ],
+    )
 
 
 # Objective aliases (CLI short forms -> canonical metric names)
@@ -427,6 +525,7 @@ class OptunaRunner:
         self,
         db_path: Optional[str] = None,
         config: Optional[Any] = None,
+        seed: int = DEFAULT_BASE_SEED,
     ):
         """
         Initialize the Optuna runner.
@@ -435,6 +534,12 @@ class OptunaRunner:
             db_path: Path to SQLite database for study persistence.
                      Defaults to "optimization_studies.db" in the module directory.
             config: Optional config override for backtesting.
+            seed: Run-level BASE seed. Every study's sampler seed is
+                derived from this plus the study's own identity (see
+                ``study_seed``), so distinct studies stay independent
+                while a pinned base still reproduces a whole run
+                exactly - the same contract ``--seed`` has in the
+                composite tuner.
         """
         if not OPTUNA_AVAILABLE:
             raise ImportError(
@@ -449,6 +554,9 @@ class OptunaRunner:
 
         # Storage URL for Optuna
         self.storage_url = f"sqlite:///{db_path}"
+
+        # Run-level base seed (see study_seed)
+        self.seed = int(seed)
 
         # Config and adapter
         self.config = config
@@ -531,8 +639,19 @@ class OptunaRunner:
         if symbol is None:
             symbol = cfg.backtest_symbol
 
-        # Create sampler
-        optuna_sampler = self._build_sampler(sampler, n_trials)
+        # Create sampler. The seed comes from the study's IDENTITY, not
+        # a constant: a per-regime study must not open on the same draw
+        # as its neighbour, or "the regimes agree" is partly an artifact
+        # of the shared startup trials. See study_seed.
+        seed = study_seed(
+            base_seed=self.seed,
+            strategy=strategy,
+            symbols=[symbol],
+            regime=regime,
+            objective=objective,
+            windows=[(start, end)],
+        )
+        optuna_sampler = self._build_sampler(sampler, n_trials, seed)
 
         # Create study name. Regime-conditional studies embed the regime
         # and objective so per-regime studies never collide, e.g.
@@ -555,10 +674,12 @@ class OptunaRunner:
             sampler=optuna_sampler,
         )
         _assert_scoring_schema(study)
+        self._record_sampler_seed(study, seed)
 
         logger.info(
             f"Starting optimization: strategy={strategy}, trials={n_trials}, "
-            f"sampler={sampler}, objective={objective}, walk_forward={walk_forward}"
+            f"sampler={sampler}, objective={objective}, "
+            f"walk_forward={walk_forward}, seed={seed}"
             + (
                 f", regime={regime}, min_regime_trades={min_regime_trades}"
                 if regime is not None
@@ -754,14 +875,27 @@ class OptunaRunner:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         regime_tag = f"_{regime.upper()}" if regime else ""
         study_name = f"{strategy}_chunked{regime_tag}_{timestamp}{study_suffix}"
+        # Identity-derived seed. Note this is also what makes the
+        # chunked WALK-FORWARD sound: each fold trains on a different
+        # window series, so each fold's study now draws differently
+        # instead of every fold repeating the same opening trials.
+        seed = study_seed(
+            base_seed=self.seed,
+            strategy=strategy,
+            symbols=sweep_symbols,
+            regime=regime,
+            objective=objective,
+            windows=sweep_windows,
+        )
         study = optuna.create_study(
             study_name=study_name,
             storage=self.storage_url,
             load_if_exists=True,
             direction="maximize",
-            sampler=self._build_sampler(sampler, n_trials),
+            sampler=self._build_sampler(sampler, n_trials, seed),
         )
         _assert_scoring_schema(study)
+        self._record_sampler_seed(study, seed)
         study.set_user_attr("sweep_symbols", sweep_symbols)
         study.set_user_attr("sweep_windows", sweep_windows)
         study.set_user_attr("sweep_objective", objective)
@@ -773,7 +907,7 @@ class OptunaRunner:
             f"symbols={','.join(sweep_symbols)}, "
             f"windows={len(sweep_windows)}x{window_months}mo "
             f"({sweep_windows[0][0]} .. {sweep_windows[-1][1]}), "
-            f"objective={objective}"
+            f"objective={objective}, seed={seed}"
             + (
                 f", regime={regime} (min {min_regime_trades} matching "
                 f"trades/trial)"
@@ -818,12 +952,34 @@ class OptunaRunner:
 
         return study
 
-    def _build_sampler(self, sampler: str, n_trials: int) -> Any:
-        """Construct the Optuna sampler for a run.
+    def _record_sampler_seed(self, study: "optuna.Study", seed: int) -> None:
+        """Persist the resolved sampler seed on the study.
+
+        Written into the study's own metadata so a stored study is
+        self-describing: a reader can see which seed produced its trial
+        sequence, and which base seed and derivation version to pass to
+        reproduce it, without re-deriving anything by hand.
+
+        Args:
+            study: The freshly created (or resumed) study.
+            seed: The resolved sampler seed.
+        """
+        study.set_user_attr("sampler_seed", int(seed))
+        study.set_user_attr("sampler_seed_base", int(self.seed))
+        study.set_user_attr("sampler_seed_namespace", STUDY_SEED_NAMESPACE)
+
+    def _build_sampler(self, sampler: str, n_trials: int, seed: int) -> Any:
+        """Construct the Optuna sampler for a study.
+
+        The seed is REQUIRED and comes from ``study_seed``; it is not
+        defaulted here on purpose, because the defect this replaced was
+        precisely a default (``seed=42``) that every caller silently
+        inherited.
 
         Args:
             sampler: "tpe" or "random".
             n_trials: Trial budget (sets TPE's startup trials).
+            seed: Identity-derived sampler seed.
 
         Returns:
             An Optuna sampler.
@@ -833,11 +989,11 @@ class OptunaRunner:
         """
         if sampler.lower() == "tpe":
             return optuna.samplers.TPESampler(
-                seed=42,
+                seed=seed,
                 n_startup_trials=min(20, n_trials // 5),
             )
         if sampler.lower() == "random":
-            return optuna.samplers.RandomSampler(seed=42)
+            return optuna.samplers.RandomSampler(seed=seed)
         raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
 
     def _suggest_or_prune(

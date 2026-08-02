@@ -6,12 +6,8 @@ account sizes and P&L scenarios.
 """
 
 import sys
-import os
 
-# Add current directory to path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from config import config
+from .config import config
 
 
 def test_circuit_breaker():

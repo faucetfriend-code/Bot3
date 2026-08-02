@@ -5,15 +5,7 @@ This script tests the ADX calculation with sample data and
 verifies it returns reasonable values.
 """
 
-import sys
-import os
-
-# Add paths to import from Example files
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
-)
-
-from indicators import calculate_adx
+from .indicators import calculate_adx
 
 
 def test_adx_basic():

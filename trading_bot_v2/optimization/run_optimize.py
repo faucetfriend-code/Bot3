@@ -123,6 +123,18 @@ Examples:
         help="Sampler type (default: tpe)",
     )
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Run-level BASE seed. Each study's Optuna seed is derived "
+            "from it plus that study's identity (strategy, symbol, "
+            "regime, objective, window - see optuna_runner.study_seed), "
+            "so distinct studies search independently while pinning "
+            "this reproduces a run exactly (default: 0)"
+        ),
+    )
+    parser.add_argument(
         "--objective", "-o",
         type=str,
         choices=sorted(OBJECTIVE_ALIASES.keys()),
@@ -343,20 +355,29 @@ def save_overlay_from_study(
     strategy: str,
     regime: str,
     objective: str,
+    allow_losing: bool = False,
 ) -> bool:
     """Persist the best trial of a regime study as the active overlay.
+
+    A study whose best trial still lost money is refused by
+    ``DatabaseManager.save_regime_param_overlay``. That refusal is
+    logged at ERROR level and reported as False rather than raised, so
+    one losing regime does not abort a multi-regime sweep - but it is
+    never silent, and nothing is written.
 
     Args:
         study: Completed Optuna study.
         strategy: Snake_case strategy key.
         regime: Target regime (any accepted form).
         objective: Objective metric the study optimized (any form).
+        allow_losing: Store the overlay even if its best objective value
+            is at or below break-even. Deliberate opt-in only.
 
     Returns:
         True when an overlay was saved, False when the study had no
-        valid best trial.
+        valid best trial or the overlay was refused as losing.
     """
-    from ..database import DatabaseManager
+    from ..database import DatabaseManager, LosingOverlayRefused
     from ..regime_param_overlay import normalize_regime_value
 
     best_trial = get_best_trial_or_none(study)
@@ -370,15 +391,21 @@ def save_overlay_from_study(
     trade_count = best_trial.user_attrs.get("regime_trade_count")
 
     db = DatabaseManager()
-    row_id = db.save_regime_param_overlay(
-        strategy=strategy,
-        regime=regime_value,
-        params=dict(best_trial.params),
-        objective=normalize_objective(objective),
-        objective_value=study.best_value,
-        trade_count=trade_count,
-        study_name=study.study_name,
-    )
+    try:
+        row_id = db.save_regime_param_overlay(
+            strategy=strategy,
+            regime=regime_value,
+            params=dict(best_trial.params),
+            objective=normalize_objective(objective),
+            objective_value=study.best_value,
+            trade_count=trade_count,
+            study_name=study.study_name,
+            allow_losing=allow_losing,
+        )
+    except LosingOverlayRefused as e:
+        logger.error(str(e))
+        return False
+
     logger.info(
         f"Saved overlay id={row_id} for ({strategy}, {regime_value}): "
         f"value={study.best_value:.4f}, trades={trade_count}, "
@@ -639,7 +666,7 @@ def run_single_strategy(
     args: argparse.Namespace, strategy: str
 ) -> Optional[object]:
     """Run optimization for a single strategy."""
-    runner = OptunaRunner(db_path=args.db_path)
+    runner = OptunaRunner(db_path=args.db_path, seed=args.seed)
 
     save_overlay = getattr(args, "save_overlay", False)
     regime = getattr(args, "regime", None)
@@ -803,7 +830,7 @@ def main() -> int:
 
     # Handle --list
     if args.list:
-        runner = OptunaRunner(db_path=args.db_path)
+        runner = OptunaRunner(db_path=args.db_path, seed=args.seed)
         studies = runner.list_studies()
         print_studies_list(studies)
         return 0

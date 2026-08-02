@@ -1,5 +1,5 @@
 import pytest
-from config import Config
+from .config import Config
 
 
 class TestConfig:

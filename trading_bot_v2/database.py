@@ -12,7 +12,7 @@ Supports:
 
 Environment variables:
   DATABASE_BACKEND  = "sqlite" | "postgres" (default: "sqlite")
-  DATABASE_PATH     = SQLite file path (default: "data/trading_bot.db")
+  DATABASE_PATH     = SQLite file path (default: "trading_bot.db")
   PG_HOST           = PostgreSQL host (default: "localhost")
   PG_PORT           = PostgreSQL port (default: 5432)
   PG_DATABASE       = PostgreSQL database name (default: "trading_bot")
@@ -35,9 +35,30 @@ from typing import Generator, List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime, date, timedelta
 import logging
 
+# Break-even rules for stored parameter overlays. overlay_quality imports
+# nothing from this package, so this cannot create a cycle - and database.py
+# still does not depend on the optimization package. The names are re-exported
+# because callers and tests import them from trading_bot_v2.database.
+from .overlay_quality import (  # noqa: F401
+    OVERLAY_BREAK_EVEN_BY_OBJECTIVE,
+    LosingOverlayRefused,
+    overlay_break_even,
+    overlay_env_opt_in as _overlay_env_opt_in,
+    overlay_rejection_reason,
+)
+
 logger = logging.getLogger(__name__)
 
-DATABASE_PATH = os.path.abspath(os.getenv("DATABASE_PATH", "data/trading_bot.db"))
+#: Default SQLite file when DATABASE_PATH is unset, relative to the working
+#: directory. SINGLE SOURCE OF TRUTH: config.Config reads this same constant
+#: (config.py imports it) so the two cannot drift. They previously disagreed -
+#: database.py defaulted to "data/trading_bot.db" and config.py to
+#: "trading_bot.db" - which meant the file a process opened depended on which
+#: module happened to resolve the path first, and produced two live databases
+#: (see tests/test_database_path_default.py).
+DEFAULT_DATABASE_PATH = "trading_bot.db"
+
+DATABASE_PATH = os.path.abspath(os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH))
 DATABASE_BACKEND: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
 
 # ============================================================================
@@ -1494,6 +1515,13 @@ def summarize_regime_shadow(
     }
 
 
+# Overlay quality rules (LosingOverlayRefused, OVERLAY_BREAK_EVEN_BY_OBJECTIVE,
+# overlay_break_even, the ALLOW_LOSING_REGIME_OVERLAYS opt-in) are imported at
+# the top of this module from .overlay_quality and re-exported here, so the
+# WRITE guard in save_regime_param_overlay and the APPLY guard in
+# regime_param_overlay.py share exactly one copy of the rules.
+
+
 class DatabaseManager:
     """Database operations for trading bot.
 
@@ -1968,6 +1996,7 @@ class DatabaseManager:
         objective_value: Optional[float] = None,
         trade_count: Optional[int] = None,
         study_name: Optional[str] = None,
+        allow_losing: bool = False,
     ) -> Optional[int]:
         """Persist a per-regime parameter overlay (P4).
 
@@ -1975,6 +2004,22 @@ class DatabaseManager:
         (strategy, regime) pair - history rows are kept - then inserts
         the new overlay as active and writes the JSON export
         (config/regime_param_overlays.json) through.
+
+        Refuses to store a *losing* overlay. Optuna always reports a
+        best trial, even for a study in which every candidate lost
+        money; that best trial is then merely the least-bad loser.
+        Storing it active means the day someone sets
+        ENABLE_REGIME_PARAM_OVERLAYS=true, the strategy silently adopts
+        a parameter set that was measured to lose. So an
+        ``objective_value`` at or below the objective's break-even
+        (:func:`overlay_break_even`) raises
+        :class:`LosingOverlayRefused` unless the caller passes
+        ``allow_losing=True`` or sets ALLOW_LOSING_REGIME_OVERLAYS.
+
+        The check lives here rather than in the callers because this is
+        the single chokepoint every write path goes through
+        (``optimization.run_optimize.save_overlay_from_study`` and any
+        direct API use), so it cannot be bypassed by adding a caller.
 
         Args:
             strategy: Snake_case strategy key (e.g. "mean_reversion").
@@ -1984,10 +2029,50 @@ class DatabaseManager:
             objective_value: Best objective value achieved.
             trade_count: Matching-regime trade count of the best trial.
             study_name: Optuna study name that produced the overlay.
+            allow_losing: Store the overlay even when its objective
+                value is at or below break-even. For deliberately
+                keeping a losing set for comparison only.
 
         Returns:
             Row id of the inserted overlay, or None on Postgres.
+
+        Raises:
+            LosingOverlayRefused: If the overlay is losing and neither
+                ``allow_losing`` nor ALLOW_LOSING_REGIME_OVERLAYS is set.
         """
+        if objective_value is not None:
+            break_even = overlay_break_even(objective)
+            if float(objective_value) <= break_even:
+                if not (allow_losing or _overlay_env_opt_in()):
+                    objective_label = objective or "unspecified objective"
+                    raise LosingOverlayRefused(
+                        f"Refusing to store a losing overlay for "
+                        f"({strategy}, {regime}): best {objective_label} = "
+                        f"{objective_value!r} is at or below break-even "
+                        f"{break_even}, so this parameter set was measured "
+                        f"to lose. The best trial of a study in which every "
+                        f"candidate lost is still a losing configuration, "
+                        f"and storing it active would install it the moment "
+                        f"ENABLE_REGIME_PARAM_OVERLAYS is turned on. "
+                        f"Study: {study_name or 'unknown'}. To keep it "
+                        f"anyway for comparison, pass allow_losing=True or "
+                        f"set ALLOW_LOSING_REGIME_OVERLAYS=true - note it "
+                        f"is stored ACTIVE either way.",
+                        strategy=strategy,
+                        regime=regime,
+                        objective=objective,
+                        objective_value=float(objective_value),
+                        break_even=break_even,
+                    )
+                logger.warning(
+                    f"Storing a LOSING overlay for ({strategy}, {regime}): "
+                    f"{objective or 'objective'}={objective_value!r} <= "
+                    f"break-even {break_even}. Opt-in was given "
+                    f"(allow_losing/ALLOW_LOSING_REGIME_OVERLAYS); this "
+                    f"overlay is ACTIVE and will apply when "
+                    f"ENABLE_REGIME_PARAM_OVERLAYS=true."
+                )
+
         params_json = json.dumps(params, sort_keys=True)
         created_at = datetime.now().isoformat()
 
@@ -2025,6 +2110,76 @@ class DatabaseManager:
             logger.warning(f"Regime overlay JSON export failed: {e}")
 
         return row_id  # type: ignore
+
+    def deactivate_regime_param_overlay(
+        self,
+        overlay_id: Optional[int] = None,
+        strategy: Optional[str] = None,
+        regime: Optional[str] = None,
+    ) -> int:
+        """Deactivate stored overlays without deleting them.
+
+        Sets ``active = 0`` on the matching rows, matching the
+        history-preserving convention of
+        :meth:`save_regime_param_overlay` (which deactivates the prior
+        row rather than removing it). The row, its params and its
+        objective value stay queryable as audit trail; it simply stops
+        being applied. Writes the JSON export through so
+        config/regime_param_overlays.json cannot drift from the table.
+
+        At least one selector must be given - a no-argument call would
+        silently deactivate every overlay in the table.
+
+        Args:
+            overlay_id: Deactivate this specific row id.
+            strategy: Deactivate active overlays for this strategy.
+            regime: Deactivate active overlays for this regime.
+
+        Returns:
+            Number of rows changed.
+
+        Raises:
+            ValueError: If no selector is supplied.
+        """
+        if overlay_id is None and not strategy and not regime:
+            raise ValueError(
+                "deactivate_regime_param_overlay requires at least one of "
+                "overlay_id, strategy or regime - refusing to deactivate "
+                "every overlay in the table."
+            )
+
+        clauses: List[str] = ["active = 1"]
+        params: List[Any] = []
+        if overlay_id is not None:
+            clauses.append("id = ?")
+            params.append(overlay_id)
+        if strategy:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if regime:
+            clauses.append("regime = ?")
+            params.append(regime)
+
+        query = "UPDATE regime_param_overlays SET active = 0 WHERE " + (
+            " AND ".join(clauses)
+        )
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            changed = cursor.rowcount
+            conn.commit()
+
+        logger.info(
+            f"Deactivated {changed} regime overlay row(s) "
+            f"(id={overlay_id}, strategy={strategy}, regime={regime})"
+        )
+
+        try:
+            self.export_regime_param_overlays()
+        except Exception as e:
+            logger.warning(f"Regime overlay JSON export failed: {e}")
+
+        return int(changed) if changed is not None else 0
 
     def get_regime_param_overlays(
         self,

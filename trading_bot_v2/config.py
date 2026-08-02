@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 # Load environment variables from .env file (override=True ensures fresh values)
 load_dotenv(override=True)
 
+# Imported AFTER load_dotenv on purpose: database.py resolves DATABASE_PATH at
+# import time, so importing it before the .env is loaded would make it resolve
+# a different file than this module - the exact split this shared constant
+# exists to close.
+from .database import DEFAULT_DATABASE_PATH  # noqa: E402
+
 # Define all enums locally to avoid import issues with "Example files/core_logic"
 # These are duplicated from core_logic/config.py for proper module resolution
 
@@ -67,7 +73,10 @@ class Config:
         # ---- Database backend selection ----
         # "sqlite" (default) or "postgres"
         self.database_backend: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
-        self.database_path: str = os.getenv("DATABASE_PATH", "trading_bot.db")
+        # Default imported from database.py so the two modules cannot
+        # disagree about which file DATABASE_PATH means (see
+        # database.DEFAULT_DATABASE_PATH).
+        self.database_path: str = os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH)
 
         # ---- PostgreSQL connection parameters ----
         self.pg_host: str = os.getenv("PG_HOST", "localhost")

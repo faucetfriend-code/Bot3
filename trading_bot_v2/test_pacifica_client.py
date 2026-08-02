@@ -2,7 +2,7 @@ import json
 import pytest
 import requests_mock
 from unittest.mock import patch, Mock
-from pacifica_client import PacificaClient
+from .pacifica_client import PacificaClient
 from solders.keypair import Keypair
 
 

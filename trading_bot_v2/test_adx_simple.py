@@ -1,11 +1,4 @@
-import sys
-import os
-
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
-)
-
-from indicators import calculate_adx
+from .indicators import calculate_adx
 import math
 
 # Test 1: Strong uptrend
