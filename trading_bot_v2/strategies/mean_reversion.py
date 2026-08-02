@@ -17,6 +17,24 @@ Best For: RANGING_CALM regime (ADX < 20, low volatility)
 
 IMPORTANT: This strategy uses 5m RSI as the trigger, NOT requiring multi-TF RSI alignment.
 The 1h regime permission is handled by StrategyManager, not within this strategy.
+
+CONFIDENCE MTF TERM (MEAN_REVERSION_MTF_CONFIDENCE)
+---------------------------------------------------
+The confidence blend historically carried a third "mtf_alignment" term
+weighted 0.3, fed with a value named ``rsi_1h``. That value was never a 1h
+RSI: it was the TRIGGER RSI (5m when execution data is supplied, otherwise
+the 15m RSI). With no 5m data the term was arithmetically identical to
+``rsi_strength`` and the blend silently collapsed to 0.7/0.3 over two
+terms; with 5m data it double-counted RSI at 70% of total weight while
+labelling the result 1h. The mislabelling is fixed unconditionally - the
+1h RSI is now computed from the 1h slice and only ever reported when real.
+The blend itself is selectable so the alternatives can be measured:
+
+- ``legacy``  - reproduce the historical (defective) blend exactly. Kept
+                only so a campaign can measure against shipped behaviour.
+- ``rsi_1h``  - wire the term as the code always claimed: a genuine 1h RSI.
+- ``off``     - treat the term as vestigial, drop it, and renormalise the
+                two real terms to their original 4:3 ratio.
 """
 
 import os
@@ -33,6 +51,19 @@ from ..indicators import (
     calculate_sma,
 )
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
+
+#: Reproduce the historical blend: MTF term fed with the trigger RSI.
+MTF_MODE_LEGACY = "legacy"
+#: Feed the MTF term a genuine 1h RSI (the design the code documented).
+MTF_MODE_RSI_1H = "rsi_1h"
+#: Drop the MTF term; renormalise the two real terms.
+MTF_MODE_OFF = "off"
+MTF_MODES = (MTF_MODE_LEGACY, MTF_MODE_RSI_1H, MTF_MODE_OFF)
+
+#: Three-term blend weights (rsi_strength, bb_proximity, mtf_alignment).
+W_RSI, W_BB, W_MTF = 0.4, 0.3, 0.3
+#: Two-term blend: the same 4:3 ratio renormalised to sum to 1.0.
+W_RSI_2, W_BB_2 = 4.0 / 7.0, 3.0 / 7.0
 
 
 class MeanReversionStrategy:
@@ -66,6 +97,7 @@ class MeanReversionStrategy:
         atr_stop_multiplier: Optional[float] = None,
         min_confidence: Optional[float] = None,
         cooldown_minutes: Optional[int] = None,
+        mtf_confidence_mode: Optional[str] = None,
     ):
         """
         Initialize Mean Reversion Strategy.
@@ -134,6 +166,20 @@ class MeanReversionStrategy:
             if cooldown_minutes is not None
             else int(os.getenv("MEAN_REVERSION_COOLDOWN_MINUTES", "0"))
         )
+        mode = (
+            mtf_confidence_mode
+            if mtf_confidence_mode is not None
+            else os.getenv("MEAN_REVERSION_MTF_CONFIDENCE", MTF_MODE_LEGACY)
+        )
+        mode = str(mode).strip().lower()
+        if mode not in MTF_MODES:
+            logger.warning(
+                f"Unknown MEAN_REVERSION_MTF_CONFIDENCE={mode!r}; "
+                f"falling back to {MTF_MODE_LEGACY!r} "
+                f"(valid: {', '.join(MTF_MODES)})"
+            )
+            mode = MTF_MODE_LEGACY
+        self.mtf_confidence_mode = mode
 
         # Cooldown tracking per symbol (prevents clustered losses at same level)
         self._last_trade_time: Dict[str, datetime] = {}
@@ -145,11 +191,59 @@ class MeanReversionStrategy:
             f"RSI {self.rsi_oversold}/{self.rsi_overbought}, "
             f"BB period={self.bb_period}, "
             f"ATR stop={self.atr_stop_multiplier}x, "
-            f"min_confidence={self.min_confidence}"
+            f"min_confidence={self.min_confidence}, "
+            f"mtf_confidence={self.mtf_confidence_mode}"
         )
 
+    def _mtf_rsi(
+        self, trigger_rsi: float, rsi_1h: Optional[float]
+    ) -> Optional[float]:
+        """Return the RSI the MTF confidence term should read.
+
+        Args:
+            trigger_rsi: Trigger-timeframe RSI (5m when available, else 15m).
+            rsi_1h: Genuine 1h RSI, or None when the 1h slice was unusable.
+
+        Returns:
+            The RSI to feed the MTF term, or None to drop the term and use
+            the renormalised two-term blend.
+        """
+        if self.mtf_confidence_mode == MTF_MODE_OFF:
+            return None
+        if self.mtf_confidence_mode == MTF_MODE_RSI_1H:
+            # None here is a real signal: no 1h data, so no MTF term.
+            return rsi_1h
+        return trigger_rsi
+
+    @staticmethod
+    def _blend_confidence(
+        rsi_strength: float,
+        bb_proximity: float,
+        mtf_alignment: Optional[float],
+    ) -> float:
+        """Combine confidence components, clamped to 0-1.
+
+        Args:
+            rsi_strength: Normalised RSI extremity on the 15m structure TF.
+            bb_proximity: Normalised closeness to the relevant BB edge.
+            mtf_alignment: Normalised MTF RSI extremity, or None to use the
+                two-term blend.
+
+        Returns:
+            Confidence in [0.0, 1.0].
+        """
+        if mtf_alignment is None:
+            confidence = rsi_strength * W_RSI_2 + bb_proximity * W_BB_2
+        else:
+            confidence = (
+                rsi_strength * W_RSI
+                + bb_proximity * W_BB
+                + mtf_alignment * W_MTF
+            )
+        return max(0.0, min(1.0, confidence))
+
     def _now(self) -> datetime:
-        """Return current time — simulated candle time in backtesting, wall-clock in live."""
+        """Return current time - simulated candle time in backtesting, wall-clock in live."""
         return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
 
     def _check_cooldown(self, symbol: str) -> bool:
@@ -242,6 +336,19 @@ class MeanReversionStrategy:
                     except Exception:
                         pass  # Use 15m fallback
 
+            # Genuine 1h RSI for the MTF confidence term. Historically this
+            # slice was documented but never read, and the trigger RSI was
+            # passed under the name rsi_1h - see the module docstring.
+            rsi_1h: Optional[float] = None
+            data_1h = multi_tf_data.get("1h")
+            if data_1h and self._validate_data(data_1h):
+                try:
+                    rsi_1h = calculate_rsi(
+                        data_1h["close"], period=self.rsi_period
+                    )
+                except Exception:
+                    rsi_1h = None
+
             logger.debug(
                 f"{symbol} mean_reversion: trigger_RSI_{trigger_tf}={trigger_rsi:.2f}, "
                 f"BB=({lower_bb:.2f}, {middle_bb:.2f}, {upper_bb:.2f}), "
@@ -259,7 +366,9 @@ class MeanReversionStrategy:
                     atr=atr_15m,
                     sma_target=sma_15m,
                     rsi_15m=rsi_15m,
-                    rsi_1h=trigger_rsi,  # Store trigger RSI for reference
+                    trigger_rsi=trigger_rsi,
+                    trigger_tf=trigger_tf,
+                    rsi_1h=rsi_1h,
                     lower_bb=lower_bb,
                     middle_bb=middle_bb,
                     upper_bb=upper_bb,
@@ -283,7 +392,9 @@ class MeanReversionStrategy:
                     atr=atr_15m,
                     sma_target=sma_15m,
                     rsi_15m=rsi_15m,
-                    rsi_1h=trigger_rsi,  # Store trigger RSI for reference
+                    trigger_rsi=trigger_rsi,
+                    trigger_tf=trigger_tf,
+                    rsi_1h=rsi_1h,
                     lower_bb=lower_bb,
                     middle_bb=middle_bb,
                     upper_bb=upper_bb,
@@ -452,12 +563,31 @@ class MeanReversionStrategy:
         atr: float,
         sma_target: float,
         rsi_15m: float,
-        rsi_1h: float,
+        trigger_rsi: float,
+        trigger_tf: str,
+        rsi_1h: Optional[float],
         lower_bb: float,
         middle_bb: float,
         upper_bb: float,
     ) -> Optional[Signal]:
-        """Create LONG signal with stop loss and take profit."""
+        """Create LONG signal with stop loss and take profit.
+
+        Args:
+            symbol: Trading symbol.
+            current_price: Entry price.
+            atr: 15m ATR for stop placement.
+            sma_target: 15m SMA (reference only; TP is the upper BB).
+            rsi_15m: 15m structure RSI.
+            trigger_rsi: Trigger RSI (5m when available, else 15m).
+            trigger_tf: Which timeframe trigger_rsi came from.
+            rsi_1h: Genuine 1h RSI, or None when unavailable.
+            lower_bb: Lower Bollinger Band.
+            middle_bb: Middle Bollinger Band.
+            upper_bb: Upper Bollinger Band (take-profit target).
+
+        Returns:
+            The Signal, or None when the RRR filter rejects it.
+        """
         # Stop Loss: 2x ATR below entry
         stop_loss = current_price - (atr * self.atr_stop_multiplier)
 
@@ -465,7 +595,7 @@ class MeanReversionStrategy:
         # Using upper BB instead of SMA gives a 2:1+ RRR vs the 1:1 from SMA
         take_profit = upper_bb
 
-        # RRR filter: skip entries where reward < min_rrr × risk
+        # RRR filter: skip entries where reward < min_rrr x risk
         risk = current_price - stop_loss
         reward = take_profit - current_price
         rrr = reward / risk if risk > 0 else 0
@@ -488,17 +618,25 @@ class MeanReversionStrategy:
             else 0
         )  # 0-1
         bb_proximity = 1.0 - bb_proximity  # Invert (closer = higher)
-        mtf_alignment = (self.rsi_oversold - rsi_1h) / self.rsi_oversold  # 0-1
+        mtf_rsi = self._mtf_rsi(trigger_rsi, rsi_1h)
+        mtf_alignment = (
+            None
+            if mtf_rsi is None
+            else (self.rsi_oversold - mtf_rsi) / self.rsi_oversold
+        )
 
-        confidence = (rsi_strength * 0.4) + (bb_proximity * 0.3) + (mtf_alignment * 0.3)
-        confidence = max(0.0, min(1.0, confidence))  # Clamp to 0-1
+        confidence = self._blend_confidence(
+            rsi_strength, bb_proximity, mtf_alignment
+        )
 
         # DEBUG: Log confidence components
         logger.debug(
-            f"[{symbol}] LONG confidence breakdown: "
-            f"rsi_strength={rsi_strength:.3f}*0.4={rsi_strength * 0.4:.3f}, "
-            f"bb_proximity={bb_proximity:.3f}*0.3={bb_proximity * 0.3:.3f}, "
-            f"mtf_alignment={mtf_alignment:.3f}*0.3={mtf_alignment * 0.3:.3f} => "
+            f"[{symbol}] LONG confidence breakdown "
+            f"(mode={self.mtf_confidence_mode}): "
+            f"rsi_strength={rsi_strength:.3f}, "
+            f"bb_proximity={bb_proximity:.3f}, "
+            f"mtf_alignment="
+            f"{'none' if mtf_alignment is None else f'{mtf_alignment:.3f}'} => "
             f"TOTAL={confidence:.3f} (min_conf={self.min_confidence})"
         )
 
@@ -526,26 +664,72 @@ class MeanReversionStrategy:
             timeframe="15m",
             pattern="oversold_mean_reversion",
             volume_confirmation=True,  # Assume volume is ok (can enhance later)
-            multi_timeframe_alignment=True,  # Both 15m and 1h RSI oversold
+            # NOTE: not a measured 1h/15m RSI agreement - this strategy
+            # deliberately requires no MTF alignment (see prompt 003).
+            multi_timeframe_alignment=True,
             support_resistance_valid=True,  # Lower BB acts as support
             rrr_meets_minimum=True,  # Will be validated by signal.is_valid()
             liquidation_buffer_safe=True,  # Will be validated externally
             account_risk_ok=True,  # Will be validated externally
             margin_drawdown_ok=True,  # Will be validated externally
             forbidden_conditions_clear=True,  # No forbidden conditions
-            indicators={
-                "rsi_15m": rsi_15m,
-                "rsi_1h": rsi_1h,
-                "atr": atr,
-                "sma": sma_target,
-                "lower_bb": lower_bb,
-                "middle_bb": middle_bb,
-                "upper_bb": upper_bb,
-            },
-            notes=f"Mean reversion LONG: RSI={rsi_15m:.1f}/{rsi_1h:.1f}, Price near lower BB",
+            indicators=self._build_indicators(
+                rsi_15m, trigger_rsi, trigger_tf, rsi_1h,
+                atr, sma_target, lower_bb, middle_bb, upper_bb,
+            ),
+            notes=(
+                f"Mean reversion LONG: RSI_15m={rsi_15m:.1f}, "
+                f"RSI_{trigger_tf}={trigger_rsi:.1f}, Price near lower BB"
+            ),
         )
 
         return signal
+
+    @staticmethod
+    def _build_indicators(
+        rsi_15m: float,
+        trigger_rsi: float,
+        trigger_tf: str,
+        rsi_1h: Optional[float],
+        atr: float,
+        sma_target: float,
+        lower_bb: float,
+        middle_bb: float,
+        upper_bb: float,
+    ) -> Dict[str, Any]:
+        """Build the signal indicator payload with honest timeframe labels.
+
+        ``rsi_1h`` is emitted ONLY when a genuine 1h RSI was computed.
+        Historically this key carried the trigger RSI, so every stored
+        MeanReversion signal predating this fix mislabels 5m/15m data as 1h.
+
+        Args:
+            rsi_15m: 15m structure RSI.
+            trigger_rsi: Trigger RSI value.
+            trigger_tf: Timeframe trigger_rsi came from ("5m" or "15m").
+            rsi_1h: Genuine 1h RSI, or None.
+            atr: 15m ATR.
+            sma_target: 15m SMA.
+            lower_bb: Lower Bollinger Band.
+            middle_bb: Middle Bollinger Band.
+            upper_bb: Upper Bollinger Band.
+
+        Returns:
+            Indicator dict for the Signal.
+        """
+        indicators: Dict[str, Any] = {
+            "rsi_15m": rsi_15m,
+            "rsi_trigger": trigger_rsi,
+            "rsi_trigger_tf": trigger_tf,
+            "atr": atr,
+            "sma": sma_target,
+            "lower_bb": lower_bb,
+            "middle_bb": middle_bb,
+            "upper_bb": upper_bb,
+        }
+        if rsi_1h is not None:
+            indicators["rsi_1h"] = rsi_1h
+        return indicators
 
     def _create_short_signal(
         self,
@@ -554,12 +738,31 @@ class MeanReversionStrategy:
         atr: float,
         sma_target: float,
         rsi_15m: float,
-        rsi_1h: float,
+        trigger_rsi: float,
+        trigger_tf: str,
+        rsi_1h: Optional[float],
         lower_bb: float,
         middle_bb: float,
         upper_bb: float,
     ) -> Optional[Signal]:
-        """Create SHORT signal with stop loss and take profit."""
+        """Create SHORT signal with stop loss and take profit.
+
+        Args:
+            symbol: Trading symbol.
+            current_price: Entry price.
+            atr: 15m ATR for stop placement.
+            sma_target: 15m SMA (reference only; TP is the lower BB).
+            rsi_15m: 15m structure RSI.
+            trigger_rsi: Trigger RSI (5m when available, else 15m).
+            trigger_tf: Which timeframe trigger_rsi came from.
+            rsi_1h: Genuine 1h RSI, or None when unavailable.
+            lower_bb: Lower Bollinger Band (take-profit target).
+            middle_bb: Middle Bollinger Band.
+            upper_bb: Upper Bollinger Band.
+
+        Returns:
+            The Signal, or None when the RRR filter rejects it.
+        """
         # Stop Loss: 2x ATR above entry
         stop_loss = current_price + (atr * self.atr_stop_multiplier)
 
@@ -567,7 +770,7 @@ class MeanReversionStrategy:
         # Using lower BB instead of SMA gives a 2:1+ RRR vs the 1:1 from SMA
         take_profit = lower_bb
 
-        # RRR filter: skip entries where reward < min_rrr × risk
+        # RRR filter: skip entries where reward < min_rrr x risk
         risk = stop_loss - current_price
         reward = current_price - take_profit
         rrr = reward / risk if risk > 0 else 0
@@ -588,19 +791,25 @@ class MeanReversionStrategy:
             else 0
         )  # 0-1
         bb_proximity = 1.0 - bb_proximity  # Invert (closer = higher)
-        mtf_alignment = (rsi_1h - self.rsi_overbought) / (
-            100 - self.rsi_overbought
-        )  # 0-1
+        mtf_rsi = self._mtf_rsi(trigger_rsi, rsi_1h)
+        mtf_alignment = (
+            None
+            if mtf_rsi is None
+            else (mtf_rsi - self.rsi_overbought) / (100 - self.rsi_overbought)
+        )
 
-        confidence = (rsi_strength * 0.4) + (bb_proximity * 0.3) + (mtf_alignment * 0.3)
-        confidence = max(0.0, min(1.0, confidence))  # Clamp to 0-1
+        confidence = self._blend_confidence(
+            rsi_strength, bb_proximity, mtf_alignment
+        )
 
         # DEBUG: Log confidence components
         logger.debug(
-            f"[{symbol}] SHORT confidence breakdown: "
-            f"rsi_strength={rsi_strength:.3f}*0.4={rsi_strength * 0.4:.3f}, "
-            f"bb_proximity={bb_proximity:.3f}*0.3={bb_proximity * 0.3:.3f}, "
-            f"mtf_alignment={mtf_alignment:.3f}*0.3={mtf_alignment * 0.3:.3f} => "
+            f"[{symbol}] SHORT confidence breakdown "
+            f"(mode={self.mtf_confidence_mode}): "
+            f"rsi_strength={rsi_strength:.3f}, "
+            f"bb_proximity={bb_proximity:.3f}, "
+            f"mtf_alignment="
+            f"{'none' if mtf_alignment is None else f'{mtf_alignment:.3f}'} => "
             f"TOTAL={confidence:.3f} (min_conf={self.min_confidence})"
         )
 
@@ -628,23 +837,23 @@ class MeanReversionStrategy:
             timeframe="15m",
             pattern="overbought_mean_reversion",
             volume_confirmation=True,  # Assume volume is ok (can enhance later)
-            multi_timeframe_alignment=True,  # Both 15m and 1h RSI overbought
+            # NOTE: not a measured 1h/15m RSI agreement - this strategy
+            # deliberately requires no MTF alignment (see prompt 003).
+            multi_timeframe_alignment=True,
             support_resistance_valid=True,  # Upper BB acts as resistance
             rrr_meets_minimum=True,  # Will be validated by signal.is_valid()
             liquidation_buffer_safe=True,  # Will be validated externally
             account_risk_ok=True,  # Will be validated externally
             margin_drawdown_ok=True,  # Will be validated externally
             forbidden_conditions_clear=True,  # No forbidden conditions
-            indicators={
-                "rsi_15m": rsi_15m,
-                "rsi_1h": rsi_1h,
-                "atr": atr,
-                "sma": sma_target,
-                "lower_bb": lower_bb,
-                "middle_bb": middle_bb,
-                "upper_bb": upper_bb,
-            },
-            notes=f"Mean reversion SHORT: RSI={rsi_15m:.1f}/{rsi_1h:.1f}, Price near upper BB",
+            indicators=self._build_indicators(
+                rsi_15m, trigger_rsi, trigger_tf, rsi_1h,
+                atr, sma_target, lower_bb, middle_bb, upper_bb,
+            ),
+            notes=(
+                f"Mean reversion SHORT: RSI_15m={rsi_15m:.1f}, "
+                f"RSI_{trigger_tf}={trigger_rsi:.1f}, Price near upper BB"
+            ),
         )
 
         return signal
