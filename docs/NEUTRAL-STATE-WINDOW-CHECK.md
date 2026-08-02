@@ -427,14 +427,66 @@ Sanity gate on both: the header confirmed non-zero folds per state
 (10 and 4 respectively) with all six composite states requested, so the
 `REGIME_MODE=volatility` env took and nothing came back `insufficient_data`.
 
-### Results - BTC full window at default step (PARTIAL, run killed)
+### Results - BTC full window at default step (COMPLETE, 10/10 folds)
 
-The BTC run was **killed at fold 5 of 10** after about 4.5 hours (folds cost
-~55 min each with two runs sharing the machine, well above the ~11-14 min/fold
-the 5-fold original implied). **No `out/neutral_probe_btc_full_step6.json` was
-written.** Folds 1-4 completed and their printed results were salvaged from
-`G:\Candle Data\Temp Test holding\neutral_probe_btc_full_step6.log`. Folds
-5-10, which would have covered test windows 2023-07 onward, were not obtained.
+> **Update 2026-08-02: this run has since been completed.** The original
+> attempt was killed at fold 5 of 10 and wrote no report. It was re-run in
+> full rather than resumed, because the tuned arm is path-dependent (see (a)
+> below) and splicing a separately-run fold into a partial result would give
+> tuned numbers that are not mutually comparable. All ten folds now exist in
+> `out/neutral_probe_btc_full_step6.json`, log at
+> `G:\Candle Data\Temp Test holding\neutral_probe_btc_rerun.log`. **The
+> verdict is in the "Resolution" section immediately below; the partial-run
+> analysis that follows is retained because findings (a) and (b) stand on
+> their own.**
+
+#### Resolution - all three neutral states are negative on complete coverage
+
+With every one of the ten windows scored (2021-07 through 2026-07, no H2-only
+gap), means across all 10 folds:
+
+| state | tuned | default | edge | folds positive (default arm) |
+|---|---|---|---|---|
+| vol_low:neutral | -0.442 | -1.068 | +0.627 | 2 / 10 |
+| vol_mid:neutral | -0.703 | -0.801 | +0.097 | 1 / 10 |
+| vol_high:neutral | -1.386 | -1.822 | +0.436 | 0 / 10 |
+| vol_low:trend | +1.549 | +0.838 | +0.711 | - |
+| vol_mid:trend | +1.486 | +0.772 | +0.714 | - |
+| vol_high:trend | +1.120 | +1.229 | -0.110 | - |
+
+**"All three neutral states lose in both arms" is correct.** It was reached
+from a badly sampled window, but complete coverage confirms it rather than
+overturning it. `DIRECTIONAL_NEUTRAL_EXCLUDE` is supported by the data.
+
+The contradiction that started this investigation is fully explained.
+`vol_mid:neutral` per fold, default arm:
+
+| # | test window | n | default |
+|---|---|---|---|
+| 1 | 2021-07..2022-01 | 36 | -0.186 |
+| 2 | 2022-01..2022-07 | 51 | -2.917 |
+| 3 | 2022-07..2023-01 | 35 | -1.118 |
+| 4 | 2023-01..2023-07 | 39 | -1.182 |
+| 5 | 2023-07..2024-01 | 43 | -1.772 |
+| 6 | **2024-01..2024-07** | 39 | **-1.469** (never scored by any prior run) |
+| 7 | 2024-07..2025-01 | 40 | -0.048 |
+| 8 | 2025-01..2025-07 | **17** | **+1.855** (the only positive fold) |
+| 9 | 2025-07..2026-01 | 34 | -0.410 |
+| 10 | 2026-01..2026-07 | 41 | -0.758 |
+
+The window that had never been measured is **negative**, and the single
+positive fold rests on the **smallest sample of the ten** (n=17, against 34-51
+elsewhere). The monthly re-tune's 4-fold window sits entirely in the recent
+region and is dominated by that one thin fold - which is why it reported
+`vol_mid:neutral` positive in both arms. That was a short-window artifact, not
+a regime change.
+
+Note the trend states, measured here on complete coverage for the first time:
+`vol_low:trend` +0.711 and `vol_mid:trend` +0.714 (the two adopted states, both
+strongly positive), and `vol_high:trend` -0.110, which continues to favour
+leaving that state on defaults.
+
+#### Analysis from the original partial run
 
 Two things came out of the four completed folds.
 
@@ -543,14 +595,13 @@ State these plainly before anyone ships a change.
    is a strategy-name list applied at runtime across whatever is enabled, so a
    mean_reversion-only finding does not license a global setting.
 
-3b. **The BTC full-window probe is incomplete.** It was killed at fold 5 of 10;
-   folds 5-10 (test windows 2023-07-01 onward at the default step) were never
-   obtained, and no JSON artifact exists for it. The chronological table above
-   therefore has a hole at 2024-01..2024-07, which no run has ever scored, and
-   the post-2024 BTC evidence rests entirely on run B's four folds plus run A's
-   two. Re-running it to completion is the single highest-value follow-up.
-   Budget ~2 hours if run alone; it took ~55 min/fold sharing the machine with
-   a second run.
+3b. ~~**The BTC full-window probe is incomplete.**~~ **RESOLVED 2026-08-02.**
+   The probe was re-run to completion, all 10 folds. The 2024-01..2024-07 hole
+   is filled and is **negative** (-1.469, n=39), and all three neutral states
+   are negative in both arms across the full ten windows. See the "Resolution"
+   section above. The only positive `vol_mid:neutral` fold in six years is
+   2025-01..2025-07 on n=17, the thinnest sample of the ten, which is what the
+   monthly re-tune's short window was picking up.
 
 3c. **Tuned-arm scores are path-dependent.** Fold 3 of the probe and fold 2 of
    run A have identical train and test windows and identical seeds, and their
@@ -605,11 +656,15 @@ Produced by this investigation:
 
 - `out/neutral_probe_eth_2023.json` - **complete**. ETH-USDC 2023-08..2026-08,
   step 6, 4 folds, all six states scored on all folds.
-- `out/neutral_probe_btc_full_step6.json` - **does not exist.** The BTC
-  full-window run (2020-07..2026-07, step 6, 10 folds) was killed at fold 5 and
-  never wrote its report. Folds 1-4 were recovered from the log below.
-- `G:\Candle Data\Temp Test holding\neutral_probe_btc_full_step6.log` - partial
-  run log; contains the printed per-fold results for folds 1-4.
+- `out/neutral_probe_btc_full_step6.json` - **complete (2026-08-02).** BTC-USDC
+  2020-07..2026-07, step 6, all 10 folds, all six states scored on every fold.
+  The first attempt was killed at fold 5 and wrote no report; it was re-run in
+  full rather than resumed, because the tuned arm is path-dependent and a
+  spliced fold would not be comparable. Log:
+  `G:\Candle Data\Temp Test holding\neutral_probe_btc_rerun.log`.
+- `G:\Candle Data\Temp Test holding\neutral_probe_btc_full_step6.log` - log of
+  the killed first attempt, retained as the evidence for finding (a); contains
+  per-fold results for folds 1-4 only.
 - `G:\Candle Data\Temp Test holding\neutral_probe_eth_2023.log` - complete run log.
 
 Both probes used the mandated env and flags, seed 0, no parameter variation.
