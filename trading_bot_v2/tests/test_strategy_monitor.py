@@ -561,12 +561,15 @@ class TestStrategyMonitorDatabase:
 
     def test_load_returns_from_db(self, monitor_with_db):
         """Test hydrating cache from database."""
-        # Insert some returns directly
+        # Insert some returns directly.  Timestamps are relative to now so
+        # they stay inside the rolling 60-day window on any run date; the
+        # oldest row is 15 days old, well inside the window.
         import trading_bot_v2.database as db_mod
 
+        now = datetime.now(timezone.utc)
         with db_mod.get_db_connection() as conn:
             for i in range(15):
-                ts = f"2026-06-0{i+1}T00:00:00"
+                ts = (now - timedelta(days=15 - i)).isoformat()
                 conn.execute(
                     "INSERT INTO strategy_returns (strategy, pnl_pct, timestamp) "
                     "VALUES (?, ?, ?)",

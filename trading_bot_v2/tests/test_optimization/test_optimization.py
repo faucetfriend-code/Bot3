@@ -21,7 +21,9 @@ import pytest
 # Skip all tests if optuna is not installed
 pytest.importorskip("optuna")
 
+from trading_bot_v2.config import StrategyType
 from trading_bot_v2.optimization.search_spaces import (
+    SEARCH_SPACE_BUILDERS,
     get_search_space,
     list_strategies,
     suggest_params,
@@ -46,17 +48,33 @@ class TestSearchSpaces:
     """Tests for search space definitions."""
 
     def test_list_strategies(self):
-        """Test that list_strategies returns all 8 strategies."""
+        """list_strategies covers every tunable strategy, exactly once.
+
+        Asserts the invariant rather than a hand-maintained count: the
+        list must match the search-space registry exactly (a strategy
+        with a space but missing from the list would silently never be
+        tuned), carry no duplicates, and name only real strategies.
+        """
         strategies = list_strategies()
-        assert len(strategies) == 8
-        assert "mean_reversion" in strategies
-        assert "ma_crossover" in strategies
-        assert "grid_trading" in strategies
-        assert "liquidation_capture" in strategies
-        assert "vwap_scalping" in strategies
-        assert "funding_arb" in strategies
-        assert "momentum_scalping" in strategies
-        assert "orderbook_imbalance" in strategies
+        assert len(strategies) == len(set(strategies))
+        # No drift between the list and the registry get_search_space uses.
+        assert set(strategies) == set(SEARCH_SPACE_BUILDERS)
+        # Every listed name is a real strategy, not a typo.
+        valid = {s.value for s in StrategyType}
+        assert set(strategies) <= valid
+        # The strategies the campaign runs must stay tunable.
+        for expected in (
+            "mean_reversion",
+            "ma_crossover",
+            "grid_trading",
+            "liquidation_capture",
+            "vwap_scalping",
+            "vwap_pullback",
+            "funding_arb",
+            "momentum_scalping",
+            "orderbook_imbalance",
+        ):
+            assert expected in strategies
 
     def test_get_search_space_valid(self):
         """Test that get_search_space returns valid spaces for all strategies."""

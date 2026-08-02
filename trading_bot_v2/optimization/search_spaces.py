@@ -15,7 +15,7 @@ Usage:
 
 import logging
 import os
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..diagnostics.gate_metrics import (
     SEVERITY_UNREACHABLE,
@@ -326,40 +326,18 @@ def get_search_space(strategy_name: str) -> SearchSpace:
     Raises:
         ValueError: If strategy_name is not recognized.
     """
-    strategy_map = {
-        "mean_reversion": _mean_reversion_space,
-        "ma_crossover": _ma_crossover_space,
-        "grid_trading": _grid_trading_space,
-        "liquidation_capture": _liquidation_capture_space,
-        "vwap_scalping": _vwap_scalping_space,
-        "vwap_pullback": _vwap_pullback_space,
-        "funding_arb": _funding_arb_space,
-        "momentum_scalping": _momentum_scalping_space,
-        "orderbook_imbalance": _orderbook_imbalance_space,
-    }
-
-    if strategy_name not in strategy_map:
-        available = ", ".join(strategy_map.keys())
+    if strategy_name not in SEARCH_SPACE_BUILDERS:
+        available = ", ".join(SEARCH_SPACE_BUILDERS.keys())
         raise ValueError(
             f"Unknown strategy: '{strategy_name}'. Available: {available}"
         )
 
-    return strategy_map[strategy_name]()
+    return SEARCH_SPACE_BUILDERS[strategy_name]()
 
 
 def list_strategies() -> List[str]:
     """Return list of all available strategy names for optimization."""
-    return [
-        "mean_reversion",
-        "ma_crossover",
-        "grid_trading",
-        "liquidation_capture",
-        "vwap_scalping",
-        "vwap_pullback",
-        "funding_arb",
-        "momentum_scalping",
-        "orderbook_imbalance",
-    ]
+    return list(SEARCH_SPACE_BUILDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -618,6 +596,23 @@ def _orderbook_imbalance_space() -> SearchSpace:
         # Confidence
         "min_confidence": (0.50, 0.70),
     }
+
+
+# Single source of truth for which strategies are tunable.  Both
+# get_search_space() and list_strategies() derive from this map, so a new
+# strategy becomes visible to the tuner by adding exactly one entry.
+# Declared after the builders so the references resolve at import time.
+SEARCH_SPACE_BUILDERS: Dict[str, Callable[[], SearchSpace]] = {
+    "mean_reversion": _mean_reversion_space,
+    "ma_crossover": _ma_crossover_space,
+    "grid_trading": _grid_trading_space,
+    "liquidation_capture": _liquidation_capture_space,
+    "vwap_scalping": _vwap_scalping_space,
+    "vwap_pullback": _vwap_pullback_space,
+    "funding_arb": _funding_arb_space,
+    "momentum_scalping": _momentum_scalping_space,
+    "orderbook_imbalance": _orderbook_imbalance_space,
+}
 
 
 # ---------------------------------------------------------------------------
