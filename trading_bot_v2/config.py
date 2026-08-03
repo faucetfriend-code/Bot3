@@ -2,10 +2,18 @@ import os
 import logging
 from typing import Optional
 from enum import Enum
-from dotenv import load_dotenv
+from .env_precedence import load_env
 
-# Load environment variables from .env file (override=True ensures fresh values)
-load_dotenv(override=True)
+# Load environment variables from .env.
+#
+# Precedence is still .env-wins (override=True), unchanged - but it is no
+# longer silent. load_env reports every key set in BOTH .env and the
+# process environment with a different value, i.e. exactly the keys whose
+# resolution this choice decided, and warns with their NAMES (never their
+# values). That set is what has to be empty before the precedence can be
+# flipped to the conventional flag > env > file > default order; see
+# env_precedence.py, and run `python -m trading_bot_v2.env_precedence`.
+ENV_LOAD_REPORT = load_env()
 
 # Imported AFTER load_dotenv on purpose: database.py resolves DATABASE_PATH at
 # import time, so importing it before the .env is loaded would make it resolve
