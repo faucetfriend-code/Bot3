@@ -2244,6 +2244,34 @@ class DatabaseManager:
     ) -> str:
         """Write the active overlays to a JSON file for inspection.
 
+        Rows measured at or below break-even go under
+        ``refused_overlays`` with their reason instead of
+        ``active_overlays``. They are not
+        dropped - the file is audit material and a silently shortened
+        list is worse than a labelled one - but they must not appear in
+        the list a reader or a future importer would treat as usable.
+
+        This exists because ``active=1`` in the table is not the same
+        claim as "may be applied". A restored backup, or any row written
+        before the write guard existed, can carry ``active=1`` on a
+        losing parameter set: overlay id=1 (mean_reversion /
+        ranging_calm, Sharpe -1.486) is active in all 11 snapshots under
+        ``backups/``, and a restore is a file copy that never passes
+        through ``save_regime_param_overlay``. The runtime is safe
+        because ``RegimeParamOverlayManager`` re-decides at load and
+        again at apply, but this export was the one remaining path by
+        which such a row could leave the guarded database and land in a
+        config file that looks authoritative.
+
+        ``ALLOW_LOSING_REGIME_OVERLAYS`` is honoured, so the file
+        describes what would actually be applied. One asymmetry with
+        the apply side is deliberate: an overlay carrying NO score stays
+        under ``active_overlays`` here, because a params-only save is a
+        supported workflow and this file mirrors the store, whereas
+        applying an unscored row is refused fail-closed. Unknown
+        provenance is a reason not to trade a row, not a reason to
+        relabel it in an inspection file.
+
         Args:
             path: Output path (default: env REGIME_OVERLAY_EXPORT_PATH,
                 then config/regime_param_overlays.json at the project
@@ -2260,19 +2288,52 @@ class DatabaseManager:
                 project_root, "config", "regime_param_overlays.json"
             )
 
-        overlays = self.get_regime_param_overlays(active_only=True)
+        rows = self.get_regime_param_overlays(active_only=True)
+        opt_in = _overlay_env_opt_in()
+        overlays: List[Dict[str, Any]] = []
+        refused: List[Dict[str, Any]] = []
+        for row in rows:
+            # require_score=False: only a MEASURED-losing row is
+            # diverted. An unscored row is the legitimate output of a
+            # params-only save, which the write guard deliberately
+            # permits, and this file is that store's mirror - diverting
+            # it would break that workflow for no safety gain, since an
+            # unscored row carries no parameters known to lose. The
+            # apply side still refuses it fail-closed, which is where
+            # the asymmetry belongs.
+            reason = overlay_rejection_reason(
+                row.get("objective"),
+                row.get("objective_value"),
+                require_score=False,
+            )
+            if reason is None or opt_in:
+                overlays.append(row)
+            else:
+                refused.append({**row, "refused_reason": reason})
+
         payload = {
             "exported_at": datetime.now().isoformat(),
             "active_overlays": overlays,
+            "refused_overlays": refused,
+            "allow_losing_opt_in": opt_in,
         }
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
 
-        logger.info(
-            f"Exported {len(overlays)} active regime overlay(s) to {path}"
-        )
+        if refused:
+            logger.error(
+                f"Exported {len(overlays)} active regime overlay(s) to "
+                f"{path}; {len(refused)} row(s) marked active in the "
+                f"database were written under 'refused_overlays' because "
+                f"the apply-side guard would reject them: "
+                f"{[(r.get('strategy'), r.get('regime')) for r in refused]}"
+            )
+        else:
+            logger.info(
+                f"Exported {len(overlays)} active regime overlay(s) to {path}"
+            )
         return path
 
     def save_trial_registry_entry(

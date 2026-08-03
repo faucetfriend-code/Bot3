@@ -662,6 +662,256 @@ class TestLosingOverlayGuard:
                 objective_value=-1.486,
             )
 
+    # -- The restored-backup hazard -----------------------------------
+    #
+    # The write guard above only sees rows written through the save API.
+    # A restore is shutil.copy2 (database.py _restore_sqlite) and never
+    # touches it, so every one of the 11 snapshots under backups/ can
+    # reinstate overlay id=1 with active=1 - a measured Sharpe of
+    # -1.486. The snapshots are audit material and are deliberately NOT
+    # rewritten; the defence is that active=1 is not the same claim as
+    # "may be applied", enforced wherever a row leaves the table.
+
+    @staticmethod
+    def _insert_unguarded(db, objective_value, objective="sharpe_ratio"):
+        """Write an active overlay by raw SQL, bypassing the save guard.
+
+        This is what a restored snapshot or a hand-edited database looks
+        like from the reader's side: a row the write path would never
+        have produced.
+        """
+        import json as _json
+
+        from trading_bot_v2.database import get_db_connection
+
+        with get_db_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO regime_param_overlays
+                    (strategy, regime, params_json, objective,
+                     objective_value, trade_count, study_name, active)
+                VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+                """,
+                (
+                    "mean_reversion", "ranging_calm",
+                    _json.dumps({"rsi_oversold": 44.96}),
+                    objective, objective_value, 246,
+                    "mean_reversion_RANGING_CALM_sharpe_20260720_070349",
+                ),
+            )
+            conn.commit()
+
+    def test_restored_losing_row_is_active_but_never_loaded(self, tmp_db):
+        """The row survives the copy; the manager still refuses it."""
+        from trading_bot_v2.regime_param_overlay import (
+            RegimeParamOverlayManager,
+        )
+
+        db, _ = tmp_db
+        self._insert_unguarded(db, -1.4860599305891151)
+        assert len(db.get_regime_param_overlays(active_only=True)) == 1
+
+        manager = RegimeParamOverlayManager(
+            SimpleNamespace(strategies={}), db=db, enabled=True
+        )
+
+        assert manager._overlays == {}
+        assert ("mean_reversion", "ranging_calm") in manager._refused
+        assert "-1.486" in manager._refused[("mean_reversion", "ranging_calm")]
+
+    def test_restored_losing_row_is_refused_again_at_apply(self, tmp_db):
+        """Defence in depth: reload is not the only checkpoint.
+
+        _overlays can be populated by something other than reload(), so
+        the guarantee has to be "nothing losing reaches a strategy", not
+        "nothing losing survives reload".
+        """
+        from trading_bot_v2.regime_param_overlay import (
+            RegimeParamOverlayManager,
+        )
+
+        db, _ = tmp_db
+        manager = RegimeParamOverlayManager(
+            SimpleNamespace(strategies={}), db=db, enabled=True
+        )
+        key = ("mean_reversion", "ranging_calm")
+        manager._overlays[key] = {"rsi_oversold": 44.96}
+        manager._overlay_scores[key] = ("sharpe_ratio", -1.486)
+
+        assert manager._refuse_at_apply(key) is True
+
+    def test_unscored_restored_row_is_refused_too(self, tmp_db):
+        """No score is not the same as a good score.
+
+        The write guard is permissive about a missing value because
+        storing an unscored row is harmless audit material. Applying one
+        is not - it is exactly the shape of a row that never went
+        through a measured write path.
+        """
+        from trading_bot_v2.regime_param_overlay import (
+            RegimeParamOverlayManager,
+        )
+
+        db, _ = tmp_db
+        self._insert_unguarded(db, None, objective=None)
+
+        manager = RegimeParamOverlayManager(
+            SimpleNamespace(strategies={}), db=db, enabled=True
+        )
+
+        assert manager._overlays == {}
+        assert ("mean_reversion", "ranging_calm") in manager._refused
+
+    def test_export_does_not_launder_a_refused_row(self, tmp_db):
+        """The export was the last way out of the guarded database.
+
+        config/regime_param_overlays.json looks authoritative; a losing
+        row listed there under "active_overlays" would outlive the
+        database it came from.
+        """
+        import json as _json
+
+        db, export_path = tmp_db
+        self._insert_unguarded(db, -1.4860599305891151)
+
+        db.export_regime_param_overlays()
+
+        with open(export_path, encoding="utf-8") as fh:
+            payload = _json.load(fh)
+
+        assert payload["active_overlays"] == []
+        assert len(payload["refused_overlays"]) == 1
+        refused = payload["refused_overlays"][0]
+        assert refused["strategy"] == "mean_reversion"
+        assert "break-even" in refused["refused_reason"]
+        assert payload["allow_losing_opt_in"] is False
+
+    def test_export_still_carries_a_winning_row(self, tmp_db):
+        """The filter must be about the score, not about exporting."""
+        import json as _json
+
+        db, export_path = tmp_db
+        db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+            objective="sharpe_ratio",
+            objective_value=1.42,
+        )
+
+        db.export_regime_param_overlays()
+
+        with open(export_path, encoding="utf-8") as fh:
+            payload = _json.load(fh)
+
+        assert len(payload["active_overlays"]) == 1
+        assert payload["refused_overlays"] == []
+
+    def test_export_keeps_an_unscored_row_active(self, tmp_db):
+        """Deliberate asymmetry with the apply side, pinned here.
+
+        A params-only save carries no score, is permitted by the write
+        guard, and this file is the store's mirror - so it stays under
+        active_overlays. The apply side still refuses it fail-closed
+        (test_unscored_restored_row_is_refused_too). Unknown provenance
+        is a reason not to trade a row, not a reason to relabel it in an
+        inspection file.
+        """
+        import json as _json
+
+        db, export_path = tmp_db
+        db.save_regime_param_overlay(
+            strategy="mean_reversion",
+            regime="ranging_calm",
+            params={"rsi_oversold": 30.0},
+        )
+
+        db.export_regime_param_overlays()
+
+        with open(export_path, encoding="utf-8") as fh:
+            payload = _json.load(fh)
+
+        assert len(payload["active_overlays"]) == 1
+        assert payload["refused_overlays"] == []
+
+    def test_export_honours_the_operator_opt_in(self, tmp_db, monkeypatch):
+        """The file must describe what would actually be applied."""
+        import json as _json
+
+        db, export_path = tmp_db
+        self._insert_unguarded(db, -1.486)
+        monkeypatch.setenv("ALLOW_LOSING_REGIME_OVERLAYS", "true")
+
+        db.export_regime_param_overlays()
+
+        with open(export_path, encoding="utf-8") as fh:
+            payload = _json.load(fh)
+
+        assert len(payload["active_overlays"]) == 1
+        assert payload["refused_overlays"] == []
+        assert payload["allow_losing_opt_in"] is True
+
+    def test_the_real_backup_snapshots_are_refused(self, tmp_path):
+        """Run the guard against the actual files, not a reconstruction.
+
+        Skips rather than fails when backups/ is absent - the snapshots
+        are operational artifacts, not fixtures, and are expected to
+        move when the working files are migrated off this drive.
+        """
+        import glob
+        import shutil
+        import sqlite3
+
+        import trading_bot_v2.database as db_mod
+        from trading_bot_v2.regime_param_overlay import (
+            RegimeParamOverlayManager,
+        )
+
+        snapshots = sorted(glob.glob("backups/trading_bot_*.db"))
+        if not snapshots:
+            pytest.skip("no backup snapshots present")
+
+        carriers = []
+        for snapshot in snapshots:
+            probe = sqlite3.connect(snapshot)
+            try:
+                rows = probe.execute(
+                    "SELECT objective, objective_value FROM "
+                    "regime_param_overlays WHERE active = 1"
+                ).fetchall()
+            except sqlite3.Error:
+                continue
+            finally:
+                probe.close()
+            if any(v is not None and v <= 0.0 for _, v in rows):
+                carriers.append(snapshot)
+
+        if not carriers:
+            pytest.skip("no snapshot carries an active losing overlay")
+
+        for snapshot in carriers:
+            restored = str(tmp_path / "restored.db")
+            shutil.copy2(snapshot, restored)
+
+            original_path = db_mod.DATABASE_PATH
+            original_pool = db_mod._connection_pool
+            db_mod.DATABASE_PATH = restored
+            pool = db_mod.ConnectionPool(max_connections=2)
+            db_mod._connection_pool = pool
+            try:
+                db = db_mod.DatabaseManager()
+                assert db.get_regime_param_overlays(active_only=True), snapshot
+
+                manager = RegimeParamOverlayManager(
+                    SimpleNamespace(strategies={}), db=db, enabled=True
+                )
+                assert manager._overlays == {}, snapshot
+                assert manager._refused, snapshot
+            finally:
+                pool.close_all()
+                db_mod.DATABASE_PATH = original_path
+                db_mod._connection_pool = original_pool
+
     def test_guard_sits_at_the_chokepoint_not_the_caller(self, tmp_db):
         """save_overlay_from_study cannot write past the guard.
 
