@@ -351,6 +351,20 @@ def _mean_reversion_space() -> SearchSpace:
 
     Focuses on RSI thresholds, Bollinger Bands, and ATR-based stops.
     Optimized for RANGING_CALM regime.
+
+    NOTE: ``min_confidence`` is deliberately ABSENT (removed 2026-08-02).
+    It is inert for this strategy - MeanReversion assigns it in __init__
+    and then references it only inside debug log f-strings; nothing ever
+    compares against it. The one gate that could act on confidence,
+    StrategyManager._apply_regime_confidence_gate, uses the global
+    MIN_SIGNAL_CONFIDENCE_FLOOR (0.0) plus a per-regime adjustment that
+    is zero for RANGING_CALM - the only regime MeanReversion is admitted
+    to - so it returns early every time. Tuning it therefore sampled
+    pure noise and consumed trial budget that the other four dimensions
+    could have used. Confidence still matters LIVE, where ConfidenceSizer
+    scales position size by it, but that is a continuous effect with no
+    threshold to tune. Do not re-add without first making it gate
+    something; see docs/MEANREVERSION-MTF-CONFIDENCE-2026-08-02.md.
     """
     return {
         # RSI parameters
@@ -360,8 +374,6 @@ def _mean_reversion_space() -> SearchSpace:
         "bb_std_dev": (1.5, 3.0),              # Wider = fewer but stronger signals
         # Stop loss
         "atr_stop_multiplier": (1.5, 3.0),     # Tighter = more stops, wider = more room
-        # Confidence threshold
-        "min_confidence": (0.35, 0.65),        # Lower = more signals, higher = fewer
     }
 
 
@@ -622,11 +634,12 @@ SEARCH_SPACE_BUILDERS: Dict[str, Callable[[], SearchSpace]] = {
 # Maps strategy -> param_name -> ("int" | "float")
 PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
     "mean_reversion": {
+        # No min_confidence: inert for this strategy, see
+        # _mean_reversion_space() for why it was removed.
         "rsi_oversold": "float",
         "rsi_overbought": "float",
         "bb_std_dev": "float",
         "atr_stop_multiplier": "float",
-        "min_confidence": "float",
     },
     "ma_crossover": {
         "fast_ma_period": "int",

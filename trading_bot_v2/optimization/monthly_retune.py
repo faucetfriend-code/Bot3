@@ -74,6 +74,18 @@ RETUNE_SYMBOL = "BTC-USDC"
 # against the adopted-baseline, default and prequential-median arms of
 # the SAME run, which is what the adoption rule already does. See
 # docs/NEUTRAL-STATE-WINDOW-CHECK.md, "Consequence of the seeding fix".
+#
+# min_confidence DROPPED (2026-08-02): the adopted sets used to carry
+# min_confidence 0.5228 (vol_low:trend) and 0.5375 (vol_mid:trend).
+# Removed not because better values were found but because the
+# dimension provably cannot change an outcome - MeanReversion never
+# compares anything against self.min_confidence, and the only gate that
+# could act on confidence returns early in RANGING_CALM, the sole
+# regime the strategy is admitted to. Optuna was sampling noise on that
+# axis, so those two numbers never meant anything. This removal is
+# behaviour-preserving by construction and was verified as such. The
+# remaining four values per state are byte-identical to the frozen
+# 2026-07-30 medians. See docs/MEANREVERSION-MTF-CONFIDENCE-2026-08-02.md.
 ADOPTED_PARAMS: Dict[str, Dict[str, Dict[str, float]]] = {
     "mean_reversion": {
         "vol_low:trend": {
@@ -81,14 +93,12 @@ ADOPTED_PARAMS: Dict[str, Dict[str, Dict[str, float]]] = {
             "rsi_overbought": 62.3545,
             "bb_std_dev": 2.7145,
             "atr_stop_multiplier": 2.3388,
-            "min_confidence": 0.5228,
         },
         "vol_mid:trend": {
             "rsi_oversold": 32.7239,
             "rsi_overbought": 63.8175,
             "bb_std_dev": 2.4479,
             "atr_stop_multiplier": 1.8305,
-            "min_confidence": 0.5375,
         },
     },
 }

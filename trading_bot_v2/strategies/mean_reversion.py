@@ -115,7 +115,18 @@ class MeanReversionStrategy:
             sma_period: SMA period for take profit target (default: 20)
             atr_period: ATR period for stop loss (default: 14)
             atr_stop_multiplier: ATR multiplier for stop loss (env: MEAN_REVERSION_ATR_STOP_MULTIPLIER, default: 2.0)
-            min_confidence: Minimum confidence for signal (env: MEAN_REVERSION_MIN_CONFIDENCE, default: 0.45)
+            min_confidence: NOT A GATE. Retained for logging and for
+                config/overlay compatibility only (env:
+                MEAN_REVERSION_MIN_CONFIDENCE, default: 0.45). Nothing in
+                this strategy compares confidence against it - contrast
+                ma_crossover and funding_arb, which do enforce theirs. By
+                design (Prompt 058) confidence affects SIZE, not
+                permission: live position size scales with it through
+                ConfidenceSizer, and the backtest engine ignores it
+                entirely. Removed from the tuning search space and from
+                ADOPTED_PARAMS on 2026-08-02 because an inert dimension
+                cannot be optimised. Setting this env var changes log
+                text and nothing else.
         """
         # Read from environment with loosened defaults (Prompt 058)
         self.rsi_oversold = (
@@ -637,7 +648,8 @@ class MeanReversionStrategy:
             f"bb_proximity={bb_proximity:.3f}, "
             f"mtf_alignment="
             f"{'none' if mtf_alignment is None else f'{mtf_alignment:.3f}'} => "
-            f"TOTAL={confidence:.3f} (min_conf={self.min_confidence})"
+            f"TOTAL={confidence:.3f} "
+            f"(min_conf={self.min_confidence}, not a gate)"
         )
 
         # Prompt 058: Confidence affects SIZE, not permission
@@ -810,7 +822,8 @@ class MeanReversionStrategy:
             f"bb_proximity={bb_proximity:.3f}, "
             f"mtf_alignment="
             f"{'none' if mtf_alignment is None else f'{mtf_alignment:.3f}'} => "
-            f"TOTAL={confidence:.3f} (min_conf={self.min_confidence})"
+            f"TOTAL={confidence:.3f} "
+            f"(min_conf={self.min_confidence}, not a gate)"
         )
 
         # Prompt 058: Confidence affects SIZE, not permission
