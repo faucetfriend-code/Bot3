@@ -1,0 +1,1493 @@
+{
+  "strategy": "vwap_pullback",
+  "symbol": "BTC-USDC",
+  "states": [
+    "vol_low:trend",
+    "vol_low:neutral",
+    "vol_mid:trend",
+    "vol_mid:neutral",
+    "vol_high:trend",
+    "vol_high:neutral"
+  ],
+  "trials_per_fold": 25,
+  "objective": "sharpe_ratio",
+  "baseline_params_file": null,
+  "baseline_params": null,
+  "run_config": {
+    "version": 1,
+    "args": {
+      "strategy": "vwap_pullback",
+      "symbol": "BTC-USDC",
+      "start": "2020-07-01",
+      "end": "2026-07-01",
+      "train_months": 12,
+      "test_months": 6,
+      "step_months": 6,
+      "step_months_arg": null,
+      "trials": 25,
+      "states": [
+        "vol_low:trend",
+        "vol_low:neutral",
+        "vol_mid:trend",
+        "vol_mid:neutral",
+        "vol_high:trend",
+        "vol_high:neutral"
+      ],
+      "min_state_trades": 10,
+      "objective": "sharpe_ratio",
+      "capital": 10000.0,
+      "seed": 0,
+      "directional_gate": "off",
+      "baseline_params": null,
+      "no_trial_registry": false,
+      "log_level": "WARNING",
+      "report": "out/composite_vpb_step6.json"
+    },
+    "env": {
+      "REGIME_MODE": "volatility",
+      "REGIME_VOL_WINDOW": null,
+      "REGIME_VOL_REFERENCE_DAYS": null,
+      "REGIME_VOL_MIN_OBSERVATIONS": null,
+      "REGIME_VOL_STRATEGIES_LOW": "VWAPPullback",
+      "REGIME_VOL_STRATEGIES_MID": "VWAPPullback",
+      "REGIME_VOL_STRATEGIES_HIGH": "VWAPPullback",
+      "REGIME_VOL_STRATEGIES_WARMUP": null,
+      "REGIME_VOL_WEIGHTS_LOW": "VWAPPullback:1.0",
+      "REGIME_VOL_WEIGHTS_MID": "VWAPPullback:1.0",
+      "REGIME_VOL_WEIGHTS_HIGH": "VWAPPullback:1.0",
+      "REGIME_VOL_WEIGHTS_WARMUP": null,
+      "DIRECTIONAL_GATE": "off",
+      "BACKTEST_HISTORY_LOOKBACK": "100",
+      "BACKTEST_WARMUP_CANDLES": null,
+      "BACKTEST_FUNDING_MODEL": null,
+      "BACKTEST_FUNDING_HOURLY_PCT": "0.0001",
+      "BACKTEST_FUNDING_CONVERSION": null,
+      "BACKTEST_FUNDING_SCALE": null,
+      "BACKTEST_FUNDING_INTERVAL_HOURS": null,
+      "BACKTEST_SEED": null
+    },
+    "resolved": {
+      "regime_mode": "volatility",
+      "backtest_history_lookback": 100,
+      "backtest_warmup_candles": 0,
+      "backtest_funding_model": "flat",
+      "backtest_funding_conversion": "prorata",
+      "backtest_funding_hourly_pct": 0.0001
+    },
+    "seed_namespace": "composite-fold-seed/v1",
+    "argv": [
+      "--strategy",
+      "vwap_pullback",
+      "--symbol",
+      "BTC-USDC",
+      "--start",
+      "2020-07-01",
+      "--end",
+      "2026-07-01",
+      "--train-months",
+      "12",
+      "--test-months",
+      "6",
+      "--trials",
+      "25",
+      "--objective",
+      "sharpe_ratio",
+      "--directional-gate",
+      "off",
+      "--log-level",
+      "WARNING",
+      "--report",
+      "out/composite_vpb_step6.json"
+    ]
+  },
+  "folds": [
+    {
+      "train": [
+        "2020-07-01",
+        "2021-07-01"
+      ],
+      "test": [
+        "2021-07-01",
+        "2022-01-01"
+      ],
+      "seed": 3465757087,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.21345142993547747,
+            "extension_min_sd": 0.8120078452801426,
+            "atr_stop_buffer": 0.3589409180414726,
+            "tp_rr": 1.9287219766748525,
+            "time_exit_hours": 33,
+            "rvol_min": 0.9303767605893183,
+            "cooldown_hours": 5.833451216786532
+          },
+          "train_score": 3.82493618745101,
+          "train_n": 101,
+          "test_tuned": {
+            "n": 135,
+            "score": 6.369537022405096,
+            "pnl": 72.9453
+          },
+          "test_default": {
+            "n": 186,
+            "score": 6.116367349856579,
+            "pnl": 86.56
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.35295737190689386,
+            "extension_min_sd": 0.7576943594555834,
+            "atr_stop_buffer": 0.3002738961533521,
+            "tp_rr": 2.0169372665204808,
+            "time_exit_hours": 40,
+            "rvol_min": 0.9160842664650238,
+            "cooldown_hours": 2.168003992147743
+          },
+          "train_score": 5.488996634747647,
+          "train_n": 238,
+          "test_tuned": {
+            "n": 108,
+            "score": 4.267971745150416,
+            "pnl": 50.8366
+          },
+          "test_default": {
+            "n": 106,
+            "score": 3.330139984607897,
+            "pnl": 42.2699
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.30933424669586784,
+            "extension_min_sd": 0.9337889372888444,
+            "atr_stop_buffer": 0.39200006271071025,
+            "tp_rr": 1.8857475815420959,
+            "time_exit_hours": 32,
+            "rvol_min": 0.6756873447687746,
+            "cooldown_hours": 6.1995797736630305
+          },
+          "train_score": 5.143555546719768,
+          "train_n": 310,
+          "test_tuned": {
+            "n": 81,
+            "score": 2.569217649627517,
+            "pnl": 27.2256
+          },
+          "test_default": {
+            "n": 98,
+            "score": 2.4099132161740746,
+            "pnl": 31.5961
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2021-01-01",
+        "2022-01-01"
+      ],
+      "test": [
+        "2022-01-01",
+        "2022-07-01"
+      ],
+      "seed": 1259367067,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2135,
+            "extension_min_sd": 0.812,
+            "atr_stop_buffer": 0.3589,
+            "tp_rr": 1.9287,
+            "time_exit_hours": 33,
+            "rvol_min": 0.9304,
+            "cooldown_hours": 5.8335
+          },
+          "median_from_folds": 1,
+          "test_median": {
+            "n": 80,
+            "score": 7.989452159369877,
+            "pnl": 53.6153
+          },
+          "params": {
+            "band_sd": 0.4695664838145006,
+            "extension_min_sd": 1.141500770655501,
+            "atr_stop_buffer": 0.36424131781432945,
+            "tp_rr": 2.394662974643989,
+            "time_exit_hours": 21,
+            "rvol_min": 0.33123033846406247,
+            "cooldown_hours": 6.793045502585227
+          },
+          "train_score": 6.541572752430265,
+          "train_n": 272,
+          "test_tuned": {
+            "n": 98,
+            "score": 7.514968705740377,
+            "pnl": 53.3518
+          },
+          "test_default": {
+            "n": 121,
+            "score": 6.9410873126008426,
+            "pnl": 56.505
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.353,
+            "extension_min_sd": 0.7577,
+            "atr_stop_buffer": 0.3003,
+            "tp_rr": 2.0169,
+            "time_exit_hours": 40,
+            "rvol_min": 0.9161,
+            "cooldown_hours": 2.168
+          },
+          "median_from_folds": 1,
+          "test_median": {
+            "n": 113,
+            "score": 5.859756730603369,
+            "pnl": 58.176
+          },
+          "params": {
+            "band_sd": 0.2540118455551718,
+            "extension_min_sd": 1.4123245123256065,
+            "atr_stop_buffer": 0.4702676466889141,
+            "tp_rr": 1.8142935811270107,
+            "time_exit_hours": 45,
+            "rvol_min": 0.9925609822364156,
+            "cooldown_hours": 2.8875453627137357
+          },
+          "train_score": 6.220331746543115,
+          "train_n": 189,
+          "test_tuned": {
+            "n": 89,
+            "score": 4.9370358642569006,
+            "pnl": 50.4878
+          },
+          "test_default": {
+            "n": 121,
+            "score": 7.386545704582852,
+            "pnl": 72.9818
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.3093,
+            "extension_min_sd": 0.9338,
+            "atr_stop_buffer": 0.392,
+            "tp_rr": 1.8857,
+            "time_exit_hours": 32,
+            "rvol_min": 0.6757,
+            "cooldown_hours": 6.1996
+          },
+          "median_from_folds": 1,
+          "test_median": {
+            "n": 112,
+            "score": 5.45112540891209,
+            "pnl": 82.0321
+          },
+          "params": {
+            "band_sd": 0.24271784649944161,
+            "extension_min_sd": 0.655162763527946,
+            "atr_stop_buffer": 0.2749036327675344,
+            "tp_rr": 2.8991417979255893,
+            "time_exit_hours": 33,
+            "rvol_min": 0.16892954076383826,
+            "cooldown_hours": 5.771057301950225
+          },
+          "train_score": 3.5386332672370697,
+          "train_n": 185,
+          "test_tuned": {
+            "n": 118,
+            "score": 3.113675081016058,
+            "pnl": 57.2453
+          },
+          "test_default": {
+            "n": 145,
+            "score": 2.990268055673996,
+            "pnl": 62.2193
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2021-07-01",
+        "2022-07-01"
+      ],
+      "test": [
+        "2022-07-01",
+        "2023-01-01"
+      ],
+      "seed": 562076644,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.3415,
+            "extension_min_sd": 0.9768,
+            "atr_stop_buffer": 0.3616,
+            "tp_rr": 2.1617,
+            "time_exit_hours": 27.0,
+            "rvol_min": 0.6308,
+            "cooldown_hours": 6.3132
+          },
+          "median_from_folds": 2,
+          "test_median": {
+            "n": 179,
+            "score": 3.333990720253304,
+            "pnl": 43.0455
+          },
+          "params": {
+            "band_sd": 0.22521412300189972,
+            "extension_min_sd": 1.3557492370913906,
+            "atr_stop_buffer": 0.5350290432189009,
+            "tp_rr": 1.6108269899400796,
+            "time_exit_hours": 8,
+            "rvol_min": 0.4994626692065944,
+            "cooldown_hours": 3.249558926148517
+          },
+          "train_score": 8.259895709357426,
+          "train_n": 369,
+          "test_tuned": {
+            "n": 245,
+            "score": 4.8029326134134624,
+            "pnl": 41.8761
+          },
+          "test_default": {
+            "n": 226,
+            "score": 3.181457324041358,
+            "pnl": 43.5224
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.3035,
+            "extension_min_sd": 1.085,
+            "atr_stop_buffer": 0.3853,
+            "tp_rr": 1.9156,
+            "time_exit_hours": 42.5,
+            "rvol_min": 0.9543,
+            "cooldown_hours": 2.5278
+          },
+          "median_from_folds": 2,
+          "test_median": {
+            "n": 93,
+            "score": 2.3316114385263647,
+            "pnl": 23.7773
+          },
+          "params": {
+            "band_sd": 0.22521412300189972,
+            "extension_min_sd": 1.3557492370913906,
+            "atr_stop_buffer": 0.5350290432189009,
+            "tp_rr": 1.6108269899400796,
+            "time_exit_hours": 8,
+            "rvol_min": 0.4994626692065944,
+            "cooldown_hours": 3.249558926148517
+          },
+          "train_score": 6.121028978766413,
+          "train_n": 221,
+          "test_tuned": {
+            "n": 109,
+            "score": 7.024232924396477,
+            "pnl": 59.9521
+          },
+          "test_default": {
+            "n": 102,
+            "score": 4.603493942294426,
+            "pnl": 44.8445
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.276,
+            "extension_min_sd": 0.7945,
+            "atr_stop_buffer": 0.3335,
+            "tp_rr": 2.3924,
+            "time_exit_hours": 32.5,
+            "rvol_min": 0.4223,
+            "cooldown_hours": 5.9853
+          },
+          "median_from_folds": 2,
+          "test_median": {
+            "n": 35,
+            "score": 0.8971149300632018,
+            "pnl": 7.0484
+          },
+          "params": {
+            "band_sd": 0.2599027219070719,
+            "extension_min_sd": 0.8354670808866764,
+            "atr_stop_buffer": 0.3693344527816262,
+            "tp_rr": 2.0579543100234168,
+            "time_exit_hours": 16,
+            "rvol_min": 0.9076900901868273,
+            "cooldown_hours": 2.4809653928559876
+          },
+          "train_score": 4.302832820284092,
+          "train_n": 211,
+          "test_tuned": {
+            "n": 35,
+            "score": 3.3136942398700366,
+            "pnl": 28.8609
+          },
+          "test_default": {
+            "n": 44,
+            "score": 2.108458323540132,
+            "pnl": 21.2245
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2022-01-01",
+        "2023-01-01"
+      ],
+      "test": [
+        "2023-01-01",
+        "2023-07-01"
+      ],
+      "seed": 506079027,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2252,
+            "extension_min_sd": 1.1415,
+            "atr_stop_buffer": 0.3642,
+            "tp_rr": 1.9287,
+            "time_exit_hours": 21,
+            "rvol_min": 0.4995,
+            "cooldown_hours": 5.8335
+          },
+          "median_from_folds": 3,
+          "test_median": {
+            "n": 72,
+            "score": 1.4396797497864762,
+            "pnl": 5.6718
+          },
+          "params": {
+            "band_sd": 0.16409115154001855,
+            "extension_min_sd": 0.7355817033919616,
+            "atr_stop_buffer": 0.47670834163027387,
+            "tp_rr": 2.5181167589113373,
+            "time_exit_hours": 17,
+            "rvol_min": 0.817232389469241,
+            "cooldown_hours": 5.567494668254081
+          },
+          "train_score": 6.994913193144922,
+          "train_n": 244,
+          "test_tuned": {
+            "n": 58,
+            "score": 3.019837661750661,
+            "pnl": 14.7721
+          },
+          "test_default": {
+            "n": 80,
+            "score": 2.097250959756504,
+            "pnl": 10.0913
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.254,
+            "extension_min_sd": 1.3557,
+            "atr_stop_buffer": 0.4703,
+            "tp_rr": 1.8143,
+            "time_exit_hours": 40,
+            "rvol_min": 0.9161,
+            "cooldown_hours": 2.8875
+          },
+          "median_from_folds": 3,
+          "test_median": {
+            "n": 142,
+            "score": 4.186986585296208,
+            "pnl": 28.648
+          },
+          "params": {
+            "band_sd": 0.3737245327941078,
+            "extension_min_sd": 1.6290596658522534,
+            "atr_stop_buffer": 0.4310134546867337,
+            "tp_rr": 2.5089177766211237,
+            "time_exit_hours": 8,
+            "rvol_min": 0.5174613536733703,
+            "cooldown_hours": 6.091184368836705
+          },
+          "train_score": 4.496505916184728,
+          "train_n": 176,
+          "test_tuned": {
+            "n": 134,
+            "score": 2.7454758369803103,
+            "pnl": 20.4641
+          },
+          "test_default": {
+            "n": 162,
+            "score": 4.811654125263257,
+            "pnl": 32.8339
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.2599,
+            "extension_min_sd": 0.8355,
+            "atr_stop_buffer": 0.3693,
+            "tp_rr": 2.058,
+            "time_exit_hours": 32,
+            "rvol_min": 0.6757,
+            "cooldown_hours": 5.7711
+          },
+          "median_from_folds": 3,
+          "test_median": {
+            "n": 141,
+            "score": 5.922597134562886,
+            "pnl": 65.3255
+          },
+          "params": {
+            "band_sd": 0.4846953449429414,
+            "extension_min_sd": 0.9279497367699798,
+            "atr_stop_buffer": 0.286354330717675,
+            "tp_rr": 2.3154904540672834,
+            "time_exit_hours": 15,
+            "rvol_min": 0.11067531619577364,
+            "cooldown_hours": 6.452194387675432
+          },
+          "train_score": 4.2897152707618575,
+          "train_n": 184,
+          "test_tuned": {
+            "n": 148,
+            "score": 5.012073283029231,
+            "pnl": 49.078
+          },
+          "test_default": {
+            "n": 177,
+            "score": 4.7576350724574255,
+            "pnl": 59.43
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2022-07-01",
+        "2023-07-01"
+      ],
+      "test": [
+        "2023-07-01",
+        "2024-01-01"
+      ],
+      "seed": 2856492136,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2193,
+            "extension_min_sd": 0.9768,
+            "atr_stop_buffer": 0.4205,
+            "tp_rr": 2.1617,
+            "time_exit_hours": 19.0,
+            "rvol_min": 0.6583,
+            "cooldown_hours": 5.7005
+          },
+          "median_from_folds": 4,
+          "test_median": {
+            "n": 106,
+            "score": 2.8465820093504823,
+            "pnl": 10.1222
+          },
+          "params": {
+            "band_sd": 0.197077789090084,
+            "extension_min_sd": 1.5563854216545066,
+            "atr_stop_buffer": 0.894644059276535,
+            "tp_rr": 2.723878912202622,
+            "time_exit_hours": 11,
+            "rvol_min": 0.7193142088630007,
+            "cooldown_hours": 3.487481963478607
+          },
+          "train_score": 4.22452406501771,
+          "train_n": 270,
+          "test_tuned": {
+            "n": 112,
+            "score": 5.827425223439879,
+            "pnl": 34.6929
+          },
+          "test_default": {
+            "n": 135,
+            "score": 4.043090344103759,
+            "pnl": 16.5225
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.3035,
+            "extension_min_sd": 1.384,
+            "atr_stop_buffer": 0.4506,
+            "tp_rr": 1.9156,
+            "time_exit_hours": 24.0,
+            "rvol_min": 0.7168,
+            "cooldown_hours": 3.0686
+          },
+          "median_from_folds": 4,
+          "test_median": {
+            "n": 146,
+            "score": 2.994625610470878,
+            "pnl": 17.5617
+          },
+          "params": {
+            "band_sd": 0.38837999756266417,
+            "extension_min_sd": 1.194717122407921,
+            "atr_stop_buffer": 0.2762862764815265,
+            "tp_rr": 1.624738824706623,
+            "time_exit_hours": 48,
+            "rvol_min": 1.323966384161965,
+            "cooldown_hours": 2.1038498290116463
+          },
+          "train_score": 4.608095876079095,
+          "train_n": 177,
+          "test_tuned": {
+            "n": 93,
+            "score": 2.7602381650323116,
+            "pnl": 10.8386
+          },
+          "test_default": {
+            "n": 145,
+            "score": 1.3260101389979093,
+            "pnl": 7.1225
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.2846,
+            "extension_min_sd": 0.8817,
+            "atr_stop_buffer": 0.3278,
+            "tp_rr": 2.1867,
+            "time_exit_hours": 24.0,
+            "rvol_min": 0.4223,
+            "cooldown_hours": 5.9853
+          },
+          "median_from_folds": 4,
+          "test_median": {
+            "n": 115,
+            "score": 3.148893459061409,
+            "pnl": 18.504
+          },
+          "params": {
+            "band_sd": 0.3363396811599504,
+            "extension_min_sd": 1.3164067206651375,
+            "atr_stop_buffer": 0.36575714518674673,
+            "tp_rr": 1.6689631809808316,
+            "time_exit_hours": 41,
+            "rvol_min": 1.423178565275955,
+            "cooldown_hours": 2.375301490752023
+          },
+          "train_score": 4.578867094122759,
+          "train_n": 94,
+          "test_tuned": {
+            "n": 77,
+            "score": 3.447992151620085,
+            "pnl": 21.7275
+          },
+          "test_default": {
+            "n": 137,
+            "score": 3.7925604492659626,
+            "pnl": 30.266
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2023-01-01",
+        "2024-01-01"
+      ],
+      "test": [
+        "2024-01-01",
+        "2024-07-01"
+      ],
+      "seed": 1284991845,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2135,
+            "extension_min_sd": 1.1415,
+            "atr_stop_buffer": 0.4767,
+            "tp_rr": 2.3947,
+            "time_exit_hours": 17,
+            "rvol_min": 0.7193,
+            "cooldown_hours": 5.5675
+          },
+          "median_from_folds": 5,
+          "test_median": {
+            "n": 108,
+            "score": 4.668044593650555,
+            "pnl": 34.8094
+          },
+          "params": {
+            "band_sd": 0.2072947073208721,
+            "extension_min_sd": 1.854816259562015,
+            "atr_stop_buffer": 0.8129448696006274,
+            "tp_rr": 2.3159167821589004,
+            "time_exit_hours": 45,
+            "rvol_min": 0.8571534533903877,
+            "cooldown_hours": 2.7999201712747066
+          },
+          "train_score": 4.6554121997876665,
+          "train_n": 182,
+          "test_tuned": {
+            "n": 98,
+            "score": 4.281912753955296,
+            "pnl": 43.9168
+          },
+          "test_default": {
+            "n": 141,
+            "score": 4.376151533561443,
+            "pnl": 36.45
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.353,
+            "extension_min_sd": 1.3557,
+            "atr_stop_buffer": 0.431,
+            "tp_rr": 1.8143,
+            "time_exit_hours": 40,
+            "rvol_min": 0.9161,
+            "cooldown_hours": 2.8875
+          },
+          "median_from_folds": 5,
+          "test_median": {
+            "n": 96,
+            "score": 3.694102840940371,
+            "pnl": 28.632
+          },
+          "params": {
+            "band_sd": 0.3342401774217545,
+            "extension_min_sd": 1.2733641777596418,
+            "atr_stop_buffer": 0.41199980184996365,
+            "tp_rr": 2.690275315986942,
+            "time_exit_hours": 32,
+            "rvol_min": 1.5274346606587685,
+            "cooldown_hours": 2.4102981973751216
+          },
+          "train_score": 4.221307214779638,
+          "train_n": 145,
+          "test_tuned": {
+            "n": 51,
+            "score": 2.0899182127200997,
+            "pnl": 16.5973
+          },
+          "test_default": {
+            "n": 120,
+            "score": 3.0037492221814523,
+            "pnl": 24.1985
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.3093,
+            "extension_min_sd": 0.9279,
+            "atr_stop_buffer": 0.3658,
+            "tp_rr": 2.058,
+            "time_exit_hours": 32,
+            "rvol_min": 0.6757,
+            "cooldown_hours": 5.7711
+          },
+          "median_from_folds": 5,
+          "test_median": {
+            "n": 101,
+            "score": 4.461902538809594,
+            "pnl": 51.4936
+          },
+          "params": {
+            "band_sd": 0.1938279369167221,
+            "extension_min_sd": 1.6971142770708154,
+            "atr_stop_buffer": 0.4688115421298925,
+            "tp_rr": 2.8014964623723313,
+            "time_exit_hours": 12,
+            "rvol_min": 1.0002128247079836,
+            "cooldown_hours": 3.4285864206260124
+          },
+          "train_score": 5.166099736362516,
+          "train_n": 210,
+          "test_tuned": {
+            "n": 81,
+            "score": 2.4257667297271874,
+            "pnl": 29.7067
+          },
+          "test_default": {
+            "n": 132,
+            "score": 3.5587955402300193,
+            "pnl": 46.3141
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2023-07-01",
+        "2024-07-01"
+      ],
+      "test": [
+        "2024-07-01",
+        "2025-01-01"
+      ],
+      "seed": 2865249945,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2104,
+            "extension_min_sd": 1.2486,
+            "atr_stop_buffer": 0.5059,
+            "tp_rr": 2.3553,
+            "time_exit_hours": 19.0,
+            "rvol_min": 0.7683,
+            "cooldown_hours": 4.5275
+          },
+          "median_from_folds": 6,
+          "test_median": {
+            "n": 89,
+            "score": 2.879244029890679,
+            "pnl": 18.9969
+          },
+          "params": {
+            "band_sd": 0.41974080086679144,
+            "extension_min_sd": 1.258560992607028,
+            "atr_stop_buffer": 0.9830729722215217,
+            "tp_rr": 1.5803428210258441,
+            "time_exit_hours": 36,
+            "rvol_min": 0.7399023774585316,
+            "cooldown_hours": 2.1281912130151053
+          },
+          "train_score": 6.028044854676697,
+          "train_n": 281,
+          "test_tuned": {
+            "n": 111,
+            "score": 2.583669702715044,
+            "pnl": 24.8824
+          },
+          "test_default": {
+            "n": 115,
+            "score": 3.5401824055409006,
+            "pnl": 23.13
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.3436,
+            "extension_min_sd": 1.3146,
+            "atr_stop_buffer": 0.4215,
+            "tp_rr": 1.9156,
+            "time_exit_hours": 36.0,
+            "rvol_min": 0.9543,
+            "cooldown_hours": 2.6489
+          },
+          "median_from_folds": 6,
+          "test_median": {
+            "n": 121,
+            "score": 5.336459787599501,
+            "pnl": 44.0312
+          },
+          "params": {
+            "band_sd": 0.407221199945488,
+            "extension_min_sd": 1.0505582789248291,
+            "atr_stop_buffer": 0.9433882346544966,
+            "tp_rr": 2.60718709891721,
+            "time_exit_hours": 12,
+            "rvol_min": 1.5635703972818895,
+            "cooldown_hours": 4.566451179956417
+          },
+          "train_score": 3.088074136328639,
+          "train_n": 111,
+          "test_tuned": {
+            "n": 66,
+            "score": 4.390259263270832,
+            "pnl": 53.7284
+          },
+          "test_default": {
+            "n": 141,
+            "score": 6.917523738146975,
+            "pnl": 56.843
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.2846,
+            "extension_min_sd": 0.9309,
+            "atr_stop_buffer": 0.3675,
+            "tp_rr": 2.1867,
+            "time_exit_hours": 24.0,
+            "rvol_min": 0.7917,
+            "cooldown_hours": 4.5998
+          },
+          "median_from_folds": 6,
+          "test_median": {
+            "n": 93,
+            "score": 6.711945046032656,
+            "pnl": 80.6447
+          },
+          "params": {
+            "band_sd": 0.429716498756578,
+            "extension_min_sd": 1.364930276462251,
+            "atr_stop_buffer": 1.0649018584237497,
+            "tp_rr": 2.866767511890574,
+            "time_exit_hours": 8,
+            "rvol_min": 0.9172196779931112,
+            "cooldown_hours": 2.6760419430707474
+          },
+          "train_score": 4.377930882403956,
+          "train_n": 219,
+          "test_tuned": {
+            "n": 99,
+            "score": 5.1561066515507745,
+            "pnl": 112.2446
+          },
+          "test_default": {
+            "n": 120,
+            "score": 5.799758261585928,
+            "pnl": 76.5327
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2024-01-01",
+        "2025-01-01"
+      ],
+      "test": [
+        "2025-01-01",
+        "2025-07-01"
+      ],
+      "seed": 1132100383,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2135,
+            "extension_min_sd": 1.2586,
+            "atr_stop_buffer": 0.535,
+            "tp_rr": 2.3159,
+            "time_exit_hours": 21,
+            "rvol_min": 0.7399,
+            "cooldown_hours": 3.4875
+          },
+          "median_from_folds": 7,
+          "test_median": {
+            "n": 154,
+            "score": 4.7851978584693065,
+            "pnl": 41.6235
+          },
+          "params": {
+            "band_sd": 0.18580329188216346,
+            "extension_min_sd": 1.548908025266241,
+            "atr_stop_buffer": 0.5754878711761123,
+            "tp_rr": 2.753605242176806,
+            "time_exit_hours": 12,
+            "rvol_min": 0.17430744916614516,
+            "cooldown_hours": 6.134789285891587
+          },
+          "train_score": 4.342167149601679,
+          "train_n": 193,
+          "test_tuned": {
+            "n": 138,
+            "score": 3.0358067670425357,
+            "pnl": 26.7307
+          },
+          "test_default": {
+            "n": 182,
+            "score": 5.918592649994335,
+            "pnl": 48.288
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.353,
+            "extension_min_sd": 1.2734,
+            "atr_stop_buffer": 0.431,
+            "tp_rr": 2.0169,
+            "time_exit_hours": 32,
+            "rvol_min": 0.9926,
+            "cooldown_hours": 2.8875
+          },
+          "median_from_folds": 7,
+          "test_median": {
+            "n": 86,
+            "score": 4.083123420392392,
+            "pnl": 32.9649
+          },
+          "params": {
+            "band_sd": 0.19541747424770917,
+            "extension_min_sd": 0.6745981636678052,
+            "atr_stop_buffer": 0.35008405297542794,
+            "tp_rr": 1.5688415223380132,
+            "time_exit_hours": 41,
+            "rvol_min": 0.011736810771140527,
+            "cooldown_hours": 6.729932242798961
+          },
+          "train_score": 6.008513533334658,
+          "train_n": 213,
+          "test_tuned": {
+            "n": 83,
+            "score": 5.229417699883104,
+            "pnl": 28.951
+          },
+          "test_default": {
+            "n": 105,
+            "score": 4.552913033250814,
+            "pnl": 38.823
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.3093,
+            "extension_min_sd": 0.9338,
+            "atr_stop_buffer": 0.3693,
+            "tp_rr": 2.3155,
+            "time_exit_hours": 16,
+            "rvol_min": 0.9077,
+            "cooldown_hours": 3.4286
+          },
+          "median_from_folds": 7,
+          "test_median": {
+            "n": 54,
+            "score": 6.2645445528048755,
+            "pnl": 56.6528
+          },
+          "params": {
+            "band_sd": 0.19541747424770917,
+            "extension_min_sd": 0.6745981636678052,
+            "atr_stop_buffer": 0.35008405297542794,
+            "tp_rr": 1.5688415223380132,
+            "time_exit_hours": 41,
+            "rvol_min": 0.011736810771140527,
+            "cooldown_hours": 6.729932242798961
+          },
+          "train_score": 6.224012981140059,
+          "train_n": 196,
+          "test_tuned": {
+            "n": 54,
+            "score": 4.877071722911256,
+            "pnl": 32.0874
+          },
+          "test_default": {
+            "n": 70,
+            "score": 6.150563755553802,
+            "pnl": 56.2765
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2024-07-01",
+        "2025-07-01"
+      ],
+      "test": [
+        "2025-07-01",
+        "2026-01-01"
+      ],
+      "seed": 1625073480,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2104,
+            "extension_min_sd": 1.3072,
+            "atr_stop_buffer": 0.5553,
+            "tp_rr": 2.3553,
+            "time_exit_hours": 19.0,
+            "rvol_min": 0.7296,
+            "cooldown_hours": 4.5275
+          },
+          "median_from_folds": 8,
+          "test_median": {
+            "n": 65,
+            "score": 4.921522909476388,
+            "pnl": 21.3221
+          },
+          "params": {
+            "band_sd": 0.18108173501583053,
+            "extension_min_sd": 1.1585711673169021,
+            "atr_stop_buffer": 0.4331224193348897,
+            "tp_rr": 1.5859234673163765,
+            "time_exit_hours": 48,
+            "rvol_min": 1.2746496741576692,
+            "cooldown_hours": 2.6645477342339694
+          },
+          "train_score": 5.121537010001972,
+          "train_n": 189,
+          "test_tuned": {
+            "n": 53,
+            "score": 6.466908740648808,
+            "pnl": 16.6567
+          },
+          "test_default": {
+            "n": 77,
+            "score": 5.120605784535946,
+            "pnl": 18.5998
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.3436,
+            "extension_min_sd": 1.234,
+            "atr_stop_buffer": 0.4215,
+            "tp_rr": 1.9156,
+            "time_exit_hours": 36.0,
+            "rvol_min": 0.9543,
+            "cooldown_hours": 3.0686
+          },
+          "median_from_folds": 8,
+          "test_median": {
+            "n": 114,
+            "score": 6.034391216301599,
+            "pnl": 33.7283
+          },
+          "params": {
+            "band_sd": 0.18108173501583053,
+            "extension_min_sd": 1.1585711673169021,
+            "atr_stop_buffer": 0.4331224193348897,
+            "tp_rr": 1.5859234673163765,
+            "time_exit_hours": 48,
+            "rvol_min": 1.2746496741576692,
+            "cooldown_hours": 2.6645477342339694
+          },
+          "train_score": 7.067669652444111,
+          "train_n": 139,
+          "test_tuned": {
+            "n": 81,
+            "score": 3.536094802728926,
+            "pnl": 16.5804
+          },
+          "test_default": {
+            "n": 127,
+            "score": 6.460303644666674,
+            "pnl": 35.1237
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.2846,
+            "extension_min_sd": 0.9309,
+            "atr_stop_buffer": 0.3675,
+            "tp_rr": 2.1867,
+            "time_exit_hours": 24.0,
+            "rvol_min": 0.7917,
+            "cooldown_hours": 4.5998
+          },
+          "median_from_folds": 8,
+          "test_median": {
+            "n": 123,
+            "score": 2.8103783645582396,
+            "pnl": 27.3086
+          },
+          "params": {
+            "band_sd": 0.2405316627872001,
+            "extension_min_sd": 0.5269327366385818,
+            "atr_stop_buffer": 0.5490794907584451,
+            "tp_rr": 1.51371835097334,
+            "time_exit_hours": 41,
+            "rvol_min": 1.3100949931405554,
+            "cooldown_hours": 3.9567376263104563
+          },
+          "train_score": 7.039153424905715,
+          "train_n": 111,
+          "test_tuned": {
+            "n": 90,
+            "score": 6.469116716193705,
+            "pnl": 55.3295
+          },
+          "test_default": {
+            "n": 151,
+            "score": 5.2807148744481305,
+            "pnl": 51.2837
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2025-01-01",
+        "2026-01-01"
+      ],
+      "test": [
+        "2026-01-01",
+        "2026-07-01"
+      ],
+      "seed": 3680746879,
+      "base_seed": 0,
+      "seed_namespace": "composite-fold-seed/v1",
+      "states": {
+        "vol_low:trend": {
+          "median_params": {
+            "band_sd": 0.2073,
+            "extension_min_sd": 1.2586,
+            "atr_stop_buffer": 0.535,
+            "tp_rr": 2.3159,
+            "time_exit_hours": 21,
+            "rvol_min": 0.7399,
+            "cooldown_hours": 3.4875
+          },
+          "median_from_folds": 9,
+          "test_median": {
+            "n": 105,
+            "score": 5.438462129278427,
+            "pnl": 34.3468
+          },
+          "params": {
+            "band_sd": 0.40367920349723546,
+            "extension_min_sd": 1.4561410229545955,
+            "atr_stop_buffer": 0.3389372771131707,
+            "tp_rr": 2.27034998744626,
+            "time_exit_hours": 31,
+            "rvol_min": 0.8596002620991084,
+            "cooldown_hours": 2.58555834315569
+          },
+          "train_score": 5.296971776853644,
+          "train_n": 272,
+          "test_tuned": {
+            "n": 128,
+            "score": 5.747758150909317,
+            "pnl": 30.8321
+          },
+          "test_default": {
+            "n": 128,
+            "score": 3.2286855136186796,
+            "pnl": 17.9139
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "median_params": {
+            "band_sd": 0.3342,
+            "extension_min_sd": 1.1947,
+            "atr_stop_buffer": 0.431,
+            "tp_rr": 1.8143,
+            "time_exit_hours": 40,
+            "rvol_min": 0.9926,
+            "cooldown_hours": 2.8875
+          },
+          "median_from_folds": 9,
+          "test_median": {
+            "n": 118,
+            "score": 3.8842378888447606,
+            "pnl": 29.3785
+          },
+          "params": {
+            "band_sd": 0.49472229155718367,
+            "extension_min_sd": 1.5993851021991097,
+            "atr_stop_buffer": 0.25978611218094505,
+            "tp_rr": 2.3446937016201175,
+            "time_exit_hours": 33,
+            "rvol_min": 0.9345991392180149,
+            "cooldown_hours": 3.1856620950325394
+          },
+          "train_score": 6.471969512539705,
+          "train_n": 200,
+          "test_tuned": {
+            "n": 121,
+            "score": 4.46941595012313,
+            "pnl": 37.5576
+          },
+          "test_default": {
+            "n": 122,
+            "score": 3.9587599787272367,
+            "pnl": 28.1922
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "median_params": {
+            "band_sd": 0.2599,
+            "extension_min_sd": 0.9279,
+            "atr_stop_buffer": 0.3693,
+            "tp_rr": 2.058,
+            "time_exit_hours": 32,
+            "rvol_min": 0.9077,
+            "cooldown_hours": 3.9567
+          },
+          "median_from_folds": 9,
+          "test_median": {
+            "n": 89,
+            "score": 6.341215730845905,
+            "pnl": 57.2641
+          },
+          "params": {
+            "band_sd": 0.45964072137754913,
+            "extension_min_sd": 1.4564265935799066,
+            "atr_stop_buffer": 0.2548228313923677,
+            "tp_rr": 1.8449406069455974,
+            "time_exit_hours": 33,
+            "rvol_min": 0.8432015583729513,
+            "cooldown_hours": 2.6171608689854367
+          },
+          "train_score": 6.2437748917459714,
+          "train_n": 221,
+          "test_tuned": {
+            "n": 125,
+            "score": 8.04389180179051,
+            "pnl": 72.9159
+          },
+          "test_default": {
+            "n": 121,
+            "score": 4.2641349389046646,
+            "pnl": 45.9939
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "vol_low:trend": {
+      "folds": 10,
+      "tuned": 4.965075734202047,
+      "default": 4.456347117761035,
+      "edge": 0.5087286164410125,
+      "median_folds": 9,
+      "median": 4.255797351058388,
+      "median_default": 4.271900425305974,
+      "edge_median_vs_default": -0.016103074247586058,
+      "median_tuned_folds": 9,
+      "median_on_tuned_folds": 4.255797351058388,
+      "median_tuned": 4.809024479957264,
+      "edge_median_vs_tuned": -0.5532271288988762
+    },
+    "vol_low:neutral": {
+      "folds": 0
+    },
+    "vol_mid:trend": {
+      "folds": 10,
+      "tuned": 4.145006046454251,
+      "default": 4.635109351271949,
+      "edge": -0.4901033048176986,
+      "median_folds": 9,
+      "median": 4.267255057663938,
+      "median_default": 4.7801059475679555,
+      "edge_median_vs_default": -0.5128508899040174,
+      "median_tuned_folds": 9,
+      "median_on_tuned_folds": 4.267255057663938,
+      "median_tuned": 4.131343191043566,
+      "edge_median_vs_tuned": 0.13591186662037202
+    },
+    "vol_mid:neutral": {
+      "folds": 0
+    },
+    "vol_high:trend": {
+      "folds": 10,
+      "tuned": 4.442860602733636,
+      "default": 4.111280248783414,
+      "edge": 0.3315803539502218,
+      "median_folds": 9,
+      "median": 4.667746351738984,
+      "median_default": 4.300321030184452,
+      "edge_median_vs_default": 0.3674253215545322,
+      "median_tuned_folds": 9,
+      "median_on_tuned_folds": 4.667746351738984,
+      "median_tuned": 4.651043153078761,
+      "edge_median_vs_tuned": 0.016703198660223073
+    },
+    "vol_high:neutral": {
+      "folds": 0
+    }
+  }
+}
