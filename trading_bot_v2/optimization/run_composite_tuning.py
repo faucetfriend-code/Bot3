@@ -40,6 +40,20 @@ Design, and why it is cheap enough to run:
   not the fold-winner arm - is the number that describes the deployed
   object. It shares the test-window backtest cache, so a median that
   coincides with a winner or the baseline costs nothing extra.
+- SELF-DESCRIBING ARTIFACTS (2026-08-02): the report carries a
+  ``run_config`` block with every resolved argument (including the
+  EFFECTIVE fold step, not the raw ``--step-months`` which is None when
+  defaulted), the measurement-relevant environment actually in force,
+  and - separately - the values those knobs RESOLVED to, since an unset
+  variable still has a default and a raw env capture alone cannot be
+  read without knowing what that default was on the day.
+  Before it existed, two artifacts could disagree with nothing in the
+  repo explaining why: ``out/composite_mr_gateenforce.json`` used a
+  12-month step and ``out/monthly/composite_mean_reversion_2026-07.json``
+  the default 6-month one, which had to be inferred from the fold dates
+  and confirmed by re-running the window
+  (docs/NEUTRAL-STATE-WINDOW-CHECK.md). Existing top-level keys are
+  unchanged; readers of ``folds``/``summary`` are unaffected.
 - REPRODUCIBLE ACROSS RUNS (2026-08-02): each fold's Optuna seed is
   derived from the fold's IDENTITY - ``sha256(--seed | strategy |
   symbol | train/test dates)``, see ``fold_seed`` - not from its ordinal
@@ -116,6 +130,173 @@ DEFAULT_MIN_STATE_TRADES = 10
 #: version bump rather than a silent shift in every tuned result.
 _FOLD_SEED_NAMESPACE = "composite-fold-seed/v1"
 
+#: Schema version of the ``run_config`` report block. Bump it when a
+#: field changes meaning, so an old artifact is not misread as a new one.
+RUN_CONFIG_VERSION = 1
+
+#: Environment variables that change WHAT A RUN MEASURES, recorded into
+#: ``run_config.env``. Deliberately an explicit allow-list rather than a
+#: dump of os.environ: these reports are written into out/ and read
+#: months later, and a dump would put API credentials in them. A
+#: variable that is unset is recorded as null, so "unset" stays
+#: distinguishable from "set to empty string".
+#:
+#: The REGIME_* block is here because missing it turns the whole run into
+#: a silent no-op (see the module docstring); the BACKTEST_* block
+#: because funding model, history lookback and tie-break seed all move
+#: the numbers without appearing anywhere else in the artifact.
+RECORDED_ENV_VARS = (
+    "REGIME_MODE",
+    "REGIME_VOL_WINDOW",
+    "REGIME_VOL_REFERENCE_DAYS",
+    "REGIME_VOL_MIN_OBSERVATIONS",
+    "REGIME_VOL_STRATEGIES_LOW",
+    "REGIME_VOL_STRATEGIES_MID",
+    "REGIME_VOL_STRATEGIES_HIGH",
+    "REGIME_VOL_STRATEGIES_WARMUP",
+    "REGIME_VOL_WEIGHTS_LOW",
+    "REGIME_VOL_WEIGHTS_MID",
+    "REGIME_VOL_WEIGHTS_HIGH",
+    "REGIME_VOL_WEIGHTS_WARMUP",
+    "DIRECTIONAL_GATE",
+    "BACKTEST_HISTORY_LOOKBACK",
+    "BACKTEST_WARMUP_CANDLES",
+    "BACKTEST_FUNDING_MODEL",
+    "BACKTEST_FUNDING_HOURLY_PCT",
+    "BACKTEST_FUNDING_CONVERSION",
+    "BACKTEST_FUNDING_SCALE",
+    "BACKTEST_FUNDING_INTERVAL_HOURS",
+    "BACKTEST_SEED",
+)
+
+
+def resolved_settings() -> Dict[str, Any]:
+    """The values the backtests actually used, not the raw env strings.
+
+    ``run_config.env`` answers "was this variable set in the
+    environment". That is not the same question as "what did the code
+    use", and on its own it is close to useless: every one of these
+    knobs applies a default at its call site (REGIME_MODE -> "adx",
+    BACKTEST_HISTORY_LOOKBACK -> 60, BACKTEST_FUNDING_MODEL -> "flat"),
+    so a null in the env block means "the default", and reading that
+    artifact a year later requires knowing what the default was AT THE
+    TIME. Defaults move. This block records the answer directly.
+
+    Every value comes from the same resolver the engine itself calls -
+    ``get_regime_mode``, ``validate_funding_model``, the ``config``
+    attributes - never a literal copied into this module, so it cannot
+    drift away from real behaviour.
+
+    Caveat worth knowing when reading an artifact: the engine lets a
+    config proxy override the funding knobs per run
+    (``engine._env_or_cfg``), and the optimization adapter uses one.
+    What is recorded here is the process-level resolution, which is what
+    a re-run from the same environment would reproduce.
+
+    Returns:
+        Knob name -> resolved value. On an unexpected resolver failure
+        the key maps to an error string rather than being dropped: a
+        missing key must always mean "this field did not exist yet".
+    """
+    from ..backtesting.funding import validate_conversion, validate_funding_model
+    from ..config import config
+    from ..volatility_regime import get_regime_mode
+
+    def _safe(name, fn):
+        try:
+            return fn()
+        except Exception as exc:  # never lose a report to a resolver
+            return f"<unresolved: {type(exc).__name__}: {exc}>"
+
+    return {
+        "regime_mode": _safe("regime_mode", get_regime_mode),
+        "backtest_history_lookback": _safe(
+            "lookback", lambda: config.backtest_history_lookback
+        ),
+        "backtest_warmup_candles": _safe(
+            "warmup", lambda: config.backtest_warmup_candles
+        ),
+        "backtest_funding_model": _safe(
+            "funding_model",
+            lambda: validate_funding_model(os.getenv("BACKTEST_FUNDING_MODEL")),
+        ),
+        "backtest_funding_conversion": _safe(
+            "funding_conversion",
+            lambda: validate_conversion(os.getenv("BACKTEST_FUNDING_CONVERSION")),
+        ),
+        "backtest_funding_hourly_pct": _safe(
+            "funding_pct", lambda: config.backtest_funding_hourly_pct
+        ),
+    }
+
+
+def build_run_config(
+    args: argparse.Namespace,
+    states: List[str],
+    step_months: int,
+    argv: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Snapshot the run's resolved configuration for the report.
+
+    Everything needed to re-run the measurement, in one block, so an
+    artifact can be read on its own. The single most important field is
+    ``args.step_months``: it is the EFFECTIVE step actually used for
+    fold generation, whereas ``args.step_months_arg`` preserves the raw
+    flag, which is null whenever the caller let it default to
+    ``--test-months``. Recording only the raw flag would have left the
+    2026-08-01 12-vs-6-month discrepancy exactly as undiagnosable as it
+    was (docs/NEUTRAL-STATE-WINDOW-CHECK.md).
+
+    Call this AFTER the ``--directional-gate`` override has been written
+    to ``os.environ``, so the recorded ``DIRECTIONAL_GATE`` is the value
+    the backtests actually saw and not the one ``.env`` supplied.
+
+    Args:
+        args: Parsed CLI namespace.
+        states: Composite states this run measures, already normalised.
+        step_months: The effective fold step in months, i.e.
+            ``args.step_months or args.test_months``.
+        argv: Argument vector this run was invoked with. Defaults to
+            ``sys.argv[1:]``.
+
+    Returns:
+        A JSON-serialisable dict with ``version``, ``args``, ``env``,
+        ``seed_namespace`` and ``argv`` keys.
+    """
+    return {
+        "version": RUN_CONFIG_VERSION,
+        "args": {
+            "strategy": args.strategy,
+            "symbol": args.symbol,
+            "start": args.start,
+            "end": args.end,
+            "train_months": args.train_months,
+            "test_months": args.test_months,
+            "step_months": step_months,
+            "step_months_arg": args.step_months,
+            "trials": args.trials,
+            "states": list(states),
+            "min_state_trades": args.min_state_trades,
+            "objective": args.objective,
+            "capital": args.capital,
+            "seed": args.seed,
+            "directional_gate": args.directional_gate,
+            "baseline_params": args.baseline_params,
+            "no_trial_registry": args.no_trial_registry,
+            "log_level": args.log_level,
+            "report": args.report,
+        },
+        # env = what was SET (null means "not set"); resolved = what was
+        # USED. Keep both: env alone cannot be read without knowing the
+        # defaults of the day, and resolved alone loses the distinction
+        # between an explicit setting and a default that happened to
+        # agree with it.
+        "env": {name: os.environ.get(name) for name in RECORDED_ENV_VARS},
+        "resolved": resolved_settings(),
+        "seed_namespace": _FOLD_SEED_NAMESPACE,
+        "argv": list(argv) if argv is not None else list(sys.argv[1:]),
+    }
+
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
@@ -160,6 +341,16 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
             "defaults. Use it to give the currently adopted params an "
             "out-of-sample score (leg 2 of the adoption rule). States "
             "absent from the file behave exactly as before."
+        ),
+    )
+    p.add_argument(
+        "--no-trial-registry", action="store_true",
+        help=(
+            "Do not record this run's trials in the trial_registry. "
+            "Leave off for any run whose search should count toward the "
+            "Deflated Sharpe Ratio's N - which is every real run. Exists "
+            "for throwaway probes that would otherwise inflate the "
+            "multiple-testing penalty for a search nobody acted on."
         ),
     )
     p.add_argument(
@@ -281,6 +472,92 @@ def fold_seed(
         base_seed,
         [strategy, symbol, train_start, train_end, test_start, test_end],
     )
+
+
+#: Objective value returned when no state scored in a trial. Excluded
+#: from the recorded Sharpe variance for the same reason OptunaRunner
+#: excludes its zero-trade band scores: it is a sentinel, not an
+#: estimate, and mixing it in produces absurd DSR benchmarks.
+_NO_SCORE_SENTINEL = -1e9
+
+
+def record_fold_trials(
+    study: Any,
+    strategy: str,
+    symbol: str,
+    objective: str,
+    train: List[str],
+    test: List[str],
+) -> Optional[int]:
+    """Record one fold's Optuna study in the trial_registry.
+
+    Composite tuning drives Optuna directly rather than through
+    ``OptunaRunner``, so until 2026-08-02 it recorded NOTHING - the
+    entire campaign from 2026-07-28 on was invisible to the Deflated
+    Sharpe Ratio, which reads its N from this table
+    (``validation/gate.py``, ``validation/runner.py``). Every DSR
+    computed against that campaign therefore understated the search
+    size and deflated too little. One row per fold matches
+    ``OptunaRunner._record_trial_registry``'s one-row-per-study
+    granularity.
+
+    ``regime`` is deliberately NULL rather than a composite state: a
+    fold runs ONE shared trial pool that every state selects from, so
+    attributing those trials to a single state would be false. NULL-
+    regime rows count toward every regime query in
+    ``get_total_trials``, which is the correct treatment here.
+
+    Args:
+        study: The finished Optuna study for this fold.
+        strategy: Snake_case strategy key.
+        symbol: Symbol being tuned.
+        objective: Canonical objective name; the Sharpe variance is
+            recorded only for ``sharpe_ratio``, mirroring OptunaRunner.
+        train: ``[start, end]`` of the fold's train window.
+        test: ``[start, end]`` of the fold's test window.
+
+    Returns:
+        The inserted row id, or None when nothing was recorded (no
+        trials, or the database was unreachable - a registry failure
+        must never destroy a multi-hour tuning run).
+    """
+    import optuna
+
+    from ..database import DatabaseManager
+
+    state = optuna.trial.TrialState
+    scored = [
+        t for t in study.trials
+        if t.state in (state.COMPLETE, state.PRUNED) and t.value is not None
+    ]
+    if not scored:
+        return None
+
+    sr_variance: Optional[float] = None
+    if objective == "sharpe_ratio":
+        values = [
+            t.value for t in scored
+            if t.state == state.COMPLETE and t.value > _NO_SCORE_SENTINEL / 2
+        ]
+        if len(values) >= 2:
+            sr_variance = statistics.variance(values)
+
+    source = (
+        f"composite/{strategy}/{symbol}/"
+        f"{train[0]}_{train[1]}/{test[0]}_{test[1]}"
+    )
+    try:
+        return DatabaseManager().save_trial_registry_entry(
+            strategy=strategy,
+            regime=None,
+            scope="optuna_study",
+            n_trials=len(scored),
+            sr_variance=sr_variance,
+            source=source,
+        )
+    except Exception as exc:
+        print(f"  trial registry: NOT recorded ({type(exc).__name__}: {exc})")
+        return None
 
 
 def _suggest(trial, space: Dict[str, Any]) -> Dict[str, Any]:
@@ -707,6 +984,9 @@ def run(argv: Optional[List[str]] = None) -> int:
         "objective": args.objective,
         "baseline_params_file": args.baseline_params,
         "baseline_params": baseline or None,
+        # Appended, never replacing anything: monthly_retune and the
+        # analysis scripts read "folds"/"summary" by name.
+        "run_config": build_run_config(args, states, step_m, argv),
         "folds": [],
     }
 
@@ -748,6 +1028,12 @@ def run(argv: Optional[List[str]] = None) -> int:
         sampler = optuna.samplers.TPESampler(seed=seed)
         study = optuna.create_study(direction="maximize", sampler=sampler)
         study.optimize(objective_fn, n_trials=args.trials)
+
+        if not args.no_trial_registry:
+            record_fold_trials(
+                study, args.strategy, args.symbol, args.objective,
+                [tr_s, tr_e], [te_s, te_e],
+            )
 
         # Per-state winner selection from the shared trial pool
         fold_out: Dict[str, Any] = {
