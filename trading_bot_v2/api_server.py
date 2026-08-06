@@ -70,41 +70,66 @@ except ImportError:
 _LOG_FMT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 logging.basicConfig(level=logging.INFO, format=_LOG_FMT)
 
-try:
-    _LOG_DIR = Path(__file__).resolve().parent.parent / "server logs reports"
-    _LOG_DIR.mkdir(exist_ok=True)
-    _CURRENT_LOG = _LOG_DIR / "current.log"
+# Guards around the file-logging setup below:
+# - Pytest: importing this module from a test run must NOT touch the live
+#   server's current.log (rotation steals it; the handler appends MagicMock
+#   debris into it). Console logging via basicConfig above is enough.
+# - Sentinel: `python -m trading_bot_v2.api_server` runs this module twice in
+#   one process (once as __main__, once re-imported by uvicorn as
+#   trading_bot_v2.api_server). A module-level flag cannot dedupe across the
+#   two module objects, so a process-wide env-var sentinel keyed on the pid
+#   ensures the FileHandler + loguru sink are attached at most once.
+_UNDER_PYTEST = "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+_FILELOG_SENTINEL = "_BOT3_FILELOG_PID"
 
-    # Rotate previous current.log if non-empty
-    if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
-        _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        _rotated = _LOG_DIR / f"current_{_ts}.log"
-        try:
-            _CURRENT_LOG.rename(_rotated)
-        except OSError:
-            # If rename fails (rare; e.g. file in use on Windows), append instead
-            pass
-
-    _file_handler = logging.FileHandler(_CURRENT_LOG, mode="a", encoding="utf-8")
-    _file_handler.setLevel(logging.INFO)
-    _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
-    logging.getLogger().addHandler(_file_handler)
-
-    # Loguru sink for modules that use loguru (signal_logger, kelly_position_sizer)
+if not _UNDER_PYTEST and os.environ.get(_FILELOG_SENTINEL) != str(os.getpid()):
     try:
-        from loguru import logger as _loguru
-        _loguru.add(
-            str(_CURRENT_LOG),
-            format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
-            level="INFO",
-            rotation=None,           # we rotate manually on bot start
-            enqueue=True,            # thread-safe writes
-        )
-    except ImportError:
-        pass  # loguru optional
-except Exception as _log_setup_err:
-    # Never let logging setup take down the bot
-    print(f"WARNING: file logging setup failed: {_log_setup_err}")
+        _LOG_DIR = Path(__file__).resolve().parent.parent / "server logs reports"
+        _LOG_DIR.mkdir(exist_ok=True)
+        _CURRENT_LOG = _LOG_DIR / "current.log"
+
+        # Rotate previous current.log if non-empty
+        if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
+            _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            _rotated = _LOG_DIR / f"current_{_ts}.log"
+            try:
+                _CURRENT_LOG.rename(_rotated)
+            except OSError:
+                # Rename fails when another process (a live server) holds the
+                # file open on Windows. Do not fail, but do not stay silent
+                # either: this process's output will append to that log.
+                logging.warning(
+                    "Could not rotate %s: another process holds it "
+                    "(a live server is probably running); "
+                    "this process's log output will append to it.",
+                    _CURRENT_LOG,
+                )
+
+        _file_handler = logging.FileHandler(_CURRENT_LOG, mode="a", encoding="utf-8")
+        _file_handler.setLevel(logging.INFO)
+        _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
+        logging.getLogger().addHandler(_file_handler)
+
+        # Loguru sink for modules that use loguru (signal_logger, kelly_position_sizer)
+        try:
+            from loguru import logger as _loguru
+            _loguru.add(
+                str(_CURRENT_LOG),
+                format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
+                level="INFO",
+                rotation=None,           # we rotate manually on bot start
+                enqueue=True,            # thread-safe writes
+            )
+        except ImportError:
+            pass  # loguru optional
+
+        # Mark this process as configured so the second import (uvicorn
+        # re-importing the module the __main__ instance already set up)
+        # does not attach a duplicate handler + sink.
+        os.environ[_FILELOG_SENTINEL] = str(os.getpid())
+    except Exception as _log_setup_err:
+        # Never let logging setup take down the bot
+        print(f"WARNING: file logging setup failed: {_log_setup_err}")
 
 logger = logging.getLogger(__name__)
 
@@ -250,51 +275,17 @@ class BotIntegration:
                 logger.warning(f"Could not start WebSocket client: {e}")
                 self.ws_client = None
 
-            # Initialize regime detector
-            self.regime_detector = make_regime_detector()
-            logger.info(
-                f"Regime detector initialized: "
-                f"{type(self.regime_detector).__name__}"
-            )
-
-            # Initialize multi-timeframe fetcher (requires pacifica_client)
-            if self.pacifica_client:
-                self.mtf_fetcher = MultiTimeframeFetcher(self.pacifica_client)
-                logger.info("MultiTimeframeFetcher initialized")
-            else:
-                self.mtf_fetcher = None
-                logger.warning("MultiTimeframeFetcher skipped - no Pacifica client")
-
-            # Initialize risk manager
+            # Initialize risk manager (TradingBot below needs it injected)
             self.risk_manager = RiskManager()
             logger.info("RiskManager initialized")
 
-            # Initialize grid lifecycle manager (requires client, risk_manager, db)
-            if self.pacifica_client:
-                self.grid_manager = GridLifecycleManager(
-                    client=self.pacifica_client,
-                    risk_manager=self.risk_manager,
-                    db=self.database,
-                )
-                logger.info("GridLifecycleManager initialized")
-            else:
-                self.grid_manager = None
-                logger.warning("GridLifecycleManager skipped - no Pacifica client")
-
-            # Initialize strategy manager (uses regime_detector and enable flags)
-            self.strategy_manager = StrategyManager(
-                regime_detector=self.regime_detector,
-                enable_mean_reversion=True,
-                enable_ma_crossover=True,
-                enable_trend_following=False,
-                enable_grid_trading=True,
-                enable_liquidation_capture=True,
-                client=self.pacifica_client,  # For FundingArb API calls
-                ws_client=self.ws_client,  # For OrderBookImbalance
-            )
-            logger.info("StrategyManager initialized")
-
-            # Initialize trading bot (uses db, client, risk_manager, hub_publish_func)
+            # Initialize trading bot (uses db, client, risk_manager) and adopt
+            # its components. TradingBot.__init__ already builds fully wired
+            # instances (regime detector with event bus + db, MTF fetcher with
+            # ws_client, config-driven StrategyManager, grid manager with
+            # orphan repair); constructing separate copies here meant every
+            # component initialized twice and the dashboard read different
+            # instances than the ones the trading loop actually uses.
             if self.pacifica_client:
                 self.trading_bot = TradingBot(
                     db=self.database,
@@ -302,7 +293,42 @@ class BotIntegration:
                     risk_manager=self.risk_manager,
                 )
                 logger.info("TradingBot initialized")
+
+                self.regime_detector = self.trading_bot.market_regime
+                self.mtf_fetcher = self.trading_bot.multi_tf_fetcher
+                self.strategy_manager = self.trading_bot.strategy_manager
+                self.grid_manager = self.trading_bot.grid_lifecycle
+                logger.info(
+                    "Adopted TradingBot components (regime detector, "
+                    "strategy manager, grid manager, MTF fetcher)"
+                )
             else:
+                # Dashboard-only mode: no TradingBot to adopt from, so build
+                # the lightweight fallbacks directly.
+                self.regime_detector = make_regime_detector()
+                logger.info(
+                    f"Regime detector initialized: "
+                    f"{type(self.regime_detector).__name__}"
+                )
+
+                self.mtf_fetcher = None
+                logger.warning("MultiTimeframeFetcher skipped - no Pacifica client")
+
+                self.grid_manager = None
+                logger.warning("GridLifecycleManager skipped - no Pacifica client")
+
+                self.strategy_manager = StrategyManager(
+                    regime_detector=self.regime_detector,
+                    enable_mean_reversion=True,
+                    enable_ma_crossover=True,
+                    enable_trend_following=False,
+                    enable_grid_trading=True,
+                    enable_liquidation_capture=True,
+                    client=self.pacifica_client,  # For FundingArb API calls
+                    ws_client=self.ws_client,  # For OrderBookImbalance
+                )
+                logger.info("StrategyManager initialized")
+
                 self.trading_bot = None
                 logger.warning(
                     "TradingBot skipped - no Pacifica client (API keys required)"
@@ -2817,4 +2843,25 @@ if __name__ == "__main__":
         # Running as script: python api_server.py
         app_path = "api_server:app"
 
-    uvicorn.run(app_path, host="0.0.0.0", port=8000, reload=False, log_level="info")
+    # Pre-flight: fail loudly if the port is taken. Without this, uvicorn
+    # crashes after logging setup but writes nothing to any log file, so a
+    # stale instance holding the port is invisible except in the console.
+    _host = "0.0.0.0"
+    _port = 8000
+    import socket
+
+    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _probe.bind((_host, _port))
+    except OSError:
+        print(
+            f"ERROR: port {_port} is already in use - "
+            "another bot instance is probably running."
+        )
+        print(f"  Find it:  netstat -ano | findstr :{_port}")
+        print("  Kill it:  taskkill /F /PID <pid>")
+        sys.exit(1)
+    finally:
+        _probe.close()
+
+    uvicorn.run(app_path, host=_host, port=_port, reload=False, log_level="info")
