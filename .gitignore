@@ -14,6 +14,10 @@ test-results/
 nul
 signals_log.csv
 backups/
+# Live SQLite database at the repo root (auto-created; mutates on every run).
+/trading_bot.db
+# Per-machine Claude Code permission overrides; never shared.
+.claude/settings.local.json
 # Candle/funding store: multi-year, expensive to re-download, never committed.
 # Broadened from the data/ dir alone - no parquet anywhere is a source artefact.
 *.parquet
