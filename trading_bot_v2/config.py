@@ -73,6 +73,28 @@ class TradeQuality(str, Enum):
     EXCEPTIONAL = "exceptional"
 
 
+def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    """Read an int env var; unparseable values fall back to ``default``."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _env_float(name: str, default: float, minimum: Optional[float] = None) -> float:
+    """Read a float env var; unparseable values fall back to ``default``."""
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 class Config:
     """Configuration class for the trading bot v2."""
 
@@ -285,6 +307,34 @@ class Config:
             )
         except ValueError:
             self.reconciliation_interval_seconds = 3600
+
+        # ---- Venue-side stop protection (live-readiness audit T4) ----
+        # What to do when a just-filled entry cannot get a venue stop
+        # installed after the one retry: "close" (default; flatten it
+        # reduce-only - safe for unattended live) or "local" (keep it,
+        # mark venue_stop_state=missing, rely on the loop check).
+        policy = os.getenv("VENUE_STOP_FAILURE_POLICY", "close").strip().lower()
+        if policy not in ("close", "local"):
+            logging.getLogger(__name__).warning(
+                "VENUE_STOP_FAILURE_POLICY=%r is not close|local; using close",
+                policy,
+            )
+            policy = "close"
+        self.venue_stop_failure_policy: str = policy
+        self.venue_stop_min_move_pct: float = _env_float(
+            "VENUE_STOP_MIN_MOVE_PCT", 0.1, minimum=0.0
+        )
+        self.venue_stop_max_amend_failures: int = _env_int(
+            "VENUE_STOP_MAX_AMEND_FAILURES", 5, minimum=1
+        )
+        # Previously read in-module by migrated_position_manager.py and
+        # trading_bot.py; those modules keep their os.getenv fallback.
+        self.migrated_close_max_attempts: int = _env_int(
+            "MIGRATED_CLOSE_MAX_ATTEMPTS", 5, minimum=1
+        )
+        self.entry_fill_max_lookups: int = _env_int(
+            "ENTRY_FILL_MAX_LOOKUPS", 10, minimum=1
+        )
 
         # ---- Automated database backup (H5) ----
         self.backup_enabled: bool = os.getenv("BACKUP_ENABLED", "true").lower() in (

@@ -49,8 +49,9 @@ class ExecutionInterface(ComponentInterface):
         quantity: float,
         order_type: str,
         price: Optional[float] = None,
+        reduce_only: bool = False,
     ) -> Optional[Dict[str, Any]]:
-        """Place an order and return order details."""
+        """Place an order and return order details (reduce_only for exits)."""
         pass
 
     @abstractmethod

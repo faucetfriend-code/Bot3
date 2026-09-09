@@ -866,6 +866,8 @@ class PacificaClient:
         quantity: float,
         order_type: str,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Place a new order.
@@ -876,6 +878,10 @@ class PacificaClient:
             quantity: Order quantity.
             order_type: Order type (e.g., 'limit', 'market').
             price: Order price (required for limit orders).
+            reduce_only: True for exits - the order may only reduce an
+                existing position and can never open reverse exposure.
+            client_order_id: Caller-generated id persisted before the
+                request is sent; generated here when omitted.
 
         Returns:
             Order data as dict.
@@ -884,8 +890,8 @@ class PacificaClient:
             "symbol": symbol,
             "amount": str(quantity),
             "side": "bid" if side == "buy" else "ask",
-            "client_order_id": str(uuid.uuid4()),
-            "reduce_only": False,  # Required field - set to True to only reduce existing position
+            "client_order_id": str(client_order_id or uuid.uuid4()),
+            "reduce_only": bool(reduce_only),
         }
 
         if order_type == "limit":

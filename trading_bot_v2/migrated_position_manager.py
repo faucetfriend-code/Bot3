@@ -23,9 +23,83 @@ This module works in conjunction with:
 
 import os
 import time
-from typing import Dict, Any, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from datetime import datetime
 from loguru import logger
+
+from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
+from .order_result import OrderResult
+from .venue_stops import (
+    PROTECTED_STATES,
+    STOP_STATE_ATTACHED,
+    STOP_STATE_MISSING,
+    STOP_STATE_STANDALONE,
+    stop_move_pct,
+    venue_stops_supported,
+)
+
+
+def _config_value(name: str, default: Any) -> Any:
+    """Read ``config.<name>`` without importing config at module import."""
+    try:
+        from .config import config
+
+        return getattr(config, name, default)
+    except Exception:  # noqa: BLE001 - config unavailable -> default
+        return default
+
+
+def _env_or_config_int(env_name: str, config_name: str, default: int) -> int:
+    """Env var first (legacy in-module behaviour), else config, else default."""
+    raw = os.getenv(env_name)
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    try:
+        return max(1, int(_config_value(config_name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_or_config_float(env_name: str, config_name: str, default: float) -> float:
+    """Env var first, else config, else default (non-negative)."""
+    raw = os.getenv(env_name)
+    if raw is not None:
+        try:
+            return max(0.0, float(raw))
+        except ValueError:
+            pass
+    try:
+        return max(0.0, float(_config_value(config_name, default)))
+    except (TypeError, ValueError):
+        return default
+
+
+def _max_close_attempts() -> int:
+    """MIGRATED_CLOSE_MAX_ATTEMPTS: env var first, else config (default 5)."""
+    return _env_or_config_int(
+        "MIGRATED_CLOSE_MAX_ATTEMPTS", "migrated_close_max_attempts", 5
+    )
+
+
+def _send_telegram_error_alert(error_type: str, message: str, context: str) -> bool:
+    """Send a Telegram error alert synchronously; False when disabled.
+
+    Imported lazily so the manager stays importable without httpx and so
+    tests can monkeypatch this hook.  The TelegramAlerts helpers are
+    async; ``asyncio.run`` mirrors ``TelegramAlerts._handle_event_sync``.
+    """
+    from .telegram_alerts import telegram_alerts
+
+    if not telegram_alerts.enabled:
+        return False
+    import asyncio
+
+    return bool(
+        asyncio.run(telegram_alerts.send_error_alert(error_type, message, context))
+    )
 
 
 class MigratedPositionManager:
@@ -45,7 +119,16 @@ class MigratedPositionManager:
     PARTIAL_PROFIT_PCT = 0.5  # Take 50% at TP target
     MAX_POSITIONS_PER_SYMBOL = 10  # Safety cap
 
-    def __init__(self, client, risk_manager, regime_detector, multi_tf_fetcher=None):
+    def __init__(
+        self,
+        client,
+        risk_manager,
+        regime_detector,
+        multi_tf_fetcher=None,
+        reconcile_callback: Optional[Callable[[], Any]] = None,
+        venue_exchange_resolver: Optional[Callable[[], Any]] = None,
+        db: Any = None,
+    ):
         """
         Initialize MigratedPositionManager.
 
@@ -54,14 +137,35 @@ class MigratedPositionManager:
             risk_manager: Central RiskManager instance (has migrated positions tracking)
             regime_detector: MarketRegimeDetector for trend direction
             multi_tf_fetcher: Optional MultiTimeframeFetcher for ATR calculation
+            reconcile_callback: Invoked after an AMBIGUOUS close outcome
+                (timeout / exception) so the position reconciler runs
+                before any accounting.  Optional.
+            venue_exchange_resolver: Returns the exchange ADAPTER used to
+                mirror trailing-stop moves onto the venue's stop order.
+                Optional; without it (or on venues without server-side
+                stops) the trailing stop stays local-only.
+            db: Optional DatabaseManager used to write the venue stop
+                id/price/state back to the positions table.
         """
         self.client = client
         self.risk_manager = risk_manager
         self.regime_detector = regime_detector
         self.multi_tf_fetcher = multi_tf_fetcher
+        self._venue_exchange_resolver = venue_exchange_resolver
+        self._db = db
 
         # Trailing stop tracking: {symbol: {side: stop_price}}
         self._trailing_stops: Dict[str, Dict[str, float]] = {}
+
+        # Venue stop mirror per position: {(symbol, side): {stop_id,
+        # price, entry_order_id, state, failures, fallback_local}}
+        self._venue_stops: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._venue_stop_min_move_pct = _env_or_config_float(
+            "VENUE_STOP_MIN_MOVE_PCT", "venue_stop_min_move_pct", 0.1
+        )
+        self._venue_stop_max_amend_failures = _env_or_config_int(
+            "VENUE_STOP_MAX_AMEND_FAILURES", "venue_stop_max_amend_failures", 5
+        )
 
         # Take profit tracking: {symbol: {side: {'target': price, 'partial_taken': bool}}}
         self._take_profits: Dict[str, Dict[str, Dict]] = {}
@@ -69,6 +173,16 @@ class MigratedPositionManager:
         # Last known ATR per symbol (cached)
         self._atr_cache: Dict[str, Dict[str, Any]] = {}
         self._atr_cache_ttl_seconds = 300  # 5 minute cache
+
+        # Pending-close markers: {(symbol, side): marker}.  A close whose
+        # order was rejected, raised, or could not be confirmed stays here
+        # with its attempt count until the exchange confirms the position
+        # is gone.  RiskManager unregister / DB close / partial_taken
+        # happen ONLY on confirmation.  In-memory: the positions table has
+        # no pending column and grid_positions is not in the schema.
+        self._pending_closes: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._max_close_attempts = _max_close_attempts()
+        self._reconcile_callback = reconcile_callback
 
         # Max hold time (hours) per strategy for time-based exits.
         # Positions tagged with one of these strategies are force-closed
@@ -117,6 +231,12 @@ class MigratedPositionManager:
         # Get all migrated positions from RiskManager
         positions = self.risk_manager.get_migrated_positions()
 
+        # Retry closes that were not confirmed on a previous cycle first,
+        # then re-read: a retry may have finalized (unregistered) one.
+        results["pending_closes_retried"] = self._retry_pending_closes(positions)
+        if self._pending_closes:
+            positions = self.risk_manager.get_migrated_positions()
+
         if not positions:
             return results
 
@@ -124,6 +244,9 @@ class MigratedPositionManager:
             symbol = pos.get("symbol")
             if not symbol:
                 continue
+
+            if (symbol, pos.get("side")) in self._pending_closes:
+                continue  # a close is already in flight; never stack orders
 
             results["positions_managed"] += 1
 
@@ -158,9 +281,10 @@ class MigratedPositionManager:
                     results["positions_closed"] += 1
                     continue
 
-                # 3. Update trailing stop
+                # 3. Update trailing stop (and mirror it onto the venue)
                 if self._update_trailing_stop(symbol, pos, current_price, market_data):
                     results["stops_updated"] += 1
+                    self._sync_venue_stop(symbol, pos)
 
                 # 4. Check take profit
                 if self._check_take_profit(symbol, pos, current_price, market_data):
@@ -546,31 +670,72 @@ class MigratedPositionManager:
             target_hit = True
 
         if target_hit:
-            # Take partial profit (50%)
+            # Take partial profit (50%) - reduce-only, sized from the exchange
             partial_qty = qty * self.PARTIAL_PROFIT_PCT
-
-            try:
-                close_side = "sell" if side == "long" else "buy"
-                self.client.place_order(symbol, close_side, partial_qty, "market")
-
-                tp_info["partial_taken"] = True
-
-                logger.info(
-                    f"📊 Partial take profit: {symbol} {side} "
-                    f"closed {partial_qty:.6f} @ ${current_price:.2f} "
-                    f"(target ${tp_info['target']:.2f})"
-                )
-
-                return True
-
-            except Exception as e:
-                logger.error(f"Failed to take partial profit for {symbol}: {e}")
+            return self._execute_partial_close(symbol, side, partial_qty, pos)
 
         return False
 
+    def _execute_partial_close(
+        self, symbol: str, side: str, partial_qty: float, pos: Dict
+    ) -> bool:
+        """Send a reduce-only partial close; mark partial_taken only on fills.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side ("long"/"short").
+            partial_qty: Quantity the take-profit rule wants to close.
+            pos: Local position dict (qty used as the before-hint).
+
+        Returns:
+            True only when the exchange confirmed executed quantity > 0.
+        """
+        key = (symbol, side)
+        tp_info = self._take_profits.get(symbol, {}).get(side)
+        plan = plan_close_quantity(self.client, symbol, side, partial_qty)
+        if plan.already_flat:
+            logger.warning(
+                f"Partial TP {symbol} {side}: exchange already flat - no order "
+                f"sent; the full-close path / reconciler will clean up"
+            )
+            self._pending_closes.pop(key, None)
+            return False
+        result = self._send_reduce_only(symbol, side, plan.quantity, key, "partial", "take_profit")
+        if result is None:
+            return False
+        executed = self._confirmed_executed_quantity(
+            symbol, side, plan, result, float(pos.get("qty", 0) or 0)
+        )
+        if executed is None:
+            self._mark_pending_close(
+                key, "partial", plan.quantity, "take_profit",
+                "accepted but fill unconfirmed", ambiguous=True, accepted=True,
+            )
+            return False
+        if executed <= 0:
+            self._mark_pending_close(
+                key, "partial", plan.quantity, "take_profit",
+                "accepted but nothing executed", accepted=True,
+            )
+            return False
+        self._pending_closes.pop(key, None)
+        if tp_info is not None:
+            tp_info["partial_taken"] = True
+        logger.info(
+            f"Partial take profit: {symbol} {side} executed {executed:.6f} "
+            f"of {plan.quantity:.6f} (order {result.order_id})"
+        )
+        return True
+
     def _close_position(self, symbol: str, pos: Dict, reason: str):
         """
-        Close a migrated position.
+        Close a migrated position with a reduce-only order sized from the
+        exchange's current position.
+
+        Accounting (RiskManager unregister, local cleanup, DB close) runs
+        ONLY after the executed quantity is confirmed.  A rejected,
+        raised, or unconfirmed close leaves the position registered and
+        records a pending-close marker that ``manage_positions`` retries.
 
         Args:
             symbol: Trading symbol
@@ -578,35 +743,416 @@ class MigratedPositionManager:
             reason: Exit reason ('trailing_stop', 'trend_reversal', 'manual')
         """
         side = pos.get("side")
-        qty = pos.get("qty", 0)
-
+        qty = float(pos.get("qty", 0) or 0)
         if qty <= 0:
             return
+        key = (symbol, side)
 
-        try:
-            # Place market close order
-            close_side = "sell" if side == "long" else "buy"
-            self.client.place_order(symbol, close_side, qty, "market")
-
-            # Unregister from RiskManager
-            self.risk_manager.unregister_migrated_position(symbol, side, qty)
-
-            # Clean up local tracking
-            if symbol in self._trailing_stops and side in self._trailing_stops[symbol]:
-                del self._trailing_stops[symbol][side]
-            if symbol in self._take_profits and side in self._take_profits[symbol]:
-                del self._take_profits[symbol][side]
-
-            logger.critical(
-                f"📊 Migrated position CLOSED: {symbol} {side} {qty:.6f} "
-                f"(reason: {reason})"
+        plan = plan_close_quantity(self.client, symbol, side, qty)
+        if plan.already_flat:
+            logger.warning(
+                f"Close {symbol} {side} ({reason}): exchange already flat - "
+                f"no order sent, reconciling local state"
+            )
+            self._finalize_close(symbol, side, qty, f"{reason}:already_flat")
+            return
+        if plan.clamped:
+            logger.warning(
+                f"Close {symbol} {side}: clamping {qty:.6f} to exchange "
+                f"quantity {plan.quantity:.6f}"
             )
 
-            # Update database
-            self._update_db_position(symbol, side, qty, reason)
+        result = self._send_reduce_only(symbol, side, plan.quantity, key, "full", reason)
+        if result is None:
+            return
+        executed = self._confirmed_executed_quantity(symbol, side, plan, result, qty)
+        if executed is None:
+            self._mark_pending_close(
+                key, "full", plan.quantity, reason,
+                "accepted but fill unconfirmed", ambiguous=True, accepted=True,
+            )
+            return
+        if executed + 1e-9 < plan.quantity:
+            self._mark_pending_close(
+                key, "full", plan.quantity - executed, reason,
+                f"partial execution {executed:.6f}/{plan.quantity:.6f}",
+                accepted=True,
+            )
+            return
+        self._finalize_close(symbol, side, qty, reason)
 
-        except Exception as e:
-            logger.error(f"Failed to close migrated position {symbol} {side}: {e}")
+    def _send_reduce_only(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        key: Tuple[str, str],
+        kind: str,
+        reason: str,
+    ) -> Optional[OrderResult]:
+        """Place a reduce-only market close and normalize the outcome.
+
+        Returns:
+            The accepted OrderResult, or None when the order was rejected
+            or raised (a pending-close marker has been recorded).
+        """
+        close_side = "sell" if side == "long" else "buy"
+        try:
+            ack = self.client.place_order(
+                symbol, close_side, quantity, "market", reduce_only=True
+            )
+        except Exception as exc:  # noqa: BLE001 - outcome is ambiguous
+            self._mark_pending_close(
+                key, kind, quantity, reason, f"{type(exc).__name__}: {exc}",
+                ambiguous=True,
+            )
+            return None
+        result = OrderResult.from_ack(ack)
+        if not result.accepted:
+            self._mark_pending_close(
+                key, kind, quantity, reason, result.error or "order rejected"
+            )
+            return None
+        return result
+
+    def _confirmed_executed_quantity(
+        self,
+        symbol: str,
+        side: str,
+        plan: ClosePlan,
+        result: OrderResult,
+        local_before: float,
+    ) -> Optional[float]:
+        """Executed quantity confirmed by ack fills or the exchange position.
+
+        Returns:
+            Executed quantity, or None when it cannot be confirmed.
+        """
+        if result.has_fills:
+            return min(plan.quantity, result.filled_quantity)
+        remaining_after = remaining_exchange_quantity(self.client, symbol, side)
+        if remaining_after is None:
+            return None
+        before = (
+            plan.exchange_quantity
+            if plan.exchange_quantity is not None
+            else local_before
+        )
+        return max(0.0, min(plan.quantity, before - remaining_after))
+
+    def _mark_pending_close(
+        self,
+        key: Tuple[str, str],
+        kind: str,
+        quantity: float,
+        reason: str,
+        error: str,
+        ambiguous: bool = False,
+        accepted: bool = False,
+    ) -> None:
+        """Record / bump a pending-close marker; no accounting happens here."""
+        marker = self._pending_closes.get(key)
+        if marker is None:
+            marker = {
+                "kind": kind,
+                "reason": reason,
+                "attempts": 0,
+                "first_failed_at": time.time(),
+                "escalated": False,
+            }
+            self._pending_closes[key] = marker
+        marker["attempts"] += 1
+        marker["qty"] = quantity
+        marker["last_error"] = error
+        marker["ambiguous"] = ambiguous
+        marker["accepted"] = accepted
+        marker["last_attempt_at"] = time.time()
+        logger.error(
+            f"CLOSE NOT CONFIRMED {key[0]} {key[1]} ({kind}, reason={reason}): "
+            f"{error} - attempt {marker['attempts']}/{self._max_close_attempts}; "
+            f"position kept, no accounting applied"
+        )
+        if ambiguous:
+            self._request_reconcile(key)
+
+    def _request_reconcile(self, key: Tuple[str, str]) -> None:
+        """Run the position reconciler after an ambiguous outcome."""
+        if self._reconcile_callback is None:
+            return
+        try:
+            self._reconcile_callback()
+        except Exception as exc:  # noqa: BLE001 - reconciliation is best effort
+            logger.warning(f"Reconcile after ambiguous close {key} failed: {exc}")
+
+    def _retry_pending_closes(self, positions: List[Dict]) -> int:
+        """Retry pending closes up to MIGRATED_CLOSE_MAX_ATTEMPTS.
+
+        Args:
+            positions: Current RiskManager migrated positions.
+
+        Returns:
+            Number of closes retried this cycle.
+        """
+        if not self._pending_closes:
+            return 0
+        by_key = {(p.get("symbol"), p.get("side")): p for p in positions}
+        retried = 0
+        for key in list(self._pending_closes):
+            marker = self._pending_closes[key]
+            pos = by_key.get(key)
+            if pos is None:
+                logger.warning(f"Pending close {key} no longer registered - dropping marker")
+                self._pending_closes.pop(key, None)
+                continue
+            if marker["attempts"] >= self._max_close_attempts:
+                if not marker.get("escalated"):
+                    marker["escalated"] = True
+                    marker["escalated_at"] = time.time()
+                    self._escalate_pending_close(key, marker)
+                continue
+            retried += 1
+            if marker.get("kind") == "partial":
+                self._execute_partial_close(key[0], key[1], float(marker["qty"]), pos)
+            else:
+                self._close_position(key[0], pos, str(marker.get("reason", "retry")))
+        return retried
+
+    def _escalate_pending_close(
+        self, key: Tuple[str, str], marker: Dict[str, Any]
+    ) -> None:
+        """Alert on a close that hit the retry cap: log, EventBus, Telegram.
+
+        Every channel is best effort - a failure is logged and never raised.
+        """
+        message = (
+            f"Pending close {key[0]} {key[1]} reached the retry cap "
+            f"({self._max_close_attempts}); position kept open - manual "
+            f"action required. Last error: {marker.get('last_error')}"
+        )
+        logger.error(message)
+        payload = {
+            "symbol": key[0],
+            "side": key[1],
+            "source_kind": "migrated_close",
+            "kind": marker.get("kind"),
+            "reason": marker.get("reason"),
+            "qty": marker.get("qty"),
+            "attempts": marker.get("attempts"),
+            "last_error": marker.get("last_error"),
+        }
+        try:
+            from .event_system import EventType, get_event_bus
+
+            get_event_bus().publish_event(
+                EventType.CLOSE_ESCALATED, payload, "MigratedPositionManager"
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Could not publish CLOSE_ESCALATED for {key}: {exc}")
+        try:
+            _send_telegram_error_alert(
+                "close_escalated", message, f"{key[0]} {key[1]} {marker.get('kind')}"
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Telegram escalation for {key} failed: {exc}")
+
+    def get_pending_closes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """Return a copy of the pending-close markers (for status/tests)."""
+        return {key: dict(marker) for key, marker in self._pending_closes.items()}
+
+    def get_escalated_closes(self) -> Dict[Tuple[str, str], Dict[str, Any]]:
+        """Return the pending closes that hit the retry cap (needs a human)."""
+        return {
+            key: dict(marker)
+            for key, marker in self._pending_closes.items()
+            if marker.get("escalated")
+        }
+
+    def _finalize_close(self, symbol: str, side: str, qty: float, reason: str) -> None:
+        """Apply accounting for a CONFIRMED close (exchange flat / fully filled)."""
+        self._pending_closes.pop((symbol, side), None)
+        try:
+            self.risk_manager.unregister_migrated_position(symbol, side, qty)
+        except Exception as exc:  # noqa: BLE001 - keep cleaning up local state
+            logger.error(f"Unregister failed for {symbol} {side}: {exc}")
+
+        if symbol in self._trailing_stops and side in self._trailing_stops[symbol]:
+            del self._trailing_stops[symbol][side]
+        if symbol in self._take_profits and side in self._take_profits[symbol]:
+            del self._take_profits[symbol][side]
+        self._venue_stops.pop((symbol, side), None)
+
+        logger.critical(
+            f"Migrated position CLOSED: {symbol} {side} {qty:.6f} (reason: {reason})"
+        )
+        self._update_db_position(symbol, side, qty, reason)
+
+    # ------------------------------------------------------------------
+    # Venue stop coordination (live-readiness audit T4)
+    # ------------------------------------------------------------------
+
+    def _venue_exchange(self) -> Optional[Any]:
+        """Exchange adapter with venue stops, or None (local-only)."""
+        if self._venue_exchange_resolver is None:
+            return None
+        try:
+            exchange = self._venue_exchange_resolver()
+        except Exception as exc:  # noqa: BLE001 - resolver failure -> local only
+            logger.warning(f"Venue exchange unavailable for stop sync: {exc}")
+            return None
+        return exchange if venue_stops_supported(exchange) else None
+
+    def _venue_stop_state(self, symbol: str, side: str, pos: Dict) -> Dict[str, Any]:
+        """Mirror record for a position's venue stop (loaded on first use).
+
+        Sources, in order: the in-memory mirror, keys on the position
+        dict (venue_stop_id / venue_stop_price / entry_order_id /
+        venue_stop_state), then the positions table.
+        """
+        key = (symbol, side)
+        state = self._venue_stops.get(key)
+        if state is not None:
+            return state
+        state = {
+            "stop_id": pos.get("venue_stop_id"),
+            "price": pos.get("venue_stop_price"),
+            "entry_order_id": pos.get("entry_order_id"),
+            "state": pos.get("venue_stop_state"),
+            "failures": 0,
+            "fallback_local": False,
+        }
+        if not state["stop_id"] and not state["price"]:
+            row = self._load_db_position(symbol, side)
+            if row and row.get("venue_stop_state") in PROTECTED_STATES:
+                state.update(
+                    stop_id=row.get("venue_stop_id"),
+                    price=row.get("venue_stop_price"),
+                    entry_order_id=row.get("entry_order_id"),
+                    state=row.get("venue_stop_state"),
+                )
+        self._venue_stops[key] = state
+        return state
+
+    def _load_db_position(self, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        """Read the positions row (side stored uppercase) or None."""
+        getter = getattr(self._db, "get_position", None)
+        if not callable(getter):
+            return None
+        try:
+            return getter(symbol, str(side).upper())
+        except Exception as exc:  # noqa: BLE001 - DB read failure -> unknown
+            logger.debug(f"Could not load position row {symbol} {side}: {exc}")
+            return None
+
+    def _write_venue_stop(self, symbol: str, side: str, fields: Dict[str, Any]) -> None:
+        """Persist venue stop id/price/state to the positions table."""
+        writer = getattr(self._db, "record_position_protection", None)
+        if not callable(writer):
+            return
+        try:
+            writer(symbol, str(side).upper(), fields)
+        except Exception as exc:  # noqa: BLE001 - persistence must not break exits
+            logger.warning(f"Could not write venue stop for {symbol} {side}: {exc}")
+
+    def _sync_venue_stop(self, symbol: str, pos: Dict) -> bool:
+        """Mirror the current trailing level onto the venue's stop order.
+
+        Skips moves smaller than VENUE_STOP_MIN_MOVE_PCT (so the venue is
+        not hammered), keeps the last known good venue price on an amend
+        failure and retries next loop, and after
+        VENUE_STOP_MAX_AMEND_FAILURES consecutive failures falls back to
+        the local stop for good (ERROR logged, DB state -> missing).
+
+        Args:
+            symbol: Trading symbol.
+            pos: Migrated position dict (side, qty, ...).
+
+        Returns:
+            True when the venue stop was moved this call.
+        """
+        side = pos.get("side")
+        new_stop = self._trailing_stops.get(symbol, {}).get(side)
+        if not new_stop:
+            return False
+        exchange = self._venue_exchange()
+        if exchange is None:
+            return False
+        state = self._venue_stop_state(symbol, side, pos)
+        if state.get("fallback_local"):
+            return False
+        move = stop_move_pct(state.get("price"), new_stop)
+        if move < self._venue_stop_min_move_pct:
+            logger.debug(
+                f"Venue stop {symbol} {side}: move {move:.4f}% below "
+                f"{self._venue_stop_min_move_pct}% threshold - not amended"
+            )
+            return False
+        if state.get("stop_id") or state.get("entry_order_id"):
+            result = exchange.amend_stop(
+                symbol,
+                side,
+                new_stop,
+                entry_order_id=state.get("entry_order_id"),
+                stop_id=state.get("stop_id"),
+            )
+        else:
+            result = exchange.install_stop(
+                symbol, side, float(pos.get("qty", 0) or 0), new_stop
+            )
+        if result.accepted:
+            self._record_venue_stop_success(symbol, side, state, result, new_stop)
+            return True
+        self._record_venue_stop_failure(symbol, side, state, result, new_stop)
+        return False
+
+    def _record_venue_stop_success(
+        self, symbol: str, side: str, state: Dict[str, Any], result: OrderResult, new_stop: float
+    ) -> None:
+        """Update the mirror + DB after the venue accepted the new level."""
+        method = str((result.raw or {}).get("data", {}).get("method", "") or "")
+        if method == "amend-order":
+            venue_state = state.get("state") or STOP_STATE_ATTACHED
+        else:
+            venue_state = STOP_STATE_STANDALONE
+        state.update(
+            stop_id=result.order_id or state.get("stop_id"),
+            price=new_stop,
+            state=venue_state,
+            failures=0,
+        )
+        logger.info(
+            f"Venue stop moved: {symbol} {side} -> {new_stop:.6f} "
+            f"(id {state['stop_id']}, {method or 'venue'})"
+        )
+        self._write_venue_stop(
+            symbol,
+            side,
+            {
+                "venue_stop_id": state["stop_id"],
+                "venue_stop_price": new_stop,
+                "venue_stop_state": venue_state,
+            },
+        )
+
+    def _record_venue_stop_failure(
+        self, symbol: str, side: str, state: Dict[str, Any], result: OrderResult, new_stop: float
+    ) -> None:
+        """Count an amend failure; fall back to local after the cap."""
+        state["failures"] = int(state.get("failures", 0)) + 1
+        cap = self._venue_stop_max_amend_failures
+        logger.warning(
+            f"Venue stop amend failed for {symbol} {side} -> {new_stop:.6f} "
+            f"({state['failures']}/{cap}): {result.error}; keeping venue stop at "
+            f"{state.get('price')} and retrying next loop"
+        )
+        if state["failures"] < cap:
+            return
+        state["fallback_local"] = True
+        logger.error(
+            f"Venue stop for {symbol} {side} failed {cap} consecutive amends - "
+            f"falling back to LOCAL stop enforcement (venue stop, if any, stays at "
+            f"{state.get('price')})"
+        )
+        self._write_venue_stop(symbol, side, {"venue_stop_state": STOP_STATE_MISSING})
 
     def _update_db_position(self, symbol: str, side: str, qty: float, exit_reason: str):
         """Update position status in database."""

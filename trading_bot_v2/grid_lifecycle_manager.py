@@ -20,11 +20,105 @@ from enum import Enum
 from typing import Dict, Any, List, Optional, Set
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 from dataclasses import dataclass, field
 
 from .config import config
+from .exit_sizing import (
+    ClosePlan,
+    normalize_position_side,
+    plan_close_quantity,
+    remaining_exchange_quantity,
+)
+from .order_result import OrderResult
+
+
+def _send_telegram_error_alert(error_type: str, message: str, context: str) -> bool:
+    """Best-effort Telegram alert; shares the migrated manager's hook.
+
+    Imported lazily so this module stays importable without httpx and so
+    tests can monkeypatch this name.  Returns False when Telegram is
+    disabled; transport failures are logged by the hook, never raised.
+    """
+    from .migrated_position_manager import _send_telegram_error_alert as _send
+
+    return _send(error_type, message, context)
+
+
+def _max_flatten_attempts() -> int:
+    """GRID_FLATTEN_MAX_ATTEMPTS env var (default 5, minimum 1)."""
+    raw = os.getenv("GRID_FLATTEN_MAX_ATTEMPTS", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 5
+    except ValueError:
+        return 5
+
+
+@dataclass
+class CloseOutcome:
+    """Result of one reduce-only close attempt against a grid position.
+
+    Attributes:
+        status: "flat" (exchange already flat, nothing sent), "closed"
+            (confirmed fully executed), "partial", "rejected",
+            "unconfirmed" (accepted but no fill evidence) or "error"
+            (the order call raised).
+        requested: Quantity submitted (0.0 when nothing was sent).
+        executed: Confirmed executed quantity.
+        detail: Human-readable explanation for logs / result dicts.
+    """
+
+    status: str
+    requested: float = 0.0
+    executed: float = 0.0
+    detail: str = ""
+
+    @property
+    def confirmed_flat(self) -> bool:
+        """True only when the exchange confirms nothing remains to close."""
+        return self.status in ("flat", "closed")
+
+
+_PROTECTIVE_ORDER_TYPES = (
+    "tpsl",
+    "stop",
+    "stop_loss",
+    "stop_market",
+    "conditional",
+    "trigger",
+)
+
+
+def is_protective_order(order: Any) -> bool:
+    """True for TP/SL (venue stop) rows, which must never count as grid orders.
+
+    Recognizes a ``tpsl_id``/``tpslId`` marker (top level or under
+    ``raw``), a stop-type ``order_type``, an ``sl_trigger_price`` and a
+    reduce-only flag - grid levels are plain limit orders and never
+    reduce-only.
+
+    Args:
+        order: Bot-native order dict from ``client.get_orders()``.
+
+    Returns:
+        True when the row is a protective order.
+    """
+    if not isinstance(order, dict):
+        return False
+    raw = order.get("raw") if isinstance(order.get("raw"), dict) else {}
+    if order.get("tpsl_id") or order.get("tpslId") or raw.get("tpslId"):
+        return True
+    order_type = str(
+        order.get("order_type") or order.get("orderType") or raw.get("orderType") or ""
+    ).lower()
+    if order_type in _PROTECTIVE_ORDER_TYPES:
+        return True
+    if order.get("sl_trigger_price") or order.get("slTriggerPrice") or raw.get("slTriggerPrice"):
+        return True
+    reduce_only = order.get("reduce_only", raw.get("reduceOnly"))
+    return reduce_only in (True, "true", "True", 1)
 
 
 class GridState(Enum):
@@ -113,6 +207,13 @@ class GridLifecycleManager:
 
         # Last time we checked for fills
         self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
+
+        # symbol -> pending-flatten marker.  A force exit that could not
+        # confirm every position flat keeps its grid state and lands here
+        # with an attempt counter; monitor_grids retries it each loop up
+        # to GRID_FLATTEN_MAX_ATTEMPTS.  In-memory only (lost on restart).
+        self._pending_flattens: Dict[str, Dict[str, Any]] = {}
+        self._max_flatten_attempts = _max_flatten_attempts()
 
     # =========================
     # ORDER-ID TRACKING HELPERS
@@ -432,6 +533,10 @@ class GridLifecycleManager:
             orders_by_symbol: Dict[str, list] = {}
 
             for order in orders:
+                # Protective TP/SL rows (venue stops) are never grid
+                # levels: a protected position must not look like a grid.
+                if is_protective_order(order):
+                    continue
                 symbol = order.get("symbol")
                 if symbol:
                     if symbol not in orders_by_symbol:
@@ -912,6 +1017,10 @@ class GridLifecycleManager:
         Returns:
             True if grid was removed, False if no grid existed
         """
+        # An explicit clear abandons any in-flight flatten retry.
+        if self._pending_flattens.pop(symbol, None) is not None:
+            logger.warning(f"Pending flatten marker dropped for {symbol} (clear_grid)")
+
         if symbol in self._grids:
             del self._grids[symbol]
             logger.info(f"📊 Grid cleared from memory for {symbol}")
@@ -1130,59 +1239,280 @@ class GridLifecycleManager:
     # CORE EXIT LOGIC
     # =========================
 
-    def _force_exit(self, symbol: str, reason: str):
+    def _force_exit(self, symbol: str, reason: str) -> Dict[str, Any]:
         """
         HARD EXIT:
         - Cancel all orders
-        - Close all positions
-        - Clear RiskManager exposure
-        - Remove grid state
+        - Close all positions (reduce-only, sized from the exchange)
+        - Clear RiskManager exposure and remove grid state ONLY when every
+          position is confirmed flat; otherwise keep the grid state and
+          record a pending-flatten marker that monitor_grids retries.
+
+        Returns:
+            Dict with ``positions_closed``, ``positions_pending``,
+            ``errors`` and ``flat`` (True when the grid was fully cleared).
         """
+        result: Dict[str, Any] = {
+            "symbol": symbol,
+            "reason": reason,
+            "flat": False,
+            "positions_closed": [],
+            "positions_pending": [],
+            "errors": [],
+        }
         try:
-            # Cancel all open orders
             self.client.cancel_all_orders(symbol)
             logger.info(f"All orders cancelled for {symbol} ({reason})")
         except Exception as e:
             logger.error(f"Order cancel failed for {symbol}: {e}")
+            result["errors"].append(f"Order cancel failed: {e}")
 
         try:
-            # Close all open positions (market)
             positions = self.client.get_positions()
-            for pos in positions:
-                if pos.get("symbol") != symbol:
-                    continue
-
-                qty = abs(float(pos.get("amount", 0)))
-                if qty <= 0:
-                    continue
-
-                # Pacifica reports position sides as lowercase "long"/"short".
-                # Normalize defensively (older code paths used "bid"/"ask");
-                # the previous check (side == "bid") sent "buy" for LONG
-                # positions, DOUBLING them instead of closing.
-                raw_side = str(pos.get("side", "")).lower()
-                if "long" in raw_side or "bid" in raw_side or "buy" in raw_side:
-                    close_side = "sell"
-                else:
-                    close_side = "buy"
-
-                self.client.place_order(symbol, close_side, qty, "market")
-                logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
-
         except Exception as e:
             logger.critical(f"POSITION FLATTEN FAILED for {symbol}: {e}")
+            result["errors"].append(f"Get positions failed: {e}")
+            self._mark_pending_flatten(symbol, reason, result)
+            return result
 
-        # Reset risk manager exposure
+        for pos in positions or []:
+            if not isinstance(pos, dict) or pos.get("symbol") != symbol:
+                continue
+            self._flatten_one_position(symbol, pos, reason, result)
+
+        if result["positions_pending"] or result["errors"]:
+            self._mark_pending_flatten(symbol, reason, result)
+            return result
+
+        self._complete_force_exit(symbol, reason)
+        result["flat"] = True
+        return result
+
+    def _flatten_one_position(
+        self, symbol: str, pos: Dict[str, Any], reason: str, result: Dict[str, Any]
+    ) -> None:
+        """Close one exchange position; failures never abort the caller's loop."""
+        side: Optional[str] = None
+        qty = 0.0
+        try:
+            qty = abs(float(pos.get("amount", 0) or 0))
+            if qty <= 0:
+                return
+            # Pacifica reports "long"/"short"; older paths used "bid"/"ask".
+            side = normalize_position_side(pos.get("side"))
+            if side is None:
+                raise ValueError(f"unrecognized position side {pos.get('side')!r}")
+            outcome = self._close_position_reduce_only(symbol, side, qty, reason)
+        except Exception as e:  # noqa: BLE001 - isolate per position
+            logger.error(f"POSITION FLATTEN FAILED for {symbol} {side} {qty}: {e}")
+            result["errors"].append(f"{side} {qty}: {e}")
+            result["positions_pending"].append(
+                {"side": side, "qty": qty, "status": "error", "detail": str(e)}
+            )
+            return
+
+        entry = {
+            "side": side,
+            "qty": qty,
+            "requested": outcome.requested,
+            "executed": outcome.executed,
+            "status": outcome.status,
+            "detail": outcome.detail,
+        }
+        if outcome.confirmed_flat:
+            result["positions_closed"].append(entry)
+            logger.critical(
+                f"Position flattened: {symbol} {side} {qty} ({outcome.status})"
+            )
+            return
+        result["positions_pending"].append(entry)
+        result["errors"].append(f"{side} {qty}: {outcome.status} - {outcome.detail}")
+
+    def _close_position_reduce_only(
+        self, symbol: str, position_side: str, qty: float, reason: str
+    ) -> CloseOutcome:
+        """Send a reduce-only market close sized from the exchange position.
+
+        Args:
+            symbol: Trading symbol.
+            position_side: "long" / "short" (any spelling accepted by
+                ``exit_sizing``; unknown sides are sent as sells and can
+                only be confirmed by ack fills).
+            qty: Locally believed open quantity.
+            reason: Exit reason for logs.
+
+        Returns:
+            CloseOutcome - only ``confirmed_flat`` outcomes may be
+            accounted as closed by the caller.
+        """
+        plan = plan_close_quantity(self.client, symbol, position_side, qty)
+        if plan.already_flat:
+            logger.warning(
+                f"Close {symbol} {position_side} ({reason}): exchange already "
+                f"flat - no order sent"
+            )
+            return CloseOutcome("flat", 0.0, 0.0, "exchange already flat")
+        if plan.clamped:
+            logger.warning(
+                f"Close {symbol} {position_side}: clamping {qty:.6f} to exchange "
+                f"quantity {plan.quantity:.6f}"
+            )
+        close_side = "buy" if position_side == "short" else "sell"
+        try:
+            ack = self.client.place_order(
+                symbol, close_side, plan.quantity, "market", reduce_only=True
+            )
+        except Exception as exc:  # noqa: BLE001 - outcome is ambiguous
+            detail = f"{type(exc).__name__}: {exc}"
+            logger.error(f"CLOSE RAISED {symbol} {position_side} ({reason}): {detail}")
+            return CloseOutcome("error", plan.quantity, 0.0, detail)
+        order = OrderResult.from_ack(ack)
+        if not order.accepted:
+            detail = order.error or "order rejected"
+            logger.error(
+                f"CLOSE REJECTED {symbol} {position_side} {plan.quantity:.6f} "
+                f"({reason}): {detail} - position kept, no accounting applied"
+            )
+            return CloseOutcome("rejected", plan.quantity, 0.0, detail)
+        executed = self._confirmed_executed_quantity(
+            symbol, position_side, plan, order, qty
+        )
+        if executed is None:
+            return CloseOutcome(
+                "unconfirmed", plan.quantity, 0.0, "accepted but fill unconfirmed"
+            )
+        if executed + 1e-9 < plan.quantity:
+            return CloseOutcome(
+                "partial",
+                plan.quantity,
+                executed,
+                f"partial execution {executed:.6f}/{plan.quantity:.6f}",
+            )
+        return CloseOutcome("closed", plan.quantity, executed, "confirmed")
+
+    def _confirmed_executed_quantity(
+        self,
+        symbol: str,
+        side: str,
+        plan: ClosePlan,
+        order: OrderResult,
+        local_before: float,
+    ) -> Optional[float]:
+        """Executed quantity confirmed by ack fills or the exchange position.
+
+        Returns:
+            Executed quantity, or None when it cannot be confirmed.
+        """
+        if order.has_fills:
+            return min(plan.quantity, order.filled_quantity)
+        remaining_after = remaining_exchange_quantity(self.client, symbol, side)
+        if remaining_after is None:
+            return None
+        before = (
+            plan.exchange_quantity
+            if plan.exchange_quantity is not None
+            else local_before
+        )
+        return max(0.0, min(plan.quantity, before - remaining_after))
+
+    def _mark_pending_flatten(
+        self, symbol: str, reason: str, result: Dict[str, Any]
+    ) -> None:
+        """Record / bump the pending-flatten marker; grid state is KEPT."""
+        marker = self._pending_flattens.get(symbol)
+        if marker is None:
+            marker = {
+                "attempts": 0,
+                "first_failed_at": time.time(),
+                "escalated": False,
+            }
+            self._pending_flattens[symbol] = marker
+        marker["attempts"] += 1
+        marker["reason"] = reason
+        marker["last_attempt_at"] = time.time()
+        marker["positions_pending"] = list(result["positions_pending"])
+        marker["errors"] = list(result["errors"])
+        if symbol in self._grids:
+            self._grids[symbol]["state"] = GridState.EMERGENCY_EXIT
+        logger.error(
+            f"GRID FLATTEN INCOMPLETE for {symbol} ({reason}): "
+            f"closed={len(result['positions_closed'])}, "
+            f"pending={len(result['positions_pending'])}, "
+            f"errors={result['errors']} - attempt "
+            f"{marker['attempts']}/{self._max_flatten_attempts}; grid state "
+            f"kept for retry, no exposure reset"
+        )
+
+    def _complete_force_exit(self, symbol: str, reason: str) -> None:
+        """Accounting for a CONFIRMED flat grid: exposure, memory, DB."""
+        self._pending_flattens.pop(symbol, None)
         self.risk_manager.on_grid_emergency_exit(symbol)
-
-        # Remove grid from memory
         if symbol in self._grids:
             del self._grids[symbol]
-
-        # Remove from database persistence
         self.delete_grid_state(symbol)
-
         logger.critical(f"Grid fully exited and cleared for {symbol} ({reason})")
+
+    def retry_pending_flattens(self) -> int:
+        """Retry incomplete force exits, capped by GRID_FLATTEN_MAX_ATTEMPTS.
+
+        Called from ``monitor_grids`` each loop.  Once a marker reaches
+        the cap it is escalated exactly once (ERROR log + EventBus event)
+        and left for manual action.
+
+        Returns:
+            Number of force exits retried this call.
+        """
+        retried = 0
+        for symbol in list(self._pending_flattens):
+            marker = self._pending_flattens[symbol]
+            if marker["attempts"] >= self._max_flatten_attempts:
+                if not marker.get("escalated"):
+                    marker["escalated"] = True
+                    self._escalate_pending_flatten(symbol, marker)
+                continue
+            retried += 1
+            self._force_exit(symbol, str(marker.get("reason", "RETRY")))
+        return retried
+
+    def _escalate_pending_flatten(self, symbol: str, marker: Dict[str, Any]) -> None:
+        """Alert on a flatten that hit the retry cap: log, EventBus, Telegram.
+
+        Every channel is best effort - a failure is logged and never raised.
+        """
+        message = (
+            f"Pending grid flatten {symbol} reached the retry cap "
+            f"({self._max_flatten_attempts}); positions kept open - manual "
+            f"action required. Last errors: {marker.get('errors')}"
+        )
+        logger.error(message)
+        try:
+            from .event_system import EventType, get_event_bus
+
+            get_event_bus().publish_event(
+                EventType.CLOSE_ESCALATED,
+                {
+                    "symbol": symbol,
+                    "source_kind": "grid_flatten",
+                    "reason": marker.get("reason"),
+                    "attempts": marker.get("attempts"),
+                    "errors": list(marker.get("errors") or []),
+                },
+                "GridLifecycleManager",
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Could not publish CLOSE_ESCALATED for {symbol}: {exc}")
+        try:
+            _send_telegram_error_alert(
+                "close_escalated",
+                message,
+                f"{symbol} grid_flatten attempts={marker.get('attempts')}",
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Telegram escalation for {symbol} failed: {exc}")
+
+    def get_pending_flattens(self) -> Dict[str, Dict[str, Any]]:
+        """Return a copy of the pending-flatten markers (for status/tests)."""
+        return {symbol: dict(m) for symbol, m in self._pending_flattens.items()}
 
     def _partial_exit(
         self, symbol: str, reason: str, trend_direction: str
@@ -1268,29 +1598,46 @@ class GridLifecycleManager:
                 against_trend = True
 
             if against_trend:
-                # CLOSE against-trend position
+                # CLOSE against-trend position.  Sized from the exchange,
+                # reduce-only, and accounted as closed ONLY on confirmed
+                # execution; a rejection / exception leaves the DB row and
+                # closed_positions untouched and fails the partial exit so
+                # the caller falls back to _force_exit (which retries).
                 try:
-                    close_side = "buy" if position_side == "short" else "sell"
-                    self.client.place_order(symbol, close_side, qty, "market")
-
-                    result["closed_positions"].append(
-                        {"side": position_side, "qty": qty, "reason": "against_trend"}
+                    outcome = self._close_position_reduce_only(
+                        symbol, position_side, qty, "against_trend"
                     )
-
-                    logger.warning(
-                        f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
-                        f"(trend={trend_direction})"
-                    )
-
-                    # Update database record
-                    self._update_position_status(
-                        symbol, position_side, qty, "closed", "against_trend"
-                    )
-
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - status stays unchanged
                     logger.error(f"Failed to close position for {symbol}: {e}")
                     result["errors"].append(f"Close position failed: {e}")
+                    return result
+                if not outcome.confirmed_flat:
+                    logger.error(
+                        f"Against-trend close NOT confirmed for {symbol} "
+                        f"{position_side} {qty}: {outcome.status} - "
+                        f"{outcome.detail}; status left unchanged"
+                    )
+                    result["errors"].append(
+                        f"Close position failed ({position_side} {qty}): "
+                        f"{outcome.status} - {outcome.detail}"
+                    )
                     return result  # Fail if any close fails
+
+                result["closed_positions"].append(
+                    {
+                        "side": position_side,
+                        "qty": qty,
+                        "executed": outcome.executed,
+                        "reason": "against_trend",
+                    }
+                )
+                logger.warning(
+                    f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
+                    f"(trend={trend_direction}, {outcome.status})"
+                )
+                self._update_position_status(
+                    symbol, position_side, qty, "closed", "against_trend"
+                )
             else:
                 # KEEP with-trend position (migrate to trend-following)
                 # Get entry price from position data (or use current price as fallback)
@@ -1432,8 +1779,18 @@ class GridLifecycleManager:
             "grids_monitored": 0,
             "new_fills": 0,
             "completed_round_trips": 0,
+            "flatten_retries": 0,
             "alerts": [],
         }
+
+        # Incomplete force exits are retried BEFORE the active-grid pass so
+        # a grid parked in EMERGENCY_EXIT keeps being flattened each loop.
+        if self._pending_flattens:
+            try:
+                results["flatten_retries"] = self.retry_pending_flattens()
+            except Exception as e:  # noqa: BLE001 - never block monitoring
+                logger.error(f"Pending flatten retry error: {e}")
+                results["alerts"].append(f"Flatten retry error: {e}")
 
         if not self._grids:
             return results
@@ -2255,8 +2612,10 @@ class GridLifecycleManager:
                                     f"⚠️ Grid {symbol} created in {regime_on_creation}, "
                                     f"but current regime is {current_regime_str} - CLOSING"
                                 )
-                                self.delete_grid_state(symbol)
-                                # Trigger close on exchange
+                                # Flatten on the exchange.  The DB row is
+                                # deleted only once every position is
+                                # confirmed flat (_complete_force_exit);
+                                # otherwise it survives for the next restart.
                                 self._force_exit(
                                     symbol,
                                     reason=f"REGIME_MISMATCH:{current_regime_str}",

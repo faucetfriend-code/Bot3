@@ -127,6 +127,59 @@ def _strip_perp(symbol: str) -> str:
     return cleaned
 
 
+# TP/SL (protective stop) endpoints.  Ported from the Discord Bot client,
+# which is proven against the live venue (docs.blofin.com, Trading > REST).
+AMEND_ORDER_PATH = "/api/v1/trade/amend-order"
+TPSL_ORDER_PATH = "/api/v1/trade/order-tpsl"
+TPSL_AMEND_PATH = "/api/v1/trade/amend-tpsl"
+TPSL_CANCEL_PATH = "/api/v1/trade/cancel-tpsl"
+TPSL_PENDING_PATH = "/api/v1/trade/orders-tpsl-pending"
+CLOSE_POSITION_PATH = "/api/v1/trade/close-position"
+MARKET_ORDER_PRICE = "-1"  # docs: -1 = execute the TP/SL leg at market
+CANCEL_BATCH_MAX = 20
+
+
+def _first_data_row(payload: Any) -> Dict[str, Any]:
+    """Return the first ``data`` row of a Blofin response (or {})."""
+    if not isinstance(payload, dict):
+        return {}
+    data = payload.get("data")
+    if isinstance(data, list):
+        return data[0] if data and isinstance(data[0], dict) else {}
+    return data if isinstance(data, dict) else {}
+
+
+def _ok(payload: Any) -> bool:
+    """True when the top-level AND per-order business codes are both 0."""
+    if not isinstance(payload, dict) or str(payload.get("code", "1")) != "0":
+        return False
+    first = _first_data_row(payload)
+    if first and str(first.get("code", "0") or "0") != "0":
+        return False
+    return True
+
+
+def _reject_detail(payload: Any) -> Tuple[str, str]:
+    """(code, msg) describing why ``_ok`` said no; for logs and errors only."""
+    if not isinstance(payload, dict):
+        return "unknown", f"unexpected response type: {type(payload).__name__}"
+    code = str(payload.get("code", "unknown"))
+    msg = str(payload.get("msg", "") or "")
+    first = _first_data_row(payload)
+    if first:
+        scode = str(first.get("code", first.get("sCode", "0")) or "0")
+        if scode != "0":
+            return scode, str(first.get("msg") or first.get("sMsg") or msg)
+    return code, msg
+
+
+def _position_side_input(side: Any) -> str:
+    """Normalize buy/sell/long/short (any casing) to "long"/"short"."""
+    value = getattr(side, "value", side)
+    lowered = str(value).strip().lower()
+    return "short" if lowered in ("short", "sell", "ask") else "long"
+
+
 class BlofinClient:
     """REST client for Blofin USDT-margined perpetual futures.
 
@@ -184,6 +237,9 @@ class BlofinClient:
         self._instruments_by_base: Dict[str, Dict[str, Any]] = {}
         self._instruments_by_inst_id: Dict[str, Dict[str, Any]] = {}
         self._position_mode_checked = False
+        # "net_mode" (one-way) or "long_short_mode" (hedge); drives
+        # the positionSide sent with every order.
+        self._position_mode = "net_mode"
 
     # ------------------------------------------------------------------
     # Auth / transport
@@ -467,12 +523,14 @@ class BlofinClient:
             payload = self._get("/api/v1/account/position-mode", auth=True)
             data = payload.get("data") or {}
             mode = str(data.get("positionMode", ""))
+            self._position_mode = mode or "net_mode"
             if mode == "net_mode":
                 return True
             self._post(
                 "/api/v1/account/set-position-mode",
                 {"positionMode": "net_mode"},
             )
+            self._position_mode = "net_mode"
             logger.info("Blofin position mode set to net_mode (one-way)")
             return True
         except (BlofinAPIError, BlofinAuthError) as exc:
@@ -495,6 +553,10 @@ class BlofinClient:
         quantity: float,
         order_type: str,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
+        sl_trigger_price: Optional[float] = None,
+        tp_trigger_price: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Place an order (quantity in base currency, side buy/sell).
 
@@ -508,6 +570,19 @@ class BlofinClient:
             quantity: Base-currency quantity (e.g. 0.05 BTC).
             order_type: "market" or "limit".
             price: Limit price (required for limit orders).
+            reduce_only: Send ``reduceOnly="true"`` so the order can only
+                shrink an existing position (EXITS).  Blofin's REST API
+                takes the flag as a string; this matches the working
+                Discord Bot client.  Entries send "false".
+            client_order_id: Caller-generated id (32 chars max) that the
+                caller persisted BEFORE transmission; generated here when
+                omitted.
+            sl_trigger_price: Attach a stop-loss to the ENTRY order
+                (``slTriggerPrice`` / ``slOrderPrice="-1"`` = market /
+                ``slTriggerPriceType="last"``).  Once the entry fills the
+                venue holds the stop as a TP/SL row, so the position is
+                protected even if this process dies.
+            tp_trigger_price: Optional take-profit attached the same way.
 
         Returns:
             Pacifica-style ack: {"success": bool, "data": {"order_id":
@@ -527,19 +602,390 @@ class BlofinClient:
         body: Dict[str, Any] = {
             "instId": self.to_inst_id(symbol),
             "marginMode": self.margin_mode,
-            "positionSide": "net",
+            "positionSide": self._position_side_for(side, reduce_only),
             "side": side,
             "orderType": order_type,
             "size": self.base_to_contracts(symbol, quantity),
-            "clientOrderId": uuid.uuid4().hex[:32],
+            "reduceOnly": "true" if reduce_only else "false",
+            "clientOrderId": str(client_order_id or uuid.uuid4().hex)[:32],
         }
         if order_type == "limit":
             if price is None:
                 raise ValueError("Price is required for limit orders")
             body["price"] = self.round_price(symbol, price)
+        self._attach_trigger_fields(body, symbol, sl_trigger_price, tp_trigger_price)
 
         response = self._post("/api/v1/trade/order", body)
         return self._wrap_order_ack(response)
+
+    def _attach_trigger_fields(
+        self,
+        body: Dict[str, Any],
+        symbol: str,
+        sl_trigger_price: Optional[float],
+        tp_trigger_price: Optional[float],
+    ) -> None:
+        """Add the documented SL/TP trigger fields to an order body in place."""
+        if sl_trigger_price is not None:
+            body["slTriggerPrice"] = self.round_price(symbol, sl_trigger_price)
+            body["slOrderPrice"] = MARKET_ORDER_PRICE
+            body["slTriggerPriceType"] = "last"
+        if tp_trigger_price is not None:
+            body["tpTriggerPrice"] = self.round_price(symbol, tp_trigger_price)
+            body["tpOrderPrice"] = MARKET_ORDER_PRICE
+            body["tpTriggerPriceType"] = "last"
+
+    def _post_tolerant(self, path: str, body: Any) -> Dict[str, Any]:
+        """POST that returns a rejection payload instead of raising.
+
+        The protective-stop cascade must never raise into the trading
+        loop; a business rejection, HTTP error or transport failure all
+        come back as a payload that ``_ok`` evaluates as False.
+        """
+        try:
+            return self._post(path, body)
+        except BlofinAPIError as exc:
+            return {"code": exc.code, "msg": exc.message, "data": []}
+        except (requests.exceptions.RequestException, ValueError) as exc:
+            return {"code": "transport", "msg": str(exc), "data": []}
+
+    # ------------------------------------------------------------------
+    # Protective stops (TP/SL orders)
+    # ------------------------------------------------------------------
+
+    def _tpsl_body(
+        self,
+        symbol: str,
+        position_side: str,
+        size_contracts: str,
+        sl_trigger_price: Optional[float],
+        tp_trigger_price: Optional[float],
+        wire_position_side: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Documented reduce-only TP/SL order body closing ``position_side``."""
+        close_side = "sell" if position_side == "long" else "buy"
+        body: Dict[str, Any] = {
+            "instId": self.to_inst_id(symbol),
+            "marginMode": self.margin_mode,
+            "positionSide": wire_position_side
+            or self._position_side_for(close_side, reduce_only=True),
+            "side": close_side,
+            "size": str(size_contracts),
+            "reduceOnly": "true",
+        }
+        self._attach_trigger_fields(body, symbol, sl_trigger_price, tp_trigger_price)
+        return body
+
+    @staticmethod
+    def _wrap_tpsl_ack(
+        response: Dict[str, Any],
+        stop_price: Optional[float],
+        method: str,
+        fallback_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Convert a TP/SL ack to the Pacifica-style wrapper (+ tpsl_id)."""
+        first = _first_data_row(response)
+        tpsl_id = first.get("tpslId") or first.get("orderId") or fallback_id
+        success = _ok(response)
+        result: Dict[str, Any] = {
+            "success": success,
+            "data": {
+                "order_id": str(tpsl_id) if tpsl_id else None,
+                "tpsl_id": str(tpsl_id) if tpsl_id else None,
+                "stop_price": stop_price,
+                "method": method,
+            },
+            "raw": response,
+        }
+        if not success:
+            code, msg = _reject_detail(response)
+            result["error"] = f"{method} rejected (code {code}): {msg or 'no detail'}"
+        return result
+
+    def place_tpsl(
+        self,
+        symbol: str,
+        side: Any,
+        size: float,
+        sl_trigger_price: Optional[float],
+        tp_trigger_price: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Place a standalone reduce-only TP/SL order protecting a position.
+
+        Args:
+            symbol: Bot symbol (e.g. "BTC").
+            side: The POSITION side being protected ("long"/"short", or
+                the entry order side "buy"/"sell"); the close side is
+                derived from it.
+            size: Position quantity in base units.
+            sl_trigger_price: Stop-loss trigger (executes at market).
+            tp_trigger_price: Optional take-profit trigger.
+
+        Returns:
+            Pacifica-style ack with ``data.tpsl_id`` set on success.
+        """
+        self._require_auth()
+        if sl_trigger_price is None and tp_trigger_price is None:
+            raise ValueError("place_tpsl needs a stop-loss or take-profit trigger")
+        if not self._position_mode_checked:
+            self._position_mode_checked = True
+            self.ensure_net_position_mode()
+        body = self._tpsl_body(
+            symbol,
+            _position_side_input(side),
+            self.base_to_contracts(symbol, size),
+            sl_trigger_price,
+            tp_trigger_price,
+        )
+        response = self._post_tolerant(TPSL_ORDER_PATH, body)
+        return self._wrap_tpsl_ack(response, sl_trigger_price, "order-tpsl")
+
+    def get_pending_tpsl(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+        """Return untriggered TP/SL orders (bot-native shape).
+
+        Keys: tpsl_id, symbol (bare base), side (close order side),
+        position_side, sl_trigger_price, tp_trigger_price, size (base
+        units), contracts, order_type="tpsl", reduce_only=True, raw.
+
+        Raises:
+            BlofinAPIError / requests errors on transport failure - the
+            caller must treat that as "unknown", never as "no stops".
+        """
+        self._require_auth()
+        self._load_instruments()
+        params: Dict[str, Any] = {"limit": "100"}
+        if symbol:
+            params["instId"] = self.to_inst_id(symbol)
+        payload = self._get(TPSL_PENDING_PATH, params, auth=True)
+        data = payload.get("data") or []
+        rows: List[Dict[str, Any]] = []
+        for raw in data if isinstance(data, list) else []:
+            if not isinstance(raw, dict):
+                continue
+            base = self.from_inst_id(str(raw.get("instId", "")))
+            try:
+                size = self.contracts_to_base(base, raw.get("size", "0") or "0")
+            except (ValueError, ArithmeticError):
+                size = 0.0
+            rows.append(
+                {
+                    "tpsl_id": str(raw.get("tpslId", "")),
+                    "symbol": base,
+                    "side": str(raw.get("side", "")).lower(),
+                    "position_side": str(raw.get("positionSide", "net")).lower(),
+                    "sl_trigger_price": self._optional_float(raw.get("slTriggerPrice")),
+                    "tp_trigger_price": self._optional_float(raw.get("tpTriggerPrice")),
+                    "size": size,
+                    "contracts": raw.get("size"),
+                    "order_type": "tpsl",
+                    "reduce_only": True,
+                    "state": raw.get("state"),
+                    "raw": raw,
+                }
+            )
+        return rows
+
+    def cancel_tpsl(self, symbol: str, tpsl_id: str) -> Dict[str, Any]:
+        """Cancel one TP/SL order (the endpoint takes a JSON ARRAY body)."""
+        self._require_auth()
+        body = [{"instId": self.to_inst_id(symbol), "tpslId": str(tpsl_id)}]
+        response = self._post_tolerant(TPSL_CANCEL_PATH, body)
+        return self._wrap_tpsl_ack(response, None, "cancel-tpsl", fallback_id=str(tpsl_id))
+
+    def amend_stop(
+        self,
+        symbol: str,
+        entry_order_id: Optional[str],
+        new_sl: float,
+        side: Any,
+        tpsl_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Move the stop-loss protecting a position, wherever it lives.
+
+        Three-step cascade, simplest object first (ported from the
+        Discord Bot client):
+
+        1. ``amend-order`` on the ENTRY order (works while it is live or
+           partially filled - the attached SL is amended in place).
+        2. Rejected -> find the pending TP/SL row (by ``tpsl_id`` when
+           given, else the first stop-loss row for the position side) and
+           ``amend-tpsl`` it.  Rejected again -> ``cancel-tpsl`` (array
+           body) and re-place it via ``order-tpsl`` at the row's size.
+        3. No pending row -> place a fresh reduce-only TP/SL sized to the
+           live position from GET positions.
+
+        Never raises.  Returns a Pacifica-style ack whose ``data`` carries
+        ``tpsl_id`` (when known), ``stop_price`` and ``method``; on total
+        failure ``success`` is False and ``error`` explains why.
+
+        Args:
+            symbol: Bot symbol.
+            entry_order_id: Exchange id of the entry order, if known.
+            new_sl: New stop-loss trigger price.
+            side: Position side ("long"/"short" or entry "buy"/"sell").
+            tpsl_id: Known TP/SL row id, if any.
+        """
+        try:
+            return self._amend_stop_cascade(symbol, entry_order_id, new_sl, side, tpsl_id)
+        except Exception as exc:  # noqa: BLE001 - protective path must not raise
+            logger.error("amend_stop %s failed: %s: %s", symbol, type(exc).__name__, exc)
+            return {
+                "success": False,
+                "data": {"tpsl_id": tpsl_id, "stop_price": new_sl, "method": "none"},
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+
+    def _amend_stop_cascade(
+        self,
+        symbol: str,
+        entry_order_id: Optional[str],
+        new_sl: float,
+        side: Any,
+        tpsl_id: Optional[str],
+    ) -> Dict[str, Any]:
+        """Body of ``amend_stop`` (may raise; the wrapper catches)."""
+        self._require_auth()
+        inst_id = self.to_inst_id(symbol)
+        new_sl_str = self.round_price(symbol, new_sl)
+        position_side = _position_side_input(side)
+
+        if entry_order_id:
+            body = {
+                "instId": inst_id,
+                "orderId": str(entry_order_id),
+                "newSlTriggerPrice": new_sl_str,
+                "newSlOrderPrice": MARKET_ORDER_PRICE,
+            }
+            resp = self._post_tolerant(AMEND_ORDER_PATH, body)
+            if _ok(resp):
+                # The ack echoes the ENTRY orderId; the stop keeps its own
+                # id (known or not) - never report the entry id as a stop.
+                stop_id = str(tpsl_id) if tpsl_id else None
+                return {
+                    "success": True,
+                    "data": {
+                        "order_id": stop_id or str(entry_order_id),
+                        "tpsl_id": stop_id,
+                        "stop_price": float(new_sl_str),
+                        "method": "amend-order",
+                    },
+                    "raw": resp,
+                }
+            logger.info(
+                "amend-order rejected for %s (%s); falling back to the TP/SL row",
+                symbol,
+                _reject_detail(resp)[1],
+            )
+
+        row = self._find_pending_stop(symbol, position_side, tpsl_id)
+        if row is not None:
+            return self._amend_or_replace_row(symbol, inst_id, row, new_sl, new_sl_str)
+
+        live = [
+            p
+            for p in self.get_positions()
+            if p.get("symbol") == _strip_perp(symbol) and p.get("side") == position_side
+        ]
+        if not live:
+            return {
+                "success": False,
+                "data": {"tpsl_id": None, "stop_price": new_sl, "method": "none"},
+                "error": f"no pending TP/SL row and no live {position_side} position",
+            }
+        return self.place_tpsl(symbol, position_side, float(live[0]["quantity"]), new_sl)
+
+    def _find_pending_stop(
+        self, symbol: str, position_side: str, tpsl_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Pending TP/SL row for the position (stop-loss rows first)."""
+        rows = self.get_pending_tpsl(symbol)
+        if tpsl_id:
+            for row in rows:
+                if row["tpsl_id"] == str(tpsl_id):
+                    return row
+        close_side = "sell" if position_side == "long" else "buy"
+        matches = [
+            r
+            for r in rows
+            if (r["position_side"] not in ("long", "short") or r["position_side"] == position_side)
+            and (not r["side"] or r["side"] == close_side)
+        ]
+        matches.sort(key=lambda r: 0 if r.get("sl_trigger_price") else 1)
+        return matches[0] if matches else None
+
+    def _amend_or_replace_row(
+        self,
+        symbol: str,
+        inst_id: str,
+        row: Dict[str, Any],
+        new_sl: float,
+        new_sl_str: str,
+    ) -> Dict[str, Any]:
+        """Step 2 of the cascade: amend-tpsl, else cancel + re-place."""
+        row_id = row["tpsl_id"]
+        body = {
+            "instId": inst_id,
+            "tpslId": row_id,
+            "newSlTriggerPrice": new_sl_str,
+            "newSlOrderPrice": MARKET_ORDER_PRICE,
+        }
+        resp = self._post_tolerant(TPSL_AMEND_PATH, body)
+        if _ok(resp):
+            return self._wrap_tpsl_ack(resp, new_sl, "amend-tpsl", fallback_id=row_id)
+        logger.warning(
+            "amend-tpsl rejected for %s (%s); cancelling and re-placing the TP/SL",
+            symbol,
+            _reject_detail(resp)[1],
+        )
+        cancel = self._post_tolerant(TPSL_CANCEL_PATH, [{"instId": inst_id, "tpslId": row_id}])
+        if not _ok(cancel):
+            logger.error("cancel-tpsl rejected for %s: %s", symbol, _reject_detail(cancel)[1])
+        raw = row.get("raw") or {}
+        position_side = row["position_side"] if row["position_side"] in ("long", "short") else None
+        if position_side is None:
+            position_side = "long" if row["side"] == "sell" else "short"
+        replacement = self._tpsl_body(
+            symbol,
+            position_side,
+            str(raw.get("size") or row.get("contracts") or ""),
+            new_sl,
+            row.get("tp_trigger_price"),
+            wire_position_side=str(raw.get("positionSide") or "net"),
+        )
+        resp = self._post_tolerant(TPSL_ORDER_PATH, replacement)
+        return self._wrap_tpsl_ack(resp, new_sl, "cancel-replace")
+
+    @staticmethod
+    def _optional_float(value: Any) -> Optional[float]:
+        """float(value) or None for empty / unparseable input."""
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _position_side_for(self, side: str, reduce_only: bool) -> str:
+        """Return the ``positionSide`` for the account's position mode.
+
+        One-way (net) mode wants "net".  Hedge mode (long_short_mode)
+        splits the book: an entry opens the side matching the order
+        direction, and a reduce-only exit targets the OPPOSITE side
+        (closing a long is a sell on positionSide "long").
+
+        Args:
+            side: "buy" or "sell".
+            reduce_only: Whether the order is an exit.
+
+        Returns:
+            "net", "long" or "short".
+        """
+        if getattr(self, "_position_mode", "net_mode") != "long_short_mode":
+            return "net"
+        opens_long = side == "buy"
+        if reduce_only:
+            return "short" if opens_long else "long"
+        return "long" if opens_long else "short"
 
     @staticmethod
     def _wrap_order_ack(response: Dict[str, Any]) -> Dict[str, Any]:
@@ -574,37 +1020,70 @@ class BlofinClient:
         response = self._post("/api/v1/trade/cancel-order", body)
         return self._wrap_order_ack(response)
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
+    def cancel_all_orders(
+        self, symbol: Optional[str] = None, include_stops: bool = False
+    ) -> Dict[str, Any]:
         """Cancel all open orders (optionally for one symbol).
 
         Blofin has no cancel-all endpoint; open orders are listed and
         cancelled via /trade/cancel-batch-orders in chunks of 20.
+
+        Protective TP/SL rows live on a separate book
+        (orders-tpsl-pending) and are LEFT IN PLACE by default: a grid
+        teardown or an operator "cancel all" must not strip the stop
+        protecting an open position.  Pass ``include_stops=True`` to
+        also cancel them via /trade/cancel-tpsl (array body, chunks of
+        20).
+
+        Args:
+            symbol: Restrict to one bot symbol.
+            include_stops: Also cancel untriggered TP/SL orders.
+
+        Returns:
+            {"success", "data": {"cancelled", "stops_cancelled"}, "error"?}.
         """
         self._require_auth()
+        errors: List[str] = []
         orders = self._get_pending_orders_raw(symbol)
-        if not orders:
-            return {"success": True, "data": {"cancelled": 0}}
         targets = [
             {"instId": o.get("instId"), "orderId": o.get("orderId")}
             for o in orders
             if o.get("orderId")
         ]
-        cancelled = 0
-        errors: List[str] = []
-        for start in range(0, len(targets), 20):
-            chunk = targets[start : start + 20]
-            try:
-                self._post("/api/v1/trade/cancel-batch-orders", chunk)
-                cancelled += len(chunk)
-            except BlofinAPIError as exc:
-                errors.append(str(exc))
+        cancelled = self._cancel_in_batches(
+            "/api/v1/trade/cancel-batch-orders", targets, errors
+        )
         result: Dict[str, Any] = {
             "success": not errors,
             "data": {"cancelled": cancelled},
         }
+        if include_stops:
+            stop_targets = [
+                {"instId": self.to_inst_id(r["symbol"]), "tpslId": r["tpsl_id"]}
+                for r in self.get_pending_tpsl(symbol)
+                if r.get("tpsl_id")
+            ]
+            result["data"]["stops_cancelled"] = self._cancel_in_batches(
+                TPSL_CANCEL_PATH, stop_targets, errors
+            )
+            result["success"] = not errors
         if errors:
             result["error"] = "; ".join(errors)
         return result
+
+    def _cancel_in_batches(
+        self, path: str, targets: List[Dict[str, Any]], errors: List[str]
+    ) -> int:
+        """POST ``targets`` to a batch-cancel endpoint in chunks of 20."""
+        cancelled = 0
+        for start in range(0, len(targets), CANCEL_BATCH_MAX):
+            chunk = targets[start : start + CANCEL_BATCH_MAX]
+            try:
+                self._post(path, chunk)
+                cancelled += len(chunk)
+            except BlofinAPIError as exc:
+                errors.append(str(exc))
+        return cancelled
 
     def _get_pending_orders_raw(
         self, symbol: Optional[str] = None
@@ -723,6 +1202,156 @@ class BlofinClient:
                 }
             )
         return trades
+
+    def get_order_fills(
+        self, symbol: str, order_id: str
+    ) -> Tuple[float, Optional[float]]:
+        """Aggregate the fills of one order from /trade/fills-history.
+
+        Args:
+            symbol: Bot symbol.
+            order_id: Exchange order id.
+
+        Returns:
+            ``(filled_quantity_in_base_units, vwap)``; ``(0.0, None)``
+            when the order has no fills.
+        """
+        self._require_auth()
+        self._load_instruments()
+        payload = self._get(
+            "/api/v1/trade/fills-history",
+            {
+                "instId": self.to_inst_id(symbol),
+                "orderId": str(order_id),
+                "limit": "100",
+            },
+            auth=True,
+        )
+        data = payload.get("data") or []
+        total = Decimal("0")
+        notional = Decimal("0")
+        for raw in data if isinstance(data, list) else []:
+            if str(raw.get("orderId", order_id)) != str(order_id):
+                continue
+            size = _dec(raw.get("fillSize", raw.get("size", "0")) or "0")
+            price = _dec(raw.get("fillPrice", raw.get("price", "0")) or "0")
+            total += size
+            notional += size * price
+        if total <= 0:
+            return 0.0, None
+        contract_value, _, _, _ = self._contract_specs(symbol)
+        return float(total * contract_value), float(notional / total)
+
+    def get_order_status(
+        self,
+        symbol: str,
+        order_id: str,
+        client_order_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Locate an order and report its executed size and VWAP.
+
+        Lookup order (cheapest / most authoritative first):
+          1. /trade/orders-pending  - still on the book
+          2. /trade/orders-history  - done (filled / canceled / partial)
+          3. /trade/fills-history   - fills only (state derived)
+
+        Args:
+            symbol: Bot symbol.
+            order_id: Exchange order id (may be "" when only the client
+                order id is known).
+            client_order_id: Client order id sent with the request.
+
+        Returns:
+            Dict with ``state`` (live / filled / partially_filled /
+            canceled / unknown ...), ``filled_quantity`` and ``size`` in
+            base units, ``avg_fill_price`` (None without fills),
+            ``order_id``, ``client_order_id`` and ``source``.
+
+        Raises:
+            BlofinAPIError / BlofinAuthError: only when the FIRST lookup
+                fails, so callers can tell "cannot see the exchange"
+                from "the order is gone".
+        """
+        self._require_auth()
+        self._load_instruments()
+        inst_id = self.to_inst_id(symbol)
+        oid = str(order_id or "")
+        payload = self._get(
+            "/api/v1/trade/orders-pending",
+            {"instId": inst_id, "limit": "100"},
+            auth=True,
+        )
+        row = self._find_order_row(payload.get("data"), oid, client_order_id)
+        if row is not None:
+            return self._order_row_status(symbol, row, "orders-pending")
+        try:
+            payload = self._get(
+                "/api/v1/trade/orders-history",
+                {"instId": inst_id, "limit": "100"},
+                auth=True,
+            )
+        except (BlofinAPIError, BlofinAuthError) as exc:
+            logger.warning("Blofin orders-history lookup failed for %s: %s", oid, exc)
+            payload = {}
+        row = self._find_order_row(payload.get("data"), oid, client_order_id)
+        if row is not None:
+            return self._order_row_status(symbol, row, "orders-history")
+        filled, avg_price = 0.0, None
+        if oid:
+            try:
+                filled, avg_price = self.get_order_fills(symbol, oid)
+            except (BlofinAPIError, BlofinAuthError) as exc:
+                logger.warning("Blofin fills-history lookup failed for %s: %s", oid, exc)
+        state = "filled" if filled > 0 else "unknown"
+        return {
+            "state": state,
+            "filled_quantity": filled,
+            "avg_fill_price": avg_price if filled > 0 else None,
+            "size": filled,
+            "order_id": oid,
+            "client_order_id": client_order_id,
+            "source": "fills-history" if filled > 0 else "none",
+        }
+
+    @staticmethod
+    def _find_order_row(
+        rows: Any, order_id: str, client_order_id: Optional[str]
+    ) -> Optional[Dict[str, Any]]:
+        """Return the order row matching either id, or None."""
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            if order_id and str(row.get("orderId", "")) == order_id:
+                return row
+            if client_order_id and str(row.get("clientOrderId", "")) == str(
+                client_order_id
+            ):
+                return row
+        return None
+
+    def _order_row_status(
+        self, symbol: str, row: Dict[str, Any], source: str
+    ) -> Dict[str, Any]:
+        """Normalize an orders-pending / orders-history row."""
+        state = str(row.get("state") or ("live" if source == "orders-pending" else "unknown"))
+        try:
+            filled = self.contracts_to_base(symbol, row.get("filledSize", "0") or "0")
+        except (ValueError, ArithmeticError):
+            filled = self._safe_float(row.get("filledSize"))
+        try:
+            size = self.contracts_to_base(symbol, row.get("size", "0") or "0")
+        except (ValueError, ArithmeticError):
+            size = self._safe_float(row.get("size"))
+        avg_price = self._safe_float(row.get("averagePrice", row.get("avgPx")))
+        return {
+            "state": state,
+            "filled_quantity": filled,
+            "avg_fill_price": avg_price if filled > 0 and avg_price > 0 else None,
+            "size": size,
+            "order_id": str(row.get("orderId", "")),
+            "client_order_id": row.get("clientOrderId"),
+            "source": source,
+        }
 
     def get_balance(self) -> Dict[str, Any]:
         """Return the futures account balance in the bot-native shape.

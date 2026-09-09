@@ -186,7 +186,9 @@ class TestForceExitSides:
 
         manager.on_emergency_stop_triggered("SUI")
 
-        client.place_order.assert_called_with("SUI", "sell", 5.0, "market")
+        client.place_order.assert_called_with(
+            "SUI", "sell", 5.0, "market", reduce_only=True
+        )
 
     def test_short_position_closed_with_buy(self):
         manager, client, _ = _make_manager()
@@ -197,7 +199,9 @@ class TestForceExitSides:
 
         manager.on_emergency_stop_triggered("SUI")
 
-        client.place_order.assert_called_with("SUI", "buy", 3.0, "market")
+        client.place_order.assert_called_with(
+            "SUI", "buy", 3.0, "market", reduce_only=True
+        )
 
     def test_legacy_bid_side_still_closed_with_sell(self):
         manager, client, _ = _make_manager()
@@ -208,7 +212,9 @@ class TestForceExitSides:
 
         manager.on_emergency_stop_triggered("SUI")
 
-        client.place_order.assert_called_with("SUI", "sell", 2.0, "market")
+        client.place_order.assert_called_with(
+            "SUI", "sell", 2.0, "market", reduce_only=True
+        )
 
 
 # ---------------------------------------------------------------------------

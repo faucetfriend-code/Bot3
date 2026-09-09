@@ -32,7 +32,7 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import Generator, List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import logging
 
 # Break-even rules for stored parameter overlays. overlay_quality imports
@@ -628,6 +628,10 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
             funding_pnl DOUBLE PRECISION DEFAULT 0,
             exit_price DOUBLE PRECISION,
             realized_pnl DOUBLE PRECISION DEFAULT 0,
+            entry_order_id TEXT,
+            venue_stop_id TEXT,
+            venue_stop_price DOUBLE PRECISION,
+            venue_stop_state TEXT,
             opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             closed_at TIMESTAMPTZ,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1098,7 +1102,79 @@ def _init_postgres_database():
     """Initialize PostgreSQL database from schema_timescaledb.sql."""
     with get_db_connection() as conn:
         _init_postgres_schema(conn)
+        _ensure_position_stop_columns(conn)
+        conn.commit()
     logger.info("PostgreSQL database initialized successfully")
+
+
+#: Venue-stop protection columns on ``positions`` (live-readiness T4).
+#: (name, sqlite type); Postgres maps REAL -> DOUBLE PRECISION.
+POSITION_STOP_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("entry_order_id", "TEXT"),
+    ("venue_stop_id", "TEXT"),
+    ("venue_stop_price", "REAL"),
+    ("venue_stop_state", "TEXT"),
+)
+POSITION_STOP_KEYS: Tuple[str, ...] = tuple(name for name, _ in POSITION_STOP_COLUMNS)
+
+
+def _row_field(row: Any, index: int, key: str) -> Any:
+    """Read a column from a row that may be a tuple, sqlite3.Row or dict."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return row[index]
+
+
+def _existing_columns(conn: Any, table: str) -> set:
+    """Return the column names currently present on ``table``."""
+    if _active_backend == "postgres":
+        cursor = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = ? AND table_schema = current_schema()",
+            (table,),
+        )
+        return {str(_row_field(row, 0, "column_name")) for row in cursor.fetchall()}
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return {str(_row_field(row, 1, "name")) for row in cursor.fetchall()}
+
+
+def _ensure_position_stop_columns(conn: Any) -> List[str]:
+    """Add the venue-stop columns to ``positions`` when they are missing.
+
+    Migration-safe: the column list is checked first (PRAGMA table_info
+    on SQLite, information_schema on Postgres) and only absent columns
+    are added, so a database created before this change is upgraded in
+    place and one created after it is left untouched.
+
+    Args:
+        conn: Open connection wrapper.
+
+    Returns:
+        Names of the columns that were added.
+    """
+    try:
+        existing = _existing_columns(conn, "positions")
+    except Exception as exc:  # noqa: BLE001 - fall back to the ALTER guard
+        logger.warning(f"Could not read positions columns: {exc}")
+        existing = set()
+    added: List[str] = []
+    for name, sqlite_type in POSITION_STOP_COLUMNS:
+        if name in existing:
+            continue
+        col_type = sqlite_type
+        if _active_backend == "postgres" and sqlite_type == "REAL":
+            col_type = "DOUBLE PRECISION"
+        try:
+            conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {col_type}")
+            added.append(name)
+        except Exception as exc:  # noqa: BLE001 - duplicate is benign
+            err = str(exc).lower()
+            if "duplicate column name" not in err and "already exists" not in err:
+                logger.warning(f"Failed to add positions.{name}: {exc}")
+    if added:
+        logger.info(f"positions table upgraded with stop columns: {added}")
+    return added
 
 
 def _init_sqlite_database():
@@ -1163,6 +1239,10 @@ def _init_sqlite_database():
                     status TEXT NOT NULL DEFAULT 'open',
                     exit_price REAL,
                     realized_pnl REAL DEFAULT 0,
+                    entry_order_id TEXT,
+                    venue_stop_id TEXT,
+                    venue_stop_price REAL,
+                    venue_stop_state TEXT,
                     opened_at TIMESTAMP NOT NULL,
                     closed_at TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1417,6 +1497,9 @@ def _init_sqlite_database():
                 err = str(e).lower()
                 if "duplicate column name" not in err and "already exists" not in err:
                     logger.warning(f"Failed to add column: {e}")
+
+        # Venue-stop protection columns (guarded by a column check)
+        _ensure_position_stop_columns(conn)
 
         # Create indexes for account_id columns
         account_indexes = [
@@ -2774,6 +2857,18 @@ class DatabaseManager:
                 f"🔍 save_position UPDATE: symbol={position_data['symbol']}, rowcount={cursor.rowcount}, funding sent to SQL={funding_value}"
             )
 
+            # Venue-stop columns are written only when the caller supplies
+            # them; the per-loop position upsert never touches them.
+            stop_fields = {
+                key: position_data[key]
+                for key in POSITION_STOP_KEYS
+                if key in position_data
+            }
+            if cursor.rowcount > 0 and stop_fields:
+                self._update_position_fields(
+                    conn, position_data["symbol"], position_data["side"], stop_fields
+                )
+
             if cursor.rowcount == 0:
                 # Insert new position
                 print(
@@ -2782,8 +2877,10 @@ class DatabaseManager:
                 cursor = conn.execute(
                     """
                     INSERT INTO positions (symbol, asset_class, side, quantity, entry_price,
-                                         current_price, unrealized_pnl, funding_pnl, opened_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         current_price, unrealized_pnl, funding_pnl, opened_at,
+                                         entry_order_id, venue_stop_id, venue_stop_price,
+                                         venue_stop_state)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         position_data["symbol"],
@@ -2795,6 +2892,10 @@ class DatabaseManager:
                         position_data.get("unrealized_pnl", 0),
                         funding_value,
                         position_data["opened_at"],
+                        position_data.get("entry_order_id"),
+                        position_data.get("venue_stop_id"),
+                        position_data.get("venue_stop_price"),
+                        position_data.get("venue_stop_state"),
                     ),
                 )
 
@@ -2805,6 +2906,96 @@ class DatabaseManager:
             _data_cache.invalidate("positions_all")
 
             return cursor.lastrowid  # type: ignore
+
+    @staticmethod
+    def _update_position_fields(
+        conn: Any, symbol: str, side: str, fields: Dict[str, Any]
+    ) -> int:
+        """UPDATE the given ``positions`` columns for one symbol/side row."""
+        if not fields:
+            return 0
+        names = [name for name in fields if name in POSITION_STOP_KEYS]
+        if not names:
+            return 0
+        assignments = ", ".join(f"{name} = ?" for name in names)
+        params = tuple(fields[name] for name in names) + (symbol, side)
+        cursor = conn.execute(
+            f"UPDATE positions SET {assignments}, updated_at = CURRENT_TIMESTAMP "
+            "WHERE symbol = ? AND side = ?",
+            params,
+        )
+        return cursor.rowcount
+
+    def record_position_protection(
+        self,
+        symbol: str,
+        side: str,
+        fields: Dict[str, Any],
+        quantity: Optional[float] = None,
+        entry_price: Optional[float] = None,
+    ) -> bool:
+        """Persist the venue-stop columns for a position (upsert).
+
+        The per-loop ``save_position`` upsert creates the row only on the
+        NEXT cycle after a fill, so when no row exists yet and the caller
+        supplies ``quantity``/``entry_price`` a minimal row is inserted;
+        the loop upsert then keeps its price/PnL columns current without
+        touching the stop columns.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side as stored by the loop ("LONG"/"SHORT").
+            fields: Any of entry_order_id, venue_stop_id,
+                venue_stop_price, venue_stop_state (None clears).
+            quantity: Position size for the insert path.
+            entry_price: Entry price for the insert path.
+
+        Returns:
+            True when a row was updated or inserted.
+        """
+        stop_fields = {k: v for k, v in fields.items() if k in POSITION_STOP_KEYS}
+        with get_db_connection() as conn:
+            updated = self._update_position_fields(conn, symbol, side, stop_fields)
+            inserted = False
+            if updated == 0 and quantity is not None and entry_price is not None:
+                conn.execute(
+                    """
+                    INSERT INTO positions (symbol, asset_class, side, quantity, entry_price,
+                                         current_price, unrealized_pnl, funding_pnl, opened_at,
+                                         entry_order_id, venue_stop_id, venue_stop_price,
+                                         venue_stop_state)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        symbol,
+                        "perpetual",
+                        side,
+                        quantity,
+                        entry_price,
+                        entry_price,
+                        0,
+                        0,
+                        datetime.now(timezone.utc).isoformat(),
+                        stop_fields.get("entry_order_id"),
+                        stop_fields.get("venue_stop_id"),
+                        stop_fields.get("venue_stop_price"),
+                        stop_fields.get("venue_stop_state"),
+                    ),
+                )
+                inserted = True
+            conn.commit()
+        _data_cache.invalidate("positions_all")
+        return updated > 0 or inserted
+
+    def get_position(self, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        """Return one open position row (all columns) or None."""
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM positions WHERE symbol = ? AND side = ?",
+                (symbol, side),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row else None
 
     def get_positions(self) -> List[Dict[str, Any]]:
         """Get all open positions with caching."""

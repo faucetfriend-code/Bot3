@@ -23,6 +23,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..models import OrderSide, OrderType
+from ..order_result import OrderResult, OrderResultStatus
 from .base import (
     ExchangeBalance,
     ExchangeCapabilities,
@@ -193,13 +194,20 @@ class PacificaExchange(ExchangeClient):
         quantity: float,
         order_type: OrderTypeInput = OrderType.MARKET,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Place an order with normalized vocabulary.
 
         Delegates to ``PacificaClient.place_order`` with the exact
         lowercase "buy"/"sell" and "market"/"limit" strings it requires;
         the native client then performs the final bid/ask and
-        string-amount wire conversion.
+        string-amount wire conversion.  ``reduce_only`` and
+        ``client_order_id`` are forwarded only when set so legacy
+        positional mocks keep matching.  ``stop_loss`` is NOT forwarded:
+        Pacifica has no venue-side stop in this client, so the caller
+        must keep local enforcement (``supports_venue_stops`` is False).
 
         Returns:
             Raw Pacifica acknowledgement dict
@@ -207,6 +215,18 @@ class PacificaExchange(ExchangeClient):
         """
         side_str = self._to_order_side(side).value  # "buy" / "sell"
         type_str = self._to_order_type(order_type).value  # "market" / "limit"
+        if stop_loss is not None:
+            logger.warning(
+                "Pacifica adapter cannot attach a venue stop for %s (stop %.6f); "
+                "local stop enforcement only",
+                symbol,
+                stop_loss,
+            )
+        extra: Dict[str, Any] = {}
+        if reduce_only:
+            extra["reduce_only"] = True
+        if client_order_id:
+            extra["client_order_id"] = client_order_id
 
         if type_str == OrderType.LIMIT.value:
             if price is None:
@@ -217,20 +237,87 @@ class PacificaExchange(ExchangeClient):
                 quantity=quantity,
                 order_type=type_str,
                 price=price,
+                **extra,
             )
         return self.rest_client.place_order(
             symbol=symbol,
             side=side_str,
             quantity=quantity,
             order_type=type_str,
+            **extra,
+        )
+
+    def get_order_fill(
+        self,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        requested_quantity: Optional[float] = None,
+    ) -> OrderResult:
+        """Best-effort fill lookup over Pacifica's order history.
+
+        Pacifica has no per-order endpoint in this client, so the recent
+        order history (``get_trades``) is scanned for the order id or the
+        client order id.  Not found / transport error -> UNKNOWN.
+        """
+        if not order_id and not client_order_id:
+            return OrderResult(
+                status=OrderResultStatus.UNKNOWN.value, error="no order id"
+            )
+        try:
+            rows = self.rest_client.get_trades(limit=100) or []
+        except Exception as exc:  # noqa: BLE001 - lookup failure is "unknown"
+            logger.warning("Pacifica fill lookup failed for %s %s: %s", symbol, order_id, exc)
+            return OrderResult(
+                order_id=order_id,
+                client_order_id=client_order_id,
+                status=OrderResultStatus.UNKNOWN.value,
+                error=str(exc),
+            )
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            row_id = str(row.get("order_id") or row.get("id") or "")
+            row_cid = str(row.get("client_order_id") or "")
+            if not (
+                (order_id and row_id == str(order_id))
+                or (client_order_id and row_cid == str(client_order_id))
+            ):
+                continue
+            filled = _first_float(
+                row, ("filled_amount", "filled_quantity", "filled_size"), 0.0
+            )
+            price = _first_float(
+                row, ("average_filled_price", "avg_fill_price", "average_price", "price"), 0.0
+            )
+            return OrderResult.from_fill_lookup(
+                order_id=row_id or order_id,
+                state=str(row.get("order_status") or row.get("status") or "unknown"),
+                filled_quantity=filled,
+                avg_fill_price=price if price > 0 else None,
+                requested_quantity=requested_quantity,
+                client_order_id=row_cid or client_order_id,
+                raw=row,
+            )
+        return OrderResult(
+            order_id=order_id,
+            client_order_id=client_order_id,
+            status=OrderResultStatus.UNKNOWN.value,
+            error="order not found in history",
         )
 
     def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """Cancel a single order (passthrough)."""
         return self.rest_client.cancel_order(symbol=symbol, order_id=order_id)
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Cancel all open orders, optionally for one symbol (passthrough)."""
+    def cancel_all_orders(
+        self, symbol: Optional[str] = None, include_stops: bool = False
+    ) -> Dict[str, Any]:
+        """Cancel all open orders, optionally for one symbol (passthrough).
+
+        ``include_stops`` is accepted for interface parity and ignored:
+        Pacifica holds no venue-side stops to cancel.
+        """
         return self.rest_client.cancel_all_orders(symbol=symbol)
 
     def get_positions(self) -> List[ExchangePosition]:

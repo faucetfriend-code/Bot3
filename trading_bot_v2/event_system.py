@@ -35,6 +35,8 @@ class EventType(Enum):
 
     # Reconciliation Events
     POSITION_DISCREPANCY = "position_discrepancy"
+    # A close that reached its retry cap and now needs manual action
+    CLOSE_ESCALATED = "close_escalated"
 
     # Grid Events
     GRID_CREATED = "grid_created"

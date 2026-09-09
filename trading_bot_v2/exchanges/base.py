@@ -34,6 +34,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple, Union
 
 from ..models import OrderSide, OrderType
+from ..order_result import OrderResult, OrderResultStatus
 
 
 class PositionSide(str, Enum):
@@ -64,6 +65,10 @@ class ExchangeCapabilities:
         amounts_as_strings: True if order amounts must be sent as strings.
         min_order_size_source: Where minimum order size comes from
             (e.g. "info_endpoint" for Pacifica's /info market specs).
+        supports_venue_stops: True when the exchange holds protective
+            stop orders server-side (Blofin TP/SL rows), so a position
+            stays protected if this process dies.  False means only the
+            bot's local loop check enforces stops (Pacifica).
     """
 
     name: str
@@ -73,6 +78,7 @@ class ExchangeCapabilities:
     native_position_sides: Tuple[str, ...]
     amounts_as_strings: bool
     min_order_size_source: str
+    supports_venue_stops: bool = False
 
 
 @dataclass
@@ -188,6 +194,9 @@ class ExchangeClient(ABC):
         quantity: float,
         order_type: OrderTypeInput = OrderType.MARKET,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Place an order using normalized side/type vocabulary.
 
@@ -199,18 +208,173 @@ class ExchangeClient(ABC):
                 exchange wire type).
             order_type: OrderType.MARKET/LIMIT (strings tolerated).
             price: Limit price (required for limit orders).
+            reduce_only: True for EXITS.  The exchange then refuses to
+                let the order open or flip a position, so a close that
+                races an exchange stop or a manual action cannot create
+                reverse exposure.  Entries leave this False.
+            client_order_id: Caller-generated id persisted before the
+                request is transmitted, so an ambiguous response can be
+                looked up afterwards.  Adapters generate one if omitted.
+            stop_loss: Protective stop to attach to an ENTRY order on
+                exchanges with ``supports_venue_stops``.  Adapters
+                without venue stops ignore it (the caller must then
+                rely on local enforcement); they never fake success.
 
         Returns:
             Raw exchange acknowledgement dict (see module docstring).
         """
+
+    def place_order_result(
+        self,
+        symbol: str,
+        side: OrderSideInput,
+        quantity: float,
+        order_type: OrderTypeInput = OrderType.MARKET,
+        price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
+    ) -> OrderResult:
+        """Place an order and return a normalized ``OrderResult``.
+
+        Thin conversion over ``place_order`` for call sites that make
+        accounting decisions and must distinguish accepted / rejected /
+        unknown instead of parsing the legacy dict.
+        """
+        kwargs: Dict[str, Any] = {}
+        if stop_loss is not None:
+            kwargs["stop_loss"] = stop_loss
+        ack = self.place_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type=order_type,
+            price=price,
+            reduce_only=reduce_only,
+            client_order_id=client_order_id,
+            **kwargs,
+        )
+        result = OrderResult.from_ack(ack)
+        if result.client_order_id is None and client_order_id:
+            result.client_order_id = client_order_id
+        return result
+
+    # ------------------------------------------------------------------
+    # Venue-side protective stops (T4).  Defaults describe an exchange
+    # WITHOUT server-side stops: every mutating call reports a clear
+    # "unsupported" rejection and never fabricates a stop id.
+    # ------------------------------------------------------------------
+
+    def _unsupported_stop_result(self, action: str) -> OrderResult:
+        """Rejection result for adapters without venue stop orders."""
+        name = self.capabilities().name
+        return OrderResult(
+            success=False,
+            accepted=False,
+            status=OrderResultStatus.REJECTED.value,
+            error=(
+                f"{action} unsupported: {name} has no venue-side stop orders "
+                "(local stop enforcement only)"
+            ),
+            raw={"unsupported": True, "exchange": name},
+        )
+
+    def install_stop(
+        self,
+        symbol: str,
+        side: Any,
+        quantity: float,
+        stop_price: float,
+    ) -> OrderResult:
+        """Place a standalone reduce-only stop protecting an open position.
+
+        Args:
+            symbol: Trading symbol.
+            side: POSITION side (PositionSide / OrderSide / "long" ...).
+            quantity: Position quantity in base units.
+            stop_price: Stop trigger price.
+
+        Returns:
+            OrderResult; ``order_id`` is the venue stop id on success.
+        """
+        return self._unsupported_stop_result("install_stop")
+
+    def amend_stop(
+        self,
+        symbol: str,
+        side: Any,
+        new_stop_price: float,
+        entry_order_id: Optional[str] = None,
+        stop_id: Optional[str] = None,
+    ) -> OrderResult:
+        """Move an existing venue stop to ``new_stop_price``.
+
+        Returns:
+            OrderResult; ``order_id`` is the (possibly new) stop id.
+        """
+        return self._unsupported_stop_result("amend_stop")
+
+    def cancel_stop(self, symbol: str, stop_id: str) -> OrderResult:
+        """Cancel one venue stop by id."""
+        return self._unsupported_stop_result("cancel_stop")
+
+    def list_stops(self, symbol: str) -> List[Dict[str, Any]]:
+        """Return pending venue stop rows for ``symbol`` (normalized dicts).
+
+        Keys: tpsl_id, symbol, side (close order side), position_side,
+        sl_trigger_price, tp_trigger_price, size, order_type="tpsl".
+        Adapters that can query the venue MUST raise on transport
+        failure rather than return [] - an empty list means "verified:
+        no stops", which the repair sweep acts on.
+        """
+        return []
+
+    def get_order_fill(
+        self,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        requested_quantity: Optional[float] = None,
+    ) -> OrderResult:
+        """Look up the fill state of an order the exchange accepted.
+
+        The default says "unknown" so adapters without an order-state
+        endpoint never masquerade an ack as a fill.  Adapters that can
+        query the venue override this.
+
+        Args:
+            symbol: Trading symbol.
+            order_id: Exchange order id from the ack.
+            client_order_id: Client order id sent with the request.
+            requested_quantity: Original order size (partial detection).
+
+        Returns:
+            OrderResult with status filled / partial / accepted /
+            rejected / unknown and the executed quantity + VWAP.
+        """
+        return OrderResult(
+            order_id=order_id,
+            client_order_id=client_order_id,
+            status=OrderResultStatus.UNKNOWN.value,
+            error="fill lookup not supported by this adapter",
+        )
 
     @abstractmethod
     def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """Cancel a single order."""
 
     @abstractmethod
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Cancel all open orders, optionally scoped to one symbol."""
+    def cancel_all_orders(
+        self, symbol: Optional[str] = None, include_stops: bool = False
+    ) -> Dict[str, Any]:
+        """Cancel all open orders, optionally scoped to one symbol.
+
+        Args:
+            symbol: Restrict to one symbol.
+            include_stops: Also cancel protective venue stops.  Default
+                False so grid teardowns and operator cancel-alls never
+                strip the stop protecting an open position.
+        """
 
     @abstractmethod
     def get_positions(self) -> List[ExchangePosition]:

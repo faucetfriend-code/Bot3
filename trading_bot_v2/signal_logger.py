@@ -260,6 +260,75 @@ class SignalLogger:
         self._add_entry(entry)
         return entry
 
+    def log_signal_pending(
+        self,
+        signal,
+        client_order_id: str = "",
+        quantity: float = 0,
+        order_id: str = "",
+        regime: str = "",
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Persist a signal as PENDING while its order is in flight.
+
+        Unlike ``generated`` (memory only until the outcome) this writes a
+        CSV/DB row IMMEDIATELY so the client order id is durable BEFORE the
+        request is transmitted.  The entry stays pending in memory, so a
+        later ``log_signal_executed`` / ``log_signal_failed`` finalizes it.
+
+        Args:
+            signal: Signal object
+            client_order_id: Client order id sent with the order
+            quantity: Requested quantity
+            order_id: Exchange order id once known
+            regime: Current market regime
+            notes: Additional notes
+
+        Returns:
+            Snapshot of the pending entry
+        """
+        note = f"client_order_id={client_order_id}; requested_quantity={quantity}"
+        if notes:
+            note = f"{note}; {notes}"
+        updates = {
+            "status": "pending",
+            "execution_result": "submitted",
+            "order_id": str(order_id or ""),
+            "filled_price": "",
+            "filled_quantity": "",
+            "notes": note,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if regime:
+            updates["regime"] = regime
+        signal_id = self._generate_signal_id(signal)
+        with self._lock:
+            entry = self._pending.get(signal_id)
+            if entry is None:
+                entry = {
+                    "symbol": getattr(signal, 'asset', str(signal)),
+                    "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
+                    "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
+                    "entry_price": getattr(signal, 'entry_price', 0),
+                    "stop_loss": getattr(signal, 'stop_loss', 0),
+                    "take_profit": getattr(signal, 'take_profit', 0),
+                    "confidence": getattr(signal, 'confidence', 0),
+                    "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
+                    "regime": regime,
+                    "rejection_reason": "",
+                    "pnl": "",
+                }
+                self._signal_log.append(entry)
+                if len(self._signal_log) > self.max_memory_entries:
+                    self._signal_log = self._signal_log[-self.max_memory_entries:]
+                self._pending[signal_id] = entry
+            entry.update(updates)
+            snapshot = dict(entry)
+        self._append_to_csv(snapshot)
+        self._save_to_database(snapshot)
+        return snapshot
+
     def log_signal_executed(
         self,
         signal,
