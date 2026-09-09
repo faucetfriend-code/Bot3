@@ -144,11 +144,7 @@ def fold_sources(payload: Dict[str, Any], path: str) -> List[str]:
 
 def _existing_sources(db) -> set:
     """Every source string already in the registry."""
-    return {
-        row.get("source")
-        for row in db.get_trial_registry()
-        if row.get("source")
-    }
+    return {row.get("source") for row in db.get_trial_registry() if row.get("source")}
 
 
 def is_intermediate(path: str) -> bool:
@@ -167,9 +163,7 @@ def is_intermediate(path: str) -> bool:
     return "_tune" in normalize_path(path).split("/")
 
 
-def plan(
-    paths: List[str], include_intermediate: bool = False
-) -> List[Dict[str, Any]]:
+def plan(paths: List[str], include_intermediate: bool = False) -> List[Dict[str, Any]]:
     """Build the row plan from artifacts.
 
     Args:
@@ -197,17 +191,21 @@ def plan(
         if digest in digests:
             # Counted anyway - see the module docstring on why identical
             # output does not imply a single search.
-            print(f"  NOTE: identical results to {digests[digest]}: "
-                  f"{normalize_path(path)} (counted as a separate search)")
+            print(
+                f"  NOTE: identical results to {digests[digest]}: "
+                f"{normalize_path(path)} (counted as a separate search)"
+            )
         else:
             digests[digest] = normalize_path(path)
         for source in fold_sources(payload, path):
-            rows.append({
-                "source": source,
-                "strategy": payload["strategy"],
-                "n_trials": payload["trials_per_fold"],
-                "path": path,
-            })
+            rows.append(
+                {
+                    "source": source,
+                    "strategy": payload["strategy"],
+                    "n_trials": payload["trials_per_fold"],
+                    "path": path,
+                }
+            )
     return rows
 
 
@@ -222,10 +220,14 @@ def run(argv: Optional[List[str]] = None) -> int:
     """
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--glob", default=DEFAULT_GLOB)
-    p.add_argument("--dry-run", action="store_true",
-                   help="Report what would be inserted, insert nothing")
     p.add_argument(
-        "--include-intermediate", action="store_true",
+        "--dry-run",
+        action="store_true",
+        help="Report what would be inserted, insert nothing",
+    )
+    p.add_argument(
+        "--include-intermediate",
+        action="store_true",
         help=(
             "Also count reports under _tune/. Those are the monthly "
             "driver's scratch copies of a report it also writes to "
@@ -238,9 +240,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     db = DatabaseManager()
     already = _existing_sources(db)
-    rows = plan(
-        glob.glob(args.glob, recursive=True), args.include_intermediate
-    )
+    rows = plan(glob.glob(args.glob, recursive=True), args.include_intermediate)
     fresh = [r for r in rows if r["source"] not in already]
 
     by_strategy: Dict[str, List[int]] = {}
@@ -252,9 +252,11 @@ def run(argv: Optional[List[str]] = None) -> int:
     print(f"to insert      : {len(fresh)}")
     for strategy, trials in sorted(by_strategy.items()):
         before = db.get_total_trials(strategy)
-        print(f"  {strategy:<18} +{len(trials):>3} rows, "
-              f"+{sum(trials):>5} trials (N {before} -> "
-              f"{before + sum(trials)})")
+        print(
+            f"  {strategy:<18} +{len(trials):>3} rows, "
+            f"+{sum(trials):>5} trials (N {before} -> "
+            f"{before + sum(trials)})"
+        )
 
     if args.dry_run:
         print("\ndry run - nothing written")

@@ -53,9 +53,7 @@ class TestShadowedKeys:
     def test_a_key_in_one_source_only_is_not_shadowed(self, dotenv_file):
         """It resolves the same way under either precedence."""
         assert "FILE_ONLY" not in ep.shadowed_keys(dotenv_file, {})
-        assert "SHELL_ONLY" not in ep.shadowed_keys(
-            dotenv_file, {"SHELL_ONLY": "x"}
-        )
+        assert "SHELL_ONLY" not in ep.shadowed_keys(dotenv_file, {"SHELL_ONLY": "x"})
 
     def test_matching_values_are_not_shadowed(self, dotenv_file):
         assert ep.shadowed_keys(dotenv_file, {"AGREES": "same"}) == []
@@ -126,9 +124,7 @@ class TestPrecedence:
         assert report["override"] is False
         assert report["override_source"] == "environment"
 
-    def test_unset_override_var_reports_the_default(
-        self, dotenv_file, monkeypatch
-    ):
+    def test_unset_override_var_reports_the_default(self, dotenv_file, monkeypatch):
         monkeypatch.delenv(ep.OVERRIDE_ENV_VAR, raising=False)
 
         report = ep.load_env(dotenv_file)
@@ -138,8 +134,16 @@ class TestPrecedence:
 
     @pytest.mark.parametrize(
         "raw,expected",
-        [("true", True), ("1", True), ("yes", True), ("false", False),
-         ("0", False), ("no", False), ("", True), (None, True)],
+        [
+            ("true", True),
+            ("1", True),
+            ("yes", True),
+            ("false", False),
+            ("0", False),
+            ("no", False),
+            ("", True),
+            (None, True),
+        ],
     )
     def test_flag_parsing_matches_config_py(self, raw, expected):
         assert ep._truthy(raw, True) is expected
@@ -160,15 +164,28 @@ class TestConfigWiring:
 
     def test_main_exit_code_gates_step_two(self, dotenv_file, monkeypatch):
         """Non-zero while any key is shadowed, so a script can gate on it."""
-        monkeypatch.setattr(ep, "load_env", lambda: {
-            "override": True, "override_source": "default",
-            "winner": "dotenv_file", "shadowed": ["DATABASE_PATH"],
-            "dotenv_key_count": 1,
-        })
+        monkeypatch.setattr(
+            ep,
+            "load_env",
+            lambda: {
+                "override": True,
+                "override_source": "default",
+                "winner": "dotenv_file",
+                "shadowed": ["DATABASE_PATH"],
+                "dotenv_key_count": 1,
+            },
+        )
         assert ep.main() == 1
 
-        monkeypatch.setattr(ep, "load_env", lambda: {
-            "override": True, "override_source": "default",
-            "winner": "dotenv_file", "shadowed": [], "dotenv_key_count": 1,
-        })
+        monkeypatch.setattr(
+            ep,
+            "load_env",
+            lambda: {
+                "override": True,
+                "override_source": "default",
+                "winner": "dotenv_file",
+                "shadowed": [],
+                "dotenv_key_count": 1,
+            },
+        )
         assert ep.main() == 0

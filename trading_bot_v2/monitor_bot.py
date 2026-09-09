@@ -16,7 +16,7 @@ import json
 import sys
 import argparse
 import io
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, Any
 
 # Fix Windows console encoding for emojis
@@ -321,13 +321,10 @@ def check_circuit_breaker() -> HealthCheck:
         r = requests.get(f"{API_BASE_URL}/status", timeout=TIMEOUT)
 
         if r.status_code == 200:
-            data = r.json()
+            r.json()
             # Note: Account balance may not be in status endpoint
             # This is a simplified check
             pass
-
-        # Assume 10% threshold
-        circuit_breaker_threshold = -0.10  # -10%
 
         # We can't calculate exact percentage without account balance,
         # but we can warn on large losses
@@ -471,7 +468,7 @@ def print_results(checks: Dict[str, HealthCheck], json_output: bool = False):
 
     # Human-readable output
     print(f"\n{'=' * 70}")
-    print(f"Trading Bot v2 - Health Check Report")
+    print("Trading Bot v2 - Health Check Report")
     print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'=' * 70}\n")
 

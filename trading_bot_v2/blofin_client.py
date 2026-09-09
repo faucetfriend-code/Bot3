@@ -208,6 +208,7 @@ class BlofinClient:
         base_url: Optional[str] = None,
     ):
         self.demo = demo if demo is not None else _env_bool("BLOFIN_DEMO", "true")
+
         # Two credential sets live side by side so switching between
         # demo and live trading is a BLOFIN_DEMO flip, never a paste-over
         # of the live keys: demo mode prefers BLOFIN_DEMO_* and falls
@@ -282,9 +283,7 @@ class BlofinClient:
             Base64 signature string for the ACCESS-SIGN header.
         """
         prehash = f"{request_path}{method.upper()}{timestamp}{nonce}{body}"
-        digest = hmac.new(
-            secret.encode(), prehash.encode(), hashlib.sha256
-        ).hexdigest()
+        digest = hmac.new(secret.encode(), prehash.encode(), hashlib.sha256).hexdigest()
         return base64.b64encode(digest.encode()).decode()
 
     def _auth_headers(
@@ -351,9 +350,7 @@ class BlofinClient:
                 time.sleep(min(2 ** (attempt + 1), 10))
                 continue
             if response.status_code >= 400:
-                raise BlofinAPIError(
-                    str(response.status_code), response.text[:500]
-                )
+                raise BlofinAPIError(str(response.status_code), response.text[:500])
             return self._check_business_code(response.json())
         raise last_error if last_error else BlofinAPIError("0", "request failed")
 
@@ -386,9 +383,7 @@ class BlofinClient:
         with self._instrument_lock:
             if self._instruments_by_base and not force:
                 return
-            payload = self._get(
-                "/api/v1/market/instruments", {"instType": "SWAP"}
-            )
+            payload = self._get("/api/v1/market/instruments", {"instType": "SWAP"})
             by_base: Dict[str, Dict[str, Any]] = {}
             by_inst: Dict[str, Dict[str, Any]] = {}
             for inst in payload.get("data", []) or []:
@@ -477,9 +472,7 @@ class BlofinClient:
         contract_value, lot_size, min_size, _ = self._contract_specs(symbol)
         contracts = _dec(quantity) / contract_value
         epsilon = Decimal("1e-9")
-        lots = ((contracts / lot_size) + epsilon).to_integral_value(
-            rounding=ROUND_DOWN
-        )
+        lots = ((contracts / lot_size) + epsilon).to_integral_value(rounding=ROUND_DOWN)
         rounded = lots * lot_size
         if rounded < min_size:
             min_base = min_size * contract_value
@@ -790,7 +783,9 @@ class BlofinClient:
         self._require_auth()
         body = [{"instId": self.to_inst_id(symbol), "tpslId": str(tpsl_id)}]
         response = self._post_tolerant(TPSL_CANCEL_PATH, body)
-        return self._wrap_tpsl_ack(response, None, "cancel-tpsl", fallback_id=str(tpsl_id))
+        return self._wrap_tpsl_ack(
+            response, None, "cancel-tpsl", fallback_id=str(tpsl_id)
+        )
 
     def amend_stop(
         self,
@@ -826,9 +821,13 @@ class BlofinClient:
             tpsl_id: Known TP/SL row id, if any.
         """
         try:
-            return self._amend_stop_cascade(symbol, entry_order_id, new_sl, side, tpsl_id)
+            return self._amend_stop_cascade(
+                symbol, entry_order_id, new_sl, side, tpsl_id
+            )
         except Exception as exc:  # noqa: BLE001 - protective path must not raise
-            logger.error("amend_stop %s failed: %s: %s", symbol, type(exc).__name__, exc)
+            logger.error(
+                "amend_stop %s failed: %s: %s", symbol, type(exc).__name__, exc
+            )
             return {
                 "success": False,
                 "data": {"tpsl_id": tpsl_id, "stop_price": new_sl, "method": "none"},
@@ -892,7 +891,9 @@ class BlofinClient:
                 "data": {"tpsl_id": None, "stop_price": new_sl, "method": "none"},
                 "error": f"no pending TP/SL row and no live {position_side} position",
             }
-        return self.place_tpsl(symbol, position_side, float(live[0]["quantity"]), new_sl)
+        return self.place_tpsl(
+            symbol, position_side, float(live[0]["quantity"]), new_sl
+        )
 
     def _find_pending_stop(
         self, symbol: str, position_side: str, tpsl_id: Optional[str]
@@ -907,7 +908,10 @@ class BlofinClient:
         matches = [
             r
             for r in rows
-            if (r["position_side"] not in ("long", "short") or r["position_side"] == position_side)
+            if (
+                r["position_side"] not in ("long", "short")
+                or r["position_side"] == position_side
+            )
             and (not r["side"] or r["side"] == close_side)
         ]
         matches.sort(key=lambda r: 0 if r.get("sl_trigger_price") else 1)
@@ -937,11 +941,17 @@ class BlofinClient:
             symbol,
             _reject_detail(resp)[1],
         )
-        cancel = self._post_tolerant(TPSL_CANCEL_PATH, [{"instId": inst_id, "tpslId": row_id}])
+        cancel = self._post_tolerant(
+            TPSL_CANCEL_PATH, [{"instId": inst_id, "tpslId": row_id}]
+        )
         if not _ok(cancel):
-            logger.error("cancel-tpsl rejected for %s: %s", symbol, _reject_detail(cancel)[1])
+            logger.error(
+                "cancel-tpsl rejected for %s: %s", symbol, _reject_detail(cancel)[1]
+            )
         raw = row.get("raw") or {}
-        position_side = row["position_side"] if row["position_side"] in ("long", "short") else None
+        position_side = (
+            row["position_side"] if row["position_side"] in ("long", "short") else None
+        )
         if position_side is None:
             position_side = "long" if row["side"] == "sell" else "short"
         replacement = self._tpsl_body(
@@ -1301,7 +1311,9 @@ class BlofinClient:
             try:
                 filled, avg_price = self.get_order_fills(symbol, oid)
             except (BlofinAPIError, BlofinAuthError) as exc:
-                logger.warning("Blofin fills-history lookup failed for %s: %s", oid, exc)
+                logger.warning(
+                    "Blofin fills-history lookup failed for %s: %s", oid, exc
+                )
         state = "filled" if filled > 0 else "unknown"
         return {
             "state": state,
@@ -1333,7 +1345,9 @@ class BlofinClient:
         self, symbol: str, row: Dict[str, Any], source: str
     ) -> Dict[str, Any]:
         """Normalize an orders-pending / orders-history row."""
-        state = str(row.get("state") or ("live" if source == "orders-pending" else "unknown"))
+        state = str(
+            row.get("state") or ("live" if source == "orders-pending" else "unknown")
+        )
         try:
             filled = self.contracts_to_base(symbol, row.get("filledSize", "0") or "0")
         except (ValueError, ArithmeticError):
@@ -1370,8 +1384,7 @@ class BlofinClient:
             for detail in data.get("details") or []:
                 if str(detail.get("currency", "")).upper() == "USDT":
                     available = self._safe_float(
-                        detail.get("available")
-                        or detail.get("availableEquity")
+                        detail.get("available") or detail.get("availableEquity")
                     )
                     if equity == 0.0:
                         equity = self._safe_float(detail.get("equity"))
@@ -1430,7 +1443,11 @@ class BlofinClient:
         """
         try:
             inst = self.get_instrument(symbol)
-        except (ValueError, BlofinAPIError, requests.exceptions.RequestException) as exc:
+        except (
+            ValueError,
+            BlofinAPIError,
+            requests.exceptions.RequestException,
+        ) as exc:
             logger.warning("get_instrument_info failed for %s: %s", symbol, exc)
             return {"tick_size": 0.0, "lot_size": 0.0, "min_order_size": 0.0}
         contract_value = _dec(inst.get("contractValue", "1"))
@@ -1560,9 +1577,7 @@ class BlofinClient:
             "next_funding_time": self._safe_int(entry.get("fundingTime")),
         }
 
-    def get_funding_history(
-        self, symbol: str, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Return funding-rate history records (newest first).
 
         Record keys match the Pacifica shape read by FundingArb:

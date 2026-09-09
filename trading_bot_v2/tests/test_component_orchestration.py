@@ -5,16 +5,13 @@ Tests the Phase 2 coordinator pattern and component communication.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, patch
 from trading_bot_v2.component_interfaces import (
     ExecutionInterface,
     RiskInterface,
     GridInterface,
-    RegimeInterface,
-    StrategyInterface,
-    DatabaseInterface,
 )
-from trading_bot_v2.event_system import EventBus, EventType, Event
+from trading_bot_v2.event_system import EventBus, EventType
 from trading_bot_v2.component_registry import ComponentRegistry
 
 
@@ -141,7 +138,7 @@ class TestComponentOrchestration:
         component_registry.register(mock_execution_client)
 
         health_status = component_registry.validate_dependencies()
-        assert health_status["all_healthy"] == True
+        assert health_status["all_healthy"] is True
         assert len(health_status["healthy"]) == 1
 
     def test_event_history_management(self, event_bus):
@@ -195,7 +192,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
@@ -225,7 +227,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client
@@ -244,7 +251,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
         ):
             bot = TradingBot()
             bot.ws_client = None  # No WebSocket client
@@ -268,7 +280,12 @@ class TestWebSocketAuthority:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws_client

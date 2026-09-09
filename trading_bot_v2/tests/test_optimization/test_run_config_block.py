@@ -153,9 +153,7 @@ class TestBuildRunConfig:
 
         assert "not-a-real-key" not in json.dumps(block)
 
-    def test_resolved_says_what_was_used_when_env_is_unset(
-        self, monkeypatch
-    ):
+    def test_resolved_says_what_was_used_when_env_is_unset(self, monkeypatch):
         """A null in env is only readable next to the resolved value.
 
         REGIME_MODE unset does not mean "no regime mode" - it means
@@ -176,9 +174,7 @@ class TestBuildRunConfig:
         monkeypatch.setenv("BACKTEST_FUNDING_MODEL", "historical")
         args, argv = _args()
 
-        resolved = rct.build_run_config(
-            args, ["vol_low:trend"], 6, argv
-        )["resolved"]
+        resolved = rct.build_run_config(args, ["vol_low:trend"], 6, argv)["resolved"]
 
         assert resolved["regime_mode"] == "volatility"
         assert resolved["backtest_funding_model"] == "historical"
@@ -223,16 +219,26 @@ class TestWrittenReport:
         monkeypatch.setattr(rct, "OptimizationAdapter", _FakeAdapter)
         monkeypatch.setenv("REGIME_MODE", "volatility")
         path = tmp_path / "composite.json"
-        rc = rct.run([
-            "--strategy", "mean_reversion",
-            "--symbol", "ETH-USDC",
-            "--start", "2024-01-01",
-            "--end", "2024-10-01",
-            "--train-months", "6",
-            "--test-months", "3",
-            "--trials", "1",
-            "--report", str(path),
-        ])
+        rc = rct.run(
+            [
+                "--strategy",
+                "mean_reversion",
+                "--symbol",
+                "ETH-USDC",
+                "--start",
+                "2024-01-01",
+                "--end",
+                "2024-10-01",
+                "--train-months",
+                "6",
+                "--test-months",
+                "3",
+                "--trials",
+                "1",
+                "--report",
+                str(path),
+            ]
+        )
         assert rc == 0
         return json.loads(path.read_text(encoding="utf-8"))
 

@@ -157,9 +157,9 @@ class TestScoringMath:
         )
 
     def test_clamping_at_both_ends(self):
-        trades = [
-            _trade("BIG_WINNER", "ranging_calm", 50.0, 0) for _ in range(5)
-        ] + [_trade("BIG_LOSER", "ranging_calm", -50.0, 0) for _ in range(5)]
+        trades = [_trade("BIG_WINNER", "ranging_calm", 50.0, 0) for _ in range(5)] + [
+            _trade("BIG_LOSER", "ranging_calm", -50.0, 0) for _ in range(5)
+        ]
         mgr = _manager(trades)
         mgr.refresh(force=True)
 
@@ -387,8 +387,8 @@ class TestStrategyManagerIntegration:
 
         adaptive = MagicMock()
         adaptive.enabled = True
-        adaptive.get_multiplier.side_effect = (
-            lambda regime, strategy: multipliers.get(strategy, 1.0)
+        adaptive.get_multiplier.side_effect = lambda regime, strategy: multipliers.get(
+            strategy, 1.0
         )
         sm.adaptive_weights = adaptive
         return sm
@@ -431,9 +431,7 @@ class TestStrategyManagerIntegration:
 
         # Boost MeanReversion 1.5x, cut VWAP 0.5x:
         # weights 0.75 / 0.25 -> confidence 0.9*0.75 + 0.5*0.25 = 0.8
-        sm_adaptive = self._make_sm(
-            static, {"MeanReversion": 1.5, "VWAPScalping": 0.5}
-        )
+        sm_adaptive = self._make_sm(static, {"MeanReversion": 1.5, "VWAPScalping": 0.5})
         combined_adaptive = sm_adaptive._combine_signals(
             [sig_mr, sig_vwap], MarketRegime.RANGING_CALM
         )
@@ -476,6 +474,4 @@ class TestStrategyManagerIntegration:
         assert sm.adaptive_weights is not None
         assert sm.adaptive_weights.db is None
         static = {"MeanReversion": 0.6}
-        assert sm._apply_adaptive_weights(
-            static, MarketRegime.RANGING_CALM
-        ) == static
+        assert sm._apply_adaptive_weights(static, MarketRegime.RANGING_CALM) == static

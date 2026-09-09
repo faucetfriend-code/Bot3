@@ -104,9 +104,7 @@ class TestExpectedMaxSharpe:
 
     def test_reference_value(self):
         # sqrt(1) * ((1-gamma)*z(0.9) + gamma*z(1 - 1/(10*e)))
-        assert expected_max_sharpe(10, 1.0) == pytest.approx(
-            1.57459830134575, abs=1e-6
-        )
+        assert expected_max_sharpe(10, 1.0) == pytest.approx(1.57459830134575, abs=1e-6)
 
 
 class TestDeflatedSharpeRatio:
@@ -225,9 +223,7 @@ class TestBootstrapProfitFactorBound:
 
     def test_point_estimate_is_sample_size_blind(self):
         """The problem being fixed: PF cannot tell 4 trades from 400."""
-        assert profit_factor(self.UNIT) == pytest.approx(
-            profit_factor(self.UNIT * 100)
-        )
+        assert profit_factor(self.UNIT) == pytest.approx(profit_factor(self.UNIT * 100))
 
     def test_bound_rises_with_sample_size(self):
         small = bootstrap_profit_factor_bound(self.UNIT)
@@ -337,21 +333,25 @@ class TestTrialRegistry:
 
     def test_sr_variance_weighted_mean(self, tmp_db):
         tmp_db.save_trial_registry_entry(
-            strategy="mean_reversion", n_trials=10, scope="optuna_study",
+            strategy="mean_reversion",
+            n_trials=10,
+            scope="optuna_study",
             sr_variance=0.1,
         )
         tmp_db.save_trial_registry_entry(
-            strategy="mean_reversion", n_trials=30, scope="optuna_study",
+            strategy="mean_reversion",
+            n_trials=30,
+            scope="optuna_study",
             sr_variance=0.2,
         )
         # NULL-variance rows are ignored
         tmp_db.save_trial_registry_entry(
-            strategy="mean_reversion", n_trials=100, scope="sweep",
+            strategy="mean_reversion",
+            n_trials=100,
+            scope="sweep",
         )
         expected = (10 * 0.1 + 30 * 0.2) / 40
-        assert tmp_db.get_trial_sr_variance("mean_reversion") == pytest.approx(
-            expected
-        )
+        assert tmp_db.get_trial_sr_variance("mean_reversion") == pytest.approx(expected)
         assert tmp_db.get_trial_sr_variance("never_optimized") is None
 
     def test_runner_records_trials(self, tmp_db):
@@ -392,7 +392,7 @@ class TestTrialRegistry:
         assert rows[0]["source"] == "mean_reversion_stub_20260720"
 
     def test_runner_skips_empty_study(self, tmp_db):
-        optuna = pytest.importorskip("optuna")
+        pytest.importorskip("optuna")
         from trading_bot_v2.optimization.optuna_runner import OptunaRunner
 
         class StubStudy:
@@ -400,7 +400,9 @@ class TestTrialRegistry:
             trials = []
 
         runner = OptunaRunner.__new__(OptunaRunner)
-        runner._record_trial_registry(StubStudy(), "mean_reversion", None, "sharpe_ratio")
+        runner._record_trial_registry(
+            StubStudy(), "mean_reversion", None, "sharpe_ratio"
+        )
         assert tmp_db.get_trial_registry(strategy="mean_reversion") == []
 
 
@@ -426,7 +428,9 @@ class TestSweepValidationIntegration:
         )
 
         tmp_db.save_trial_registry_entry(
-            strategy="mean_reversion", n_trials=40, scope="optuna_study",
+            strategy="mean_reversion",
+            n_trials=40,
+            scope="optuna_study",
             sr_variance=0.05,
         )
         r = self._result()

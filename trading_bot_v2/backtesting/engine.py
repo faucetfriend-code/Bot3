@@ -288,6 +288,7 @@ class BacktestEngine:
     def __init__(self, override_config=None):
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
+
         self.cfg = override_config or live_config
         # Signal funnel for this run (replaced in run(); NullFunnel until
         # then so _execute_signal is safe to call standalone in tests).
@@ -341,9 +342,7 @@ class BacktestEngine:
         - the code it gates sizes the order to the existing position and exits
         it - so the name has always described something the engine does not do.
         """
-        hedge_raw = _env_or_cfg(
-            self.cfg, "backtest_hedge_mode", "BACKTEST_HEDGE_MODE"
-        )
+        hedge_raw = _env_or_cfg(self.cfg, "backtest_hedge_mode", "BACKTEST_HEDGE_MODE")
         self._hedge_mode = _as_bool(hedge_raw) if hedge_raw is not None else False
 
         opposing_raw = _env_or_cfg(
@@ -724,7 +723,9 @@ class BacktestEngine:
     ) -> BacktestResult:
         symbol = symbol or self.cfg.backtest_symbol
         initial_capital = initial_capital or self.cfg.backtest_initial_capital
-        strategy_filter = strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
+        strategy_filter = (
+            strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
+        )
 
         # Initialise per-run state
         self._resolve_execution_policy()
@@ -757,9 +758,7 @@ class BacktestEngine:
         )
 
         # --- Build components ---
-        funding_schedule = self._resolve_funding_schedule(
-            symbol, funnel, start, end
-        )
+        funding_schedule = self._resolve_funding_schedule(symbol, funnel, start, end)
         exchange = SimulatedExchange(
             initial_capital=initial_capital,
             slippage_pct=self.cfg.backtest_slippage_pct,
@@ -786,7 +785,7 @@ class BacktestEngine:
                     f"no strategy will match"
                 )
             for name, flag in STRATEGY_ENABLE_FLAGS.items():
-                strategy_kwargs[flag] = (name == strategy_filter)
+                strategy_kwargs[flag] = name == strategy_filter
             logger.info(f"Single-strategy mode: only {strategy_filter} enabled")
 
         # Force-disable strategies that can never work against the
@@ -819,9 +818,7 @@ class BacktestEngine:
             _strategy_key = DISPLAY_TO_STRATEGY_KEY.get(_display_name)
             if not _strategy_key:
                 continue
-            _params = getattr(
-                self.cfg, f"_optimization_params_{_strategy_key}", None
-            )
+            _params = getattr(self.cfg, f"_optimization_params_{_strategy_key}", None)
             if _params:
                 _applied = apply_params_to_strategy(
                     _strategy_obj, _strategy_key, _params
@@ -892,15 +889,15 @@ class BacktestEngine:
 
             # --- Build multi-timeframe bundles ---
             i_15m = self._nearest_idx(idx_map["15m"], sorted_ts["15m"], ts)
-            i_1h  = self._nearest_idx(idx_map["1h"],  sorted_ts["1h"],  ts)
-            i_4h  = self._nearest_idx(idx_map["4h"],  sorted_ts["4h"],  ts)
-            i_1m  = self._nearest_idx(idx_map["1m"],  sorted_ts["1m"],  ts)
+            i_1h = self._nearest_idx(idx_map["1h"], sorted_ts["1h"], ts)
+            i_4h = self._nearest_idx(idx_map["4h"], sorted_ts["4h"], ts)
+            i_1m = self._nearest_idx(idx_map["1m"], sorted_ts["1m"], ts)
 
             # Regime / structure timeframes (required by StrategyManager)
             multi_tf_data = {
                 "15m": self._history(candles["15m"], i_15m, lookback),
-                "1h":  self._history(candles["1h"],  i_1h,  lookback),
-                "4h":  self._history(candles["4h"],  i_4h,  lookback),
+                "1h": self._history(candles["1h"], i_1h, lookback),
+                "4h": self._history(candles["4h"], i_4h, lookback),
             }
 
             # Execution timeframes (optional, for precise entry)
@@ -958,9 +955,7 @@ class BacktestEngine:
             # Expose the confirmed regime to the exchange so every fill
             # is regime-tagged (reuses the cache populated during signal
             # generation - no recomputation).
-            regime_obj = strategy_manager.regime_detector.get_current_regime(
-                symbol
-            )
+            regime_obj = strategy_manager.regime_detector.get_current_regime(symbol)
             exchange._current_regime = getattr(regime_obj, "value", "") or ""
 
             # Expose the directional-bias state the same way, so every
@@ -1073,7 +1068,9 @@ class BacktestEngine:
     # Signal execution
     # ------------------------------------------------------------------
 
-    def _execute_signal(self, signal, exchange: SimulatedExchange, candle_idx: int) -> bool:
+    def _execute_signal(
+        self, signal, exchange: SimulatedExchange, candle_idx: int
+    ) -> bool:
         """
         Translate a Signal object into a SimulatedExchange order.
 
@@ -1146,9 +1143,7 @@ class BacktestEngine:
                 # the same reason. No strategy that shipped before
                 # FundingArb sets the flag, so the default path is
                 # untouched.
-                explicit_close = bool(
-                    (signal.indicators or {}).get("close_position")
-                )
+                explicit_close = bool((signal.indicators or {}).get("close_position"))
                 # Opposing direction - signal-driven close, if permitted
                 if not self._opposing_closes_position and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
@@ -1159,9 +1154,7 @@ class BacktestEngine:
                     )
                     return False
 
-                open_candle = self._position_open_candle.get(
-                    signal.asset, candle_idx
-                )
+                open_candle = self._position_open_candle.get(signal.asset, candle_idx)
                 candles_held = candle_idx - open_candle
                 if candles_held < self._min_hold_candles and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
@@ -1248,7 +1241,10 @@ class BacktestEngine:
         # now to keep min-hold ageing identical to the pre-policy engine. A
         # resting limit entry has no position yet; _sync_position_tracking()
         # stamps that one from the bar it actually fills on.
-        if position_after is not None and signal.asset not in self._position_open_candle:
+        if (
+            position_after is not None
+            and signal.asset not in self._position_open_candle
+        ):
             self._position_open_candle[signal.asset] = candle_idx
 
         if is_pyramid_add:
@@ -1275,7 +1271,7 @@ class BacktestEngine:
                 "risk": float(trailing.get("risk")),
                 "side": "long" if side == "bid" else "short",
                 "strategy": signal.strategy.value,
-                "peak": None,          # set from bars once a position exists
+                "peak": None,  # set from bars once a position exists
                 "active": False,
                 "placed_stop": signal.stop_loss,
                 "seen_position": position_after is not None,
@@ -1397,31 +1393,25 @@ class BacktestEngine:
             if cfg["side"] == "long":
                 cfg["peak"] = max(cfg["peak"] or high, high)
                 if not cfg["active"]:
-                    cfg["active"] = (
-                        cfg["peak"] >= entry + cfg["activation_r"] * risk
-                    )
+                    cfg["active"] = cfg["peak"] >= entry + cfg["activation_r"] * risk
                 if not cfg["active"]:
                     continue
                 new_stop = cfg["peak"] - cfg["trail_r"] * risk
                 improves = (
                     cfg["placed_stop"] is None
-                    or new_stop
-                    >= cfg["placed_stop"] + RATCHET_EPS_R * risk
+                    or new_stop >= cfg["placed_stop"] + RATCHET_EPS_R * risk
                 )
                 stop_side = "ask"
             else:
                 cfg["peak"] = min(cfg["peak"] or low, low)
                 if not cfg["active"]:
-                    cfg["active"] = (
-                        cfg["peak"] <= entry - cfg["activation_r"] * risk
-                    )
+                    cfg["active"] = cfg["peak"] <= entry - cfg["activation_r"] * risk
                 if not cfg["active"]:
                     continue
                 new_stop = cfg["peak"] + cfg["trail_r"] * risk
                 improves = (
                     cfg["placed_stop"] is None
-                    or new_stop
-                    <= cfg["placed_stop"] - RATCHET_EPS_R * risk
+                    or new_stop <= cfg["placed_stop"] - RATCHET_EPS_R * risk
                 )
                 stop_side = "bid"
 
@@ -1501,7 +1491,7 @@ class BacktestEngine:
         session windows within the slice.
         """
         start = max(0, up_to - lookback + 1)
-        return {k: candles[k][start: up_to + 1] for k in candles}
+        return {k: candles[k][start : up_to + 1] for k in candles}
 
     @staticmethod
     def _nearest_idx(idx_map: Dict, sorted_ts: List[str], ts) -> int:

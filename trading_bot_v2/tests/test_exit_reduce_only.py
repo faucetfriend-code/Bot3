@@ -19,7 +19,7 @@ JSON body; the position manager gets an in-memory fake client.
 import json
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -73,9 +73,7 @@ def _blofin_with_capture(routes: Optional[Dict[str, Any]] = None):
     Returns:
         Tuple of the client and the list of JSON bodies POSTed.
     """
-    client = BlofinClient(
-        api_key="k", api_secret="s", passphrase="p", demo=True
-    )
+    client = BlofinClient(api_key="k", api_secret="s", passphrase="p", demo=True)
     client.session = MagicMock()
     client._position_mode_checked = True
     get_routes = {"/market/instruments": INSTRUMENTS}
@@ -149,7 +147,9 @@ class FakeRiskManager:
     def unregister_migrated_position(self, symbol, side, qty=None):
         self.unregistered.append((symbol, side, qty))
         self.positions = [
-            p for p in self.positions if not (p["symbol"] == symbol and p["side"] == side)
+            p
+            for p in self.positions
+            if not (p["symbol"] == symbol and p["side"] == side)
         ]
         return True
 
@@ -187,9 +187,7 @@ class TestBlofinReduceOnlyBody:
 
     def test_caller_client_order_id_is_sent_verbatim(self):
         client, sent = _blofin_with_capture()
-        client.place_order(
-            "BTC", "buy", 0.01, "market", client_order_id="abc123def456"
-        )
+        client.place_order("BTC", "buy", 0.01, "market", client_order_id="abc123def456")
         assert sent[0]["clientOrderId"] == "abc123def456"
 
     def test_hedge_mode_targets_opposite_side_for_reduce_only(self):
@@ -204,7 +202,12 @@ class TestBlofinReduceOnlyBody:
 
     def test_net_mode_probe_records_mode(self):
         client, _ = _blofin_with_capture(
-            {"/account/position-mode": {"code": "0", "data": {"positionMode": "long_short_mode"}}}
+            {
+                "/account/position-mode": {
+                    "code": "0",
+                    "data": {"positionMode": "long_short_mode"},
+                }
+            }
         )
         client._position_mode_checked = False
         client.session.post.side_effect = None
@@ -220,7 +223,9 @@ class TestBlofinAdapterForwarding:
         exchange = BlofinExchange(rest_client=rest)
         exchange.place_order("BTC", OrderSide.BUY, 0.5, OrderType.MARKET)
         assert "reduce_only" not in rest.place_order.call_args.kwargs
-        exchange.place_order("BTC", OrderSide.SELL, 0.5, OrderType.MARKET, reduce_only=True)
+        exchange.place_order(
+            "BTC", OrderSide.SELL, 0.5, OrderType.MARKET, reduce_only=True
+        )
         assert rest.place_order.call_args.kwargs["reduce_only"] is True
 
     def test_place_order_result_normalizes_ack(self):
@@ -258,7 +263,9 @@ class TestPacificaReduceOnly:
 
     def test_exit_payload_reduce_only_true(self):
         client = self._client()
-        client.place_order("BTC", "sell", 1.0, "market", reduce_only=True, client_order_id="cid-x")
+        client.place_order(
+            "BTC", "sell", 1.0, "market", reduce_only=True, client_order_id="cid-x"
+        )
         payload = client._make_signed_request.call_args[0][1]
         assert payload["reduce_only"] is True
         assert payload["side"] == "ask"
@@ -273,7 +280,9 @@ class TestPacificaReduceOnly:
             symbol="BTC", side="buy", quantity=1.0, order_type="market"
         )
         rest.reset_mock()
-        exchange.place_order("BTC", OrderSide.SELL, 1.0, OrderType.MARKET, reduce_only=True)
+        exchange.place_order(
+            "BTC", OrderSide.SELL, 1.0, OrderType.MARKET, reduce_only=True
+        )
         assert rest.place_order.call_args.kwargs["reduce_only"] is True
         assert rest.place_order.call_args.kwargs["side"] == "sell"
 
@@ -286,11 +295,13 @@ class TestPacificaReduceOnly:
 class TestExitSizing:
     def test_remaining_quantity_sums_matching_side_only(self):
         client = FakeClient(
-            [[
-                {"symbol": "BTC", "side": "long", "amount": "1.5"},
-                {"symbol": "BTC", "side": "short", "amount": "0.2"},
-                {"symbol": "ETH", "side": "long", "amount": "9"},
-            ]]
+            [
+                [
+                    {"symbol": "BTC", "side": "long", "amount": "1.5"},
+                    {"symbol": "BTC", "side": "short", "amount": "0.2"},
+                    {"symbol": "ETH", "side": "long", "amount": "9"},
+                ]
+            ]
         )
         assert remaining_exchange_quantity(client, "BTC", "long") == pytest.approx(1.5)
         assert remaining_exchange_quantity(client, "BTC", "SHORT") == pytest.approx(0.2)
@@ -317,7 +328,9 @@ class TestExitSizing:
         exchange = PacificaExchange(
             rest_client=FakeClient([[{"symbol": "BTC", "side": "long", "amount": "3"}]])
         )
-        assert remaining_exchange_quantity(exchange, "BTC", "long") == pytest.approx(3.0)
+        assert remaining_exchange_quantity(exchange, "BTC", "long") == pytest.approx(
+            3.0
+        )
 
 
 # ======================================================================
@@ -327,10 +340,10 @@ class TestExitSizing:
 
 class TestMigratedManagerExits:
     def test_full_close_is_reduce_only_and_sized_from_exchange(self):
-        client = FakeClient(
-            [[{"symbol": "BTC", "side": "long", "amount": "2"}], []]
+        client = FakeClient([[{"symbol": "BTC", "side": "long", "amount": "2"}], []])
+        risk = FakeRiskManager(
+            [{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}]
         )
-        risk = FakeRiskManager([{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}])
         manager = _manager(client, risk)
 
         manager.close_position("BTC", risk.positions[0], "trailing_stop")
@@ -346,7 +359,9 @@ class TestMigratedManagerExits:
 
     def test_close_of_already_flat_position_sends_no_order(self):
         client = FakeClient([[]])
-        risk = FakeRiskManager([{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}])
+        risk = FakeRiskManager(
+            [{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}]
+        )
         manager = _manager(client, risk)
 
         manager.close_position("BTC", risk.positions[0], "trend_reversal")
@@ -357,10 +372,10 @@ class TestMigratedManagerExits:
         assert "already_flat" in reason
 
     def test_close_after_partial_external_reduction_sends_remaining(self):
-        client = FakeClient(
-            [[{"symbol": "BTC", "side": "long", "amount": "0.5"}], []]
+        client = FakeClient([[{"symbol": "BTC", "side": "long", "amount": "0.5"}], []])
+        risk = FakeRiskManager(
+            [{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}]
         )
-        risk = FakeRiskManager([{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}])
         manager = _manager(client, risk)
 
         manager.close_position("BTC", risk.positions[0], "time_exit")
@@ -371,10 +386,10 @@ class TestMigratedManagerExits:
         assert risk.unregistered == [("BTC", "long", 2.0)]
 
     def test_short_close_uses_buy_reduce_only(self):
-        client = FakeClient(
-            [[{"symbol": "ETH", "side": "short", "amount": "4"}], []]
+        client = FakeClient([[{"symbol": "ETH", "side": "short", "amount": "4"}], []])
+        risk = FakeRiskManager(
+            [{"symbol": "ETH", "side": "short", "qty": 4.0, "entry_price": 10.0}]
         )
-        risk = FakeRiskManager([{"symbol": "ETH", "side": "short", "qty": 4.0, "entry_price": 10.0}])
         manager = _manager(client, risk)
         manager.close_position("ETH", risk.positions[0], "manual")
         assert client.calls[0]["side"] == "buy"
@@ -383,14 +398,18 @@ class TestMigratedManagerExits:
     def test_partial_take_profit_is_reduce_only_and_clamped(self):
         # Exchange only holds 0.6 of the local 2.0 -> the 1.0 partial is
         # clamped to 0.6, then the exchange shows it filled (flat after).
-        client = FakeClient(
-            [[{"symbol": "BTC", "side": "long", "amount": "0.6"}], []]
+        client = FakeClient([[{"symbol": "BTC", "side": "long", "amount": "0.6"}], []])
+        risk = FakeRiskManager(
+            [{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}]
         )
-        risk = FakeRiskManager([{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}])
         manager = _manager(client, risk)
-        manager._take_profits["BTC"] = {"long": {"target": 105.0, "partial_taken": False}}
+        manager._take_profits["BTC"] = {
+            "long": {"target": 105.0, "partial_taken": False}
+        }
 
-        taken = manager._check_take_profit("BTC", risk.positions[0], current_price=106.0)
+        taken = manager._check_take_profit(
+            "BTC", risk.positions[0], current_price=106.0
+        )
 
         assert taken is True
         assert client.calls[0]["reduce_only"] is True
@@ -399,11 +418,17 @@ class TestMigratedManagerExits:
 
     def test_partial_take_profit_on_flat_position_sends_nothing(self):
         client = FakeClient([[]])
-        risk = FakeRiskManager([{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}])
+        risk = FakeRiskManager(
+            [{"symbol": "BTC", "side": "long", "qty": 2.0, "entry_price": 100.0}]
+        )
         manager = _manager(client, risk)
-        manager._take_profits["BTC"] = {"long": {"target": 105.0, "partial_taken": False}}
+        manager._take_profits["BTC"] = {
+            "long": {"target": 105.0, "partial_taken": False}
+        }
 
-        taken = manager._check_take_profit("BTC", risk.positions[0], current_price=106.0)
+        taken = manager._check_take_profit(
+            "BTC", risk.positions[0], current_price=106.0
+        )
 
         assert taken is False
         assert client.calls == []

@@ -65,8 +65,6 @@ def derive_seed(namespace: str, base_seed: int, parts: Iterable[str]) -> int:
         A non-negative seed in ``[0, 0xFFFFFFFF]``, identical for the
         same inputs in any process, on any platform.
     """
-    canonical = SEED_FIELD_SEPARATOR.join(
-        [namespace, str(int(base_seed)), *parts]
-    )
+    canonical = SEED_FIELD_SEPARATOR.join([namespace, str(int(base_seed)), *parts])
     digest = hashlib.sha256(canonical.encode("utf-8")).digest()
     return int.from_bytes(digest[:4], "big") & SEED_MASK

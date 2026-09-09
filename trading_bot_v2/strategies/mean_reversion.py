@@ -159,8 +159,16 @@ class MeanReversionStrategy:
             if bb_proximity is not None
             else float(os.getenv("MEAN_REVERSION_BB_PROXIMITY", "0.20"))
         )
-        self.sma_period = sma_period if sma_period is not None else int(os.getenv("MEAN_REVERSION_SMA_PERIOD", "20"))
-        self.atr_period = atr_period if atr_period is not None else int(os.getenv("MEAN_REVERSION_ATR_PERIOD", "14"))
+        self.sma_period = (
+            sma_period
+            if sma_period is not None
+            else int(os.getenv("MEAN_REVERSION_SMA_PERIOD", "20"))
+        )
+        self.atr_period = (
+            atr_period
+            if atr_period is not None
+            else int(os.getenv("MEAN_REVERSION_ATR_PERIOD", "14"))
+        )
         self.atr_stop_multiplier = (
             atr_stop_multiplier
             if atr_stop_multiplier is not None
@@ -206,9 +214,7 @@ class MeanReversionStrategy:
             f"mtf_confidence={self.mtf_confidence_mode}"
         )
 
-    def _mtf_rsi(
-        self, trigger_rsi: float, rsi_1h: Optional[float]
-    ) -> Optional[float]:
+    def _mtf_rsi(self, trigger_rsi: float, rsi_1h: Optional[float]) -> Optional[float]:
         """Return the RSI the MTF confidence term should read.
 
         Args:
@@ -247,15 +253,15 @@ class MeanReversionStrategy:
             confidence = rsi_strength * W_RSI_2 + bb_proximity * W_BB_2
         else:
             confidence = (
-                rsi_strength * W_RSI
-                + bb_proximity * W_BB
-                + mtf_alignment * W_MTF
+                rsi_strength * W_RSI + bb_proximity * W_BB + mtf_alignment * W_MTF
             )
         return max(0.0, min(1.0, confidence))
 
     def _now(self) -> datetime:
         """Return current time - simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _check_cooldown(self, symbol: str) -> bool:
         """Return True if symbol is in cooldown (skip signal generation)."""
@@ -265,8 +271,12 @@ class MeanReversionStrategy:
             return False
         elapsed = self._now() - self._last_trade_time[symbol]
         if elapsed < timedelta(minutes=self.cooldown_minutes):
-            remaining = (timedelta(minutes=self.cooldown_minutes) - elapsed).total_seconds() / 60
-            logger.debug(f"{symbol}: MeanReversion cooldown {remaining:.0f}min remaining")
+            remaining = (
+                timedelta(minutes=self.cooldown_minutes) - elapsed
+            ).total_seconds() / 60
+            logger.debug(
+                f"{symbol}: MeanReversion cooldown {remaining:.0f}min remaining"
+            )
             return True
         return False
 
@@ -354,9 +364,7 @@ class MeanReversionStrategy:
             data_1h = multi_tf_data.get("1h")
             if data_1h and self._validate_data(data_1h):
                 try:
-                    rsi_1h = calculate_rsi(
-                        data_1h["close"], period=self.rsi_period
-                    )
+                    rsi_1h = calculate_rsi(data_1h["close"], period=self.rsi_period)
                 except Exception:
                     rsi_1h = None
 
@@ -636,9 +644,7 @@ class MeanReversionStrategy:
             else (self.rsi_oversold - mtf_rsi) / self.rsi_oversold
         )
 
-        confidence = self._blend_confidence(
-            rsi_strength, bb_proximity, mtf_alignment
-        )
+        confidence = self._blend_confidence(rsi_strength, bb_proximity, mtf_alignment)
 
         # DEBUG: Log confidence components
         logger.debug(
@@ -686,8 +692,15 @@ class MeanReversionStrategy:
             margin_drawdown_ok=True,  # Will be validated externally
             forbidden_conditions_clear=True,  # No forbidden conditions
             indicators=self._build_indicators(
-                rsi_15m, trigger_rsi, trigger_tf, rsi_1h,
-                atr, sma_target, lower_bb, middle_bb, upper_bb,
+                rsi_15m,
+                trigger_rsi,
+                trigger_tf,
+                rsi_1h,
+                atr,
+                sma_target,
+                lower_bb,
+                middle_bb,
+                upper_bb,
             ),
             notes=(
                 f"Mean reversion LONG: RSI_15m={rsi_15m:.1f}, "
@@ -810,9 +823,7 @@ class MeanReversionStrategy:
             else (mtf_rsi - self.rsi_overbought) / (100 - self.rsi_overbought)
         )
 
-        confidence = self._blend_confidence(
-            rsi_strength, bb_proximity, mtf_alignment
-        )
+        confidence = self._blend_confidence(rsi_strength, bb_proximity, mtf_alignment)
 
         # DEBUG: Log confidence components
         logger.debug(
@@ -860,8 +871,15 @@ class MeanReversionStrategy:
             margin_drawdown_ok=True,  # Will be validated externally
             forbidden_conditions_clear=True,  # No forbidden conditions
             indicators=self._build_indicators(
-                rsi_15m, trigger_rsi, trigger_tf, rsi_1h,
-                atr, sma_target, lower_bb, middle_bb, upper_bb,
+                rsi_15m,
+                trigger_rsi,
+                trigger_tf,
+                rsi_1h,
+                atr,
+                sma_target,
+                lower_bb,
+                middle_bb,
+                upper_bb,
             ),
             notes=(
                 f"Mean reversion SHORT: RSI_15m={rsi_15m:.1f}, "

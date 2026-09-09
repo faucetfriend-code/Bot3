@@ -37,10 +37,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
-from .database import get_db_connection, is_postgres, get_backend
-from .event_system import get_event_bus, EventType, Event
+from .database import get_db_connection, is_postgres
+from .event_system import get_event_bus, EventType
 
 logger = logging.getLogger(__name__)
 
@@ -48,12 +48,8 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ============================================================================
 
-FRESHNESS_CHECK_INTERVAL: int = int(
-    os.getenv("MONITOR_FRESHNESS_CHECK_INTERVAL", "60")
-)
-STALENESS_ALERT_SECONDS: int = int(
-    os.getenv("MONITOR_STALENESS_ALERT_SECONDS", "300")
-)
+FRESHNESS_CHECK_INTERVAL: int = int(os.getenv("MONITOR_FRESHNESS_CHECK_INTERVAL", "60"))
+STALENESS_ALERT_SECONDS: int = int(os.getenv("MONITOR_STALENESS_ALERT_SECONDS", "300"))
 GAP_ALERT_ENABLED: bool = os.getenv("MONITOR_GAP_ALERT_ENABLED", "true").lower() in (
     "true",
     "1",
@@ -62,9 +58,7 @@ GAP_ALERT_ENABLED: bool = os.getenv("MONITOR_GAP_ALERT_ENABLED", "true").lower()
 ANOMALY_ZSCORE_THRESHOLD: float = float(
     os.getenv("MONITOR_ANOMALY_ZSCORE_THRESHOLD", "3.0")
 )
-METRICS_RETENTION_HOURS: int = int(
-    os.getenv("MONITOR_METRICS_RETENTION_HOURS", "72")
-)
+METRICS_RETENTION_HOURS: int = int(os.getenv("MONITOR_METRICS_RETENTION_HOURS", "72"))
 
 
 class HealthStatus(str, Enum):
@@ -136,9 +130,7 @@ class FreshnessStatus:
             "symbol": self.symbol,
             "table": self.table,
             "latest_timestamp": (
-                self.latest_timestamp.isoformat()
-                if self.latest_timestamp
-                else None
+                self.latest_timestamp.isoformat() if self.latest_timestamp else None
             ),
             "staleness_seconds": round(self.staleness_seconds, 1),
             "status": self.status.value,
@@ -252,7 +244,7 @@ class DataQualityPrometheusMetrics:
                 to the global REGISTRY when not provided.
         """
         try:
-            from prometheus_client import REGISTRY, Counter, Gauge, Histogram
+            from prometheus_client import REGISTRY, Counter, Gauge
 
             target_registry = registry if registry is not None else REGISTRY
             cached = _DATA_QUALITY_METRICS_CACHE.get(id(target_registry))
@@ -325,13 +317,11 @@ class DataQualityPrometheusMetrics:
             logger.debug("prometheus_client not available, metrics disabled")
             self._available = False
 
-    def record_freshness(
-        self, symbol: str, table: str, staleness: float
-    ) -> None:
+    def record_freshness(self, symbol: str, table: str, staleness: float) -> None:
         if self._available:
-            self.data_freshness_seconds.labels(
-                symbol=symbol, table=table
-            ).set(staleness)
+            self.data_freshness_seconds.labels(symbol=symbol, table=table).set(
+                staleness
+            )
 
     def record_quality_score(self, metric_type: str, score: float) -> None:
         if self._available:
@@ -349,9 +339,7 @@ class DataQualityPrometheusMetrics:
 
     def record_alert(self, severity: str, category: str) -> None:
         if self._available:
-            self.data_alerts_total.labels(
-                severity=severity, category=category
-            ).inc()
+            self.data_alerts_total.labels(severity=severity, category=category).inc()
 
 
 # ============================================================================
@@ -759,9 +747,7 @@ class DataMonitor:
 
         return status
 
-    def _count_gaps(
-        self, symbol: str, table: str, hours: int = 24
-    ) -> int:
+    def _count_gaps(self, symbol: str, table: str, hours: int = 24) -> int:
         """Count the number of gaps in data for the given time window."""
         try:
             with get_db_connection() as conn:
@@ -791,22 +777,34 @@ class DataMonitor:
 
                 gap_count = 0
                 for i in range(1, len(rows)):
-                    prev_ts = rows[i - 1][0] if not isinstance(rows[i - 1], dict) else rows[i - 1].get("timestamp")
-                    curr_ts = rows[i][0] if not isinstance(rows[i], dict) else rows[i].get("timestamp")
+                    prev_ts = (
+                        rows[i - 1][0]
+                        if not isinstance(rows[i - 1], dict)
+                        else rows[i - 1].get("timestamp")
+                    )
+                    curr_ts = (
+                        rows[i][0]
+                        if not isinstance(rows[i], dict)
+                        else rows[i].get("timestamp")
+                    )
 
                     if prev_ts is None or curr_ts is None:
                         continue
 
                     try:
                         if isinstance(prev_ts, str):
-                            prev_dt = datetime.fromisoformat(prev_ts.replace("Z", "+00:00"))
+                            prev_dt = datetime.fromisoformat(
+                                prev_ts.replace("Z", "+00:00")
+                            )
                         elif isinstance(prev_ts, datetime):
                             prev_dt = prev_ts
                         else:
                             continue
 
                         if isinstance(curr_ts, str):
-                            curr_dt = datetime.fromisoformat(curr_ts.replace("Z", "+00:00"))
+                            curr_dt = datetime.fromisoformat(
+                                curr_ts.replace("Z", "+00:00")
+                            )
                         elif isinstance(curr_ts, datetime):
                             curr_dt = curr_ts
                         else:
@@ -854,8 +852,12 @@ class DataMonitor:
                         ).fetchone()
 
                     if row:
-                        close_val = row[0] if not isinstance(row, dict) else row.get("close")
-                        vol_val = row[1] if not isinstance(row, dict) else row.get("volume")
+                        close_val = (
+                            row[0] if not isinstance(row, dict) else row.get("close")
+                        )
+                        vol_val = (
+                            row[1] if not isinstance(row, dict) else row.get("volume")
+                        )
 
                         if close_val is not None:
                             price_anomaly = self.anomaly_detector.detect_price_anomaly(
@@ -947,7 +949,8 @@ class DataMonitor:
             logger.debug(f"Failed to publish alert event: {e}")
 
         logger.log(
-            logging.WARNING if severity in (AlertSeverity.WARNING, AlertSeverity.ERROR)
+            logging.WARNING
+            if severity in (AlertSeverity.WARNING, AlertSeverity.ERROR)
             else logging.INFO,
             f"Data alert [{severity.value}]: {message}",
         )
@@ -959,9 +962,7 @@ class DataMonitor:
         cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
         with self._lock:
             old_ids = [
-                aid
-                for aid, alert in self._alerts.items()
-                if alert.timestamp < cutoff
+                aid for aid, alert in self._alerts.items() if alert.timestamp < cutoff
             ]
             for aid in old_ids:
                 del self._alerts[aid]
@@ -1002,13 +1003,9 @@ class DataMonitor:
             with get_db_connection() as conn:
                 # Total records
                 if is_postgres():
-                    row = conn.execute(
-                        "SELECT count(*) FROM market_data"
-                    ).fetchone()
+                    row = conn.execute("SELECT count(*) FROM market_data").fetchone()
                 else:
-                    row = conn.execute(
-                        "SELECT count(*) FROM market_data"
-                    ).fetchone()
+                    row = conn.execute("SELECT count(*) FROM market_data").fetchone()
                 metrics.total_records = row[0] if row else 0
 
                 # Records last hour
@@ -1049,9 +1046,7 @@ class DataMonitor:
             logger.debug(f"Quality metrics computation error: {e}")
 
         # Count gaps
-        total_gaps = sum(
-            fs.gap_count_24h for fs in self._freshness_cache.values()
-        )
+        total_gaps = sum(fs.gap_count_24h for fs in self._freshness_cache.values())
         metrics.gap_count = total_gaps
 
         # Count anomalies
@@ -1128,14 +1123,10 @@ class DataMonitor:
             return self._quality_history[-1]
         return QualityMetrics()
 
-    def get_quality_history(
-        self, hours: int = 24
-    ) -> List[QualityMetrics]:
+    def get_quality_history(self, hours: int = 24) -> List[QualityMetrics]:
         """Get quality metrics history for the specified time window."""
         cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-        return [
-            m for m in self._quality_history if m.timestamp >= cutoff
-        ]
+        return [m for m in self._quality_history if m.timestamp >= cutoff]
 
     def get_health_report(self) -> HealthReport:
         """
@@ -1209,9 +1200,7 @@ class DataMonitor:
 
         return stats
 
-    def _generate_recommendations(
-        self, report: HealthReport
-    ) -> List[str]:
+    def _generate_recommendations(self, report: HealthReport) -> List[str]:
         """Generate actionable recommendations from the health report."""
         recommendations: List[str] = []
 

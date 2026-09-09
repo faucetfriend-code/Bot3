@@ -42,8 +42,12 @@ FAIL = optuna.trial.TrialState.FAIL
 
 def _record(study, objective="sharpe_ratio"):
     return rct.record_fold_trials(
-        study, "mean_reversion", "BTC-USDC", objective,
-        ["2024-01-01", "2025-01-01"], ["2025-01-01", "2025-07-01"],
+        study,
+        "mean_reversion",
+        "BTC-USDC",
+        objective,
+        ["2024-01-01", "2025-01-01"],
+        ["2025-01-01", "2025-07-01"],
     )
 
 
@@ -53,12 +57,14 @@ def _rows():
 
 class TestRecordFoldTrials:
     def test_counts_completed_and_pruned(self):
-        study = _FakeStudy([
-            _FakeTrial(COMPLETE, 1.0),
-            _FakeTrial(COMPLETE, 2.0),
-            _FakeTrial(PRUNED, 0.5),
-            _FakeTrial(FAIL, None),
-        ])
+        study = _FakeStudy(
+            [
+                _FakeTrial(COMPLETE, 1.0),
+                _FakeTrial(COMPLETE, 2.0),
+                _FakeTrial(PRUNED, 0.5),
+                _FakeTrial(FAIL, None),
+            ]
+        )
         before = len(_rows())
 
         row_id = _record(study)
@@ -133,17 +139,14 @@ class TestRecordingIsOptIn:
         assert args.no_trial_registry is False
 
     def test_the_flag_is_recorded_in_run_config(self):
-        args = rct._parse_args(
-            ["--strategy", "mean_reversion", "--no-trial-registry"]
-        )
+        args = rct._parse_args(["--strategy", "mean_reversion", "--no-trial-registry"])
 
         block = rct.build_run_config(args, ["vol_low:trend"], 6, [])
 
         assert block["args"]["no_trial_registry"] is True
 
 
-def _write_report(path, strategy="mean_reversion", folds=2, trials=25,
-                  marker=0.0):
+def _write_report(path, strategy="mean_reversion", folds=2, trials=25, marker=0.0):
     payload = {
         "strategy": strategy,
         "symbol": "BTC-USDC",
@@ -184,10 +187,12 @@ class TestBackfillPlan:
         _write_report(tmp_path / "gateoff.json", folds=2)
         _write_report(tmp_path / "gateenforce.json", folds=2)
 
-        rows = bf.plan([
-            str(tmp_path / "gateoff.json"),
-            str(tmp_path / "gateenforce.json"),
-        ])
+        rows = bf.plan(
+            [
+                str(tmp_path / "gateoff.json"),
+                str(tmp_path / "gateenforce.json"),
+            ]
+        )
 
         assert len(rows) == 4
         assert len({r["source"] for r in rows}) == 4
@@ -197,10 +202,12 @@ class TestBackfillPlan:
         _write_report(tmp_path / "monthly" / "_tune" / "r.json", folds=2)
         _write_report(tmp_path / "monthly" / "r.json", folds=2)
 
-        rows = bf.plan([
-            str(tmp_path / "monthly" / "_tune" / "r.json"),
-            str(tmp_path / "monthly" / "r.json"),
-        ])
+        rows = bf.plan(
+            [
+                str(tmp_path / "monthly" / "_tune" / "r.json"),
+                str(tmp_path / "monthly" / "r.json"),
+            ]
+        )
 
         assert len(rows) == 2
         assert all("_tune" not in r["source"] for r in rows)
@@ -208,9 +215,7 @@ class TestBackfillPlan:
     def test_intermediate_can_be_forced_in(self, tmp_path):
         _write_report(tmp_path / "_tune" / "r.json", folds=2)
 
-        rows = bf.plan(
-            [str(tmp_path / "_tune" / "r.json")], include_intermediate=True
-        )
+        rows = bf.plan([str(tmp_path / "_tune" / "r.json")], include_intermediate=True)
 
         assert len(rows) == 2
 
@@ -237,9 +242,9 @@ class TestBackfillPlan:
         (tmp_path / "other.json").write_text('{"hello": 1}', encoding="utf-8")
         (tmp_path / "broken.json").write_text("not json", encoding="utf-8")
 
-        assert bf.plan([
-            str(tmp_path / "other.json"), str(tmp_path / "broken.json")
-        ]) == []
+        assert (
+            bf.plan([str(tmp_path / "other.json"), str(tmp_path / "broken.json")]) == []
+        )
 
     def test_is_intermediate_matches_directories_not_substrings(self):
         assert bf.is_intermediate("out/monthly/_tune/r.json")

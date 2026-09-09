@@ -21,13 +21,13 @@ Phase 3: Execution Filtering (Safety)
 - Timing (market hours, etc.)
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Tuple
 from enum import Enum
 from dataclasses import dataclass, field
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
-from .models import Signal, OrderSide
+from .models import Signal
 from .config import StrategyType
 
 

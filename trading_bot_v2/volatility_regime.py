@@ -407,9 +407,7 @@ class VolatilityRegimeClassifier:
             self._bucketers[symbol] = bucketer
         return bucketer
 
-    def _seed(
-        self, symbol: str, when: datetime, closes: Sequence[float]
-    ) -> None:
+    def _seed(self, symbol: str, when: datetime, closes: Sequence[float]) -> None:
         """Seed one symbol's reference window from past candles.
 
         Every seeded value is the trailing volatility as of a bar STRICTLY
@@ -722,9 +720,7 @@ class VolatilityRegimeDetector(MarketRegimeDetector):
         if self.compute_adx:
             self._refresh_adx(market_data)
 
-        result = self.classifier.classify(
-            self._active_symbol, self._clock(), closes
-        )
+        result = self.classifier.classify(self._active_symbol, self._clock(), closes)
         if result is None:
             logger.debug(
                 f"Regime: VOL_WARMUP for {self._active_symbol} "
@@ -852,8 +848,7 @@ def get_regime_mode() -> str:
     raw = os.getenv("REGIME_MODE", "adx").strip().lower()
     if raw not in REGIME_MODES:
         logger.warning(
-            f"REGIME_MODE={raw!r} is not one of {REGIME_MODES}; "
-            f"falling back to 'adx'."
+            f"REGIME_MODE={raw!r} is not one of {REGIME_MODES}; falling back to 'adx'."
         )
         return "adx"
     return raw

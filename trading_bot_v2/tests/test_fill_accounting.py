@@ -88,7 +88,9 @@ class FakeExchange:
             raise self.ack
         return self.ack
 
-    def get_order_fill(self, symbol, order_id=None, client_order_id=None, requested_quantity=None):
+    def get_order_fill(
+        self, symbol, order_id=None, client_order_id=None, requested_quantity=None
+    ):
         self.lookups.append(
             {"symbol": symbol, "order_id": order_id, "client_order_id": client_order_id}
         )
@@ -152,7 +154,9 @@ class TestClientOrderId:
     def test_rejected_ack_records_failed_with_client_order_id(self):
         events: List[tuple] = []
         exchange = FakeExchange(
-            events, {"success": False, "error": "bad size", "data": {}}, [_fill("unknown", 0.0, None)]
+            events,
+            {"success": False, "error": "bad size", "data": {}},
+            [_fill("unknown", 0.0, None)],
         )
         logger = RecordingLogger(events)
         bot = _bot(exchange, logger)
@@ -191,7 +195,9 @@ class TestFillAccounting:
 
     def test_partial_fill_recorded_with_actual_qty_and_vwap(self):
         events: List[tuple] = []
-        exchange = FakeExchange(events, ACCEPTED_ACK, [_fill("partially_filled", 0.6, 101.5)])
+        exchange = FakeExchange(
+            events, ACCEPTED_ACK, [_fill("partially_filled", 0.6, 101.5)]
+        )
         logger = RecordingLogger(events)
         bot = _bot(exchange, logger)
 
@@ -258,7 +264,9 @@ class TestFillAccounting:
     def test_pending_then_rejected_after_accept(self):
         events: List[tuple] = []
         exchange = FakeExchange(
-            events, ACCEPTED_ACK, [_fill("live", 0.0, None), _fill("canceled", 0.0, None)]
+            events,
+            ACCEPTED_ACK,
+            [_fill("live", 0.0, None), _fill("canceled", 0.0, None)],
         )
         logger = RecordingLogger(events)
         bot = _bot(exchange, logger)
@@ -295,7 +303,9 @@ class TestFillAccounting:
     def test_bare_success_ack_without_order_id_goes_pending(self):
         events: List[tuple] = []
         exchange = FakeExchange(
-            events, {"success": True, "data": {}, "status": "success"}, [_fill("", 0.0, None)]
+            events,
+            {"success": True, "data": {}, "status": "success"},
+            [_fill("", 0.0, None)],
         )
         logger = RecordingLogger(events)
         bot = _bot(exchange, logger)
@@ -415,8 +425,13 @@ class TestBlofinFillLookup:
                 "/trade/orders-pending": {
                     "code": "0",
                     "data": [
-                        {"orderId": "9002", "clientOrderId": "cid", "state": "live",
-                         "filledSize": "0", "size": "10"}
+                        {
+                            "orderId": "9002",
+                            "clientOrderId": "cid",
+                            "state": "live",
+                            "filledSize": "0",
+                            "size": "10",
+                        }
                     ],
                 },
             }
@@ -433,17 +448,28 @@ class TestBlofinFillLookup:
                 "/trade/orders-pending": {"code": "0", "data": []},
                 "/trade/orders-history": {
                     "code": "0",
-                    "data": [{"orderId": "9001", "state": "canceled", "filledSize": "0", "size": "10"}],
+                    "data": [
+                        {
+                            "orderId": "9001",
+                            "state": "canceled",
+                            "filledSize": "0",
+                            "size": "10",
+                        }
+                    ],
                 },
             }
         )
-        result = BlofinExchange(rest_client=client).get_order_fill("BTC", order_id="9001")
+        result = BlofinExchange(rest_client=client).get_order_fill(
+            "BTC", order_id="9001"
+        )
         assert result.rejected
 
     def test_transport_failure_is_unknown(self):
         client = _blofin({})
         client.session.get.side_effect = ConnectionError("down")
-        result = BlofinExchange(rest_client=client).get_order_fill("BTC", order_id="9001")
+        result = BlofinExchange(rest_client=client).get_order_fill(
+            "BTC", order_id="9001"
+        )
         assert result.status == OrderResultStatus.UNKNOWN.value
         assert result.has_fills is False
 
@@ -452,8 +478,12 @@ class TestPacificaFillLookup:
     def test_matches_history_row_by_order_id(self):
         rest = MagicMock()
         rest.get_trades.return_value = [
-            {"order_id": 5, "order_status": "filled", "filled_amount": "0.5",
-             "average_filled_price": "101.25"},
+            {
+                "order_id": 5,
+                "order_status": "filled",
+                "filled_amount": "0.5",
+                "average_filled_price": "101.25",
+            },
         ]
         result = PacificaExchange(rest_client=rest).get_order_fill(
             "BTC", order_id="5", requested_quantity=0.5

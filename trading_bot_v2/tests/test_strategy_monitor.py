@@ -5,7 +5,6 @@ Tests correlation calculation, decay detection, health report generation,
 database persistence, and EventBus integration.
 """
 
-import math
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime, timedelta, timezone
@@ -17,10 +16,8 @@ from trading_bot_v2.strategy_monitor import (
     StrategyHealth,
     HealthReport,
     get_strategy_monitor,
-    CORRELATION_ALERT,
     DECAY_ALERT_PCT,
     MIN_TRADES_FOR_SHARPE,
-    MIN_TRADES_FOR_CORRELATION,
 )
 
 
@@ -133,7 +130,9 @@ class TestStrategyMonitor:
         """Create a fresh StrategyMonitor with mocked database."""
         with patch("trading_bot_v2.strategy_monitor.get_db_connection") as mock_db:
             mock_conn = MagicMock()
-            mock_conn.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[]))
+            mock_conn.execute.return_value = MagicMock(
+                fetchall=MagicMock(return_value=[])
+            )
             mock_conn.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.__exit__ = MagicMock(return_value=False)
             mock_db.return_value = mock_conn
@@ -171,7 +170,7 @@ class TestStrategyMonitor:
     def test_record_return_multiple(self, monitor):
         """Test recording multiple returns for the same strategy."""
         for i in range(5):
-            ts = f"2026-01-0{i+1}T00:00:00"
+            ts = f"2026-01-0{i + 1}T00:00:00"
             monitor.record_return("grid_trading", float(i) * 0.5, timestamp=ts)
 
         assert len(monitor._returns_cache["grid_trading"]) == 5
@@ -400,7 +399,6 @@ class TestStrategyMonitor:
 
         report = monitor.get_health_report()
         # The decay alert should be present
-        decay_strategies = [a["strategy"] for a in report["decay_alerts"]]
         # May or may not trigger depending on exact Sharpe split;
         # just verify the report structure is valid
         assert isinstance(report["decay_alerts"], list)
@@ -480,10 +478,7 @@ class TestStrategyMonitor:
                 monitor.record_return(strategy, float(i) * 0.1, timestamp=ts)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-            futures = [
-                pool.submit(record_batch, f"strat_{j}", 50)
-                for j in range(4)
-            ]
+            futures = [pool.submit(record_batch, f"strat_{j}", 50) for j in range(4)]
             concurrent.futures.wait(futures)
 
         # All 4 strategies should have 50 returns each
@@ -501,7 +496,6 @@ class TestStrategyMonitorDatabase:
         """Create StrategyMonitor that actually talks to a test DB."""
         import os
         import tempfile
-        import sqlite3
 
         # Use a temporary SQLite database
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
@@ -518,6 +512,7 @@ class TestStrategyMonitorDatabase:
 
             # Reset the database module's backend
             import trading_bot_v2.database as db_mod
+
             original_backend = db_mod._active_backend
             original_path = db_mod.DATABASE_PATH
             db_mod._active_backend = "sqlite"
@@ -544,7 +539,9 @@ class TestStrategyMonitorDatabase:
 
     def test_record_return_persists_to_db(self, monitor_with_db):
         """Test that record_return writes to the database."""
-        monitor_with_db.record_return("test_strat", 2.5, timestamp="2026-06-01T12:00:00")
+        monitor_with_db.record_return(
+            "test_strat", 2.5, timestamp="2026-06-01T12:00:00"
+        )
 
         # Verify via direct DB query
         import trading_bot_v2.database as db_mod
@@ -604,7 +601,6 @@ class TestStrategyMonitorDatabase:
             assert len(rows) >= 1
             assert abs(float(rows[0][0]) - corr) < 1e-6
 
-
     def test_health_snapshot_round_trips_new_columns(self, monitor_with_db):
         """Test snapshot save persists profit_factor and max_drawdown_pct."""
         now = datetime.now(timezone.utc)
@@ -641,9 +637,7 @@ class TestStrategyMonitorDatabase:
         import trading_bot_v2.database as db_mod
 
         with db_mod.get_db_connection() as conn:
-            cursor = conn.execute(
-                "PRAGMA table_info(strategy_health_snapshots)"
-            )
+            cursor = conn.execute("PRAGMA table_info(strategy_health_snapshots)")
             columns = [row[1] for row in cursor.fetchall()]
 
         assert columns.count("profit_factor") == 1
@@ -671,9 +665,7 @@ class TestStrategyMonitorDatabase:
         monitor_with_db._ensure_schema()
 
         with db_mod.get_db_connection() as conn:
-            cursor = conn.execute(
-                "PRAGMA table_info(strategy_health_snapshots)"
-            )
+            cursor = conn.execute("PRAGMA table_info(strategy_health_snapshots)")
             columns = [row[1] for row in cursor.fetchall()]
 
         assert "profit_factor" in columns
@@ -692,12 +684,16 @@ class TestStrategyMonitorEventBus:
 
         with patch("trading_bot_v2.strategy_monitor.get_db_connection") as mock_db:
             mock_conn = MagicMock()
-            mock_conn.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[]))
+            mock_conn.execute.return_value = MagicMock(
+                fetchall=MagicMock(return_value=[])
+            )
             mock_conn.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.__exit__ = MagicMock(return_value=False)
             mock_db.return_value = mock_conn
 
-            with patch("trading_bot_v2.strategy_monitor.get_event_bus", return_value=bus):
+            with patch(
+                "trading_bot_v2.strategy_monitor.get_event_bus", return_value=bus
+            ):
                 mon = StrategyMonitor()
                 mon._returns_cache = {}
                 yield mon, bus
@@ -780,7 +776,9 @@ class TestGetStrategyMonitorSingleton:
         """Test get_strategy_monitor returns the same instance."""
         with patch("trading_bot_v2.strategy_monitor.get_db_connection") as mock_db:
             mock_conn = MagicMock()
-            mock_conn.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[]))
+            mock_conn.execute.return_value = MagicMock(
+                fetchall=MagicMock(return_value=[])
+            )
             mock_conn.__enter__ = MagicMock(return_value=mock_conn)
             mock_conn.__exit__ = MagicMock(return_value=False)
             mock_db.return_value = mock_conn
@@ -790,6 +788,7 @@ class TestGetStrategyMonitorSingleton:
 
                 # Reset the module-level singleton
                 import trading_bot_v2.strategy_monitor as sm_mod
+
                 sm_mod._monitor = None
 
                 m1 = get_strategy_monitor()
@@ -816,12 +815,8 @@ class TestHealthReportDataclass:
             )
         }
         corr_matrix = {"strat_a": {"strat_a": 1.0, "strat_b": None}}
-        corr_alerts = [
-            CorrelationAlert("strat_a", "strat_b", 0.8, 30)
-        ]
-        decay_alerts = [
-            DecayAlert("strat_a", 0.2, 1.5, 86.67, 30)
-        ]
+        corr_alerts = [CorrelationAlert("strat_a", "strat_b", 0.8, 30)]
+        decay_alerts = [DecayAlert("strat_a", 0.2, 1.5, 86.67, 30)]
 
         report = HealthReport(
             strategies=strategies,

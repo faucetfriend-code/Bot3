@@ -152,14 +152,10 @@ class VWAPPullbackStrategy:
         self.min_confidence = min_confidence
         self.min_rrr = min_rrr
         self.enable_short = enable_short
-        self.entry_mode = (
-            entry_mode if entry_mode in ("market", "maker") else "market"
-        )
+        self.entry_mode = entry_mode if entry_mode in ("market", "maker") else "market"
         self.maker_offset_bp = maker_offset_bp
         self.entry_ttl_candles = entry_ttl_candles
-        self.exit_mode = (
-            exit_mode if exit_mode in ("fixed", "trailing") else "fixed"
-        )
+        self.exit_mode = exit_mode if exit_mode in ("fixed", "trailing") else "fixed"
         self.trail_activation_r = trail_activation_r
         self.trail_r = trail_r
 
@@ -184,8 +180,8 @@ class VWAPPullbackStrategy:
 
     def _now(self) -> datetime:
         """Current UTC time - simulated candle time in backtesting."""
-        now = self._sim_time if self._sim_time is not None else datetime.now(
-            timezone.utc
+        now = (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
         )
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -302,8 +298,12 @@ class VWAPPullbackStrategy:
         opens = [float(v) for v in df_15m.get("open", [])]
         volumes = [float(v) for v in df_15m.get("volume", [])]
         n = min(
-            len(highs), len(lows), len(closes), len(opens),
-            len(volumes), len(raw_timestamps),
+            len(highs),
+            len(lows),
+            len(closes),
+            len(opens),
+            len(volumes),
+            len(raw_timestamps),
         )
         if n < self.min_session_bars:
             return signals
@@ -367,9 +367,7 @@ class VWAPPullbackStrategy:
                 volumes[: last_i + 1], window=self.rvol_window
             )
             if rvol < self.rvol_min:
-                logger.debug(
-                    f"{symbol}: resumption rvol {rvol:.2f} < {self.rvol_min}"
-                )
+                logger.debug(f"{symbol}: resumption rvol {rvol:.2f} < {self.rvol_min}")
                 return signals
 
         # ATR(15m) buffer for the stop
@@ -480,9 +478,7 @@ class VWAPPullbackStrategy:
                 # Engine cancels the unfilled entry + its exits after
                 # this many replay candles (maker mode only)
                 "entry_ttl_candles": (
-                    self.entry_ttl_candles
-                    if self.entry_mode == "maker"
-                    else None
+                    self.entry_ttl_candles if self.entry_mode == "maker" else None
                 ),
                 # Engine ratchets the stop behind the peak (trailing
                 # mode only): arms at +activation_r x risk, trails at
@@ -514,7 +510,8 @@ class VWAPPullbackStrategy:
         self._last_signal_time[symbol] = now
 
         tp_text = (
-            f"${take_profit:.4f}" if take_profit is not None
+            f"${take_profit:.4f}"
+            if take_profit is not None
             else f"trail {self.trail_r}R after +{self.trail_activation_r}R"
         )
         logger.info(

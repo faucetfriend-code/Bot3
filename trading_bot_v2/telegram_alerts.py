@@ -29,7 +29,7 @@ Usage:
 
 import os
 import asyncio
-from typing import Optional, Dict, Any
+from typing import Optional
 from datetime import datetime
 import httpx
 from loguru import logger
@@ -50,7 +50,9 @@ class TelegramAlerts:
             self.api_url = f"https://api.telegram.org/bot{self.bot_token}"
             logger.info("Telegram alerts enabled")
         else:
-            logger.warning("Telegram alerts disabled (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)")
+            logger.warning(
+                "Telegram alerts disabled (missing TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID)"
+            )
 
     async def _send_message(self, text: str, parse_mode: str = "HTML") -> bool:
         """
@@ -73,16 +75,18 @@ class TelegramAlerts:
                     json={
                         "chat_id": self.chat_id,
                         "text": text,
-                        "parse_mode": parse_mode
+                        "parse_mode": parse_mode,
                     },
-                    timeout=10.0
+                    timeout=10.0,
                 )
 
                 if response.status_code == 200:
                     logger.debug("Telegram message sent successfully")
                     return True
                 else:
-                    logger.error(f"Telegram API error: {response.status_code} - {response.text}")
+                    logger.error(
+                        f"Telegram API error: {response.status_code} - {response.text}"
+                    )
                     return False
 
         except Exception as e:
@@ -98,7 +102,7 @@ class TelegramAlerts:
         quantity: float,
         stop_loss: Optional[float] = None,
         take_profit: Optional[float] = None,
-        confidence: Optional[float] = None
+        confidence: Optional[float] = None,
     ) -> bool:
         """
         Send trade execution alert.
@@ -141,10 +145,7 @@ class TelegramAlerts:
         return await self._send_message(text)
 
     async def send_error_alert(
-        self,
-        error_type: str,
-        error_message: str,
-        context: Optional[str] = None
+        self, error_type: str, error_message: str, context: Optional[str] = None
     ) -> bool:
         """
         Send error alert.
@@ -177,7 +178,7 @@ class TelegramAlerts:
         winning_trades: int,
         total_pnl: float,
         open_positions: int = 0,
-        balance: float = 0.0
+        balance: float = 0.0,
     ) -> bool:
         """
         Send daily trading summary.
@@ -206,15 +207,13 @@ class TelegramAlerts:
 <b>Open Positions:</b> {open_positions}
 <b>Account Balance:</b> ${balance:,.2f}
 
-<i>{datetime.now().strftime('%Y-%m-%d')}</i>
+<i>{datetime.now().strftime("%Y-%m-%d")}</i>
 """
 
         return await self._send_message(text)
 
     async def send_circuit_breaker_alert(
-        self,
-        loss_percent: float,
-        threshold_percent: float
+        self, loss_percent: float, threshold_percent: float
     ) -> bool:
         """
         Send circuit breaker triggered alert.
@@ -233,16 +232,13 @@ class TelegramAlerts:
 <b>Threshold:</b> {threshold_percent:.2f}%
 <b>Status:</b> Trading halted
 
-<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>
+<i>{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</i>
 """
 
         return await self._send_message(text)
 
     async def send_regime_change_alert(
-        self,
-        old_regime: str,
-        new_regime: str,
-        affected_strategies: list
+        self, old_regime: str, new_regime: str, affected_strategies: list
     ) -> bool:
         """
         Send market regime change alert.
@@ -255,7 +251,9 @@ class TelegramAlerts:
         Returns:
             True if sent successfully
         """
-        strategies_text = ", ".join(affected_strategies) if affected_strategies else "None"
+        strategies_text = (
+            ", ".join(affected_strategies) if affected_strategies else "None"
+        )
 
         text = f"""
 🔄 <b>Market Regime Change</b>
@@ -264,7 +262,7 @@ class TelegramAlerts:
 <b>To:</b> {new_regime}
 <b>Affected Strategies:</b> {strategies_text}
 
-<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>
+<i>{datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</i>
 """
 
         return await self._send_message(text)
@@ -307,8 +305,12 @@ class TelegramAlerts:
 
             elif event.event_type == EventType.REGIME_CHANGED:
                 data = event.data if isinstance(event.data, dict) else {}
-                old_regime = data.get("old_regime", data.get("previous_regime", "unknown"))
-                new_regime = data.get("new_regime", data.get("current_regime", "unknown"))
+                old_regime = data.get(
+                    "old_regime", data.get("previous_regime", "unknown")
+                )
+                new_regime = data.get(
+                    "new_regime", data.get("current_regime", "unknown")
+                )
                 affected = data.get("affected_strategies", [])
                 await self.send_regime_change_alert(
                     old_regime=str(old_regime),

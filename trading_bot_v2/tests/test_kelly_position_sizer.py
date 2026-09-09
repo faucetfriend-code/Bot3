@@ -14,8 +14,7 @@ store's get_closed_trades() (returning trade dicts) instead of raw SQL.
 """
 
 import pytest
-from datetime import datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from trading_bot_v2.kelly_position_sizer import KellyPositionSizer
 from trading_bot_v2.models import Signal, OrderSide
 from trading_bot_v2.config import StrategyType, AssetClass, TradeQuality, MarketState
@@ -76,9 +75,7 @@ class TestKellyPositionSizer:
     def test_fallback_with_insufficient_trades(self, kelly_sizer, sample_signal):
         """Test fallback sizing with < 50 trades."""
         # 30 winning trades
-        kelly_sizer.trade_store.get_closed_trades.return_value = _trades(
-            [100.0] * 30
-        )
+        kelly_sizer.trade_store.get_closed_trades.return_value = _trades([100.0] * 30)
 
         account_balance = 10000.0
         quantity = kelly_sizer.calculate_position_size(sample_signal, account_balance)

@@ -180,9 +180,7 @@ def normalize_regime_value(regime: Any) -> str:
 
     valid = {r.value for r in MarketRegime}
     if value not in valid:
-        raise ValueError(
-            f"Unknown regime: {regime!r}. Valid values: {sorted(valid)}"
-        )
+        raise ValueError(f"Unknown regime: {regime!r}. Valid values: {sorted(valid)}")
     return value if direction is None else f"{value}:{direction}"
 
 
@@ -606,8 +604,7 @@ class RegimeParamOverlayManager:
             new_regime_value = data.get("new_regime")
             if not symbol or not new_regime_value:
                 logger.warning(
-                    "Regime param overlays: event missing symbol/new_regime "
-                    "- skipping"
+                    "Regime param overlays: event missing symbol/new_regime - skipping"
                 )
                 return
             if symbol != self.reference_symbol:
@@ -670,9 +667,7 @@ class RegimeParamOverlayManager:
                     overlay = None
                 if overlay:
                     self._capture_baseline(strategy_key, strategy)
-                    applied = apply_params_to_strategy(
-                        strategy, strategy_key, overlay
-                    )
+                    applied = apply_params_to_strategy(strategy, strategy_key, overlay)
                     if applied:
                         logger.info(
                             f"Regime param overlay applied: {strategy_key} "
@@ -735,8 +730,7 @@ class RegimeParamOverlayManager:
         baseline = effective_params(strategy, strategy_key)
         self._baselines[strategy_key] = baseline
         logger.debug(
-            f"Regime param overlays: captured baseline for {strategy_key}: "
-            f"{baseline}"
+            f"Regime param overlays: captured baseline for {strategy_key}: {baseline}"
         )
 
     # ------------------------------------------------------------------

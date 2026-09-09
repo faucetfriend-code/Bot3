@@ -28,6 +28,7 @@ Safety properties
   Rationale: a corrupt file should not silently halt trading.
 - File write is atomic (write to .tmp, rename) to avoid partial reads.
 """
+
 from __future__ import annotations
 
 import json
@@ -43,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Pause file lives at project root (Bot3/supervisor_pause.json)
 # alongside trading_bot.db and other runtime state.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PAUSE_FILE   = _PROJECT_ROOT / "supervisor_pause.json"
+_PAUSE_FILE = _PROJECT_ROOT / "supervisor_pause.json"
 
 
 class SupervisorControl:
@@ -63,7 +64,9 @@ class SupervisorControl:
         self._file_lock = threading.Lock()
         # Don't create the file on init — fail-open if it doesn't exist
         if not _PAUSE_FILE.exists():
-            logger.info(f"SupervisorControl initialized (no pause file at {_PAUSE_FILE})")
+            logger.info(
+                f"SupervisorControl initialized (no pause file at {_PAUSE_FILE})"
+            )
         else:
             logger.info(f"SupervisorControl initialized (pause file at {_PAUSE_FILE})")
 
@@ -119,7 +122,7 @@ class SupervisorControl:
                     )
                     self._write_state(
                         {
-                            "paused":     False,
+                            "paused": False,
                             "expired_at": until_ts,
                             "expired_reason": state.get("reason"),
                         }
@@ -133,7 +136,9 @@ class SupervisorControl:
 
         return True
 
-    def pause(self, reason: str = "no reason given", until_ts: Optional[str] = None) -> dict:
+    def pause(
+        self, reason: str = "no reason given", until_ts: Optional[str] = None
+    ) -> dict:
         """
         Pause new entries. Existing positions are unaffected.
 
@@ -146,10 +151,10 @@ class SupervisorControl:
         Returns the new state dict.
         """
         state = {
-            "paused":      True,
-            "reason":      reason,
-            "since_ts":    datetime.now(timezone.utc).isoformat(),
-            "until_ts":    until_ts,
+            "paused": True,
+            "reason": reason,
+            "since_ts": datetime.now(timezone.utc).isoformat(),
+            "until_ts": until_ts,
         }
         self._write_state(state)
         logger.warning(
@@ -161,7 +166,7 @@ class SupervisorControl:
     def resume(self) -> dict:
         """Clear the pause. Returns new state."""
         state = {
-            "paused":     False,
+            "paused": False,
             "resumed_ts": datetime.now(timezone.utc).isoformat(),
         }
         self._write_state(state)

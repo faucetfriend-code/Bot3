@@ -202,7 +202,9 @@ class WalkForwardAnalyzer:
 
         results = []
         for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
-            logger.info(f"Window {i+1}/{len(windows)}: test {test_start} -> {test_end}")
+            logger.info(
+                f"Window {i + 1}/{len(windows)}: test {test_start} -> {test_end}"
+            )
             result = self.engine.run(
                 start=test_start,
                 end=test_end,
@@ -288,7 +290,7 @@ class WalkForwardAnalyzer:
 
         for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
             logger.info(
-                f"WF window {i+1}/{len(windows)}: "
+                f"WF window {i + 1}/{len(windows)}: "
                 f"train {train_start} -> {train_end}, "
                 f"test {test_start} -> {test_end} ({n_trials} trials)"
             )
@@ -339,8 +341,7 @@ class WalkForwardAnalyzer:
                 window.train_objective = best_trial.value
             else:
                 logger.warning(
-                    f"WF window {i+1}: no valid trial - "
-                    "testing with default params"
+                    f"WF window {i + 1}: no valid trial - testing with default params"
                 )
 
             # --- Apply best params to the TEST window ---
@@ -438,33 +439,41 @@ class WalkForwardAnalyzer:
 
     def print_report(self, report: WalkForwardReport) -> None:
         """Print the per-window table and aggregate OOS summary."""
-        print(f"\n{'='*78}")
+        print(f"\n{'=' * 78}")
         print(
             f"WALK-FORWARD OPTIMIZATION: {report.strategy} | {report.symbol} "
             f"| {report.start} -> {report.end}"
         )
         print(f"Objective: {report.objective} | {len(report.windows)} windows")
-        print(f"{'='*78}")
+        print(f"{'=' * 78}")
         print(
             f"  {'Win':<4} {'Test window':<24} {'TrainObj':>9} "
             f"{'TestObj':>9} {'Trades':>7}  Params"
         )
-        print(f"  {'-'*72}")
+        print(f"  {'-' * 72}")
         for w in report.windows:
-            train_s = f"{w.train_objective:.3f}" if w.train_objective is not None else "n/a"
-            test_s = f"{w.test_objective:.3f}" if w.test_objective is not None else "n/a"
+            train_s = (
+                f"{w.train_objective:.3f}" if w.train_objective is not None else "n/a"
+            )
+            test_s = (
+                f"{w.test_objective:.3f}" if w.test_objective is not None else "n/a"
+            )
             trades = w.result.closed_trades if w.result else 0
-            params_s = ", ".join(
-                f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
-                for k, v in sorted(w.params.items())
-            ) or "(defaults)"
+            params_s = (
+                ", ".join(
+                    f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                    for k, v in sorted(w.params.items())
+                )
+                or "(defaults)"
+            )
             print(
                 f"  {w.index:<4} {w.test_start} -> {w.test_end:<10} "
                 f"{train_s:>9} {test_s:>9} {trades:>7}  {params_s}"
             )
-        print(f"  {'-'*72}")
+        print(f"  {'-' * 72}")
         pf_s = (
-            "inf" if report.profit_factor == float("inf")
+            "inf"
+            if report.profit_factor == float("inf")
             else f"{report.profit_factor:.2f}"
         )
         print(f"\n  Aggregate OOS ({len(report.oos_returns)} closed trades):")
@@ -489,15 +498,15 @@ class WalkForwardAnalyzer:
             reason = report.dsr.reason if report.dsr else "not computed"
             print(f"    DSR             : n/a ({reason})")
         print(f"    Total trials    : {report.n_trials_total}")
-        print(f"{'='*78}\n")
+        print(f"{'=' * 78}\n")
 
     def print_summary(self, results: List[BacktestResult]) -> None:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"WALK-FORWARD SUMMARY ({len(results)} windows)")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         if not results:
             print("  No windows produced results.")
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
             return
         returns = [r.total_return_pct for r in results]
         sharpes = [r.sharpe_ratio for r in results]
@@ -506,11 +515,11 @@ class WalkForwardAnalyzer:
         profitable = sum(1 for r in returns if r > 0)
 
         print(f"  Profitable windows : {profitable}/{len(results)}")
-        print(f"  Avg return         : {sum(returns)/len(returns):+.1f}%")
-        print(f"  Avg Sharpe         : {sum(sharpes)/len(sharpes):.2f}")
-        print(f"  Avg Max DD         : {sum(drawdowns)/len(drawdowns):.1f}%")
-        print(f"  Avg Win Rate       : {sum(win_rates)/len(win_rates):.1f}%")
-        print(f"{'='*60}\n")
+        print(f"  Avg return         : {sum(returns) / len(returns):+.1f}%")
+        print(f"  Avg Sharpe         : {sum(sharpes) / len(sharpes):.2f}")
+        print(f"  Avg Max DD         : {sum(drawdowns) / len(drawdowns):.1f}%")
+        print(f"  Avg Win Rate       : {sum(win_rates) / len(win_rates):.1f}%")
+        print(f"{'=' * 60}\n")
 
     @staticmethod
     def _build_windows(
@@ -530,12 +539,14 @@ class WalkForwardAnalyzer:
             train_start = test_start - timedelta(days=train_months * 30)
             train_end = test_start - timedelta(days=1)
             test_end = min(test_start + timedelta(days=test_months * 30 - 1), dt_end)
-            windows.append((
-                train_start.date().isoformat(),
-                train_end.date().isoformat(),
-                test_start.date().isoformat(),
-                test_end.date().isoformat(),
-            ))
+            windows.append(
+                (
+                    train_start.date().isoformat(),
+                    train_end.date().isoformat(),
+                    test_start.date().isoformat(),
+                    test_end.date().isoformat(),
+                )
+            )
             test_start += timedelta(days=test_months * 30)
 
         return windows
@@ -667,7 +678,7 @@ def build_chunk_folds(
         raise ValueError(f"train_windows must be >= 1 (got {train_windows})")
     folds: List[Tuple[List[Tuple[str, str]], Tuple[str, str]]] = []
     for i in range(train_windows, len(windows)):
-        train = windows[:i] if anchored else windows[i - train_windows: i]
+        train = windows[:i] if anchored else windows[i - train_windows : i]
         folds.append((list(train), windows[i]))
     return folds
 
@@ -828,8 +839,7 @@ def run_chunked_walk_forward(
             fold.in_sample = best.value
         else:
             logger.warning(
-                f"Fold {i}: no valid trial - grading default params "
-                f"out of sample"
+                f"Fold {i}: no valid trial - grading default params out of sample"
             )
 
         evaluation = runner.evaluate_param_set(
@@ -845,9 +855,7 @@ def run_chunked_walk_forward(
         payload = evaluation.funnel.to_dict()
         fold.out_of_sample = evaluation.banded_value
         fold.oos_raw = evaluation.value
-        fold.oos_outcome = str(
-            getattr(evaluation.outcome, "value", evaluation.outcome)
-        )
+        fold.oos_outcome = str(getattr(evaluation.outcome, "value", evaluation.outcome))
         fold.oos_headline = payload.get("headline", "")
         fold.oos_trades = evaluation.total_trades
         fold.oos_traded_symbols = evaluation.traded_symbols
@@ -887,14 +895,10 @@ def _fold_trial_counts(study: Any) -> Tuple[int, List[Any]]:
     state = optuna.trial.TrialState
     trials = getattr(study, "trials", None) or []
     completed = [
-        t
-        for t in trials
-        if t.state == state.COMPLETE and not _is_infeasible_trial(t)
+        t for t in trials if t.state == state.COMPLETE and not _is_infeasible_trial(t)
     ]
     pruned = [
-        t
-        for t in trials
-        if t.state == state.PRUNED and not _is_infeasible_trial(t)
+        t for t in trials if t.state == state.PRUNED and not _is_infeasible_trial(t)
     ]
     return len(completed) + len(pruned), completed
 
@@ -925,9 +929,7 @@ def _finalize_chunked_report(
         trial_values: Traded trial objective values across folds.
     """
     is_values = [f.in_sample for f in report.folds if f.in_sample is not None]
-    oos_values = [
-        f.out_of_sample for f in report.folds if f.out_of_sample is not None
-    ]
+    oos_values = [f.out_of_sample for f in report.folds if f.out_of_sample is not None]
     if is_values:
         report.in_sample_objective = sum(is_values) / len(is_values)
     if oos_values:
@@ -935,9 +937,7 @@ def _finalize_chunked_report(
     if report.in_sample_objective is not None and (
         report.out_of_sample_objective is not None
     ):
-        report.overfit_gap = (
-            report.in_sample_objective - report.out_of_sample_objective
-        )
+        report.overfit_gap = report.in_sample_objective - report.out_of_sample_objective
 
     returns = report.oos_returns
     report.oos_trades = len(returns)
@@ -1105,10 +1105,13 @@ def print_chunked_walk_forward_report(
             f"{_fmt(fold.in_sample):>9} {_fmt(fold.out_of_sample):>9} "
             f"{_fmt(fold.gap, '8.3f'):>8} {fold.oos_trades:>7}"
         )
-        params_s = ", ".join(
-            f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
-            for k, v in sorted(fold.params.items())
-        ) or "(defaults)"
+        params_s = (
+            ", ".join(
+                f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+                for k, v in sorted(fold.params.items())
+            )
+            or "(defaults)"
+        )
         print(f"        params: {params_s}")
         _print_fold_symbols(fold)
         if fold.oos_trades == 0:
@@ -1127,10 +1130,7 @@ def print_chunked_walk_forward_report(
 
     print("\n  IN-SAMPLE vs OUT-OF-SAMPLE (same banded scale)")
     print(f"    In-sample  (optimized on) : {_fmt(report.in_sample_objective)}")
-    print(
-        f"    OUT-OF-SAMPLE  (HEADLINE)  : "
-        f"{_fmt(report.out_of_sample_objective)}"
-    )
+    print(f"    OUT-OF-SAMPLE  (HEADLINE)  : {_fmt(report.out_of_sample_objective)}")
     print(f"    Overfit gap (IS - OOS)    : {_fmt(report.overfit_gap)}")
     print(f"    {_overfit_verdict(report)}")
 
@@ -1171,9 +1171,7 @@ def print_chunked_walk_forward_report(
         for check in report.gate.checks:
             tag = "PASS" if check.passed else "FAIL"
             print(f"    {check.name:<26} {tag:<5} {check.value}")
-        print(
-            f"    OVERALL: {'PASS' if report.gate.passed else 'FAIL'}"
-        )
+        print(f"    OVERALL: {'PASS' if report.gate.passed else 'FAIL'}")
     print(f"{line}\n")
 
 
@@ -1218,31 +1216,59 @@ def main() -> int:
         "Optuna optimization (P5)",
     )
     parser.add_argument(
-        "--strategy", "-s", type=str, default=None,
+        "--strategy",
+        "-s",
+        type=str,
+        default=None,
         help="Snake_case strategy key (e.g. mean_reversion). Required "
         "unless --no-optimize.",
     )
-    parser.add_argument("--symbol", type=str, default=None,
-                        help="Trading symbol (default: config)")
-    parser.add_argument("--start", type=str, default=None,
-                        help="Range start date (default: config)")
-    parser.add_argument("--end", type=str, default=None,
-                        help="Range end date (default: config)")
-    parser.add_argument("--train-months", type=int, default=None,
-                        help="Train window size in months (default: config)")
-    parser.add_argument("--test-months", type=int, default=None,
-                        help="Test window size in months (default: config)")
     parser.add_argument(
-        "--trials", "-n", type=int, default=None,
+        "--symbol", type=str, default=None, help="Trading symbol (default: config)"
+    )
+    parser.add_argument(
+        "--start", type=str, default=None, help="Range start date (default: config)"
+    )
+    parser.add_argument(
+        "--end", type=str, default=None, help="Range end date (default: config)"
+    )
+    parser.add_argument(
+        "--train-months",
+        type=int,
+        default=None,
+        help="Train window size in months (default: config)",
+    )
+    parser.add_argument(
+        "--test-months",
+        type=int,
+        default=None,
+        help="Test window size in months (default: config)",
+    )
+    parser.add_argument(
+        "--trials",
+        "-n",
+        type=int,
+        default=None,
         help=f"Optuna trials per train window "
         f"(default: env WALK_FORWARD_TRIALS or {DEFAULT_WALK_FORWARD_TRIALS})",
     )
-    parser.add_argument("--objective", "-o", type=str, default="sharpe",
-                        help="Objective metric (default: sharpe)")
-    parser.add_argument("--capital", "-c", type=float, default=10000.0,
-                        help="Initial capital per window (default: 10000)")
     parser.add_argument(
-        "--no-optimize", action="store_true",
+        "--objective",
+        "-o",
+        type=str,
+        default="sharpe",
+        help="Objective metric (default: sharpe)",
+    )
+    parser.add_argument(
+        "--capital",
+        "-c",
+        type=float,
+        default=10000.0,
+        help="Initial capital per window (default: 10000)",
+    )
+    parser.add_argument(
+        "--no-optimize",
+        action="store_true",
         help="Legacy mode: backtest test windows with default params only",
     )
     args = parser.parse_args()

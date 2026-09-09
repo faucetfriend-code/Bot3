@@ -35,6 +35,14 @@ from typing import Generator, List, Dict, Any, Optional, Tuple, Union
 from datetime import datetime, date, timedelta, timezone
 import logging
 
+try:
+    import aiosqlite
+
+    HAS_AIOSQLITE = True
+except ImportError:  # pragma: no cover - optional dependency
+    aiosqlite = None
+    HAS_AIOSQLITE = False
+
 # Break-even rules for stored parameter overlays. overlay_quality imports
 # nothing from this package, so this cannot create a cycle - and database.py
 # still does not depend on the optimization package. The names are re-exported
@@ -112,7 +120,9 @@ def _translate_insert_or_replace(sql: str) -> str:
     #   - pacifica_positions (UNIQUE on position_id)
     #   - performance_metrics (UNIQUE on account_id, date)
     new_sql = sql[: match.start()]  # Preserve any leading comments/whitespace
-    new_sql += f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_match.group(1)}) "
+    new_sql += (
+        f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_match.group(1)}) "
+    )
 
     # Determine conflict columns based on table
     if table_name == "pacifica_positions":
@@ -140,7 +150,9 @@ def _translate_insert_or_replace(sql: str) -> str:
             new_sql += ", ".join(update_parts)
         else:
             # No columns to update (just id), do nothing
-            new_sql = new_sql.replace("ON CONFLICT DO UPDATE SET", "ON CONFLICT DO NOTHING")
+            new_sql = new_sql.replace(
+                "ON CONFLICT DO UPDATE SET", "ON CONFLICT DO NOTHING"
+            )
 
     return new_sql
 
@@ -279,7 +291,9 @@ class _ConnectionWrapper:
         self._is_postgres = is_postgres
         self._closed = False
 
-    def execute(self, sql: str, params: Optional[Union[tuple, list]] = None) -> _CursorWrapper:
+    def execute(
+        self, sql: str, params: Optional[Union[tuple, list]] = None
+    ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor.
 
@@ -410,7 +424,9 @@ class _ConnectionWrapper:
         if not self._is_postgres:
             self._conn.row_factory = factory
 
-    def execute_returning(self, sql: str, params: Optional[tuple] = None) -> _CursorWrapper:
+    def execute_returning(
+        self, sql: str, params: Optional[tuple] = None
+    ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor with RETURNING support.
 
@@ -866,6 +882,7 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
         );
     """
     conn.executescript(minimal_sql)
+
 
 # Check for psycopg2 availability
 try:
@@ -1995,9 +2012,7 @@ class DatabaseManager:
             for row in rows
         ]
 
-    def save_adaptive_weight_snapshot(
-        self, rows: List[Dict[str, Any]]
-    ) -> int:
+    def save_adaptive_weight_snapshot(self, rows: List[Dict[str, Any]]) -> int:
         """Persist an adaptive weight recompute snapshot.
 
         Args:
@@ -2322,9 +2337,7 @@ class DatabaseManager:
             )
         return overlays
 
-    def export_regime_param_overlays(
-        self, path: Optional[str] = None
-    ) -> str:
+    def export_regime_param_overlays(self, path: Optional[str] = None) -> str:
         """Write the active overlays to a JSON file for inspection.
 
         Rows measured at or below break-even go under
@@ -2367,9 +2380,7 @@ class DatabaseManager:
             path = os.getenv("REGIME_OVERLAY_EXPORT_PATH") or None
         if path is None:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            path = os.path.join(
-                project_root, "config", "regime_param_overlays.json"
-            )
+            path = os.path.join(project_root, "config", "regime_param_overlays.json")
 
         rows = self.get_regime_param_overlays(active_only=True)
         opt_in = _overlay_env_opt_in()
@@ -2414,9 +2425,7 @@ class DatabaseManager:
                 f"{[(r.get('strategy'), r.get('regime')) for r in refused]}"
             )
         else:
-            logger.info(
-                f"Exported {len(overlays)} active regime overlay(s) to {path}"
-            )
+            logger.info(f"Exported {len(overlays)} active regime overlay(s) to {path}")
         return path
 
     def save_trial_registry_entry(
@@ -2523,9 +2532,7 @@ class DatabaseManager:
             for row in rows
         ]
 
-    def get_total_trials(
-        self, strategy: str, regime: Optional[str] = None
-    ) -> int:
+    def get_total_trials(self, strategy: str, regime: Optional[str] = None) -> int:
         """Total configurations tried against a strategy (DSR's N).
 
         When a regime is given, regime-agnostic rows (regime NULL) are
@@ -2541,8 +2548,7 @@ class DatabaseManager:
             strategy has no recorded trials).
         """
         query = (
-            "SELECT COALESCE(SUM(n_trials), 0) FROM trial_registry "
-            "WHERE strategy = ?"
+            "SELECT COALESCE(SUM(n_trials), 0) FROM trial_registry WHERE strategy = ?"
         )
         params: List[Any] = [strategy]
         if regime:
@@ -2740,9 +2746,7 @@ class DatabaseManager:
 
         return TradeStore(db=self).get_closed_trades()
 
-    def get_open_trades(
-        self, symbol: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def get_open_trades(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch open trades including their owning strategy and regime tag.
 
         Used by the regime-flip position review to map open positions back
@@ -2900,7 +2904,7 @@ class DatabaseManager:
                 )
 
             conn.commit()
-            print(f"DEBUG save_position: COMMITTED to database")
+            print("DEBUG save_position: COMMITTED to database")
 
             # Invalidate positions cache
             _data_cache.invalidate("positions_all")
@@ -3403,7 +3407,10 @@ class DatabaseManager:
                     )
                     min_ts, max_ts = cursor.fetchone()
                     if min_ts and max_ts:
-                        stats[f"{table}_date_range"] = {"start": str(min_ts), "end": str(max_ts)}
+                        stats[f"{table}_date_range"] = {
+                            "start": str(min_ts),
+                            "end": str(max_ts),
+                        }
                 except Exception:
                     pass  # Table might not have timestamp column
 
@@ -3516,7 +3523,9 @@ class DatabaseManager:
                 import shutil
 
                 shutil.copy2(DATABASE_PATH, backup_path)
-                logger.info(f"SQLite database backup created using file copy at {backup_path}")
+                logger.info(
+                    f"SQLite database backup created using file copy at {backup_path}"
+                )
                 return True
             except Exception as e2:
                 logger.error(f"File copy backup also failed: {e2}")
@@ -3535,11 +3544,16 @@ class DatabaseManager:
 
             cmd = [
                 "pg_dump",
-                "-h", pg_host,
-                "-p", pg_port,
-                "-U", pg_user,
-                "-d", pg_database,
-                "-f", backup_path,
+                "-h",
+                pg_host,
+                "-p",
+                pg_port,
+                "-U",
+                pg_user,
+                "-d",
+                pg_database,
+                "-f",
+                backup_path,
                 "--no-owner",
                 "--no-privileges",
             ]
@@ -3550,7 +3564,9 @@ class DatabaseManager:
             if pg_password:
                 env["PGPASSWORD"] = pg_password
 
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, env=env, timeout=120
+            )
 
             if result.returncode == 0:
                 logger.info(f"PostgreSQL backup created via pg_dump at {backup_path}")
@@ -3641,11 +3657,16 @@ class DatabaseManager:
 
                 cmd = [
                     "psql",
-                    "-h", pg_host,
-                    "-p", pg_port,
-                    "-U", pg_user,
-                    "-d", pg_database,
-                    "-f", backup_path,
+                    "-h",
+                    pg_host,
+                    "-p",
+                    pg_port,
+                    "-U",
+                    pg_user,
+                    "-d",
+                    pg_database,
+                    "-f",
+                    backup_path,
                 ]
 
                 env = os.environ.copy()
@@ -3653,10 +3674,14 @@ class DatabaseManager:
                 if pg_password:
                     env["PGPASSWORD"] = pg_password
 
-                result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, env=env, timeout=300
+                )
 
                 if result.returncode == 0:
-                    logger.info(f"PostgreSQL database restored from pg_dump: {backup_path}")
+                    logger.info(
+                        f"PostgreSQL database restored from pg_dump: {backup_path}"
+                    )
                     return True
                 else:
                     logger.error(f"psql restore failed: {result.stderr}")
@@ -4052,7 +4077,9 @@ class DatabaseManager:
                 )
                 count = cursor.fetchone()[0]
                 if count < 3:
-                    logger.warning("PostgreSQL Pacifica tables missing, creating minimal schema")
+                    logger.warning(
+                        "PostgreSQL Pacifica tables missing, creating minimal schema"
+                    )
                     self._create_minimal_pacifica_pg(conn)
                 else:
                     logger.info("PostgreSQL Pacifica funding tracking tables verified")

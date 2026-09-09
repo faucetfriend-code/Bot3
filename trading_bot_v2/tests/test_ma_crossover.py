@@ -59,7 +59,10 @@ def _first_cross(closes: List[float], fast: int, slow: int, golden: bool) -> int
     honest about where the crossover actually is.
     """
     for i in range(slow, len(closes)):
-        fast_prev, slow_prev = _sma_at(closes, fast, i - 1), _sma_at(closes, slow, i - 1)
+        fast_prev, slow_prev = (
+            _sma_at(closes, fast, i - 1),
+            _sma_at(closes, slow, i - 1),
+        )
         fast_now, slow_now = _sma_at(closes, fast, i), _sma_at(closes, slow, i)
         if golden and fast_prev <= slow_prev and fast_now > slow_now:
             return i
@@ -198,14 +201,10 @@ class TestConfigurableEntryWindow:
         strategy = MACrossoverStrategy()
         assert (strategy.min_entry_bars, strategy.max_entry_bars) == (0, 12)
 
-    @pytest.mark.parametrize(
-        "min_bars,max_bars", [(5, 1), (-1, 5), (-3, -1)]
-    )
+    @pytest.mark.parametrize("min_bars,max_bars", [(5, 1), (-1, 5), (-3, -1)])
     def test_invalid_pairs_fall_back(self, min_bars, max_bars):
         """An empty/negative window falls back instead of disabling entries."""
-        strategy = MACrossoverStrategy(
-            min_entry_bars=min_bars, max_entry_bars=max_bars
-        )
+        strategy = MACrossoverStrategy(min_entry_bars=min_bars, max_entry_bars=max_bars)
         assert (strategy.min_entry_bars, strategy.max_entry_bars) == (
             DEFAULT_MIN_ENTRY_BARS,
             DEFAULT_MAX_ENTRY_BARS,
@@ -271,9 +270,7 @@ class TestConfigurableEntryWindow:
         )
 
         space = get_search_space("ma_crossover")
-        sample = {
-            name: (bounds[0] + bounds[1]) / 2 for name, bounds in space.items()
-        }
+        sample = {name: (bounds[0] + bounds[1]) / 2 for name, bounds in space.items()}
         sample["fast_ma_period"] = 8
         sample["slow_ma_period"] = 34
         sample["max_entry_bars"] = 12
@@ -370,7 +367,9 @@ class TestRollingWindowCrossoverTracking:
 
         bundle = BacktestEngine._history(series, cross_idx, ENGINE_LOOKBACK)
         for _ in range(48):
-            strategy.generate_signals(symbol, {"4h": bundle}, series["close"][cross_idx])
+            strategy.generate_signals(
+                symbol, {"4h": bundle}, series["close"][cross_idx]
+            )
 
         info = strategy.last_crossover[symbol]
         elapsed = strategy._bars_since_crossover(
@@ -413,12 +412,16 @@ class TestHistoryValidation:
         assert "BTC-USDC" in joined
 
     def test_required_history_reflects_configuration(self):
-        assert MACrossoverStrategy(
-            fast_ma_period=10, slow_ma_period=30
-        ).required_history() == 35  # macd 26 + 9 dominates
-        assert MACrossoverStrategy(
-            fast_ma_period=50, slow_ma_period=200
-        ).required_history() == 201
+        assert (
+            MACrossoverStrategy(fast_ma_period=10, slow_ma_period=30).required_history()
+            == 35
+        )  # macd 26 + 9 dominates
+        assert (
+            MACrossoverStrategy(
+                fast_ma_period=50, slow_ma_period=200
+            ).required_history()
+            == 201
+        )
 
 
 class TestEngineWarmup:

@@ -9,7 +9,6 @@ import pytest
 import time
 import threading
 from unittest.mock import Mock, patch
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 
 class TestPerformanceBenchmarks:
@@ -231,7 +230,12 @@ class TestPerformanceBenchmarks:
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=mock_ws),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
         ):
             bot = TradingBot()
             bot.ws_client = mock_ws
@@ -241,7 +245,7 @@ class TestPerformanceBenchmarks:
             start_time = time.time()
 
             for _ in range(num_requests):
-                price = bot._get_ticker_ws("SUI-PERP")
+                bot._get_ticker_ws("SUI-PERP")
 
             end_time = time.time()
             total_time = end_time - start_time
@@ -307,7 +311,6 @@ class TestPerformanceBenchmarks:
 
     def test_database_operation_performance(self):
         """Test database operation performance."""
-        from trading_bot_v2.database import DatabaseManager
 
         # This would test actual database performance
         # For now, we'll test the mock performance

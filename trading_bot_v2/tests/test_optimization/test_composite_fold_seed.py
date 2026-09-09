@@ -145,9 +145,11 @@ class TestStableAcrossProcesses:
     """Builtin ``hash()`` is salted per process; this must not be."""
 
     def _subprocess_seed(self, hashseed):
-        repo_root = Path(
-            trading_bot_v2.optimization.run_composite_tuning.__file__
-        ).resolve().parents[2]
+        repo_root = (
+            Path(trading_bot_v2.optimization.run_composite_tuning.__file__)
+            .resolve()
+            .parents[2]
+        )
         code = (
             "import json;"
             "from trading_bot_v2.optimization.run_composite_tuning "

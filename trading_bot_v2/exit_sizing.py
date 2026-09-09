@@ -69,9 +69,7 @@ def _extract_position(pos: Any) -> Tuple[str, Optional[str], float]:
     return normalize_symbol(symbol), normalize_position_side(side), quantity
 
 
-def remaining_exchange_quantity(
-    client: Any, symbol: str, side: str
-) -> Optional[float]:
+def remaining_exchange_quantity(client: Any, symbol: str, side: str) -> Optional[float]:
     """Return the open quantity the exchange reports for ``symbol``/``side``.
 
     Args:

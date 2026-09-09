@@ -24,7 +24,7 @@ import os
 import random
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from loguru import logger
 
 from .cost_model import CostTable, LiquidityRole
@@ -35,10 +35,10 @@ from .funding import FundingSchedule
 class SimulatedOrder:
     order_id: str
     symbol: str
-    side: str          # "bid" | "ask"
+    side: str  # "bid" | "ask"
     price: float
     quantity: float
-    order_type: str    # "limit" | "market" | "stop"
+    order_type: str  # "limit" | "market" | "stop"
     status: str = "open"
     filled_qty: float = 0.0
     fill_price: float = 0.0
@@ -49,7 +49,7 @@ class SimulatedOrder:
 @dataclass
 class SimulatedPosition:
     symbol: str
-    side: str          # "long" | "short"
+    side: str  # "long" | "short"
     quantity: float
     entry_price: float
     unrealised_pnl: float = 0.0
@@ -162,8 +162,10 @@ class SimulatedExchange:
         self._current_price: float = 0.0
         self._current_timestamp: str = ""
         self._order_counter: int = 0
-        self._current_strategy: str = ""  # Set by engine before each order for attribution
-        self._current_regime: str = ""    # Set by engine each bar (regime value, P4)
+        self._current_strategy: str = (
+            ""  # Set by engine before each order for attribution
+        )
+        self._current_regime: str = ""  # Set by engine each bar (regime value, P4)
         # Directional-bias state ("bull"/"bear"/"neutral"), set by the
         # engine each bar alongside _current_regime. Combined with the
         # regime it forms the composite state (vol tercile x direction)
@@ -195,9 +197,7 @@ class SimulatedExchange:
         Returns:
             Sum of ``quantity * entry_price`` over all open positions.
         """
-        return sum(
-            p.quantity * p.entry_price for p in self._positions.values()
-        )
+        return sum(p.quantity * p.entry_price for p in self._positions.values())
 
     def equity(self) -> float:
         """
@@ -222,13 +222,15 @@ class SimulatedExchange:
     def get_positions(self) -> List[Dict]:
         result = []
         for pos in self._positions.values():
-            result.append({
-                "symbol": pos.symbol,
-                "side": pos.side,
-                "quantity": str(pos.quantity),
-                "entry_price": str(pos.entry_price),
-                "unrealised_pnl": str(round(pos.unrealised_pnl, 4)),
-            })
+            result.append(
+                {
+                    "symbol": pos.symbol,
+                    "side": pos.side,
+                    "quantity": str(pos.quantity),
+                    "entry_price": str(pos.entry_price),
+                    "unrealised_pnl": str(round(pos.unrealised_pnl, 4)),
+                }
+            )
         return result
 
     def place_order(
@@ -281,11 +283,17 @@ class SimulatedExchange:
     def get_orderbook(self, symbol: str, depth: int = 10) -> Dict:
         spread_pct = 0.0005
         bids = [
-            [str(round(self._current_price * (1 - spread_pct * i), 4)), str(1000 / (i + 1))]
+            [
+                str(round(self._current_price * (1 - spread_pct * i), 4)),
+                str(1000 / (i + 1)),
+            ]
             for i in range(1, depth + 1)
         ]
         asks = [
-            [str(round(self._current_price * (1 + spread_pct * i), 4)), str(1000 / (i + 1))]
+            [
+                str(round(self._current_price * (1 + spread_pct * i), 4)),
+                str(1000 / (i + 1)),
+            ]
             for i in range(1, depth + 1)
         ]
         return {"bids": bids, "asks": asks}
@@ -460,8 +468,13 @@ class SimulatedExchange:
         if order.status == "filled":  # may have been cancelled by balance guard
             self.balance -= fee
             self._log_trade(
-                order, fill_price, fee, realised_pnl, regime_tag,
-                direction_tag, role.value
+                order,
+                fill_price,
+                fee,
+                realised_pnl,
+                regime_tag,
+                direction_tag,
+                role.value,
             )
 
     def _open_or_add_position(
@@ -504,8 +517,11 @@ class SimulatedExchange:
                     else:
                         self.balance -= cost
                         self._positions[symbol] = SimulatedPosition(
-                            symbol=symbol, side=side, quantity=remaining,
-                            entry_price=price, entry_regime=self._current_regime,
+                            symbol=symbol,
+                            side=side,
+                            quantity=remaining,
+                            entry_price=price,
+                            entry_regime=self._current_regime,
                             entry_direction=self._current_direction,
                         )
             # partial close: existing.quantity already reduced above
@@ -521,7 +537,9 @@ class SimulatedExchange:
                 return 0.0
             self.balance -= cost
             total_qty = existing.quantity + qty
-            avg_price = (existing.entry_price * existing.quantity + price * qty) / total_qty
+            avg_price = (
+                existing.entry_price * existing.quantity + price * qty
+            ) / total_qty
             existing.entry_price = avg_price
             existing.quantity = total_qty
 
@@ -536,14 +554,19 @@ class SimulatedExchange:
                 return 0.0
             self.balance -= cost
             self._positions[symbol] = SimulatedPosition(
-                symbol=symbol, side=side, quantity=qty, entry_price=price,
+                symbol=symbol,
+                side=side,
+                quantity=qty,
+                entry_price=price,
                 entry_regime=self._current_regime,
                 entry_direction=self._current_direction,
             )
 
         return realised_pnl
 
-    def _calculate_pnl(self, pos: SimulatedPosition, exit_price: float, qty: float) -> float:
+    def _calculate_pnl(
+        self, pos: SimulatedPosition, exit_price: float, qty: float
+    ) -> float:
         if pos.side == "long":
             return (exit_price - pos.entry_price) * qty
         else:
@@ -590,7 +613,9 @@ class SimulatedExchange:
 
     def _update_unrealised_pnl(self) -> None:
         for pos in self._positions.values():
-            pos.unrealised_pnl = self._calculate_pnl(pos, self._current_price, pos.quantity)
+            pos.unrealised_pnl = self._calculate_pnl(
+                pos, self._current_price, pos.quantity
+            )
 
     def _current_funding_rate(self) -> float:
         """Rate charged per venue settlement at the current timestamp.
@@ -681,18 +706,20 @@ class SimulatedExchange:
             fills. Makes fee attribution auditable - a strategy whose
             fills are all resting limits should never show a taker bill.
         """
-        self.trade_log.append({
-            "order_id": order.order_id,
-            "timestamp": self._current_timestamp,
-            "symbol": order.symbol,
-            "side": order.side,
-            "quantity": order.quantity,
-            "fill_price": fill_price,
-            "fee": fee,
-            "pnl": round(realised_pnl, 6),
-            "balance_after": round(self.balance, 4),
-            "strategy": self._current_strategy,
-            "regime": regime,
-            "direction": direction,
-            "role": role,
-        })
+        self.trade_log.append(
+            {
+                "order_id": order.order_id,
+                "timestamp": self._current_timestamp,
+                "symbol": order.symbol,
+                "side": order.side,
+                "quantity": order.quantity,
+                "fill_price": fill_price,
+                "fee": fee,
+                "pnl": round(realised_pnl, 6),
+                "balance_after": round(self.balance, 4),
+                "strategy": self._current_strategy,
+                "regime": regime,
+                "direction": direction,
+                "role": role,
+            }
+        )

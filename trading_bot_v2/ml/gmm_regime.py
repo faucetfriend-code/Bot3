@@ -15,21 +15,22 @@ These 3 latent labels are mapped to the system's 5 existing regimes via a
 configurable mapping, and a confidence score governs fallback behaviour.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 from loguru import logger
 
 from ..market_regime import MarketRegime
-from .feature_engineering import FeatureExtractor, MarketFeatures
+from .feature_engineering import FeatureExtractor
 from .model_manager import ModelManager
 
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class GMMConfig:
@@ -58,6 +59,7 @@ class GMMConfig:
 # ---------------------------------------------------------------------------
 # Latent regime labels (internal GMM clusters)
 # ---------------------------------------------------------------------------
+
 
 class _LatentRegime(Enum):
     """Internal regime labels before mapping to system regimes.
@@ -149,6 +151,7 @@ def assign_cluster_labels(cluster_means: np.ndarray) -> Dict[int, _LatentRegime]
 # Regime detection result
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class GMMRegimeResult:
     """Result of a GMM regime prediction.
@@ -171,6 +174,7 @@ class GMMRegimeResult:
 # ---------------------------------------------------------------------------
 # GMM Regime Detector
 # ---------------------------------------------------------------------------
+
 
 class GMMRegimeDetector:
     """Gaussian Mixture Model regime detector.
@@ -361,9 +365,7 @@ class GMMRegimeDetector:
         X = np.nan_to_num(X, nan=0.0, posinf=10.0, neginf=-10.0)
 
         if len(X) < self.config.n_regimes * 10:
-            logger.warning(
-                f"Too few feature vectors for reliable training: {len(X)}"
-            )
+            logger.warning(f"Too few feature vectors for reliable training: {len(X)}")
             return None
 
         # Standardise features for better GMM convergence
@@ -395,9 +397,7 @@ class GMMRegimeDetector:
         avg_log_likelihood = float(gmm.score(X_scaled))
 
         # Cluster means back in raw feature units for reporting
-        cluster_means_raw = (
-            gmm.means_ * self._feature_stds + self._feature_means
-        )
+        cluster_means_raw = gmm.means_ * self._feature_stds + self._feature_means
 
         logger.info(
             f"GMM training complete: {len(X)} samples, "
@@ -424,8 +424,7 @@ class GMMRegimeDetector:
             "log_likelihood": avg_log_likelihood,
             "cluster_sizes": label_counts,
             "cluster_to_latent": {
-                idx: latent.value
-                for idx, latent in self._cluster_to_latent.items()
+                idx: latent.value for idx, latent in self._cluster_to_latent.items()
             },
             "cluster_means_raw": cluster_means_raw,
         }
@@ -484,9 +483,7 @@ class GMMRegimeDetector:
         system_regime = _DEFAULT_REGIME_MAP.get(latent, MarketRegime.INDECISIVE)
 
         prob_dict = {
-            self._cluster_to_latent.get(i, _LatentRegime.RANGING).value: float(
-                probs[i]
-            )
+            self._cluster_to_latent.get(i, _LatentRegime.RANGING).value: float(probs[i])
             for i in range(len(probs))
         }
 
@@ -510,7 +507,11 @@ class GMMRegimeDetector:
             "confidence_threshold": self.config.confidence_threshold,
         }
         if self._gmm_model is not None:
-            info["cluster_sizes"] = dict(self._gmm_model.counts_) if hasattr(self._gmm_model, "counts_") else {}
+            info["cluster_sizes"] = (
+                dict(self._gmm_model.counts_)
+                if hasattr(self._gmm_model, "counts_")
+                else {}
+            )
             info["converged"] = self._gmm_model.converged_
             info["n_features"] = self._gmm_model.n_features_in_
         return info

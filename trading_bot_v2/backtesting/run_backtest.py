@@ -24,7 +24,9 @@ def main():
     parser.add_argument("--start", default=config.backtest_start_date)
     parser.add_argument("--end", default=config.backtest_end_date)
     parser.add_argument("--symbol", default=config.backtest_symbol)
-    parser.add_argument("--capital", type=float, default=config.backtest_initial_capital)
+    parser.add_argument(
+        "--capital", type=float, default=config.backtest_initial_capital
+    )
     parser.add_argument("--walk-forward", action="store_true")
     parser.add_argument("--report", default="backtest_report.html")
     parser.add_argument(
@@ -59,10 +61,15 @@ def main():
         results = wf.run(args.start, args.end, args.symbol, args.capital)
         # Save combined report for walk-forward
         for i, r in enumerate(results):
-            r.save_html(f"backtest_wf_{i+1:02d}.html")
+            r.save_html(f"backtest_wf_{i + 1:02d}.html")
     else:
-        result = engine.run(args.start, args.end, args.symbol, args.capital,
-                            strategy_filter=strategy_filter)
+        result = engine.run(
+            args.start,
+            args.end,
+            args.symbol,
+            args.capital,
+            strategy_filter=strategy_filter,
+        )
         result.print_summary()
         # Shown on every run, not just empty ones: on a profitable run it
         # still names the stage with the largest attrition.

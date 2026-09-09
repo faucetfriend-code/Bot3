@@ -24,7 +24,6 @@ This module works in conjunction with:
 import os
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
-from datetime import datetime
 from loguru import logger
 
 from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
@@ -335,7 +334,6 @@ class MigratedPositionManager:
         Returns:
             ATR value, or 0 if calculation fails
         """
-        from datetime import datetime
         import time
 
         # Check cache
@@ -512,7 +510,6 @@ class MigratedPositionManager:
             True if stop was updated
         """
         side = pos.get("side")
-        entry_price = pos.get("entry_price", 0)
 
         # Get ATR for stop distance
         atr = self._get_atr(symbol, market_data)
@@ -700,7 +697,9 @@ class MigratedPositionManager:
             )
             self._pending_closes.pop(key, None)
             return False
-        result = self._send_reduce_only(symbol, side, plan.quantity, key, "partial", "take_profit")
+        result = self._send_reduce_only(
+            symbol, side, plan.quantity, key, "partial", "take_profit"
+        )
         if result is None:
             return False
         executed = self._confirmed_executed_quantity(
@@ -708,14 +707,23 @@ class MigratedPositionManager:
         )
         if executed is None:
             self._mark_pending_close(
-                key, "partial", plan.quantity, "take_profit",
-                "accepted but fill unconfirmed", ambiguous=True, accepted=True,
+                key,
+                "partial",
+                plan.quantity,
+                "take_profit",
+                "accepted but fill unconfirmed",
+                ambiguous=True,
+                accepted=True,
             )
             return False
         if executed <= 0:
             self._mark_pending_close(
-                key, "partial", plan.quantity, "take_profit",
-                "accepted but nothing executed", accepted=True,
+                key,
+                "partial",
+                plan.quantity,
+                "take_profit",
+                "accepted but nothing executed",
+                accepted=True,
             )
             return False
         self._pending_closes.pop(key, None)
@@ -762,19 +770,29 @@ class MigratedPositionManager:
                 f"quantity {plan.quantity:.6f}"
             )
 
-        result = self._send_reduce_only(symbol, side, plan.quantity, key, "full", reason)
+        result = self._send_reduce_only(
+            symbol, side, plan.quantity, key, "full", reason
+        )
         if result is None:
             return
         executed = self._confirmed_executed_quantity(symbol, side, plan, result, qty)
         if executed is None:
             self._mark_pending_close(
-                key, "full", plan.quantity, reason,
-                "accepted but fill unconfirmed", ambiguous=True, accepted=True,
+                key,
+                "full",
+                plan.quantity,
+                reason,
+                "accepted but fill unconfirmed",
+                ambiguous=True,
+                accepted=True,
             )
             return
         if executed + 1e-9 < plan.quantity:
             self._mark_pending_close(
-                key, "full", plan.quantity - executed, reason,
+                key,
+                "full",
+                plan.quantity - executed,
+                reason,
                 f"partial execution {executed:.6f}/{plan.quantity:.6f}",
                 accepted=True,
             )
@@ -803,7 +821,11 @@ class MigratedPositionManager:
             )
         except Exception as exc:  # noqa: BLE001 - outcome is ambiguous
             self._mark_pending_close(
-                key, kind, quantity, reason, f"{type(exc).__name__}: {exc}",
+                key,
+                kind,
+                quantity,
+                reason,
+                f"{type(exc).__name__}: {exc}",
                 ambiguous=True,
             )
             return None
@@ -901,7 +923,9 @@ class MigratedPositionManager:
             marker = self._pending_closes[key]
             pos = by_key.get(key)
             if pos is None:
-                logger.warning(f"Pending close {key} no longer registered - dropping marker")
+                logger.warning(
+                    f"Pending close {key} no longer registered - dropping marker"
+                )
                 self._pending_closes.pop(key, None)
                 continue
             if marker["attempts"] >= self._max_close_attempts:
@@ -1105,7 +1129,12 @@ class MigratedPositionManager:
         return False
 
     def _record_venue_stop_success(
-        self, symbol: str, side: str, state: Dict[str, Any], result: OrderResult, new_stop: float
+        self,
+        symbol: str,
+        side: str,
+        state: Dict[str, Any],
+        result: OrderResult,
+        new_stop: float,
     ) -> None:
         """Update the mirror + DB after the venue accepted the new level."""
         method = str((result.raw or {}).get("data", {}).get("method", "") or "")
@@ -1134,7 +1163,12 @@ class MigratedPositionManager:
         )
 
     def _record_venue_stop_failure(
-        self, symbol: str, side: str, state: Dict[str, Any], result: OrderResult, new_stop: float
+        self,
+        symbol: str,
+        side: str,
+        state: Dict[str, Any],
+        result: OrderResult,
+        new_stop: float,
     ) -> None:
         """Count an amend failure; fall back to local after the cap."""
         state["failures"] = int(state.get("failures", 0)) + 1

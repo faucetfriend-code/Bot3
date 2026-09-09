@@ -85,7 +85,7 @@ class TestDetectorEquivalence:
                         detector, adx, falling, vol, prev_enum
                     )
                     assert classify(params, bar, previous) == expected.value, (
-                        f"adx={adx} falling={falling} vol={vol} " f"prev={previous}"
+                        f"adx={adx} falling={falling} vol={vol} prev={previous}"
                     )
 
     def test_replay_matches_confirmation_state_machine(self):

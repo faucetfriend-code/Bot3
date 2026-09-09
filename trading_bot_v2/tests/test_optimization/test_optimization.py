@@ -12,9 +12,7 @@ Tests cover:
 
 import os
 import tempfile
-from pathlib import Path
-from typing import Dict, Any
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -209,15 +207,11 @@ class TestSearchSpaces:
     def test_ma_crossover_history_budget_is_enforced(self, monkeypatch):
         """A slow MA beyond the engine's history budget is infeasible."""
         monkeypatch.setenv("BACKTEST_HISTORY_LOOKBACK", "30")
-        reasons = check_param_feasibility(
-            "ma_crossover", {"slow_ma_period": 50}
-        )
+        reasons = check_param_feasibility("ma_crossover", {"slow_ma_period": 50})
         assert any("BACKTEST_HISTORY_LOOKBACK" in r for r in reasons)
 
         monkeypatch.setenv("BACKTEST_HISTORY_LOOKBACK", "60")
-        assert check_param_feasibility(
-            "ma_crossover", {"slow_ma_period": 50}
-        ) == []
+        assert check_param_feasibility("ma_crossover", {"slow_ma_period": 50}) == []
 
 
 # ---------------------------------------------------------------------------
@@ -511,6 +505,7 @@ class TestOptunaRunner:
         finally:
             # Force cleanup before deleting
             import gc
+
             gc.collect()
             try:
                 os.unlink(db_path)
@@ -567,15 +562,18 @@ class TestChunkedSweep:
         try:
             runner = OptunaRunner(db_path=db_path)
             runner.adapter = mock_adapter
-            with patch(
-                "trading_bot_v2.validation.runner.resolve_chunk_windows",
-                return_value={
-                    "symbols": symbols,
-                    "windows": windows,
-                    "data_start": "2024-01-01",
-                    "data_end": "2024-03-01",
-                },
-            ), patch.object(runner, "_record_trial_registry"):
+            with (
+                patch(
+                    "trading_bot_v2.validation.runner.resolve_chunk_windows",
+                    return_value={
+                        "symbols": symbols,
+                        "windows": windows,
+                        "data_start": "2024-01-01",
+                        "data_end": "2024-03-01",
+                    },
+                ),
+                patch.object(runner, "_record_trial_registry"),
+            ):
                 study = runner.optimize_chunked(
                     strategy="ma_crossover",
                     symbols=symbols,
@@ -674,6 +672,7 @@ class TestCLI:
 
         with pytest.raises(SystemExit) as exc_info:
             import sys
+
             sys.argv = ["run_optimize", "--help"]
             parse_args()
 
@@ -685,15 +684,23 @@ class TestCLI:
 
         sys.argv = [
             "run_optimize",
-            "--strategy", "mean_reversion",
-            "--trials", "50",
-            "--sampler", "random",
-            "--objective", "sortino_ratio",
+            "--strategy",
+            "mean_reversion",
+            "--trials",
+            "50",
+            "--sampler",
+            "random",
+            "--objective",
+            "sortino_ratio",
             "--walk-forward",
-            "--start", "2024-01-01",
-            "--end", "2024-12-31",
-            "--symbol", "BTC-USDC",
-            "--capital", "50000",
+            "--start",
+            "2024-01-01",
+            "--end",
+            "2024-12-31",
+            "--symbol",
+            "BTC-USDC",
+            "--capital",
+            "50000",
         ]
 
         from trading_bot_v2.optimization.run_optimize import parse_args
@@ -730,8 +737,10 @@ class TestCLI:
 
         sys.argv = [
             "run_optimize",
-            "--strategy", "vwap_scalping",
-            "--data-dir", "/abs/store",
+            "--strategy",
+            "vwap_scalping",
+            "--data-dir",
+            "/abs/store",
         ]
 
         from trading_bot_v2.optimization.run_optimize import parse_args
@@ -759,8 +768,10 @@ class TestCLI:
             "argv",
             [
                 "run_optimize",
-                "--strategy", "vwap_scalping",
-                "--data-dir", "/abs/store",
+                "--strategy",
+                "vwap_scalping",
+                "--data-dir",
+                "/abs/store",
             ],
         )
         try:
@@ -812,6 +823,7 @@ class TestIntegration:
 
             # Get results DataFrame
             import pandas as pd
+
             df = runner.get_study_results("mean_reversion")
             assert isinstance(df, pd.DataFrame)
             assert not df.empty
@@ -821,6 +833,7 @@ class TestIntegration:
             del runner
             gc.collect()
             import time
+
             time.sleep(0.5)
             try:
                 shutil.rmtree(tmpdir, ignore_errors=True)

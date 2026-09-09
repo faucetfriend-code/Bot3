@@ -147,9 +147,7 @@ class TestSignalFunnel:
         assert a.get(STAGE_RAW_SIGNALS) == 15
         assert a.get(STAGE_BARS_EVALUATED) == 52041 * 2
         assert a.reasons[REASON_VALIDITY["rrr_meets_minimum"]] == 15
-        assert (
-            a.by_strategy["momentum_scalping"][STAGE_VALIDITY_DROPPED] == 15
-        )
+        assert a.by_strategy["momentum_scalping"][STAGE_VALIDITY_DROPPED] == 15
         # set_stage values are absolute per-chunk but still additive on merge
         assert a.get(STAGE_CLOSED_TRADES) == 0
 
@@ -263,9 +261,7 @@ class TestScoring:
         discarded = score_for_outcome(
             TrialOutcome.ALL_DISCARDED_DOWNSTREAM, progress=0.999
         )
-        none_fired = score_for_outcome(
-            TrialOutcome.NO_OPPORTUNITIES, progress=0.999
-        )
+        none_fired = score_for_outcome(TrialOutcome.NO_OPPORTUNITIES, progress=0.999)
         never = score_for_outcome(TrialOutcome.NEVER_INVOKED, progress=0.999)
         assert traded > discarded > none_fired > never
 
@@ -274,9 +270,7 @@ class TestScoring:
             score_for_outcome(TrialOutcome.TRADED, objective_value=-500.0)
             == TRADED_SCORE_FLOOR
         )
-        assert (
-            score_for_outcome(TrialOutcome.TRADED, objective_value=1.4) == 1.4
-        )
+        assert score_for_outcome(TrialOutcome.TRADED, objective_value=1.4) == 1.4
 
     def test_infeasible_has_no_score(self):
         with pytest.raises(ValueError):
@@ -401,9 +395,7 @@ class TestRegressionPins:
         assert value != float("-inf")
 
     def test_zero_trade_ranks_below_every_traded_result(self):
-        worst_traded = score_for_outcome(
-            TrialOutcome.TRADED, objective_value=-10_000.0
-        )
+        worst_traded = score_for_outcome(TrialOutcome.TRADED, objective_value=-10_000.0)
         zero_trade = score_for_outcome(
             TrialOutcome.ALL_DISCARDED_DOWNSTREAM, progress=0.999
         )
@@ -496,21 +488,14 @@ class TestStrategyManagerWiring:
         stats = manager.get_signal_discard_stats()
         assert stats["momentum_scalping"]["discarded"] == 1
         assert funnel.get(STAGE_VALIDITY_DROPPED) == 1
-        assert (
-            funnel.reasons[REASON_VALIDITY["rrr_meets_minimum"]] == 1
-        )
-        assert (
-            funnel.by_strategy["momentum_scalping"][STAGE_VALIDITY_DROPPED]
-            == 1
-        )
+        assert funnel.reasons[REASON_VALIDITY["rrr_meets_minimum"]] == 1
+        assert funnel.by_strategy["momentum_scalping"][STAGE_VALIDITY_DROPPED] == 1
 
     def test_discard_with_null_funnel_still_counts_normally(self):
         manager = self._manager(NULL_FUNNEL)
         manager._record_discarded_signal(_signal(account_risk_ok=False), "S")
         stats = manager.get_signal_discard_stats()
-        assert stats["momentum_scalping"]["failed_flags"] == {
-            "account_risk_ok": 1
-        }
+        assert stats["momentum_scalping"]["failed_flags"] == {"account_risk_ok": 1}
 
     def test_conflict_drops_are_attributed(self):
         funnel = SignalFunnel()
@@ -519,9 +504,7 @@ class TestStrategyManagerWiring:
         dropped = _signal()
         manager._count_conflict_drops([kept, dropped], [kept])
         assert funnel.get("conflict_dropped") == 1
-        assert (
-            funnel.by_strategy["momentum_scalping"]["conflict_dropped"] == 1
-        )
+        assert funnel.by_strategy["momentum_scalping"]["conflict_dropped"] == 1
 
     def test_conflict_drops_are_free_with_a_null_funnel(self):
         manager = self._manager(NULL_FUNNEL)
@@ -594,9 +577,7 @@ class TestReportWiring:
             trial_funnel_payload,
         )
 
-        payload = trial_funnel_payload(
-            _StubTrial(7, _attrs_from(momentum_shape()))
-        )
+        payload = trial_funnel_payload(_StubTrial(7, _attrs_from(momentum_shape())))
         text = render_funnel_report(payload)
         assert "all_discarded_downstream" in text
         assert "BINDING CONSTRAINT: validity_dropped" in text

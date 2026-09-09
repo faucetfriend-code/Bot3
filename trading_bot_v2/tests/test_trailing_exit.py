@@ -3,23 +3,24 @@ Tests for trailing exits: VWAPPullback's trailing signal shape and the
 engine's stop-ratchet sweep against scripted bars.
 """
 
-from datetime import timedelta
-
 from trading_bot_v2.backtesting.cost_model import CostTable
 from trading_bot_v2.backtesting.engine import BacktestEngine
 from trading_bot_v2.backtesting.simulated_exchange import SimulatedExchange
-from trading_bot_v2.models import OrderSide
 from trading_bot_v2.tests.test_vwap_pullback import (
     BULL_4H,
-    SESSION_DAY,
     _long_session,
     _strategy,
 )
 
 
-def _bar(h, l):
-    return {"open": (h + l) / 2, "high": h, "low": l,
-            "close": (h + l) / 2, "volume": 1000}
+def _bar(h, lo):
+    return {
+        "open": (h + lo) / 2,
+        "high": h,
+        "low": lo,
+        "close": (h + lo) / 2,
+        "volume": 1000,
+    }
 
 
 def _exchange():
@@ -43,23 +44,23 @@ def _engine():
 
 def _open_long(exchange, entry=100.0, qty="1"):
     exchange.advance(_bar(entry, entry), "2024-01-01T00:00:00")
-    exchange.place_order(symbol="BTC-USDC", side="bid", quantity=qty,
-                         order_type="market")
+    exchange.place_order(
+        symbol="BTC-USDC", side="bid", quantity=qty, order_type="market"
+    )
     return exchange._positions["BTC-USDC"]
 
 
 def _stops(exchange):
     return [
-        o for o in exchange._orders.values()
-        if o.symbol == "BTC-USDC" and o.status == "open"
-        and o.order_type == "stop"
+        o
+        for o in exchange._orders.values()
+        if o.symbol == "BTC-USDC" and o.status == "open" and o.order_type == "stop"
     ]
 
 
 class TestStrategyTrailingSignal:
     def test_trailing_signal_has_no_take_profit_and_carries_config(self):
-        strategy = _strategy(exit_mode="trailing", trail_activation_r=1.0,
-                             trail_r=0.75)
+        strategy = _strategy(exit_mode="trailing", trail_activation_r=1.0, trail_r=0.75)
         sig = strategy.generate_signals(
             "BTC-USDC", {"15m": _long_session(), "4h": BULL_4H}, 108.0
         )[0]
@@ -84,19 +85,25 @@ class TestStrategyTrailingSignal:
 
 
 class TestEngineRatchet:
-    def _tracked(self, engine, risk=2.0, activation=1.0, trail=1.0,
-                 placed=98.0):
+    def _tracked(self, engine, risk=2.0, activation=1.0, trail=1.0, placed=98.0):
         engine._position_trailing["BTC-USDC"] = {
-            "activation_r": activation, "trail_r": trail, "risk": risk,
-            "side": "long", "strategy": "vwap_pullback", "peak": None,
-            "active": False, "placed_stop": placed, "seen_position": True,
+            "activation_r": activation,
+            "trail_r": trail,
+            "risk": risk,
+            "side": "long",
+            "strategy": "vwap_pullback",
+            "peak": None,
+            "active": False,
+            "placed_stop": placed,
+            "seen_position": True,
         }
 
     def test_no_ratchet_before_activation(self):
         ex = _exchange()
         _open_long(ex, 100.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="stop", price=98.0)
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="stop", price=98.0
+        )
         engine = _engine()
         self._tracked(engine, risk=2.0, activation=1.0)
         # High 101.5 < entry + 1R (102): not active, stop untouched
@@ -107,8 +114,9 @@ class TestEngineRatchet:
     def test_ratchet_replaces_stop_behind_peak(self):
         ex = _exchange()
         _open_long(ex, 100.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="stop", price=98.0)
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="stop", price=98.0
+        )
         engine = _engine()
         self._tracked(engine, risk=2.0, activation=1.0, trail=1.0)
         # High 104 >= 102 activates; new stop = 104 - 2 = 102
@@ -126,8 +134,9 @@ class TestEngineRatchet:
     def test_ratcheted_stop_fills_on_retrace(self):
         ex = _exchange()
         _open_long(ex, 100.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="stop", price=98.0)
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="stop", price=98.0
+        )
         engine = _engine()
         self._tracked(engine, risk=2.0)
         engine._apply_trailing_stops(ex, _bar(106.0, 101.0))  # stop -> 104
@@ -144,7 +153,6 @@ class TestEngineRatchet:
         engine = _engine()
         self._tracked(engine)
         # Close the position manually
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="market")
+        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1", order_type="market")
         engine._apply_trailing_stops(ex, _bar(100.0, 100.0))
         assert "BTC-USDC" not in engine._position_trailing

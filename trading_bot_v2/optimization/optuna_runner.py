@@ -27,6 +27,7 @@ from loguru import logger
 
 try:
     import optuna
+
     OPTUNA_AVAILABLE = True
 except ImportError:
     OPTUNA_AVAILABLE = False
@@ -330,9 +331,7 @@ def classify_and_score(
     else:
         outcome = TrialOutcome.from_diagnosis(funnel.diagnose())
     if outcome is TrialOutcome.TRADED:
-        return outcome, score_for_outcome(
-            outcome, objective_value=objective_value
-        )
+        return outcome, score_for_outcome(outcome, objective_value=objective_value)
     return outcome, score_for_outcome(outcome, progress=funnel.progress())
 
 
@@ -542,9 +541,7 @@ class OptunaRunner:
                 composite tuner.
         """
         if not OPTUNA_AVAILABLE:
-            raise ImportError(
-                "Optuna is required. Install with: pip install optuna"
-            )
+            raise ImportError("Optuna is required. Install with: pip install optuna")
 
         # Set up database path
         if db_path is None:
@@ -614,9 +611,7 @@ class OptunaRunner:
         # Validate strategy
         available = list_strategies()
         if strategy not in available:
-            raise ValueError(
-                f"Unknown strategy: '{strategy}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {available}")
 
         # Get search space
         get_search_space(strategy)
@@ -630,6 +625,7 @@ class OptunaRunner:
 
         # Set up dates from config if not provided
         from ..config import config as default_config
+
         cfg = self.config or default_config
 
         if start is None:
@@ -741,8 +737,7 @@ class OptunaRunner:
             )
         else:
             logger.warning(
-                "Optimization completed with no valid trials "
-                "(all pruned or failed)"
+                "Optimization completed with no valid trials (all pruned or failed)"
             )
 
         # P5: record how many configurations this study tried so the
@@ -840,9 +835,7 @@ class OptunaRunner:
         """
         available = list_strategies()
         if strategy not in available:
-            raise ValueError(
-                f"Unknown strategy: '{strategy}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {available}")
         get_search_space(strategy)
         objective = normalize_objective(objective)
         if regime is not None:
@@ -909,8 +902,7 @@ class OptunaRunner:
             f"({sweep_windows[0][0]} .. {sweep_windows[-1][1]}), "
             f"objective={objective}, seed={seed}"
             + (
-                f", regime={regime} (min {min_regime_trades} matching "
-                f"trades/trial)"
+                f", regime={regime} (min {min_regime_trades} matching trades/trial)"
                 if regime
                 else ""
             )
@@ -996,9 +988,7 @@ class OptunaRunner:
             return optuna.samplers.RandomSampler(seed=seed)
         raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
 
-    def _suggest_or_prune(
-        self, trial: "optuna.Trial", strategy: str
-    ) -> Dict[str, Any]:
+    def _suggest_or_prune(self, trial: "optuna.Trial", strategy: str) -> Dict[str, Any]:
         """Sample parameters, pruning structurally infeasible regions.
 
         Combinations that could never produce a tradeable signal are
@@ -1069,9 +1059,7 @@ class OptunaRunner:
         Raises:
             RuntimeError: When the grid produced no backtests at all.
         """
-        target_regime = (
-            normalize_regime_value(regime) if regime is not None else None
-        )
+        target_regime = normalize_regime_value(regime) if regime is not None else None
         funnel = SignalFunnel(label=label or f"{strategy}/chunks")
         chunk_values: List[float] = []
         per_symbol: Dict[str, Dict[str, Any]] = {}
@@ -1102,9 +1090,7 @@ class OptunaRunner:
                 raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
 
                 if target_regime is not None:
-                    matched = self.adapter.get_regime_trades(
-                        result, target_regime
-                    )
+                    matched = self.adapter.get_regime_trades(result, target_regime)
                     closed = len(matched)
                     pnls = [float(t.get("pnl", 0)) for t in matched]
                     return_pct += (
@@ -1127,9 +1113,7 @@ class OptunaRunner:
                     )
                 else:
                     closed = int(getattr(result, "closed_trades", 0) or 0)
-                    return_pct += float(
-                        getattr(result, "total_return_pct", 0.0) or 0.0
-                    )
+                    return_pct += float(getattr(result, "total_return_pct", 0.0) or 0.0)
                     pooled.extend(
                         closed_trade_returns(
                             getattr(result, "trade_log", None) or [],
@@ -1160,9 +1144,7 @@ class OptunaRunner:
                 "trades": trades,
                 "invoked": invoked,
                 "raw_signals": raw_signals,
-                "objective": (
-                    round(sum(values) / len(values), 6) if values else 0.0
-                ),
+                "objective": (round(sum(values) / len(values), 6) if values else 0.0),
                 "return_pct": round(return_pct, 4),
             }
             symbol_returns[symbol] = pooled
@@ -1176,19 +1158,17 @@ class OptunaRunner:
         # In regime mode a parameter set can run every chunk and still
         # match no trade in the target regime. That is a zero-trade
         # outcome to be banded by the funnel, not a setup failure.
-        mean_value = (
-            sum(chunk_values) / len(chunk_values) if chunk_values else 0.0
-        )
+        mean_value = sum(chunk_values) / len(chunk_values) if chunk_values else 0.0
         std_dev = 0.0
         value = mean_value
         # Penalize dispersion across chunks, mirroring the walk-forward
         # branch: a parameter set that only works in one window/symbol
         # should not outrank a steadier one at the same mean.
         if len(chunk_values) > 1:
-            variance = sum(
-                (v - mean_value) ** 2 for v in chunk_values
-            ) / len(chunk_values)
-            std_dev = variance ** 0.5
+            variance = sum((v - mean_value) ** 2 for v in chunk_values) / len(
+                chunk_values
+            )
+            std_dev = variance**0.5
             if std_dev > 1.0:
                 value -= (std_dev - 1.0) * 0.2
 
@@ -1215,9 +1195,7 @@ class OptunaRunner:
             symbol_returns=symbol_returns,
             chunks=chunk_log,
             total_trades=sum(s["trades"] for s in per_symbol.values()),
-            traded_symbols=sum(
-                1 for s in per_symbol.values() if s["trades"] > 0
-            ),
+            traded_symbols=sum(1 for s in per_symbol.values() if s["trades"] > 0),
             profitable_symbols=sum(
                 1 for s in per_symbol.values() if s["objective"] > 0
             ),
@@ -1277,9 +1255,7 @@ class OptunaRunner:
         trial.set_user_attr("chunks", evaluation.chunks)
         trial.set_user_attr("total_trades", evaluation.total_trades)
         trial.set_user_attr("traded_symbols", evaluation.traded_symbols)
-        trial.set_user_attr(
-            "profitable_symbols", evaluation.profitable_symbols
-        )
+        trial.set_user_attr("profitable_symbols", evaluation.profitable_symbols)
 
         if regime is not None:
             trial.set_user_attr("regime_trade_count", evaluation.total_trades)
@@ -1290,8 +1266,7 @@ class OptunaRunner:
             )
             if evaluation.total_trades < threshold:
                 raise optuna.TrialPruned(
-                    f"Only {evaluation.total_trades} {regime} trades "
-                    f"(< {threshold})"
+                    f"Only {evaluation.total_trades} {regime} trades (< {threshold})"
                 )
 
         return self._score_trial(
@@ -1379,9 +1354,7 @@ class OptunaRunner:
             f"Trial registry: recorded {n_trials} trials "
             f"(completed={len(completed)}, pruned={len(pruned)}, "
             f"infeasible_excluded={infeasible}) "
-            f"for {strategy}"
-            + (f"/{regime}" if regime else "")
-            + f" as row {row_id}"
+            f"for {strategy}" + (f"/{regime}" if regime else "") + f" as row {row_id}"
         )
 
     def _objective(
@@ -1466,8 +1439,7 @@ class OptunaRunner:
                 if regime is not None:
                     # Per-window objective on the regime-filtered subset
                     window_trades = [
-                        (r, self.adapter.get_regime_trades(r, regime))
-                        for r in results
+                        (r, self.adapter.get_regime_trades(r, regime)) for r in results
                     ]
                     total_matching = sum(len(t) for _, t in window_trades)
                     trial.set_user_attr("regime_trade_count", total_matching)
@@ -1491,8 +1463,7 @@ class OptunaRunner:
                     ]
                 else:
                     values = [
-                        self.adapter.calculate_objective(r, objective)
-                        for r in results
+                        self.adapter.calculate_objective(r, objective) for r in results
                     ]
 
                 avg_value = sum(values) / len(values)
@@ -1500,7 +1471,7 @@ class OptunaRunner:
                 # Penalize high variance across windows
                 if len(values) > 1:
                     variance = sum((v - avg_value) ** 2 for v in values) / len(values)
-                    std_dev = variance ** 0.5
+                    std_dev = variance**0.5
                     # Penalize if std > 1.0
                     if std_dev > 1.0:
                         avg_value -= (std_dev - 1.0) * 0.2
@@ -1761,12 +1732,14 @@ class OptunaRunner:
                         best_value = best_row[0]
                         break
 
-                studies.append({
-                    "study_id": study_id,
-                    "study_name": study_name,
-                    "best_value": best_value,
-                    "trial_count": trial_count,
-                })
+                studies.append(
+                    {
+                        "study_id": study_id,
+                        "study_name": study_name,
+                        "best_value": best_value,
+                        "trial_count": trial_count,
+                    }
+                )
 
             conn.close()
 
@@ -1783,8 +1756,7 @@ class OptunaRunner:
             all_studies = storage.get_all_studies()
 
             matching_names = [
-                s.study_name for s in all_studies
-                if s.study_name.startswith(strategy)
+                s.study_name for s in all_studies if s.study_name.startswith(strategy)
             ]
 
             if matching_names:

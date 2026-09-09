@@ -15,7 +15,7 @@ Minimum history for regime detection: 29 x 4h candles (4.8 days)
 import math
 import os
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
@@ -292,13 +292,11 @@ class BacktestDataLoader:
         parquet_path = self.data_dir / f"{base}_{timeframe}.parquet"
         if parquet_path.exists():
             try:
-                stamps = pd.read_parquet(
-                    parquet_path, columns=["timestamp"]
-                )["timestamp"]
+                stamps = pd.read_parquet(parquet_path, columns=["timestamp"])[
+                    "timestamp"
+                ]
             except Exception as e:  # noqa: BLE001 - fall back to full load
-                logger.debug(
-                    f"Timestamp-only read failed for {parquet_path}: {e}"
-                )
+                logger.debug(f"Timestamp-only read failed for {parquet_path}: {e}")
             else:
                 if stamps.empty:
                     return None
@@ -334,7 +332,9 @@ class BacktestDataLoader:
         else:
             df = self._fetch_from_api(timeframe, start, end)
             df.to_csv(csv_path, index=False)
-            logger.info(f"Fetched and cached {len(df)} {timeframe} candles to {csv_path}")
+            logger.info(
+                f"Fetched and cached {len(df)} {timeframe} candles to {csv_path}"
+            )
 
         self._cache[cache_key] = df
         return df

@@ -27,8 +27,12 @@ STATE = "vol_low:trend"
 
 
 def _args(**kw):
-    base = {"strategy": "mean_reversion", "symbol": "BTC-USDC",
-            "objective": "sharpe_ratio", "capital": 10000.0}
+    base = {
+        "strategy": "mean_reversion",
+        "symbol": "BTC-USDC",
+        "objective": "sharpe_ratio",
+        "capital": 10000.0,
+    }
     base.update(kw)
     return argparse.Namespace(**base)
 
@@ -46,18 +50,17 @@ class _ParamScoreAdapter:
         self.calls = []
         self.trades_per_state = trades_per_state
 
-    def run_backtest(self, strategy, params, start, end, symbol=None,
-                     initial_capital=None):
-        self.calls.append({"params": dict(params), "start": start,
-                           "end": end})
+    def run_backtest(
+        self, strategy, params, start, end, symbol=None, initial_capital=None
+    ):
+        self.calls.append({"params": dict(params), "start": start, "end": end})
         return {"params": dict(params)}
 
     def get_regime_trades(self, result, state):
         pnl = float(result["params"].get("rsi_oversold", 0.0))
         return [{"pnl": pnl}] * self.trades_per_state
 
-    def calculate_objective_from_trades(self, trades, objective, capital,
-                                        start, end):
+    def calculate_objective_from_trades(self, trades, objective, capital, start, end):
         return trades[0]["pnl"] / 100.0
 
 
@@ -72,15 +75,15 @@ class TestCoordinateMedian:
         # a's median comes from the middle vector, b's from a different
         # one: the result is a vector nobody proposed.
         got = coordinate_median(
-            [{"a": 1.0, "b": 9.0}, {"a": 2.0, "b": 1.0}, {"a": 3.0, "b": 5.0}])
+            [{"a": 1.0, "b": 9.0}, {"a": 2.0, "b": 1.0}, {"a": 3.0, "b": 5.0}]
+        )
         assert got == {"a": 2.0, "b": 5.0}
 
     def test_rounding_matches_the_deployed_median(self):
         from trading_bot_v2.optimization.monthly_retune import _fresh_medians
 
         winners = [{"a": 1.111111}, {"a": 2.222222}, {"a": 3.333333}]
-        report = {"folds": [{"states": {STATE: {"params": w}}}
-                            for w in winners]}
+        report = {"folds": [{"states": {STATE: {"params": w}}} for w in winners]}
         assert _fresh_medians(report)[STATE] == coordinate_median(winners)
 
 
@@ -98,48 +101,73 @@ class TestArmCacheReuse:
         adapter = _ParamScoreAdapter()
         cache = {}
         params = {"rsi_oversold": 30.0}
-        _cached_backtest(adapter, cache, "mean_reversion", params,
-                         "2025-01-01", "2025-07-01", "BTC-USDC", 10000.0)
-        _arm_state_scores(adapter, cache, _args(), {STATE: dict(params)},
-                          "2025-01-01", "2025-07-01")
+        _cached_backtest(
+            adapter,
+            cache,
+            "mean_reversion",
+            params,
+            "2025-01-01",
+            "2025-07-01",
+            "BTC-USDC",
+            10000.0,
+        )
+        _arm_state_scores(
+            adapter, cache, _args(), {STATE: dict(params)}, "2025-01-01", "2025-07-01"
+        )
         assert len(adapter.calls) == 1
 
     def test_a_new_vector_does_cost_a_backtest(self):
         adapter = _ParamScoreAdapter()
         cache = {}
-        _cached_backtest(adapter, cache, "mean_reversion",
-                         {"rsi_oversold": 30.0}, "2025-01-01", "2025-07-01",
-                         "BTC-USDC", 10000.0)
-        _arm_state_scores(adapter, cache, _args(),
-                          {STATE: {"rsi_oversold": 31.0}},
-                          "2025-01-01", "2025-07-01")
+        _cached_backtest(
+            adapter,
+            cache,
+            "mean_reversion",
+            {"rsi_oversold": 30.0},
+            "2025-01-01",
+            "2025-07-01",
+            "BTC-USDC",
+            10000.0,
+        )
+        _arm_state_scores(
+            adapter,
+            cache,
+            _args(),
+            {STATE: {"rsi_oversold": 31.0}},
+            "2025-01-01",
+            "2025-07-01",
+        )
         assert len(adapter.calls) == 2
 
 
 class TestSummarizeMedianArm:
     def _fold(self, tuned=None, default=None, median=None, baseline=None):
         cell = {}
-        for key, value in (("test_tuned", tuned), ("test_default", default),
-                           ("test_median", median),
-                           ("test_baseline", baseline)):
+        for key, value in (
+            ("test_tuned", tuned),
+            ("test_default", default),
+            ("test_median", median),
+            ("test_baseline", baseline),
+        ):
             if value is not None:
                 cell[key] = {"score": value}
         return {"states": {STATE: cell}}
 
     def test_states_without_a_median_arm_keep_the_old_shape(self):
-        summary = _summarize(
-            [self._fold(1.0, 0.5), self._fold(2.0, 0.5)], [STATE])
-        assert summary[STATE] == {
-            "folds": 2, "tuned": 1.5, "default": 0.5, "edge": 1.0}
+        summary = _summarize([self._fold(1.0, 0.5), self._fold(2.0, 0.5)], [STATE])
+        assert summary[STATE] == {"folds": 2, "tuned": 1.5, "default": 0.5, "edge": 1.0}
 
     def test_median_vs_default_is_paired_over_median_folds_only(self):
         # Fold 1 has no median arm (as in a real run): its default score
         # must not enter the median-vs-default comparison.
         summary = _summarize(
-            [self._fold(1.0, 5.0),
-             self._fold(2.0, 0.5, median=0.9),
-             self._fold(3.0, 0.5, median=1.1)],
-            [STATE])[STATE]
+            [
+                self._fold(1.0, 5.0),
+                self._fold(2.0, 0.5, median=0.9),
+                self._fold(3.0, 0.5, median=1.1),
+            ],
+            [STATE],
+        )[STATE]
         assert summary["folds"] == 3
         assert summary["median_folds"] == 2
         assert summary["median"] == pytest.approx(1.0)
@@ -148,10 +176,13 @@ class TestSummarizeMedianArm:
 
     def test_median_vs_tuned_gap_is_paired(self):
         summary = _summarize(
-            [self._fold(1.0, 0.5),
-             self._fold(2.0, 0.5, median=1.0),
-             self._fold(4.0, 0.5, median=2.0)],
-            [STATE])[STATE]
+            [
+                self._fold(1.0, 0.5),
+                self._fold(2.0, 0.5, median=1.0),
+                self._fold(4.0, 0.5, median=2.0),
+            ],
+            [STATE],
+        )[STATE]
         assert summary["tuned"] == pytest.approx(7.0 / 3)
         assert summary["median_tuned"] == pytest.approx(3.0)
         assert summary["median_on_tuned_folds"] == pytest.approx(1.5)
@@ -159,19 +190,31 @@ class TestSummarizeMedianArm:
 
     def test_median_vs_adopted_baseline_is_reported(self):
         summary = _summarize(
-            [self._fold(1.0, 0.5, baseline=0.6),
-             self._fold(2.0, 0.5, median=1.4, baseline=0.4)],
-            [STATE])[STATE]
+            [
+                self._fold(1.0, 0.5, baseline=0.6),
+                self._fold(2.0, 0.5, median=1.4, baseline=0.4),
+            ],
+            [STATE],
+        )[STATE]
         assert summary["median_baseline_folds"] == 1
         assert summary["median_baseline"] == pytest.approx(0.4)
         assert summary["edge_median_vs_baseline"] == pytest.approx(1.0)
 
     def test_median_survives_an_unmeasured_tuned_arm(self):
         summary = _summarize(
-            [{"states": {STATE: {"verdict": "insufficient_data",
-                                 "test_default": {"score": 0.5},
-                                 "test_median": {"score": 1.0}}}}],
-            [STATE])[STATE]
+            [
+                {
+                    "states": {
+                        STATE: {
+                            "verdict": "insufficient_data",
+                            "test_default": {"score": 0.5},
+                            "test_median": {"score": 1.0},
+                        }
+                    }
+                }
+            ],
+            [STATE],
+        )[STATE]
         assert summary["folds"] == 0
         assert summary["median_folds"] == 1
         assert "edge_median_vs_tuned" not in summary
@@ -190,13 +233,28 @@ class TestRunUsesOnlyPriorFolds:
         adapter = _ParamScoreAdapter()
         monkeypatch.setattr(rct, "OptimizationAdapter", lambda: adapter)
         path = tmp_path / "composite.json"
-        code = run([
-            "--strategy", "mean_reversion", "--symbol", "BTC-USDC",
-            "--start", "2020-01-01", "--end", "2025-01-01",
-            "--train-months", "12", "--test-months", "12",
-            "--trials", "5", "--states", STATE,
-            "--report", str(path),
-        ])
+        code = run(
+            [
+                "--strategy",
+                "mean_reversion",
+                "--symbol",
+                "BTC-USDC",
+                "--start",
+                "2020-01-01",
+                "--end",
+                "2025-01-01",
+                "--train-months",
+                "12",
+                "--test-months",
+                "12",
+                "--trials",
+                "5",
+                "--states",
+                STATE,
+                "--report",
+                str(path),
+            ]
+        )
         assert code == 0
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -219,26 +277,26 @@ class TestRunUsesOnlyPriorFolds:
     def test_fold_two_median_is_exactly_fold_ones_winner(self, report):
         cell = self._cell(report, 2)
         assert cell["median_from_folds"] == 1
-        assert cell["median_params"] == coordinate_median(
-            [self._winner(report, 1)])
+        assert cell["median_params"] == coordinate_median([self._winner(report, 1)])
 
     def test_fold_three_median_comes_from_folds_one_and_two(self, report):
         cell = self._cell(report, 3)
         assert cell["median_from_folds"] == 2
         assert cell["median_params"] == coordinate_median(
-            [self._winner(report, k) for k in (1, 2)])
+            [self._winner(report, k) for k in (1, 2)]
+        )
 
     def test_fold_three_median_excludes_folds_three_and_four(self, report):
         got = self._cell(report, 3)["median_params"]
         for leaked in ((1, 2, 3), (1, 2, 3, 4), (1, 2, 4)):
-            assert got != coordinate_median(
-                [self._winner(report, k) for k in leaked])
+            assert got != coordinate_median([self._winner(report, k) for k in leaked])
 
     def test_fold_four_median_comes_from_the_first_three(self, report):
         cell = self._cell(report, 4)
         assert cell["median_from_folds"] == 3
         assert cell["median_params"] == coordinate_median(
-            [self._winner(report, k) for k in (1, 2, 3)])
+            [self._winner(report, k) for k in (1, 2, 3)]
+        )
 
     def test_median_is_scored_on_the_folds_own_test_window(self, report):
         cell = self._cell(report, 3)

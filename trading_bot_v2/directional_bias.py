@@ -297,10 +297,13 @@ class DirectionalBiasEngine:
                 continue
 
         if len(rates) < self.funding_min_obs:
-            bias, detail = BIAS_NEUTRAL, {
-                "funding_reason": "insufficient_history",
-                "funding_obs": len(rates),
-            }
+            bias, detail = (
+                BIAS_NEUTRAL,
+                {
+                    "funding_reason": "insufficient_history",
+                    "funding_obs": len(rates),
+                },
+            )
         else:
             current = rates[-1]
             rank = sum(1 for r in rates if r <= current) / len(rates)

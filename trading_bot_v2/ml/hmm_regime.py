@@ -34,6 +34,7 @@ from .model_manager import ModelManager
 # Configuration
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class HMMConfig:
     """Configuration for the HMM regime detector.
@@ -68,6 +69,7 @@ class HMMConfig:
 # ---------------------------------------------------------------------------
 # HMM Regime Detector
 # ---------------------------------------------------------------------------
+
 
 class HMMRegimeDetector:
     """Gaussian HMM regime detector with forward-filtered classification.
@@ -158,9 +160,7 @@ class HMMRegimeDetector:
         """
         if not self.ensure_model_loaded():
             if not allow_fallback:
-                raise RuntimeError(
-                    "No trained HMM model available for prediction"
-                )
+                raise RuntimeError("No trained HMM model available for prediction")
             return self._adx_fallback(market_data)
 
         if not allow_fallback:
@@ -209,9 +209,7 @@ class HMMRegimeDetector:
             batch_features = self._feature_extractor.extract_batch(
                 closes, highs, lows, volumes
             )
-            X = np.array(
-                [f.to_array() for f in batch_features], dtype=np.float64
-            )
+            X = np.array([f.to_array() for f in batch_features], dtype=np.float64)
             summary = self.train_on_features(X, auto_save=auto_save)
             return summary is not None
         except Exception as exc:
@@ -251,9 +249,7 @@ class HMMRegimeDetector:
         X = np.nan_to_num(X, nan=0.0, posinf=10.0, neginf=-10.0)
 
         if len(X) < self.config.n_states * 10:
-            logger.warning(
-                f"Too few feature vectors for reliable training: {len(X)}"
-            )
+            logger.warning(f"Too few feature vectors for reliable training: {len(X)}")
             return None
 
         # Standardise features (same convention as the GMM detector)
@@ -274,18 +270,14 @@ class HMMRegimeDetector:
         self._hmm_model = model
 
         states = model.predict(X_scaled, lengths=lengths)
-        state_sizes = {
-            i: int(np.sum(states == i)) for i in range(self.config.n_states)
-        }
+        state_sizes = {i: int(np.sum(states == i)) for i in range(self.config.n_states)}
         avg_log_likelihood = float(
             model.score(X_scaled, lengths=lengths) / len(X_scaled)
         )
         converged = bool(model.monitor_.converged)
         transmat = np.array(model.transmat_, dtype=np.float64)
 
-        state_means_raw = (
-            model.means_ * self._feature_stds + self._feature_means
-        )
+        state_means_raw = model.means_ * self._feature_stds + self._feature_means
 
         logger.info(
             f"HMM training complete: {len(X)} samples, "
@@ -313,8 +305,7 @@ class HMMRegimeDetector:
             "log_likelihood": avg_log_likelihood,
             "state_sizes": state_sizes,
             "state_to_latent": {
-                idx: latent.value
-                for idx, latent in self._state_to_latent.items()
+                idx: latent.value for idx, latent in self._state_to_latent.items()
             },
             "state_means_raw": state_means_raw,
             "transmat": transmat,
@@ -388,9 +379,7 @@ class HMMRegimeDetector:
         system_regime = _DEFAULT_REGIME_MAP.get(latent, MarketRegime.INDECISIVE)
 
         prob_dict = {
-            self._state_to_latent.get(i, _LatentRegime.RANGING).value: float(
-                probs[i]
-            )
+            self._state_to_latent.get(i, _LatentRegime.RANGING).value: float(probs[i])
             for i in range(len(probs))
         }
 
@@ -450,13 +439,10 @@ class HMMRegimeDetector:
         lows = market_data.get("low")
         volumes = market_data.get("volume")
 
-        batch = self._feature_extractor.extract_batch(
-            closes, highs, lows, volumes
-        )
+        batch = self._feature_extractor.extract_batch(closes, highs, lows, volumes)
         if not batch:
             raise ValueError(
-                "Insufficient data for HMM feature extraction "
-                f"({len(closes)} candles)"
+                f"Insufficient data for HMM feature extraction ({len(closes)} candles)"
             )
 
         X = np.array([f.to_array() for f in batch], dtype=np.float64)
@@ -477,10 +463,7 @@ class HMMRegimeDetector:
                 probabilities=result.probabilities,
             )
 
-        if (
-            allow_fallback
-            and result.confidence < self.config.confidence_threshold
-        ):
+        if allow_fallback and result.confidence < self.config.confidence_threshold:
             logger.debug(
                 f"HMM confidence {result.confidence:.3f} < threshold "
                 f"{self.config.confidence_threshold} - using ADX fallback"
@@ -489,9 +472,7 @@ class HMMRegimeDetector:
 
         return result
 
-    def _adx_fallback(
-        self, market_data: Dict[str, List[float]]
-    ) -> GMMRegimeResult:
+    def _adx_fallback(self, market_data: Dict[str, List[float]]) -> GMMRegimeResult:
         """Fall back to ADX-based regime detection."""
         try:
             from ..market_regime import MarketRegimeDetector
@@ -518,9 +499,7 @@ class HMMRegimeDetector:
                 used_fallback=True,
             )
 
-    def _quick_adx(
-        self, market_data: Dict[str, List[float]]
-    ) -> Optional[float]:
+    def _quick_adx(self, market_data: Dict[str, List[float]]) -> Optional[float]:
         """Quickly compute ADX for regime refinement without full detection."""
         try:
             from ..indicators import calculate_adx

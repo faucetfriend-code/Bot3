@@ -311,13 +311,9 @@ class TestMinTradesPruning:
 
         states = [t.state.name for t in study.trials]
         assert states == ["PRUNED"] * 3
-        assert all(
-            t.user_attrs.get("regime_trade_count") == 3 for t in study.trials
-        )
+        assert all(t.user_attrs.get("regime_trade_count") == 3 for t in study.trials)
 
-    def test_enough_trades_completes_and_names_study_with_regime(
-        self, optuna_db
-    ):
+    def test_enough_trades_completes_and_names_study_with_regime(self, optuna_db):
         runner = OptunaRunner(db_path=optuna_db)
         runner.adapter = StubAdapter(matching_trades=[{"pnl": 1.0}] * 20)
 
@@ -343,9 +339,7 @@ class TestMinTradesPruning:
 
     def test_walk_forward_regime_mode(self, optuna_db):
         runner = OptunaRunner(db_path=optuna_db)
-        runner.adapter = StubAdapter(
-            matching_trades=[{"pnl": 1.0}] * 10, n_windows=2
-        )
+        runner.adapter = StubAdapter(matching_trades=[{"pnl": 1.0}] * 10, n_windows=2)
 
         study = runner.optimize(
             strategy="mean_reversion",
@@ -693,9 +687,12 @@ class TestLosingOverlayGuard:
                 VALUES (?, ?, ?, ?, ?, ?, ?, 1)
                 """,
                 (
-                    "mean_reversion", "ranging_calm",
+                    "mean_reversion",
+                    "ranging_calm",
                     _json.dumps({"rsi_oversold": 44.96}),
-                    objective, objective_value, 246,
+                    objective,
+                    objective_value,
+                    246,
                     "mean_reversion_RANGING_CALM_sharpe_20260720_070349",
                 ),
             )
@@ -1096,9 +1093,7 @@ class TestWhitelist:
 
         strategy = DummyStrategy()
         messages = []
-        sink_id = loguru_logger.add(
-            lambda m: messages.append(str(m)), level="WARNING"
-        )
+        sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="WARNING")
         try:
             applied = apply_params_to_strategy(
                 strategy,
@@ -1221,10 +1216,7 @@ class TestHelpers:
         assert normalize_regime_value("ranging_calm") == "ranging_calm"
         from trading_bot_v2.market_regime import MarketRegime
 
-        assert (
-            normalize_regime_value(MarketRegime.TRENDING_STRONG)
-            == "trending_strong"
-        )
+        assert normalize_regime_value(MarketRegime.TRENDING_STRONG) == "trending_strong"
         with pytest.raises(ValueError, match="Unknown regime"):
             normalize_regime_value("sideways")
 
@@ -1294,7 +1286,9 @@ class TestSearchSpaceReachability:
             grid_spacing_multiplier = 0.4
 
         applied = apply_params_to_strategy(
-            Grid(), "grid_trading", {"grid_spacing_atr_multiplier": 0.7},
+            Grid(),
+            "grid_trading",
+            {"grid_spacing_atr_multiplier": 0.7},
             check_feasibility=False,
         )
         assert applied == {"grid_spacing_atr_multiplier": 0.7}
@@ -1364,10 +1358,7 @@ class TestRegimeMinTrades:
         from trading_bot_v2.validation.gate import load_gate_policy
 
         monkeypatch.delenv("REGIME_OPT_MIN_TRADES", raising=False)
-        assert (
-            regime_opt_min_trades()
-            == load_gate_policy()["min_closed_trades"]
-        )
+        assert regime_opt_min_trades() == load_gate_policy()["min_closed_trades"]
 
     def test_env_override_wins(self, monkeypatch):
         from trading_bot_v2.optimization.optuna_runner import (
@@ -1530,9 +1521,7 @@ class TestApplySideOverlayGuard:
 
         rows = [self._row(objective_value=-1.4860599305891151)]
         messages = []
-        sink_id = loguru_logger.add(
-            lambda m: messages.append(str(m)), level="ERROR"
-        )
+        sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="ERROR")
         try:
             mgr, sm = self._manager(rows)
         finally:
@@ -1740,8 +1729,7 @@ class TestOverlayQualityRulesAreShared:
         assert db_mod.LosingOverlayRefused is oq.LosingOverlayRefused
         assert db_mod.overlay_break_even is oq.overlay_break_even
         assert (
-            db_mod.OVERLAY_BREAK_EVEN_BY_OBJECTIVE
-            is oq.OVERLAY_BREAK_EVEN_BY_OBJECTIVE
+            db_mod.OVERLAY_BREAK_EVEN_BY_OBJECTIVE is oq.OVERLAY_BREAK_EVEN_BY_OBJECTIVE
         )
 
     def test_apply_guard_uses_the_same_rules(self):

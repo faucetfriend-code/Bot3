@@ -1,7 +1,6 @@
 import time
 import logging
 import threading
-import sys
 import os
 import uuid
 import warnings
@@ -43,7 +42,6 @@ from .venue_stops import (
     stop_hit,
     venue_stops_supported,
 )
-from .indicators import calculate_adx, calculate_atr, calculate_bollinger_bands
 
 # Exchange abstraction: adapter factory selected via EXCHANGE env var
 from .exchanges import get_exchange_client
@@ -51,12 +49,11 @@ from .exchanges import get_exchange_client
 # Import other modules
 from .database import DatabaseManager
 from .history import TradeStore
-from .pacifica_client import PacificaClient, PacificaEnvironment
+from .pacifica_client import PacificaClient
 from .strategy_manager import StrategyManager
 from .multi_timeframe_fetcher import MultiTimeframeFetcher
-from .market_regime import MarketRegimeDetector
 from .volatility_regime import make_regime_detector
-from .risk_manager import RiskManager, RiskProfile
+from .risk_manager import RiskManager
 
 # Import StrategyType from local config (re-exported from core_logic)
 from .config import StrategyType
@@ -84,14 +81,6 @@ from .execution_layer import ExecutionLayer
 from .signal_logger import SignalLogger
 
 # Import Phase 2 component system
-from .component_interfaces import (
-    ExecutionInterface,
-    RiskInterface,
-    GridInterface,
-    RegimeInterface,
-    StrategyInterface,
-    DatabaseInterface,
-)
 from .event_system import get_event_bus, EventType
 from .component_registry import get_component_registry
 from .telegram_alerts import telegram_alerts
@@ -259,9 +248,7 @@ class TradingBot:
         # transitions publish REGIME_CHANGED and persist to regime_history.
         # REGIME_MODE selects the taxonomy: 'adx' (default, shipped) or
         # 'volatility' (docs/REGIME-VOLATILITY.md).
-        self.market_regime = make_regime_detector(
-            event_bus=get_event_bus(), db=self.db
-        )
+        self.market_regime = make_regime_detector(event_bus=get_event_bus(), db=self.db)
 
         # Initialize strategy manager with regime detector
         self.strategy_manager = StrategyManager(
@@ -553,7 +540,11 @@ class TradingBot:
             RuntimeError: If both WebSocket and REST API price unavailable
         """
         # Check if WebSocket client is available and connected
-        if not self.ws_client or not hasattr(self.ws_client, "_running") or not self.ws_client._running:
+        if (
+            not self.ws_client
+            or not hasattr(self.ws_client, "_running")
+            or not self.ws_client._running
+        ):
             logger.warning(
                 f"WebSocket unavailable for {symbol}, falling back to REST API"
             )
@@ -572,11 +563,11 @@ class TradingBot:
                 # as if it were real, which would break stop-distance logic if
                 # any caller ever read ticker["high"] or ticker["low"].
                 return {
-                    "symbol":    symbol,
-                    "last":      float(price),
-                    "volume":    0,  # Not available via ticker WS
+                    "symbol": symbol,
+                    "last": float(price),
+                    "volume": 0,  # Not available via ticker WS
                     "timestamp": int(time.time() * 1000),
-                    "_source":   "ws_last_only",  # marker so callers can detect
+                    "_source": "ws_last_only",  # marker so callers can detect
                 }
             else:
                 # No WebSocket price - fall back to REST
@@ -621,7 +612,9 @@ class TradingBot:
             self._last_loop_time = datetime.now(timezone.utc)
             self._loop_step = "starting"
             try:
-                logger.info(f"🔄 Trading loop iteration {self._loop_iteration} starting...")
+                logger.info(
+                    f"🔄 Trading loop iteration {self._loop_iteration} starting..."
+                )
 
                 # Update positions from client
                 self._loop_step = "update_positions"
@@ -657,11 +650,15 @@ class TradingBot:
                 # len() saturates at max_history (1000) and then always returns 1000,
                 # making "after - before" permanently 0 — a misleading metric.
                 count_before = self.event_bus._published_count
-                logger.info(f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})...")
+                logger.info(
+                    f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})..."
+                )
                 self._generate_and_publish_signals()
                 count_after = self.event_bus._published_count
                 self._loop_events_generated = count_after - count_before
-                logger.info(f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})")
+                logger.info(
+                    f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})"
+                )
 
                 # Monitor risk (delegated to RiskManager)
                 self._loop_step = "monitor_risk"
@@ -691,12 +688,13 @@ class TradingBot:
 
             except Exception as e:
                 logger.error(
-                    f"Error in trading loop (step={self._loop_step}): {e}", exc_info=True
+                    f"Error in trading loop (step={self._loop_step}): {e}",
+                    exc_info=True,
                 )
 
             # Sleep for configured interval (30 seconds)
             self._loop_step = "sleeping"
-            time.sleep(getattr(config, 'trading_loop_interval', 30))
+            time.sleep(getattr(config, "trading_loop_interval", 30))
 
     def _monitor_risk(self) -> None:
         """Monitor risk and trigger circuit breaker if needed."""
@@ -794,18 +792,20 @@ class TradingBot:
                     unrealized_pnl = (entry_price - current_price) * quantity
 
                 # Update position in database (save_position does upsert)
-                self.db.save_position({
-                    "symbol": symbol,
-                    "side": side,
-                    "quantity": quantity,
-                    "entry_price": entry_price,
-                    "current_price": current_price,
-                    "unrealized_pnl": unrealized_pnl,
-                    "leverage": float(pos.get("leverage", 1)),
-                    "asset_class": "perpetual",
-                    "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
-                    "funding_pnl": float(pos.get("funding_pnl", 0)),
-                })
+                self.db.save_position(
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "quantity": quantity,
+                        "entry_price": entry_price,
+                        "current_price": current_price,
+                        "unrealized_pnl": unrealized_pnl,
+                        "leverage": float(pos.get("leverage", 1)),
+                        "asset_class": "perpetual",
+                        "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
+                        "funding_pnl": float(pos.get("funding_pnl", 0)),
+                    }
+                )
 
                 logging.debug(
                     f"Updated position: {symbol} {side} {quantity} @ ${entry_price:.2f} "
@@ -943,8 +943,12 @@ class TradingBot:
                     continue
 
                 # Pacifica API uses "bid"/"ask" for sides (not "BUY"/"SELL")
-                buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
-                sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                buy_orders = [
+                    o for o in orders if o.get("side") in ("bid", "BUY", "buy")
+                ]
+                sell_orders = [
+                    o for o in orders if o.get("side") in ("ask", "SELL", "sell")
+                ]
 
                 if not buy_orders or not sell_orders:
                     logger.debug(
@@ -971,13 +975,18 @@ class TradingBot:
             if self.grid_lifecycle and self.grid_lifecycle._grids:
                 confirmed_grid_symbols = set()
                 for symbol, orders in orders_by_symbol.items():
-                    buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
-                    sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                    buy_orders = [
+                        o for o in orders if o.get("side") in ("bid", "BUY", "buy")
+                    ]
+                    sell_orders = [
+                        o for o in orders if o.get("side") in ("ask", "SELL", "sell")
+                    ]
                     if len(orders) >= 5 and buy_orders and sell_orders:
                         confirmed_grid_symbols.add(symbol)
 
                 stale_symbols = [
-                    s for s in self.grid_lifecycle._grids
+                    s
+                    for s in self.grid_lifecycle._grids
                     if s not in confirmed_grid_symbols
                 ]
                 for symbol in stale_symbols:
@@ -1003,8 +1012,12 @@ class TradingBot:
         try:
             all_orders = buy_orders + sell_orders
             # Calculate center price from order spread
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
-            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
+            sell_prices = [
+                float(o.get("price", 0)) for o in sell_orders if o.get("price")
+            ]
 
             if not buy_prices or not sell_prices:
                 logger.error(f"Cannot re-adopt {symbol}: no valid prices in orders")
@@ -1029,9 +1042,7 @@ class TradingBot:
             # Convention (matches grid_lifecycle_manager._sync_grids_from_exchange):
             #   emergency_stop = lowest_buy_price × (1 - GRID_EMERGENCY_STOP_PCT)
             # Falls back to center × (1 - pct) if no buy orders are visible.
-            emergency_stop_pct = float(
-                os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
-            )
+            emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
             if buy_prices:
                 emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
             else:
@@ -1063,19 +1074,19 @@ class TradingBot:
                     if oid:
                         readopted_ids.add(str(oid))
                 if readopted_ids:
-                    self.grid_lifecycle._grids[symbol]["order_ids"] = (
-                        readopted_ids
-                    )
+                    self.grid_lifecycle._grids[symbol]["order_ids"] = readopted_ids
 
                 logger.info(
                     f"✅ Re-adopted grid for {symbol}: center=${center_price:.4f}, "
                     f"emergency_stop=${emergency_stop:.4f} "
-                    f"({emergency_stop_pct*100:.0f}% below lowest bid), "
+                    f"({emergency_stop_pct * 100:.0f}% below lowest bid), "
                     f"{len(buy_orders)} bids + {len(sell_orders)} asks, "
                     f"capital≈${total_capital:.2f}"
                 )
             else:
-                logger.warning(f"Cannot re-adopt {symbol}: GridLifecycleManager unavailable or grid already exists")
+                logger.warning(
+                    f"Cannot re-adopt {symbol}: GridLifecycleManager unavailable or grid already exists"
+                )
 
         except Exception as e:
             logger.error(f"Error re-adopting grid for {symbol}: {e}", exc_info=True)
@@ -1160,9 +1171,7 @@ class TradingBot:
                     logger.warning(f"Grid alert: {alert}")
 
             except Exception as e:
-                logger.error(
-                    f"Error monitoring grids: {e}", exc_info=True
-                )
+                logger.error(f"Error monitoring grids: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error in grid monitoring: {e}", exc_info=True)
@@ -1210,9 +1219,7 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error managing migrated positions: {e}", exc_info=True
-            )
+            logger.error(f"Error managing migrated positions: {e}", exc_info=True)
 
     def start_trading(self) -> None:
         """
@@ -1253,7 +1260,9 @@ class TradingBot:
             logger.info(f"📊 Checking {len(markets)} markets for signals...")
 
             signals_generated = 0
-            for market in markets[:10]:  # Limit to first 10 markets to avoid rate limits
+            for market in markets[
+                :10
+            ]:  # Limit to first 10 markets to avoid rate limits
                 try:
                     symbol = market.get("symbol")
                     if not symbol:
@@ -1268,12 +1277,16 @@ class TradingBot:
                         continue
 
                     if current_price <= 0:
-                        logger.debug(f"Skipping {symbol}: invalid price {current_price}")
+                        logger.debug(
+                            f"Skipping {symbol}: invalid price {current_price}"
+                        )
                         continue
 
                     # Get multi-timeframe data (5m for MomentumScalping, others for main strategies)
                     multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
-                        symbol=symbol, timeframes=["5m", "15m", "1h", "4h"], lookback_candles=250
+                        symbol=symbol,
+                        timeframes=["5m", "15m", "1h", "4h"],
+                        lookback_candles=250,
                     )
 
                     if not multi_tf_data:
@@ -1299,25 +1312,41 @@ class TradingBot:
                         # Validate signal before publishing
                         if not signal.is_valid():
                             flags = {
-                                'volume_confirmation': signal.volume_confirmation,
-                                'multi_timeframe_alignment': signal.multi_timeframe_alignment,
-                                'support_resistance_valid': signal.support_resistance_valid,
-                                'rrr_meets_minimum': signal.rrr_meets_minimum,
-                                'liquidation_buffer_safe': signal.liquidation_buffer_safe,
-                                'account_risk_ok': signal.account_risk_ok,
-                                'margin_drawdown_ok': signal.margin_drawdown_ok,
-                                'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                                "volume_confirmation": signal.volume_confirmation,
+                                "multi_timeframe_alignment": signal.multi_timeframe_alignment,
+                                "support_resistance_valid": signal.support_resistance_valid,
+                                "rrr_meets_minimum": signal.rrr_meets_minimum,
+                                "liquidation_buffer_safe": signal.liquidation_buffer_safe,
+                                "account_risk_ok": signal.account_risk_ok,
+                                "margin_drawdown_ok": signal.margin_drawdown_ok,
+                                "forbidden_conditions_clear": signal.forbidden_conditions_clear,
                             }
                             failed = [k for k, v in flags.items() if not v]
                             reason = f"Pre-publish validation failed: {failed}"
-                            logger.debug(f"Skipping invalid signal for {symbol}: {failed}")
-                            regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
-                            self.signal_logger.log_signal_rejected(signal=signal, reason=reason, regime=regime_str)
+                            logger.debug(
+                                f"Skipping invalid signal for {symbol}: {failed}"
+                            )
+                            regime_str = (
+                                regime.name
+                                if regime and hasattr(regime, "name")
+                                else str(regime)
+                                if regime
+                                else "unknown"
+                            )
+                            self.signal_logger.log_signal_rejected(
+                                signal=signal, reason=reason, regime=regime_str
+                            )
                             continue
 
                         # Log signal BEFORE publishing event (event bus is synchronous)
                         signals_generated += 1
-                        regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
+                        regime_str = (
+                            regime.name
+                            if regime and hasattr(regime, "name")
+                            else str(regime)
+                            if regime
+                            else "unknown"
+                        )
                         log_result = self.signal_logger.log_signal_generated(
                             signal=signal,
                             regime=regime_str,
@@ -1415,7 +1444,9 @@ class TradingBot:
         - RISK_LIMIT_EXCEEDED: Trigger circuit breaker
         - GRID_EMERGENCY: Handle grid emergency stops
         """
-        self.event_bus.subscribe(EventType.SIGNAL_GENERATED, self._handle_signal_generated)
+        self.event_bus.subscribe(
+            EventType.SIGNAL_GENERATED, self._handle_signal_generated
+        )
         self.event_bus.subscribe(EventType.ORDER_PLACED, self._handle_order_placed)
         self.event_bus.subscribe(EventType.ORDER_FILLED, self._handle_order_filled)
         self.event_bus.subscribe(
@@ -1491,11 +1522,19 @@ class TradingBot:
         """
         try:
             # Event object has .data attribute (not a dict with .get())
-            signal_data = event.data if hasattr(event, 'data') else event.get("data", {})
-            signal = signal_data.get("signal") if isinstance(signal_data, dict) else None
+            signal_data = (
+                event.data if hasattr(event, "data") else event.get("data", {})
+            )
+            signal = (
+                signal_data.get("signal") if isinstance(signal_data, dict) else None
+            )
 
             if not signal:
-                logger.warning("Received signal event with no signal data - event.data type=%s, signal_data type=%s", type(event.data).__name__, type(signal_data).__name__)
+                logger.warning(
+                    "Received signal event with no signal data - event.data type=%s, signal_data type=%s",
+                    type(event.data).__name__,
+                    type(signal_data).__name__,
+                )
                 return
 
             logger.info(
@@ -1592,24 +1631,28 @@ class TradingBot:
             # Check signal validity
             if not signal.is_valid():
                 flags = {
-                    'volume_confirmation': signal.volume_confirmation,
-                    'multi_timeframe_alignment': signal.multi_timeframe_alignment,
-                    'support_resistance_valid': signal.support_resistance_valid,
-                    'rrr_meets_minimum': signal.rrr_meets_minimum,
-                    'liquidation_buffer_safe': signal.liquidation_buffer_safe,
-                    'account_risk_ok': signal.account_risk_ok,
-                    'margin_drawdown_ok': signal.margin_drawdown_ok,
-                    'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                    "volume_confirmation": signal.volume_confirmation,
+                    "multi_timeframe_alignment": signal.multi_timeframe_alignment,
+                    "support_resistance_valid": signal.support_resistance_valid,
+                    "rrr_meets_minimum": signal.rrr_meets_minimum,
+                    "liquidation_buffer_safe": signal.liquidation_buffer_safe,
+                    "account_risk_ok": signal.account_risk_ok,
+                    "margin_drawdown_ok": signal.margin_drawdown_ok,
+                    "forbidden_conditions_clear": signal.forbidden_conditions_clear,
                 }
                 failed = [k for k, v in flags.items() if not v]
                 reason = f"Signal invalid - failed flags: {failed}"
-                logger.info(f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}")
+                logger.info(
+                    f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}"
+                )
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
             # CRITICAL: Validate stop loss is present
             if not signal.stop_loss or signal.stop_loss <= 0:
-                reason = "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                reason = (
+                    "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                )
                 logger.error(f"{reason} for {signal.asset}")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
@@ -1628,7 +1671,9 @@ class TradingBot:
 
             if exposure_pct >= 80:  # 80% utilization limit
                 reason = f"Risk limit reached ({exposure_pct:.1f}% >= 80%)"
-                logger.warning(f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal")
+                logger.warning(
+                    f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal"
+                )
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
@@ -1682,7 +1727,9 @@ class TradingBot:
             allocation_result = self.risk_manager.request_capital_allocation(
                 symbol=signal.asset,
                 requested_amount=requested_amount,
-                strategy=signal.strategy.name if hasattr(signal.strategy, 'name') else str(signal.strategy),
+                strategy=signal.strategy.name
+                if hasattr(signal.strategy, "name")
+                else str(signal.strategy),
                 account_balance=account_balance,
                 current_exposure=current_exposure,
             )
@@ -1702,7 +1749,9 @@ class TradingBot:
 
             # Execute signal based on type
             if signal.strategy == StrategyType.GRID_TRADING:
-                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+                self._execute_grid_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
             else:
                 self._execute_standard_signal_coordinated(
                     signal, allocation_result, log_entry
@@ -1727,7 +1776,9 @@ class TradingBot:
         """
         try:
             if signal.strategy == StrategyType.GRID_TRADING:
-                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+                self._execute_grid_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
             else:
                 self._execute_standard_signal_coordinated(
                     signal, allocation_result, log_entry
@@ -1775,8 +1826,8 @@ class TradingBot:
             )
 
             if result.get("success"):
-                buy_orders = result.get('buy_orders', 0)
-                sell_orders = result.get('sell_orders', 0)
+                buy_orders = result.get("buy_orders", 0)
+                sell_orders = result.get("sell_orders", 0)
                 logger.info(
                     f"✅ Grid orders placed for {symbol}: "
                     f"{buy_orders} BUY, {sell_orders} SELL"
@@ -1797,21 +1848,13 @@ class TradingBot:
                 # value (signal.stop_loss = entry - 2*ATR) landed INSIDE the
                 # grid and force-exited healthy grids on normal oscillation.
                 # Convention matches re-adoption: lowest_buy * (1 - stop_pct).
-                emergency_stop_pct = float(
-                    os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
-                )
-                center_price = (
-                    result.get("center_price") or signal.entry_price
-                )
+                emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+                center_price = result.get("center_price") or signal.entry_price
                 lowest_buy_price = result.get("lowest_buy_price") or 0
                 if lowest_buy_price > 0:
-                    emergency_stop_price = lowest_buy_price * (
-                        1.0 - emergency_stop_pct
-                    )
+                    emergency_stop_price = lowest_buy_price * (1.0 - emergency_stop_pct)
                 else:
-                    emergency_stop_price = center_price * (
-                        1.0 - emergency_stop_pct
-                    )
+                    emergency_stop_price = center_price * (1.0 - emergency_stop_pct)
 
                 # Record the actual market regime (not signal.market_state,
                 # which is always "RANGE" for grid signals).
@@ -1819,9 +1862,7 @@ class TradingBot:
                 regime_detector = getattr(self, "market_regime", None)
                 if regime_detector is not None:
                     try:
-                        current_regime = regime_detector.get_current_regime(
-                            symbol
-                        )
+                        current_regime = regime_detector.get_current_regime(symbol)
                         if current_regime is not None:
                             regime_str = current_regime.value
                     except Exception as e:
@@ -1848,17 +1889,19 @@ class TradingBot:
                     regime=regime_str,
                     atr=(signal.indicators or {}).get("atr", 0),
                     spacing=result.get("grid_spacing") or signal.spacing or 0,
-                    num_levels=result.get("num_levels")
-                    or signal.grid_levels
-                    or 10,
+                    num_levels=result.get("num_levels") or signal.grid_levels or 10,
                     center_price=center_price,
                     order_ids=placed_order_ids,
                 )
-                logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+                logger.info(
+                    f"✅ Grid registered with GridLifecycleManager for {symbol}"
+                )
 
             else:
-                error_msg = result.get('error', 'Unknown error')
-                logger.error(f"❌ Grid order placement failed for {symbol}: {error_msg}")
+                error_msg = result.get("error", "Unknown error")
+                logger.error(
+                    f"❌ Grid order placement failed for {symbol}: {error_msg}"
+                )
 
                 # Log failed grid execution
                 self.signal_logger.log_signal_failed(
@@ -1938,7 +1981,9 @@ class TradingBot:
                     )
 
                     # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_data = (
+                        response.get("data", {}) if isinstance(response, dict) else {}
+                    )
                     order_id = order_data.get("order_id") or order_data.get("id")
 
                     if order_id:
@@ -1950,7 +1995,9 @@ class TradingBot:
                         error_msg = response.get("error", "Unknown API error")
                         logger.error(f"  ❌ BUY order rejected: {error_msg}")
                 except Exception as e:
-                    logger.error(f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}")
+                    logger.error(
+                        f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}"
+                    )
 
             # Place SELL orders (normalized vocabulary via exchange adapter)
             for level in grid_levels["sell_levels"]:
@@ -1964,7 +2011,9 @@ class TradingBot:
                     )
 
                     # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_data = (
+                        response.get("data", {}) if isinstance(response, dict) else {}
+                    )
                     order_id = order_data.get("order_id") or order_data.get("id")
 
                     if order_id:
@@ -1976,7 +2025,9 @@ class TradingBot:
                         error_msg = response.get("error", "Unknown API error")
                         logger.error(f"  ❌ SELL order rejected: {error_msg}")
                 except Exception as e:
-                    logger.error(f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}")
+                    logger.error(
+                        f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}"
+                    )
 
             # Return results, including the grid geometry actually used so the
             # caller can register the grid with real values (spacing drives
@@ -2041,14 +2092,16 @@ class TradingBot:
             # Refine signal through ExecutionLayer before execution
             refined_signal = self.execution_layer.refine_entry(signal, symbol)
             if refined_signal is None:
-                logger.info(f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable")
+                logger.info(
+                    f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable"
+                )
                 self.signal_logger.log_signal_rejected(
                     signal=signal,
                     reason="ExecutionLayer timing skip",
                     notes="1m/5m timing conditions not met",
                 )
                 return
-            
+
             # Use refined signal for execution
             signal = refined_signal
 
@@ -2165,7 +2218,9 @@ class TradingBot:
         """Record an ACCEPTED entry from actual fills, or park it as pending."""
         fill = self._lookup_entry_fill(exchange, symbol, result, quantity)
         if fill.has_fills:
-            self._record_entry_fill(signal, symbol, quantity, capital_allocated, fill, False)
+            self._record_entry_fill(
+                signal, symbol, quantity, capital_allocated, fill, False
+            )
             return
         if fill.rejected:
             self._record_entry_rejected(signal, symbol, quantity, fill)
@@ -2295,8 +2350,12 @@ class TradingBot:
             if fill.has_fills:
                 self._pending_entries.pop(key, None)
                 self._record_entry_fill(
-                    entry["signal"], entry["symbol"], entry["quantity"],
-                    entry["capital"], fill, True,
+                    entry["signal"],
+                    entry["symbol"],
+                    entry["quantity"],
+                    entry["capital"],
+                    fill,
+                    True,
                 )
             elif fill.rejected:
                 self._pending_entries.pop(key, None)
@@ -2375,13 +2434,23 @@ class TradingBot:
                     )
                 else:
                     self._apply_stop_failure_policy(
-                        symbol, side, quantity, stop_price, record,
+                        symbol,
+                        side,
+                        quantity,
+                        stop_price,
+                        record,
                         f"install rejected: {result.error}",
                     )
             else:
                 self._apply_stop_failure_policy(
-                    symbol, side, quantity, stop_price, record,
-                    "signal carries no stop price" if stop_price is None else "no fill quantity",
+                    symbol,
+                    side,
+                    quantity,
+                    stop_price,
+                    record,
+                    "signal carries no stop price"
+                    if stop_price is None
+                    else "no fill quantity",
                 )
         elif stop_price is None:
             logger.error(
@@ -2396,7 +2465,9 @@ class TradingBot:
         self._persist_protection(symbol, side, record, quantity, entry_price)
         return record
 
-    def _list_venue_stops(self, exchange, symbol: str) -> Optional[List[Dict[str, Any]]]:
+    def _list_venue_stops(
+        self, exchange, symbol: str
+    ) -> Optional[List[Dict[str, Any]]]:
         """Pending venue stop rows for ``symbol``; None when the venue is unreachable."""
         try:
             return list(exchange.list_stops(symbol) or [])
@@ -2404,7 +2475,9 @@ class TradingBot:
             logger.warning(f"Could not list venue stops for {symbol}: {exc}")
             return None
 
-    def _verify_venue_stop(self, exchange, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+    def _verify_venue_stop(
+        self, exchange, symbol: str, side: str
+    ) -> Optional[Dict[str, Any]]:
         """Return the pending venue stop row protecting ``side``, if any.
 
         A transport failure is treated as "not verified" (None) so the
@@ -2571,7 +2644,9 @@ class TradingBot:
         from .exit_sizing import remaining_exchange_quantity
 
         try:
-            return float(remaining_exchange_quantity(self.client, symbol, side.lower()) or 0.0)
+            return float(
+                remaining_exchange_quantity(self.client, symbol, side.lower()) or 0.0
+            )
         except Exception:  # noqa: BLE001 - reduce-only close clamps anyway
             return 0.0
 
@@ -2594,7 +2669,8 @@ class TradingBot:
         candidates: List[Any] = []
         if db_row:
             candidates.extend(
-                db_row.get(key) for key in ("venue_stop_price", "stop_loss", "stop_price")
+                db_row.get(key)
+                for key in ("venue_stop_price", "stop_loss", "stop_price")
             )
         record = (getattr(self, "_protection_records", None) or {}).get((symbol, side))
         if record:
@@ -2627,7 +2703,12 @@ class TradingBot:
         Returns:
             Summary counts {"protected", "installed", "failed", "skipped"}.
         """
-        summary: Dict[str, Any] = {"protected": 0, "installed": 0, "failed": 0, "skipped": 0}
+        summary: Dict[str, Any] = {
+            "protected": 0,
+            "installed": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
         exchange = _resolve_exchange(self)
         if not venue_stops_supported(exchange):
             summary["unsupported"] = True
@@ -2647,7 +2728,9 @@ class TradingBot:
                 self._repair_one_position(exchange, pos, db_rows, summary, reason)
             except Exception as exc:  # noqa: BLE001 - one position must not stop the sweep
                 summary["failed"] += 1
-                logger.error(f"Stop repair ({reason}) failed for {pos.get('symbol')}: {exc}")
+                logger.error(
+                    f"Stop repair ({reason}) failed for {pos.get('symbol')}: {exc}"
+                )
         logger.info(f"Venue stop repair ({reason}): {summary}")
         return summary
 
@@ -2690,7 +2773,9 @@ class TradingBot:
                 if current_state in PROTECTED_STATES
                 else STOP_STATE_STANDALONE,
             )
-            self._persist_protection(symbol, side, record, quantity, pos.get("entry_price"))
+            self._persist_protection(
+                symbol, side, record, quantity, pos.get("entry_price")
+            )
             return
         stop_price = self._stored_stop_price(symbol, side, db_row)
         if stop_price is None:
@@ -2735,7 +2820,9 @@ class TradingBot:
         try:
             positions = self.client.get_positions()
         except Exception as exc:  # noqa: BLE001 - cannot see the exchange
-            logger.error(f"Reconcile after ambiguous close: positions unavailable: {exc}")
+            logger.error(
+                f"Reconcile after ambiguous close: positions unavailable: {exc}"
+            )
             return
         self._last_reconciliation_time = 0.0
         self._maybe_run_full_reconciliation(exchange_positions=positions)
@@ -2799,9 +2886,7 @@ class TradingBot:
                     f"to {new_regime}"
                 )
         except Exception as e:
-            logger.error(
-                f"Error handling REGIME_CHANGED for grids: {e}", exc_info=True
-            )
+            logger.error(f"Error handling REGIME_CHANGED for grids: {e}", exc_info=True)
 
     def _handle_grid_emergency(self, event):
         """Handle GRID_EMERGENCY event."""
@@ -2868,10 +2953,12 @@ class TradingBot:
 
             equity = balance.equity
             logging.info(f"🔍 Final account balance: ${equity:.2f}")
-            
+
             if equity <= 0:
-                logging.warning(f"⚠️ Account balance is ${equity:.2f} - this will block all executions!")
-            
+                logging.warning(
+                    f"⚠️ Account balance is ${equity:.2f} - this will block all executions!"
+                )
+
             return equity
         except Exception as e:
             logging.error(f"❌ Error getting account balance: {e}")
@@ -2960,7 +3047,9 @@ class TradingBot:
         # For now using fixed 7.5%
         return signal.entry_price * 0.925  # 7.5% below entry
 
-    def _emergency_close_position(self, symbol: str, side: str, quantity: float) -> bool:
+    def _emergency_close_position(
+        self, symbol: str, side: str, quantity: float
+    ) -> bool:
         """
         Emergency close a position immediately at market price.
 
@@ -3169,13 +3258,13 @@ class TradingBot:
             # Using conservative tick sizes to match Pacifica API requirements
             if current_price >= 100:
                 tick_decimals = 2  # BTC: 0.01
-                lot_decimals = 4   # 0.0001
+                lot_decimals = 4  # 0.0001
             elif current_price >= 1:
                 tick_decimals = 3  # AVAX, XRP: 0.001
-                lot_decimals = 2   # 0.01
+                lot_decimals = 2  # 0.01
             else:
                 tick_decimals = 5  # SUI: 0.00001
-                lot_decimals = 1   # 0.1 for small coins
+                lot_decimals = 1  # 0.1 for small coins
 
             # Round quantity to lot size
             quantity_per_level = round(quantity_per_level, lot_decimals)
@@ -3198,7 +3287,9 @@ class TradingBot:
                 price = round(price, tick_decimals)
                 sell_levels.append({"price": price, "quantity": quantity_per_level})
 
-            spacing_pct = (grid_spacing / current_price * 100) if current_price > 0 else 0
+            spacing_pct = (
+                (grid_spacing / current_price * 100) if current_price > 0 else 0
+            )
             logging.info(
                 f"Grid levels calculated: {len(buy_levels)} BUY, {len(sell_levels)} SELL, "
                 f"spacing: ${grid_spacing:.4f} ({spacing_pct:.2f}%), qty/level: {quantity_per_level:.4f}"
@@ -3241,21 +3332,13 @@ class TradingBot:
             grid_levels: Calculated grid levels
         """
         try:
-            # Calculate total capital allocated
-            total_capital = sum(
-                level["quantity"] * level["price"]
-                for level in grid_levels["buy_levels"]
-            )
-
             # Grid metadata
             metadata = {
                 "grid_type": "ranging_volatile",
                 "num_levels": len(buy_orders) + len(sell_orders),
                 "grid_spacing": grid_levels["grid_spacing"],
                 "quantity_per_level": grid_levels["quantity_per_level"],
-                "buy_order_ids": [
-                    o.get("order_id") or o.get("id") for o in buy_orders
-                ],
+                "buy_order_ids": [o.get("order_id") or o.get("id") for o in buy_orders],
                 "sell_order_ids": [
                     o.get("order_id") or o.get("id") for o in sell_orders
                 ],
@@ -3385,8 +3468,7 @@ class TradingBot:
             #    need order cancellation.
             open_trades = self.db.get_trades(status="open")
             strategy_trades = [
-                t for t in open_trades
-                if t.get("strategy") == db_strategy
+                t for t in open_trades if t.get("strategy") == db_strategy
             ]
 
             if not strategy_trades:
@@ -3396,7 +3478,9 @@ class TradingBot:
                 )
                 return
 
-            symbols_affected = {t.get("symbol") for t in strategy_trades if t.get("symbol")}
+            symbols_affected = {
+                t.get("symbol") for t in strategy_trades if t.get("symbol")
+            }
             logging.info(
                 f"  {strategy_name}: closing {len(strategy_trades)} open trade(s) "
                 f"across symbols: {symbols_affected}"
@@ -3419,11 +3503,11 @@ class TradingBot:
             #    state so GridLifecycleManager doesn't try to manage stale grids.
             if strategy_name == "GridTrading":
                 try:
-                    grid_mgr = self.component_registry.get(
+                    self.component_registry.get(
                         type(None)  # use duck-typing below
                     )
                 except Exception:
-                    grid_mgr = None
+                    pass
 
                 # Try direct attribute access (GridLifecycleManager stored on bot)
                 grid_lifecycle = getattr(self, "grid_lifecycle_manager", None)
@@ -3481,9 +3565,7 @@ class TradingBot:
                 inactive_strategies = set(old_strategies) - set(new_strategies)
 
                 if inactive_strategies:
-                    logging.info(
-                        f"  Strategies going inactive: {inactive_strategies}"
-                    )
+                    logging.info(f"  Strategies going inactive: {inactive_strategies}")
 
                 # Close positions from inactive strategies
                 for strategy_name in inactive_strategies:
@@ -3516,14 +3598,15 @@ class TradingBot:
             # strategy='GRID_TRADING' and side='GRID' and status='open'.
             open_trades = self.db.get_trades(status="open")
             grid_trades = [
-                t for t in open_trades
-                if t.get("strategy") == "GRID_TRADING"
+                t for t in open_trades if t.get("strategy") == "GRID_TRADING"
             ]
 
             if not grid_trades:
                 return  # Nothing to monitor
 
-            logging.debug(f"Emergency stop monitor: {len(grid_trades)} active grid trade(s)")
+            logging.debug(
+                f"Emergency stop monitor: {len(grid_trades)} active grid trade(s)"
+            )
 
             for trade in grid_trades:
                 symbol = trade.get("symbol")
@@ -3534,12 +3617,16 @@ class TradingBot:
                     # 1. Check current price vs emergency stop level
                     ticker = self._get_ticker_ws(symbol)
                     if isinstance(ticker, dict):
-                        current_price = float(ticker.get("last", ticker.get("price", 0)))
+                        current_price = float(
+                            ticker.get("last", ticker.get("price", 0))
+                        )
                     else:
                         current_price = float(ticker) if ticker else 0
 
                     if current_price <= 0:
-                        logging.debug(f"  {symbol}: price unavailable, skipping emergency check")
+                        logging.debug(
+                            f"  {symbol}: price unavailable, skipping emergency check"
+                        )
                         continue
 
                     # Emergency stop is stored in trade metadata (stop_loss field)
@@ -3561,7 +3648,9 @@ class TradingBot:
                             f"ADX {last_adx:.1f} > threshold {adx_threshold:.1f} — "
                             f"trend forming, grid is unsuitable"
                         )
-                        self._close_orphaned_grid(symbol, reason="ADX_THRESHOLD_EXCEEDED")
+                        self._close_orphaned_grid(
+                            symbol, reason="ADX_THRESHOLD_EXCEEDED"
+                        )
                         continue
 
                     # 3. Check unrealized P&L vs max drawdown (if available)
@@ -3571,14 +3660,18 @@ class TradingBot:
                     if entry_price > 0 and quantity > 0:
                         position_value = entry_price * quantity
                         max_drawdown_pct = 0.15  # 15% drawdown triggers emergency stop
-                        if position_value > 0 and unrealized_pnl < -(position_value * max_drawdown_pct):
+                        if position_value > 0 and unrealized_pnl < -(
+                            position_value * max_drawdown_pct
+                        ):
                             logging.warning(
                                 f"🚨 GRID P&L STOP for {symbol}: "
                                 f"unrealized P&L {unrealized_pnl:.2f} exceeds "
-                                f"{max_drawdown_pct*100:.0f}% drawdown on "
+                                f"{max_drawdown_pct * 100:.0f}% drawdown on "
                                 f"position value {position_value:.2f}"
                             )
-                            self._close_orphaned_grid(symbol, reason="MAX_DRAWDOWN_EXCEEDED")
+                            self._close_orphaned_grid(
+                                symbol, reason="MAX_DRAWDOWN_EXCEEDED"
+                            )
                             continue
 
                 except Exception as per_trade_err:
@@ -3618,14 +3711,10 @@ class TradingBot:
             AssertionError: If any pre-trade condition fails
         """
         # Validate grid spacing
-        assert (
-            grid_spacing > 0
-        ), f"Grid spacing must be positive, got {grid_spacing}"
+        assert grid_spacing > 0, f"Grid spacing must be positive, got {grid_spacing}"
 
         # Validate number of levels
-        assert (
-            5 <= num_levels <= 20
-        ), f"Number of levels must be 5-20, got {num_levels}"
+        assert 5 <= num_levels <= 20, f"Number of levels must be 5-20, got {num_levels}"
 
         # Validate quantity per level against exchange minimum
         # Fetch live instrument info so we respect per-token minimums.
@@ -3673,9 +3762,7 @@ class TradingBot:
             positions = self.client.get_positions()
 
             # Calculate total unrealized P&L
-            total_pnl = sum(
-                float(pos.get("unrealized_pnl", 0)) for pos in positions
-            )
+            total_pnl = sum(float(pos.get("unrealized_pnl", 0)) for pos in positions)
 
             # Get current exposure
             exposure = self._get_current_exposure()

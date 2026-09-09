@@ -20,12 +20,19 @@ SESSION_DAY = datetime(2024, 6, 15, tzinfo=timezone.utc)
 
 def _bars_15m(specs):
     """Build a 15m bundle from (open, high, low, close, volume) tuples."""
-    data = {"open": [], "high": [], "low": [], "close": [], "volume": [], "timestamp": []}
-    for i, (o, h, l, c, v) in enumerate(specs):
+    data = {
+        "open": [],
+        "high": [],
+        "low": [],
+        "close": [],
+        "volume": [],
+        "timestamp": [],
+    }
+    for i, (o, h, lo, c, v) in enumerate(specs):
         ts = SESSION_DAY + timedelta(minutes=15 * i)
         data["open"].append(o)
         data["high"].append(h)
-        data["low"].append(l)
+        data["low"].append(lo)
         data["close"].append(c)
         data["volume"].append(v)
         data["timestamp"].append(ts.strftime("%Y-%m-%dT%H:%M:%S"))

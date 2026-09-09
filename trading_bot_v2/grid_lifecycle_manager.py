@@ -23,7 +23,7 @@ import os
 import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .config import config
 from .exit_sizing import (
@@ -115,7 +115,11 @@ def is_protective_order(order: Any) -> bool:
     ).lower()
     if order_type in _PROTECTIVE_ORDER_TYPES:
         return True
-    if order.get("sl_trigger_price") or order.get("slTriggerPrice") or raw.get("slTriggerPrice"):
+    if (
+        order.get("sl_trigger_price")
+        or order.get("slTriggerPrice")
+        or raw.get("slTriggerPrice")
+    ):
         return True
     reduce_only = order.get("reduce_only", raw.get("reduceOnly"))
     return reduce_only in (True, "true", "True", 1)
@@ -135,9 +139,7 @@ class GridState(Enum):
 # churned on every border flicker; new grids are still only CREATED in
 # ranging regimes (StrategyManager Step 2.25 + _handle_grid_signals).
 # Grids are unwound when a TRENDING_* regime is confirmed.
-GRID_ALLOWED_REGIMES = frozenset(
-    {"ranging_calm", "ranging_volatile", "indecisive"}
-)
+GRID_ALLOWED_REGIMES = frozenset({"ranging_calm", "ranging_volatile", "indecisive"})
 
 
 @dataclass
@@ -206,7 +208,9 @@ class GridLifecycleManager:
         self._metrics: Dict[str, GridMetrics] = {}
 
         # Last time we checked for fills
-        self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
+        self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(
+            hours=1
+        )
 
         # symbol -> pending-flatten marker.  A force exit that could not
         # confirm every position flat keeps its grid state and lands here
@@ -300,7 +304,9 @@ class GridLifecycleManager:
                 issues = []
 
                 # Check for missing center price
-                if not grid_data.get("center_price") and not grid_data.get("initial_center"):
+                if not grid_data.get("center_price") and not grid_data.get(
+                    "initial_center"
+                ):
                     issues.append("missing_center_price")
 
                 # Check for incomplete metadata
@@ -311,7 +317,11 @@ class GridLifecycleManager:
                 # Check for invalid state
                 state_value = grid_data.get("state")
                 if state_value is not None:
-                    state_str = state_value.value if hasattr(state_value, "value") else str(state_value)
+                    state_str = (
+                        state_value.value
+                        if hasattr(state_value, "value")
+                        else str(state_value)
+                    )
                     if state_str not in [s.value for s in GridState]:
                         issues.append("invalid_state")
 
@@ -336,7 +346,9 @@ class GridLifecycleManager:
                 repaired_count += exchange_repaired
 
         except Exception as e:
-            logger.error(f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True)
+            logger.error(
+                f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True
+            )
 
         return repaired_count
 
@@ -358,7 +370,9 @@ class GridLifecycleManager:
                 if center_price:
                     grid_data["center_price"] = center_price
                     grid_data["initial_center"] = center_price
-                    logger.info(f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}")
+                    logger.info(
+                        f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}"
+                    )
                 else:
                     return False
 
@@ -401,7 +415,9 @@ class GridLifecycleManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True
+            )
             return False
 
     def _close_unrecoverable_grid(self, symbol: str, reason: str) -> None:
@@ -425,7 +441,9 @@ class GridLifecycleManager:
                     del data_dict[symbol]
 
         except Exception as e:
-            logger.error(f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True
+            )
 
     def _calculate_center_from_exchange_orders(self, symbol: str) -> Optional[float]:
         """Calculate grid center price from current exchange orders."""
@@ -436,14 +454,22 @@ class GridLifecycleManager:
             if not symbol_orders:
                 return None
 
-            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            buy_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]
+            ]
+            sell_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]
+            ]
 
             if not buy_orders or not sell_orders:
                 return None
 
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
-            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
+            sell_prices = [
+                float(o.get("price", 0)) for o in sell_orders if o.get("price")
+            ]
 
             if not buy_prices or not sell_prices:
                 return None
@@ -451,7 +477,9 @@ class GridLifecycleManager:
             return (max(buy_prices) + min(sell_prices)) / 2
 
         except Exception as e:
-            logger.error(f"Error calculating center from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error calculating center from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _calculate_spacing_from_exchange_orders(self, symbol: str) -> Optional[float]:
@@ -460,8 +488,12 @@ class GridLifecycleManager:
             orders = self.client.get_orders()
             symbol_orders = [o for o in orders if o.get("symbol") == symbol]
 
-            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            buy_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]
+            ]
+            sell_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]
+            ]
 
             if not buy_orders or not sell_orders:
                 return None
@@ -480,15 +512,21 @@ class GridLifecycleManager:
             spacings = []
             for i in range(len(buy_prices) - 1):
                 if buy_prices[i + 1] > 0:
-                    spacings.append((buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1])
+                    spacings.append(
+                        (buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1]
+                    )
             for i in range(len(sell_prices) - 1):
                 if sell_prices[i] > 0:
-                    spacings.append((sell_prices[i + 1] - sell_prices[i]) / sell_prices[i])
+                    spacings.append(
+                        (sell_prices[i + 1] - sell_prices[i]) / sell_prices[i]
+                    )
 
             return sum(spacings) / len(spacings) if spacings else None
 
         except Exception as e:
-            logger.error(f"Error calculating spacing from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error calculating spacing from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _count_levels_from_exchange_orders(self, symbol: str) -> Optional[int]:
@@ -497,7 +535,9 @@ class GridLifecycleManager:
             orders = self.client.get_orders()
             return len([o for o in orders if o.get("symbol") == symbol])
         except Exception as e:
-            logger.error(f"Error counting levels from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error counting levels from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _estimate_capital_from_exchange_orders(self, symbol: str) -> Optional[float]:
@@ -510,13 +550,18 @@ class GridLifecycleManager:
             for order in symbol_orders:
                 price = float(order.get("price", 0))
                 quantity = float(
-                    order.get("quantity") or order.get("size") or order.get("amount") or order.get("initial_amount", 0)
+                    order.get("quantity")
+                    or order.get("size")
+                    or order.get("amount")
+                    or order.get("initial_amount", 0)
                 )
                 total_value += price * quantity
 
             return total_value if total_value > 0 else None
         except Exception as e:
-            logger.error(f"Error estimating capital from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error estimating capital from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _sync_grids_from_exchange(self) -> int:
@@ -548,15 +593,29 @@ class GridLifecycleManager:
                     continue
 
                 if len(symbol_orders) >= 5:
-                    buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-                    sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+                    buy_orders = [
+                        o
+                        for o in symbol_orders
+                        if o.get("side", "").lower() in ["bid", "buy"]
+                    ]
+                    sell_orders = [
+                        o
+                        for o in symbol_orders
+                        if o.get("side", "").lower() in ["ask", "sell"]
+                    ]
 
                     if buy_orders and sell_orders:
-                        logger.info(f"🔍 Found potential orphaned grid on exchange: {symbol}")
+                        logger.info(
+                            f"🔍 Found potential orphaned grid on exchange: {symbol}"
+                        )
 
-                        if self._readopt_orphaned_grid_from_exchange(symbol, buy_orders, sell_orders):
+                        if self._readopt_orphaned_grid_from_exchange(
+                            symbol, buy_orders, sell_orders
+                        ):
                             repaired_count += 1
-                            logger.info(f"✅ Re-adopted orphaned grid from exchange: {symbol}")
+                            logger.info(
+                                f"✅ Re-adopted orphaned grid from exchange: {symbol}"
+                            )
 
         except Exception as e:
             logger.error(f"Error syncing grids from exchange: {e}", exc_info=True)
@@ -589,7 +648,9 @@ class GridLifecycleManager:
             # _check_emergency_stop short-circuits on ≤ 0; without this the
             # grid runs unprotected at the per-symbol level.
             emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
             if buy_prices:
                 emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
             else:
@@ -616,9 +677,7 @@ class GridLifecycleManager:
             # only fills of these orders are attributed to the grid.
             readopted_ids = {
                 oid
-                for oid in (
-                    self._extract_order_id_from_order(o) for o in all_orders
-                )
+                for oid in (self._extract_order_id_from_order(o) for o in all_orders)
                 if oid
             }
             if readopted_ids:
@@ -634,7 +693,9 @@ class GridLifecycleManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error readopting orphaned grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error readopting orphaned grid for {symbol}: {e}", exc_info=True
+            )
             return False
 
     def _validate_grid_integrity(self) -> None:
@@ -657,7 +718,9 @@ class GridLifecycleManager:
 
                 if issues:
                     issues_found += 1
-                    logger.warning(f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}")
+                    logger.warning(
+                        f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}"
+                    )
 
                     if "invalid_spacing" in issues:
                         center_ref = (
@@ -674,7 +737,9 @@ class GridLifecycleManager:
                     valid_grids += 1
 
             if issues_found > 0:
-                logger.info(f"Grid integrity check: {valid_grids} valid, {issues_found} with issues")
+                logger.info(
+                    f"Grid integrity check: {valid_grids} valid, {issues_found} with issues"
+                )
             else:
                 logger.debug(f"Grid integrity check: all {valid_grids} grids valid")
 
@@ -694,7 +759,9 @@ class GridLifecycleManager:
             logger.info("🔧 Initializing GridLifecycleManager repair system...")
 
             if self.db:
-                loaded_grids = self.load_grid_states(regime_detector=self.regime_detector)
+                loaded_grids = self.load_grid_states(
+                    regime_detector=self.regime_detector
+                )
                 logger.info(f"📊 Loaded {len(loaded_grids)} grids from database")
 
             orphaned_repaired = self.detect_and_repair_orphaned_grids()
@@ -766,7 +833,9 @@ class GridLifecycleManager:
             return 0.0
         return self._grids[symbol].get("grid_spacing", 0.0)
 
-    def update_grid_spacing(self, symbol: str, new_spacing: float, reason: str = "dynamic"):
+    def update_grid_spacing(
+        self, symbol: str, new_spacing: float, reason: str = "dynamic"
+    ):
         """Update the grid spacing (for dynamic spacing adjustments)."""
         if symbol not in self._grids:
             logger.warning(f"Cannot update spacing - no grid for {symbol}")
@@ -778,7 +847,9 @@ class GridLifecycleManager:
             f"📊 Grid {symbol} spacing updated: ${old_spacing:.4f} → ${new_spacing:.4f} ({reason})"
         )
 
-    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh") -> bool:
+    def recenter_grid(
+        self, symbol: str, new_center: float, reason: str = "signal_refresh"
+    ) -> bool:
         """
         Soft recenter: shift UNFILLED limit orders toward new center price.
         Does NOT touch filled positions.
@@ -803,10 +874,15 @@ class GridLifecycleManager:
 
         # Safety: enforce minimum time between refreshes (45 minutes)
         last_refresh = self.get_last_refresh_time(symbol)
-        if last_refresh and (datetime.now(timezone.utc) - last_refresh).total_seconds() < 2700:
-            remaining = 2700 - (datetime.now(timezone.utc) - last_refresh).total_seconds()
+        if (
+            last_refresh
+            and (datetime.now(timezone.utc) - last_refresh).total_seconds() < 2700
+        ):
+            remaining = (
+                2700 - (datetime.now(timezone.utc) - last_refresh).total_seconds()
+            )
             logger.info(
-                f"Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
+                f"Refresh skipped for {symbol} - cooldown {remaining / 60:.1f}min remaining"
             )
             return False
 
@@ -820,7 +896,6 @@ class GridLifecycleManager:
         try:
             # Calculate shift delta
             delta = new_center - current_center
-            spacing = grid.get("grid_spacing", 0)
 
             # Resolve correct tick size for this symbol from the exchange.
             # Falls back to a sane default ONLY if instrument info is unavailable.
@@ -855,13 +930,15 @@ class GridLifecycleManager:
             # can decide whether the recenter as a whole was successful.
             # Previously, partial failures left center_price updated as if all
             # replacements had worked — corrupting the in-memory model.
-            orders_to_replace = []   # legs that pass safety checks
-            skipped_legs     = []    # legs we deliberately skipped (price shift cap)
+            orders_to_replace = []  # legs that pass safety checks
+            skipped_legs = []  # legs we deliberately skipped (price shift cap)
             for order in symbol_orders:
                 order_id = order.get("id") or order.get("order_id")
                 old_price = float(order.get("price", 0))
                 side = order.get("side", "").lower()
-                quantity = float(order.get("quantity") or order.get("size") or order.get("amount", 0))
+                quantity = float(
+                    order.get("quantity") or order.get("size") or order.get("amount", 0)
+                )
 
                 if not order_id or not old_price or not quantity:
                     continue
@@ -879,7 +956,9 @@ class GridLifecycleManager:
 
                 # Round to tick size resolved above
                 new_price = round(new_price / tick_size) * tick_size
-                orders_to_replace.append((order_id, side, quantity, old_price, new_price))
+                orders_to_replace.append(
+                    (order_id, side, quantity, old_price, new_price)
+                )
 
             # Phase 1: cancel-then-replace each leg, tracking failures
             failed_replacements = []
@@ -905,9 +984,7 @@ class GridLifecycleManager:
                     tracked_ids = grid.get("order_ids")
                     if tracked_ids is not None:
                         tracked_ids.discard(str(order_id))
-                        replacement_id = self._extract_order_id_from_response(
-                            new_order
-                        )
+                        replacement_id = self._extract_order_id_from_response(new_order)
                         if replacement_id:
                             tracked_ids.add(replacement_id)
 
@@ -920,15 +997,17 @@ class GridLifecycleManager:
                         f"(state={state}, side={side}, qty={quantity}, "
                         f"price ${old_price:.4f}→${new_price:.4f}): {e}"
                     )
-                    failed_replacements.append({
-                        "order_id":  order_id,
-                        "side":      side,
-                        "quantity":  quantity,
-                        "old_price": old_price,
-                        "new_price": new_price,
-                        "state":     state,
-                        "error":     str(e),
-                    })
+                    failed_replacements.append(
+                        {
+                            "order_id": order_id,
+                            "side": side,
+                            "quantity": quantity,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "state": state,
+                            "error": str(e),
+                        }
+                    )
 
                     # Cancelled-but-not-replaced legs are no longer live:
                     # drop them from the tracked ID set.
@@ -948,11 +1027,13 @@ class GridLifecycleManager:
                     f"failed {len(failed_replacements)}."
                 )
                 # Track in grid metadata so monitor / supervisor can see it
-                grid.setdefault("recenter_failures", []).append({
-                    "ts":      datetime.now(timezone.utc).isoformat(),
-                    "reason":  reason,
-                    "orphans": failed_replacements,
-                })
+                grid.setdefault("recenter_failures", []).append(
+                    {
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "reason": reason,
+                        "orphans": failed_replacements,
+                    }
+                )
                 return False
 
             # All legs that we attempted succeeded → safe to update metadata
@@ -1097,9 +1178,7 @@ class GridLifecycleManager:
         }
 
         if order_ids is not None:
-            self._grids[symbol]["order_ids"] = {
-                str(oid) for oid in order_ids if oid
-            }
+            self._grids[symbol]["order_ids"] = {str(oid) for oid in order_ids if oid}
 
         # Initialize exposure tracking at zero
         self.risk_manager.grid_exposure[symbol] = 0.0
@@ -2013,7 +2092,9 @@ class GridLifecycleManager:
             return 3, 2
         return 5, 1
 
-    def _replenish_order(self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float):
+    def _replenish_order(
+        self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float
+    ):
         """
         Place a counter order when a grid order is filled.
 
@@ -2062,9 +2143,7 @@ class GridLifecycleManager:
             # used when the grid levels were originally placed
             # (TradingBot._calculate_grid_levels). The previous hardcoded
             # 0.01 tick collapsed sub-cent ladders on low-priced symbols.
-            tick_decimals, lot_decimals = self._round_decimals_for_price(
-                fill_price
-            )
+            tick_decimals, lot_decimals = self._round_decimals_for_price(fill_price)
             counter_price = round(counter_price, tick_decimals)
 
             if counter_price <= 0:
@@ -2078,7 +2157,9 @@ class GridLifecycleManager:
             min_lot = 10 ** (-lot_decimals)
 
             if counter_quantity < min_lot:
-                logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity}")
+                logger.warning(
+                    f"Counter quantity too small for {symbol}: {counter_quantity}"
+                )
                 return
 
             # Place the counter order
@@ -2089,9 +2170,7 @@ class GridLifecycleManager:
             # Register the replacement order ID so its future fill is
             # attributed to the grid (only for ID-tracking grids).
             if grid.get("order_ids") is not None:
-                new_order_id = self._extract_order_id_from_response(
-                    order_result
-                )
+                new_order_id = self._extract_order_id_from_response(order_result)
                 if new_order_id:
                     grid["order_ids"].add(new_order_id)
                 else:
@@ -2309,8 +2388,7 @@ class GridLifecycleManager:
                 synced_ids = {
                     oid
                     for oid in (
-                        self._extract_order_id_from_order(o)
-                        for o in limit_orders
+                        self._extract_order_id_from_order(o) for o in limit_orders
                     )
                     if oid
                 }
@@ -2497,19 +2575,32 @@ class GridLifecycleManager:
 
         # Build repair history JSON if present
         import json
+
         repair_history = None
         if grid.get("repair_issues") or grid.get("readopted"):
             repair_entries = grid.get("repair_history_entries", [])
             if grid.get("repair_issues"):
-                repair_entries.append({
-                    "at": grid.get("repaired_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("repaired_at"), datetime) else str(grid.get("repaired_at", "")),
-                    "issues": grid.get("repair_issues", []),
-                })
+                repair_entries.append(
+                    {
+                        "at": grid.get(
+                            "repaired_at", datetime.now(timezone.utc)
+                        ).isoformat()
+                        if isinstance(grid.get("repaired_at"), datetime)
+                        else str(grid.get("repaired_at", "")),
+                        "issues": grid.get("repair_issues", []),
+                    }
+                )
             if grid.get("readopted"):
-                repair_entries.append({
-                    "at": grid.get("readopted_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("readopted_at"), datetime) else str(grid.get("readopted_at", "")),
-                    "type": "readopted_from_exchange",
-                })
+                repair_entries.append(
+                    {
+                        "at": grid.get(
+                            "readopted_at", datetime.now(timezone.utc)
+                        ).isoformat()
+                        if isinstance(grid.get("readopted_at"), datetime)
+                        else str(grid.get("readopted_at", "")),
+                        "type": "readopted_from_exchange",
+                    }
+                )
             repair_history = json.dumps(repair_entries[-10:])  # Keep last 10
 
         # Serialize tracked order IDs (None => legacy grid, stored as NULL)
@@ -2648,8 +2739,7 @@ class GridLifecycleManager:
                             }
                         except (ValueError, TypeError) as e:
                             logger.warning(
-                                f"Could not parse stored order_ids for "
-                                f"{symbol}: {e}"
+                                f"Could not parse stored order_ids for {symbol}: {e}"
                             )
 
                     # Initialize metrics from DB

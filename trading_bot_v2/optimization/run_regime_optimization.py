@@ -56,14 +56,16 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--strategy", "-s",
+        "--strategy",
+        "-s",
         type=str,
         required=True,
         choices=list_strategies(),
         help="Strategy to optimize",
     )
     parser.add_argument(
-        "--regimes", "-r",
+        "--regimes",
+        "-r",
         type=str,
         required=True,
         help="Comma-separated regimes (e.g. RANGING_CALM,RANGING_VOLATILE)",
@@ -84,13 +86,15 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Backtest end date (ISO). Uses config default if not set.",
     )
     parser.add_argument(
-        "--trials", "-n",
+        "--trials",
+        "-n",
         type=int,
         default=30,
         help="Trials per regime (default: 30)",
     )
     parser.add_argument(
-        "--objective", "-o",
+        "--objective",
+        "-o",
         type=str,
         choices=sorted(OBJECTIVE_ALIASES.keys()),
         default="sharpe",
@@ -110,7 +114,8 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Initial capital (default: 10000.0)",
     )
     parser.add_argument(
-        "--walk-forward", "-w",
+        "--walk-forward",
+        "-w",
         action="store_true",
         help="Enable walk-forward validation",
     )
@@ -130,7 +135,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--min-trades",
         type=int,
         help="Minimum matching-regime trades per trial before pruning "
-             "(default: env REGIME_OPT_MIN_TRADES or 15)",
+        "(default: env REGIME_OPT_MIN_TRADES or 15)",
     )
     parser.add_argument(
         "--save-overlay",
@@ -155,12 +160,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging",
     )
     parser.add_argument(
-        "--quiet", "-q",
+        "--quiet",
+        "-q",
         action="store_true",
         help="Suppress most output",
     )
@@ -208,13 +215,13 @@ def print_comparison_table(
     regimes = list(summaries.keys())
     param_names = sorted(get_search_space(strategy).keys())
 
-    print(f"\n{'='*78}")
+    print(f"\n{'=' * 78}")
     print(f"REGIME OPTIMIZATION COMPARISON: {strategy} (objective: {objective})")
-    print(f"{'='*78}")
+    print(f"{'=' * 78}")
 
     header = f"  {'metric':<30}" + "".join(f"{r:>22}" for r in regimes)
     print(header)
-    print(f"  {'-'*30}" + "".join(f" {'-'*21}" for _ in regimes))
+    print(f"  {'-' * 30}" + "".join(f" {'-' * 21}" for _ in regimes))
 
     def _fmt(value: Any) -> str:
         if value is None:
@@ -246,10 +253,10 @@ def print_comparison_table(
         line = f"  {label:<30}" + "".join(f"{_fmt(v):>22}" for v in values)
         print(line)
 
-    print(f"{'='*78}")
+    print(f"{'=' * 78}")
     for regime, summary in summaries.items():
         print(f"  {regime}: study={summary['study_name']}")
-    print(f"{'='*78}\n")
+    print(f"{'=' * 78}\n")
 
 
 def main(argv: Optional[List[str]] = None) -> int:

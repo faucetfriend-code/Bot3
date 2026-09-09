@@ -129,11 +129,7 @@ class BlofinExchange(ExchangeClient):
     @staticmethod
     def to_native_order_side(side: OrderSideInput) -> str:
         """Normalize an order side to the Blofin wire value "buy"/"sell"."""
-        return (
-            "buy"
-            if BlofinExchange._to_order_side(side) == OrderSide.BUY
-            else "sell"
-        )
+        return "buy" if BlofinExchange._to_order_side(side) == OrderSide.BUY else "sell"
 
     @staticmethod
     def from_native_order_side(value: str) -> OrderSide:
@@ -266,7 +262,8 @@ class BlofinExchange(ExchangeClient):
         except Exception as exc:  # noqa: BLE001 - protective path must not raise
             logger.error("Blofin install_stop %s failed: %s", symbol, exc)
             return OrderResult(
-                status=OrderResultStatus.UNKNOWN.value, error=f"{type(exc).__name__}: {exc}"
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
             )
         return self._stop_result(ack, "order-tpsl not accepted")
 
@@ -290,7 +287,8 @@ class BlofinExchange(ExchangeClient):
         except Exception as exc:  # noqa: BLE001 - protective path must not raise
             logger.error("Blofin amend_stop %s failed: %s", symbol, exc)
             return OrderResult(
-                status=OrderResultStatus.UNKNOWN.value, error=f"{type(exc).__name__}: {exc}"
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
             )
         return self._stop_result(ack, "amend cascade failed")
 
@@ -301,7 +299,8 @@ class BlofinExchange(ExchangeClient):
         except Exception as exc:  # noqa: BLE001 - protective path must not raise
             logger.error("Blofin cancel_stop %s/%s failed: %s", symbol, stop_id, exc)
             return OrderResult(
-                status=OrderResultStatus.UNKNOWN.value, error=f"{type(exc).__name__}: {exc}"
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
             )
         return self._stop_result(ack, "cancel-tpsl not accepted")
 
@@ -331,7 +330,9 @@ class BlofinExchange(ExchangeClient):
                 symbol, order_id or "", client_order_id=client_order_id
             )
         except Exception as exc:  # noqa: BLE001 - lookup failure is "unknown"
-            logger.warning("Blofin fill lookup failed for %s %s: %s", symbol, order_id, exc)
+            logger.warning(
+                "Blofin fill lookup failed for %s %s: %s", symbol, order_id, exc
+            )
             return OrderResult(
                 order_id=order_id,
                 client_order_id=client_order_id,
@@ -472,8 +473,6 @@ class BlofinExchange(ExchangeClient):
         """Instrument constraints in base units (tick/lot/min sizes)."""
         return self.rest_client.get_instrument_info(symbol)
 
-    def get_funding_history(
-        self, symbol: str, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Funding-rate history records (passthrough)."""
         return self.rest_client.get_funding_history(symbol, limit=limit)

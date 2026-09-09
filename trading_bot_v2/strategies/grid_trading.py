@@ -20,7 +20,7 @@ Always use with regime detection and emergency stops.
 """
 
 import os
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
 from loguru import logger
 
@@ -75,42 +75,50 @@ class GridTradingStrategy:
             min_confidence: Minimum confidence for signal
         """
         self.grid_levels = (
-            grid_levels if grid_levels is not None
+            grid_levels
+            if grid_levels is not None
             else int(os.getenv("GRID_TRADING_LEVELS", "10"))
         )
         self.grid_spacing_multiplier = (
-            grid_spacing_atr_multiplier if grid_spacing_atr_multiplier is not None
+            grid_spacing_atr_multiplier
+            if grid_spacing_atr_multiplier is not None
             else float(os.getenv("GRID_SPACING_ATR_MULTIPLIER", "0.65"))
         )
         self.max_positions = (
-            max_positions_per_symbol if max_positions_per_symbol is not None
+            max_positions_per_symbol
+            if max_positions_per_symbol is not None
             else int(os.getenv("GRID_MAX_POSITIONS", "10"))
         )
         self.emergency_stop_pct = (
-            emergency_stop_loss_pct if emergency_stop_loss_pct is not None
+            emergency_stop_loss_pct
+            if emergency_stop_loss_pct is not None
             else float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
         )
         self.adx_threshold = (
-            adx_regime_threshold if adx_regime_threshold is not None
+            adx_regime_threshold
+            if adx_regime_threshold is not None
             else float(os.getenv("GRID_ADX_THRESHOLD", "20.0"))
         )
         self.atr_period = (
-            atr_period if atr_period is not None
+            atr_period
+            if atr_period is not None
             else int(os.getenv("GRID_ATR_PERIOD", "14"))
         )
         self.adx_period = (
-            adx_period if adx_period is not None
+            adx_period
+            if adx_period is not None
             else int(os.getenv("GRID_ADX_PERIOD", "14"))
         )
         self.min_confidence = (
-            min_confidence if min_confidence is not None
+            min_confidence
+            if min_confidence is not None
             else float(os.getenv("GRID_MIN_CONFIDENCE", "0.45"))
         )
         self.risk_manager = risk_manager  # Store RiskManager reference
 
         # Dynamic spacing bounds (as percentage of price)
         self.min_spacing_pct = float(os.getenv("GRID_MIN_SPACING_PCT", "0.003"))  # 0.3%
-        self.max_spacing_pct = float(os.getenv("GRID_MAX_SPACING_PCT", "0.06"))   # 6%
+        self.max_spacing_pct = float(os.getenv("GRID_MAX_SPACING_PCT", "0.06"))  # 6%
 
         # Track active grids per symbol
         self.active_grids: Dict[str, List[Dict[str, Any]]] = {}
@@ -131,7 +139,9 @@ class GridTradingStrategy:
 
     def _now(self) -> datetime:
         """Return simulated time during backtesting, wall-clock time in live trading."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def generate_signals(
         self,
@@ -204,9 +214,13 @@ class GridTradingStrategy:
                             f"{symbol}: ADX calculated locally (fallback) on {regime_tf} = {adx_for_filter:.1f}"
                         )
                     except Exception as e:
-                        logger.warning(f"{symbol}: Could not calculate regime ADX filter: {e}")
+                        logger.warning(
+                            f"{symbol}: Could not calculate regime ADX filter: {e}"
+                        )
             else:
-                logger.debug(f"{symbol}: Using regime detector ADX = {adx_for_filter:.1f}")
+                logger.debug(
+                    f"{symbol}: Using regime detector ADX = {adx_for_filter:.1f}"
+                )
 
             if adx_for_filter is not None:
                 # SANITY CHECK: ADX > 90 is extremely rare — likely a data issue
@@ -250,7 +264,6 @@ class GridTradingStrategy:
 
             # Get account balance from risk_manager if available
             account_balance = getattr(self.risk_manager, "last_known_balance", 15000)
-            current_exposure = 0  # Exposure checked at bot level
 
             # Allocate 10% of account balance per grid (no artificial cap)
             # RiskManager will validate and potentially reduce at execution time
@@ -313,7 +326,9 @@ class GridTradingStrategy:
             spacing_pct = raw_spacing / current_price if current_price > 0 else 0.01
 
             # Apply dynamic bounds
-            clamped_pct = max(self.min_spacing_pct, min(self.max_spacing_pct, spacing_pct))
+            clamped_pct = max(
+                self.min_spacing_pct, min(self.max_spacing_pct, spacing_pct)
+            )
             grid_spacing = current_price * clamped_pct
 
             # Log if clamping occurred
@@ -332,8 +347,12 @@ class GridTradingStrategy:
             # Generate BUY (below price) + SELL (above price) pair.
             # _handle_grid_signals in StrategyManager requires exactly 1 BUY + 1 SELL
             # with BUY entry < SELL entry to confirm it's a bilateral grid setup.
-            buy_signal = self._create_grid_buy_signal(symbol, current_price, grid_spacing, atr, adx)
-            sell_signal = self._create_grid_sell_signal(symbol, current_price, grid_spacing, atr, adx)
+            buy_signal = self._create_grid_buy_signal(
+                symbol, current_price, grid_spacing, atr, adx
+            )
+            sell_signal = self._create_grid_sell_signal(
+                symbol, current_price, grid_spacing, atr, adx
+            )
 
             signals = []
             if buy_signal:

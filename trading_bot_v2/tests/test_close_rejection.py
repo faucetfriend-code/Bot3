@@ -65,7 +65,9 @@ class FakeRiskManager:
     def unregister_migrated_position(self, symbol, side, qty=None):
         self.unregistered.append((symbol, side, qty))
         self.positions = [
-            p for p in self.positions if not (p["symbol"] == symbol and p["side"] == side)
+            p
+            for p in self.positions
+            if not (p["symbol"] == symbol and p["side"] == side)
         ]
         return True
 
@@ -97,7 +99,9 @@ class TestOrderResult:
         assert "margin" in result.error
 
     def test_bare_success_ack_is_accepted_without_order_id(self):
-        result = OrderResult.from_ack({"success": True, "data": {}, "status": "success"})
+        result = OrderResult.from_ack(
+            {"success": True, "data": {}, "status": "success"}
+        )
         assert result.accepted is True and result.order_id is None
         assert result.status == OrderResultStatus.ACCEPTED.value
         assert result.has_fills is False
@@ -151,7 +155,9 @@ class TestRejectedClose:
         client = ScriptedClient([LONG_2], [REJECT_ACK])
         risk = FakeRiskManager([POS])
         manager = _manager(client, risk)
-        manager._take_profits["BTC"] = {"long": {"target": 105.0, "partial_taken": False}}
+        manager._take_profits["BTC"] = {
+            "long": {"target": 105.0, "partial_taken": False}
+        }
 
         taken = manager._check_take_profit("BTC", dict(POS), current_price=110.0)
 
@@ -296,7 +302,9 @@ class TestPendingCloseRetry:
         )
         risk = FakeRiskManager([POS])
         manager = _manager(client, risk)
-        manager._take_profits["BTC"] = {"long": {"target": 105.0, "partial_taken": False}}
+        manager._take_profits["BTC"] = {
+            "long": {"target": 105.0, "partial_taken": False}
+        }
         manager._check_take_profit("BTC", dict(POS), current_price=110.0)
         assert manager._take_profits["BTC"]["long"]["partial_taken"] is False
 

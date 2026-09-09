@@ -165,8 +165,9 @@ def load_env(
 def _print_report(report: Dict[str, Any]) -> None:
     """Print the precedence report for a human."""
     print("ENV PRECEDENCE")
-    print(f"  override        : {report['override']} "
-          f"(from {report['override_source']})")
+    print(
+        f"  override        : {report['override']} (from {report['override_source']})"
+    )
     print(f"  winner          : {report['winner']}")
     print(f"  .env keys       : {report['dotenv_key_count']}")
     shadowed = report["shadowed"]

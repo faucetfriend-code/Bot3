@@ -10,11 +10,8 @@ Run: pytest trading_bot_v2/tests/test_profiler_benchmark.py -v
 import json
 import math
 import os
-import sqlite3
 import tempfile
 import time
-from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -23,7 +20,6 @@ from trading_bot_v2.trading_loop_profiler import (
     IterationTiming,
     LatencyStats,
     PhaseTiming,
-    ProfilerPrometheusMetrics,
     TradingLoopProfiler,
     _get_memory_bytes,
     get_profiler,
@@ -103,9 +99,7 @@ class TestLatencyStats:
         for val in [10.0, 12.0, 14.0, 16.0, 18.0]:
             stats.add_sample(val)
         stats.compute()
-        expected_std = math.sqrt(
-            sum((x - 14.0) ** 2 for x in [10, 12, 14, 16, 18]) / 4
-        )
+        expected_std = math.sqrt(sum((x - 14.0) ** 2 for x in [10, 12, 14, 16, 18]) / 4)
         assert stats.std_dev_ms == pytest.approx(expected_std, abs=0.01)
 
 

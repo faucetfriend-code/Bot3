@@ -51,12 +51,8 @@ def zero_trade_funnel(n_signals: int = 136) -> SignalFunnel:
     funnel.count(STAGE_BARS_EVALUATED, 52041)
     funnel.count_strategy("momentum_scalping", STAGE_STRATEGY_INVOKED, 18220)
     funnel.count_strategy("momentum_scalping", STAGE_RAW_SIGNALS, n_signals)
-    funnel.count_strategy(
-        "momentum_scalping", STAGE_VALIDITY_DROPPED, n_signals
-    )
-    funnel.reject(
-        REASON_VALIDITY["rrr_meets_minimum"], n_signals, "momentum_scalping"
-    )
+    funnel.count_strategy("momentum_scalping", STAGE_VALIDITY_DROPPED, n_signals)
+    funnel.reject(REASON_VALIDITY["rrr_meets_minimum"], n_signals, "momentum_scalping")
     funnel.set_stage(STAGE_ORDERS_PLACED, 0)
     funnel.set_stage(STAGE_CLOSED_TRADES, 0)
     return funnel
@@ -188,22 +184,33 @@ class TestScoreTrial:
 class TestFunnelForResult:
     def test_uses_stored_diagnostics(self):
         result = BacktestResult(
-            symbol="S", start="a", end="b", initial_capital=1.0,
-            final_equity=1.0, diagnostics=zero_trade_funnel().to_dict(),
+            symbol="S",
+            start="a",
+            end="b",
+            initial_capital=1.0,
+            final_equity=1.0,
+            diagnostics=zero_trade_funnel().to_dict(),
         )
         assert _funnel_for_result(result).diagnose() == "all_discarded_downstream"
 
     def test_uninstrumented_run_with_trades_is_traded(self):
         """Stubbed adapters must not be mislabelled as zero-signal."""
         result = BacktestResult(
-            symbol="S", start="a", end="b", initial_capital=1.0,
-            final_equity=1.0, closed_trades=25,
+            symbol="S",
+            start="a",
+            end="b",
+            initial_capital=1.0,
+            final_equity=1.0,
+            closed_trades=25,
         )
         assert _funnel_for_result(result).diagnose() == "traded"
 
     def test_uninstrumented_run_without_trades_is_no_data(self):
         result = BacktestResult(
-            symbol="S", start="a", end="b", initial_capital=1.0,
+            symbol="S",
+            start="a",
+            end="b",
+            initial_capital=1.0,
             final_equity=1.0,
         )
         assert _funnel_for_result(result).diagnose() == "no_data"
@@ -313,9 +320,7 @@ def tmp_db(monkeypatch, tmp_path):
 
 class TestTrialRegistryInfeasibleExclusion:
     def test_is_infeasible_trial_detection(self):
-        infeasible = StubTrial(
-            attrs={"outcome": TrialOutcome.INFEASIBLE_CONFIG.value}
-        )
+        infeasible = StubTrial(attrs={"outcome": TrialOutcome.INFEASIBLE_CONFIG.value})
         regular = StubTrial(attrs={"outcome": "no_opportunities"})
         assert _is_infeasible_trial(infeasible) is True
         assert _is_infeasible_trial(regular) is False
@@ -346,9 +351,7 @@ class TestTrialRegistryInfeasibleExclusion:
         )
 
         runner = OptunaRunner.__new__(OptunaRunner)
-        runner._record_trial_registry(
-            study, "momentum_scalping", None, "sharpe_ratio"
-        )
+        runner._record_trial_registry(study, "momentum_scalping", None, "sharpe_ratio")
 
         rows = tmp_db.get_trial_registry(strategy="momentum_scalping")
         assert len(rows) == 1
@@ -364,9 +367,7 @@ class TestTrialRegistryInfeasibleExclusion:
             trials=[StubTrial(i, state.PRUNED, attrs=infeasible) for i in range(5)],
         )
         runner = OptunaRunner.__new__(OptunaRunner)
-        runner._record_trial_registry(
-            study, "momentum_scalping", None, "sharpe_ratio"
-        )
+        runner._record_trial_registry(study, "momentum_scalping", None, "sharpe_ratio")
         assert tmp_db.get_trial_registry(strategy="momentum_scalping") == []
 
 
@@ -400,9 +401,7 @@ class TestFailRateGuard:
     def _study_with(self, n_fail: int, n_ok: int) -> StubStudy:
         state = optuna.trial.TrialState
         trials = [StubTrial(i, state.FAIL) for i in range(n_fail)]
-        trials += [
-            StubTrial(n_fail + i, state.COMPLETE, 1.0) for i in range(n_ok)
-        ]
+        trials += [StubTrial(n_fail + i, state.COMPLETE, 1.0) for i in range(n_ok)]
         return StubStudy(trials=trials)
 
     def test_quiet_below_the_minimum_trial_count(self):

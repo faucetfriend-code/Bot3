@@ -88,7 +88,14 @@ class TestNormalization:
         assert result == {}
 
     def test_filter_real_positions_handles_string_quantity(self):
-        positions = [{"symbol": "BTC-USDC", "side": "long", "quantity": "1.5", "entry_price": "100"}]
+        positions = [
+            {
+                "symbol": "BTC-USDC",
+                "side": "long",
+                "quantity": "1.5",
+                "entry_price": "100",
+            }
+        ]
         result = _filter_real_positions(positions)
         assert result["BTC-USDC:LONG"]["quantity"] == 1.5
 
@@ -106,7 +113,9 @@ class TestStalePositionClosing:
         mock_db.close_position.assert_any_call("BTC-USDC", "LONG")
         mock_db.close_position.assert_any_call("ETH-USDC", "LONG")
 
-    def test_partial_closure_when_position_missing_from_exchange(self, reconciler, mock_db):
+    def test_partial_closure_when_position_missing_from_exchange(
+        self, reconciler, mock_db
+    ):
         exchange_positions = [_pos(symbol="BTC-USDC")]
         db_positions = [_pos(symbol="BTC-USDC"), _pos(symbol="ETH-USDC")]
 
@@ -116,7 +125,9 @@ class TestStalePositionClosing:
         assert report.matched == 1
         mock_db.close_position.assert_called_once_with("ETH-USDC", "LONG")
 
-    def test_no_db_positions_and_no_exchange_positions_is_noop(self, reconciler, mock_db):
+    def test_no_db_positions_and_no_exchange_positions_is_noop(
+        self, reconciler, mock_db
+    ):
         report = reconciler.reconcile(exchange_positions=[], db_positions=[])
         assert report.closed_locally == 0
         assert report.adopted_from_exchange == 0
@@ -129,7 +140,9 @@ class TestStalePositionClosing:
 # ---------------------------------------------------------------------------
 class TestAdoptMissingPosition:
     def test_adopts_exchange_position_missing_from_db(self, reconciler, mock_db):
-        exchange_positions = [_pos(symbol="BTC-USDC", quantity=2.0, entry_price=60000.0)]
+        exchange_positions = [
+            _pos(symbol="BTC-USDC", quantity=2.0, entry_price=60000.0)
+        ]
         report = reconciler.reconcile(exchange_positions, db_positions=[])
 
         assert report.adopted_from_exchange == 1
@@ -154,12 +167,16 @@ class TestAdoptMissingPosition:
 # Discrepancy detection
 # ---------------------------------------------------------------------------
 class TestDiscrepancyDetection:
-    def test_quantity_mismatch_detected_and_corrected(self, reconciler, mock_db, event_bus):
+    def test_quantity_mismatch_detected_and_corrected(
+        self, reconciler, mock_db, event_bus
+    ):
         exchange_positions = [_pos(quantity=5.0)]
         db_positions = [_pos(quantity=1.0)]
 
         received = []
-        event_bus.subscribe(EventType.POSITION_DISCREPANCY, lambda e: received.append(e))
+        event_bus.subscribe(
+            EventType.POSITION_DISCREPANCY, lambda e: received.append(e)
+        )
 
         report = reconciler.reconcile(exchange_positions, db_positions)
 
@@ -178,8 +195,18 @@ class TestDiscrepancyDetection:
         # side is part of the key; simulate via same symbol different side
         # entries present in both maps is not directly reachable through the
         # key, so we validate via the static helper instead.
-        exchange_pos = {"symbol": "BTC-USDC", "side": "LONG", "quantity": 1.0, "entry_price": 100.0}
-        db_pos = {"symbol": "BTC-USDC", "side": "SHORT", "quantity": 1.0, "entry_price": 100.0}
+        exchange_pos = {
+            "symbol": "BTC-USDC",
+            "side": "LONG",
+            "quantity": 1.0,
+            "entry_price": 100.0,
+        }
+        db_pos = {
+            "symbol": "BTC-USDC",
+            "side": "SHORT",
+            "quantity": 1.0,
+            "entry_price": 100.0,
+        }
         mismatches = PositionReconciler._find_mismatches(exchange_pos, db_pos)
         assert any("side mismatch" in m for m in mismatches)
 

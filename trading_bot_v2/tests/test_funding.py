@@ -130,9 +130,9 @@ class StubFundingSource(FundingSource):
     def fetch(self, symbol, start_dt, end_dt):
         self.calls.append((start_dt, end_dt))
         df = normalize_funding(self._frame)
-        keep = (
-            pd.to_datetime(df["timestamp"]) >= start_dt
-        ) & (pd.to_datetime(df["timestamp"]) <= end_dt)
+        keep = (pd.to_datetime(df["timestamp"]) >= start_dt) & (
+            pd.to_datetime(df["timestamp"]) <= end_dt
+        )
         return df[keep].reset_index(drop=True)
 
 
@@ -140,9 +140,7 @@ class TestFundingStore:
     def test_ensure_downloads_only_missing_ranges(self, tmp_path):
         full = make_funding("2024-01-01T00:00:00", 9)
         source = StubFundingSource(full)
-        mgr = CandleDownloadManager(
-            data_dir=str(tmp_path), funding_sources=[source]
-        )
+        mgr = CandleDownloadManager(data_dir=str(tmp_path), funding_sources=[source])
         mgr.save_funding_store("BTC-USDC", full.iloc[:3])
 
         mgr.ensure_funding("BTC-USDC", "2024-01-01", "2024-01-04")
@@ -155,9 +153,7 @@ class TestFundingStore:
     def test_coverage_reports_internal_gaps(self, tmp_path):
         full = make_funding("2024-01-01T00:00:00", 9)
         holed = pd.concat([full.iloc[:3], full.iloc[6:]], ignore_index=True)
-        mgr = CandleDownloadManager(
-            data_dir=str(tmp_path), funding_sources=[]
-        )
+        mgr = CandleDownloadManager(data_dir=str(tmp_path), funding_sources=[])
         mgr.save_funding_store("BTC-USDC", holed)
         cov = mgr.funding_coverage("BTC-USDC")
         assert cov.timeframe == FUNDING_KEY
@@ -173,14 +169,10 @@ class TestFundingStore:
     def test_ensure_is_idempotent(self, tmp_path):
         full = make_funding("2024-01-01T00:00:00", 6)
         source = StubFundingSource(full)
-        mgr = CandleDownloadManager(
-            data_dir=str(tmp_path), funding_sources=[source]
-        )
+        mgr = CandleDownloadManager(data_dir=str(tmp_path), funding_sources=[source])
         mgr.ensure_funding("BTC-USDC", "2024-01-01", "2024-01-02T16:00:00")
         first = mgr.funding_coverage("BTC-USDC").candle_count
-        second = mgr.ensure_funding(
-            "BTC-USDC", "2024-01-01", "2024-01-02T16:00:00"
-        )
+        second = mgr.ensure_funding("BTC-USDC", "2024-01-01", "2024-01-02T16:00:00")
         assert second["added"] == 0
         assert mgr.funding_coverage("BTC-USDC").candle_count == first
 
@@ -210,9 +202,7 @@ class TestBinanceFundingPaging:
             return out
 
         monkeypatch.setattr(source, "_get_json", fake_get_json)
-        df = source.fetch(
-            "BTC-USDC", datetime(2024, 1, 1), datetime(2024, 1, 3)
-        )
+        df = source.fetch("BTC-USDC", datetime(2024, 1, 1), datetime(2024, 1, 3))
         assert len(df) == 3
         assert df["timestamp"].iloc[0] == "2024-01-01T00:00:00"
         assert df["timestamp"].iloc[-1] == "2024-01-01T16:00:00"
@@ -220,9 +210,7 @@ class TestBinanceFundingPaging:
     def test_empty_first_page_returns_canonical_empty(self, monkeypatch):
         source = BinanceFundingSource(throttle_s=0.0)
         monkeypatch.setattr(source, "_get_json", lambda url, params: [])
-        df = source.fetch(
-            "BTC-USDC", datetime(2024, 1, 1), datetime(2024, 1, 3)
-        )
+        df = source.fetch("BTC-USDC", datetime(2024, 1, 1), datetime(2024, 1, 3))
         assert df.empty
         assert list(df.columns) == FUNDING_COLUMNS
 
@@ -266,25 +254,19 @@ def build_schedule(**kwargs):
 class TestFundingSchedule:
     def test_venue_rate_is_prorated(self):
         sched = build_schedule()
-        assert sched.venue_rate_at(
-            datetime(2024, 1, 1, 3)
-        ) == pytest.approx(0.0001)
+        assert sched.venue_rate_at(datetime(2024, 1, 1, 3)) == pytest.approx(0.0001)
 
     def test_scale_multiplies_the_basis(self):
         sched = build_schedule(scale=2.0)
-        assert sched.venue_rate_at(
-            datetime(2024, 1, 1, 3)
-        ) == pytest.approx(0.0002)
+        assert sched.venue_rate_at(datetime(2024, 1, 1, 3)) == pytest.approx(0.0002)
 
     def test_lookup_never_looks_ahead(self):
         """07:59 must still see the 00:00 settlement, not the 08:00 one."""
         sched = build_schedule()
-        assert sched.observed_rate_at(
-            datetime(2024, 1, 1, 7, 59)
-        ) == pytest.approx(0.0008)
-        assert sched.observed_rate_at(
-            datetime(2024, 1, 1, 8)
-        ) == pytest.approx(-0.0016)
+        assert sched.observed_rate_at(datetime(2024, 1, 1, 7, 59)) == pytest.approx(
+            0.0008
+        )
+        assert sched.observed_rate_at(datetime(2024, 1, 1, 8)) == pytest.approx(-0.0016)
 
     def test_before_series_start_is_none(self):
         sched = build_schedule()
@@ -327,9 +309,7 @@ class TestFundingSchedule:
 
     def test_eight_hour_venue_needs_no_rescaling(self):
         sched = build_schedule(venue_interval_hours=8)
-        assert sched.venue_rate_at(
-            datetime(2024, 1, 1, 4)
-        ) == pytest.approx(0.0008)
+        assert sched.venue_rate_at(datetime(2024, 1, 1, 4)) == pytest.approx(0.0008)
 
     def test_load_returns_none_when_store_absent(self, tmp_path):
         assert load_funding_schedule("BTC-USDC", str(tmp_path)) is None
@@ -339,14 +319,10 @@ class TestFundingSchedule:
         mgr.save_funding_store(
             "BTC-USDC", make_funding("2024-01-01T00:00:00", 3, rate=0.0008)
         )
-        sched = load_funding_schedule(
-            "BTC-USDC", str(tmp_path), venue_interval_hours=1
-        )
+        sched = load_funding_schedule("BTC-USDC", str(tmp_path), venue_interval_hours=1)
         assert sched is not None
         assert len(sched) == 3
-        assert sched.venue_rate_at(
-            datetime(2024, 1, 1, 5)
-        ) == pytest.approx(0.0001)
+        assert sched.venue_rate_at(datetime(2024, 1, 1, 5)) == pytest.approx(0.0001)
 
 
 # ---------------------------------------------------------------------
@@ -367,8 +343,7 @@ def advance_hours(exchange, hours, start=datetime(2024, 1, 1), price=100.0):
     for _ in range(hours * 12):
         t += timedelta(minutes=5)
         exchange.advance(
-            {"open": price, "high": price, "low": price,
-             "close": price, "volume": 1.0},
+            {"open": price, "high": price, "low": price, "close": price, "volume": 1.0},
             t.isoformat(),
         )
 
@@ -389,14 +364,10 @@ class TestFlatFundingModelUnchanged:
         ex = SimulatedExchange(initial_capital=10000.0)
         open_position(ex, side="ask")
         advance_hours(ex, 24)
-        assert ex._positions["BTC-USDC"].funding_paid == pytest.approx(
-            2.4, abs=1e-6
-        )
+        assert ex._positions["BTC-USDC"].funding_paid == pytest.approx(2.4, abs=1e-6)
 
     def test_eight_hour_venue_charges_three_times_a_day(self):
-        ex = SimulatedExchange(
-            initial_capital=10000.0, funding_interval_hours=8
-        )
+        ex = SimulatedExchange(initial_capital=10000.0, funding_interval_hours=8)
         open_position(ex)
         advance_hours(ex, 24)
         assert ex.funding_events == 3
@@ -415,9 +386,7 @@ class TestHistoricalFundingModel:
         open_position(ex)
         advance_hours(ex, 8)
         # -0.0001/hr on 1000 notional, long -> +0.10/hr, +0.80 over 8h
-        assert ex._positions["BTC-USDC"].funding_paid == pytest.approx(
-            0.8, abs=1e-6
-        )
+        assert ex._positions["BTC-USDC"].funding_paid == pytest.approx(0.8, abs=1e-6)
         assert ex.total_funding > 0
 
     def test_rate_is_one_eighth_of_the_flat_default(self):

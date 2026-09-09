@@ -194,8 +194,9 @@ def _month_window(month: Optional[str]) -> Tuple[str, str, str]:
         year, mon = (int(x) for x in month.split("-"))
     else:
         today = date.today()
-        year, mon = (today.year, today.month - 1) if today.month > 1 else (
-            today.year - 1, 12)
+        year, mon = (
+            (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+        )
     start = date(year, mon, 1)
     end = date(year + 1, 1, 1) if mon == 12 else date(year, mon + 1, 1)
     return start.isoformat(), end.isoformat(), f"{year:04d}-{mon:02d}"
@@ -216,8 +217,7 @@ def _resolve_log_dir(requested: str) -> Path:
     except OSError:
         fallback = Path("out/monthly/logs")
         fallback.mkdir(parents=True, exist_ok=True)
-        print(f"[monthly] log dir {requested} unavailable, "
-              f"using {fallback}")
+        print(f"[monthly] log dir {requested} unavailable, using {fallback}")
         return fallback
 
 
@@ -247,12 +247,16 @@ def _run_step(
     with open(log_path, "a", encoding="utf-8") as sink:
         sink.write(f"\n===== {' '.join(cmd)} =====\n")
         if env_overrides:
-            sink.write(f"===== env: {json.dumps(env_overrides, sort_keys=True)}"
-                       f" =====\n")
+            sink.write(
+                f"===== env: {json.dumps(env_overrides, sort_keys=True)} =====\n"
+            )
         sink.flush()
         try:
             proc = subprocess.run(
-                cmd, stdout=sink, stderr=subprocess.STDOUT, timeout=timeout,
+                cmd,
+                stdout=sink,
+                stderr=subprocess.STDOUT,
+                timeout=timeout,
                 env=env,
             )
             code = proc.returncode
@@ -273,16 +277,23 @@ def _run_step(
 def step_refresh(symbols: str, log_dir: Path, label: str) -> Dict[str, Any]:
     log_path = log_dir / f"monthly-refresh-{label}.log"
     return _run_step(
-        [sys.executable, "-m", "trading_bot_v2.data_manager",
-         "--symbols", symbols, "--timeframes", "1m,5m,15m,1h,4h",
-         "--update", "--funding"],
-        log_path, timeout=3 * 3600,
+        [
+            sys.executable,
+            "-m",
+            "trading_bot_v2.data_manager",
+            "--symbols",
+            symbols,
+            "--timeframes",
+            "1m,5m,15m,1h,4h",
+            "--update",
+            "--funding",
+        ],
+        log_path,
+        timeout=3 * 3600,
     )
 
 
-def step_scorecard(
-    symbols: List[str], start: str, end: str
-) -> List[Dict[str, Any]]:
+def step_scorecard(symbols: List[str], start: str, end: str) -> List[Dict[str, Any]]:
     """Backtest each shipped strategy over [start, end) per symbol."""
     from trading_bot_v2.backtesting.optimization_adapter import (
         OptimizationAdapter,
@@ -293,28 +304,37 @@ def step_scorecard(
     for strategy in SCORECARD_STRATEGIES:
         for symbol in symbols:
             row: Dict[str, Any] = {
-                "strategy": strategy, "symbol": symbol,
-                "start": start, "end": end,
+                "strategy": strategy,
+                "symbol": symbol,
+                "start": start,
+                "end": end,
             }
             try:
                 res = adapter.run_backtest(strategy, {}, start, end, symbol)
-                row.update({
-                    "closed_trades": res.closed_trades,
-                    "profit_factor": round(res.profit_factor, 3),
-                    "net_pnl": round(res.final_equity - res.initial_capital, 2),
-                    "return_pct": round(res.total_return_pct, 2),
-                    "win_rate_pct": round(res.win_rate_pct, 1),
-                    "max_drawdown_pct": round(res.max_drawdown_pct, 2),
-                    "fees": round(res.total_fees, 2),
-                })
+                row.update(
+                    {
+                        "closed_trades": res.closed_trades,
+                        "profit_factor": round(res.profit_factor, 3),
+                        "net_pnl": round(res.final_equity - res.initial_capital, 2),
+                        "return_pct": round(res.total_return_pct, 2),
+                        "win_rate_pct": round(res.win_rate_pct, 1),
+                        "max_drawdown_pct": round(res.max_drawdown_pct, 2),
+                        "fees": round(res.total_fees, 2),
+                    }
+                )
             except Exception as exc:  # keep the scorecard complete
                 row["error"] = f"{type(exc).__name__}: {exc}"
             rows.append(row)
-            print(f"[scorecard] {strategy:20s} {symbol:9s} "
-                  + (f"trades={row.get('closed_trades')} "
-                     f"PF={row.get('profit_factor')} "
-                     f"net={row.get('net_pnl')}"
-                     if "error" not in row else f"ERROR {row['error']}"))
+            print(
+                f"[scorecard] {strategy:20s} {symbol:9s} "
+                + (
+                    f"trades={row.get('closed_trades')} "
+                    f"PF={row.get('profit_factor')} "
+                    f"net={row.get('net_pnl')}"
+                    if "error" not in row
+                    else f"ERROR {row['error']}"
+                )
+            )
     return rows
 
 
@@ -327,8 +347,12 @@ def _write_baseline_file(baseline: Dict[str, Dict[str, float]]) -> Path:
 
 
 def step_retune(
-    end: str, tune_months: int, trials: int, report_path: Path,
-    log_dir: Path, label: str,
+    end: str,
+    tune_months: int,
+    trials: int,
+    report_path: Path,
+    log_dir: Path,
+    label: str,
     baseline: Optional[Dict[str, Dict[str, float]]] = None,
 ) -> Dict[str, Any]:
     """Run the walk-forward re-tune with the adopted params as a 3rd arm.
@@ -360,25 +384,44 @@ def step_retune(
     env_overrides = _retune_env(RETUNE_STRATEGY)
     if baseline is None:
         baseline = ADOPTED_PARAMS.get(RETUNE_STRATEGY, {})
-    print(f"[retune] env: "
-          f"{', '.join(f'{k}={v}' for k, v in sorted(env_overrides.items()))}")
-    print(f"[retune] adopted-baseline arm: "
-          f"{sorted(baseline) if baseline else 'none (no adopted params)'}")
+    print(
+        f"[retune] env: "
+        f"{', '.join(f'{k}={v}' for k, v in sorted(env_overrides.items()))}"
+    )
+    print(
+        f"[retune] adopted-baseline arm: "
+        f"{sorted(baseline) if baseline else 'none (no adopted params)'}"
+    )
     cmd = [
-        sys.executable, "-m", "trading_bot_v2.optimization.run_composite_tuning",
-        "--strategy", RETUNE_STRATEGY, "--symbol", RETUNE_SYMBOL,
-        "--start", start, "--end", end,
-        "--trials", str(trials),
-        "--report", str(report_path),
-        "--directional-gate", "enforce",
-        "--log-level", "WARNING",
+        sys.executable,
+        "-m",
+        "trading_bot_v2.optimization.run_composite_tuning",
+        "--strategy",
+        RETUNE_STRATEGY,
+        "--symbol",
+        RETUNE_SYMBOL,
+        "--start",
+        start,
+        "--end",
+        end,
+        "--trials",
+        str(trials),
+        "--report",
+        str(report_path),
+        "--directional-gate",
+        "enforce",
+        "--log-level",
+        "WARNING",
     ]
     baseline_path = _write_baseline_file(baseline) if baseline else None
     if baseline_path is not None:
         cmd += ["--baseline-params", str(baseline_path)]
     try:
         result = _run_step(
-            cmd, log_path, timeout=8 * 3600, env_overrides=env_overrides,
+            cmd,
+            log_path,
+            timeout=8 * 3600,
+            env_overrides=env_overrides,
         )
     finally:
         if baseline_path is not None:
@@ -495,8 +538,11 @@ def _rule_legs(summary: Dict[str, Any], has_adopted: bool) -> Dict[str, Any]:
         mechanical verdict.
     """
     if not isinstance(summary, dict) or not summary.get("folds"):
-        return {"beats_default": None, "beats_adopted": None,
-                "verdict": VERDICT_NOT_MEASURED}
+        return {
+            "beats_default": None,
+            "beats_adopted": None,
+            "verdict": VERDICT_NOT_MEASURED,
+        }
     edge = summary.get("edge")
     edge_adopted = summary.get("edge_vs_baseline")
     beats_default = None if edge is None else edge > 0
@@ -513,8 +559,11 @@ def _rule_legs(summary: Dict[str, Any], has_adopted: bool) -> Dict[str, Any]:
         verdict = VERDICT_REPLACE
     else:
         verdict = VERDICT_NO_CHANGE
-    return {"beats_default": beats_default, "beats_adopted": beats_adopted,
-            "verdict": verdict}
+    return {
+        "beats_default": beats_default,
+        "beats_adopted": beats_adopted,
+        "verdict": verdict,
+    }
 
 
 def compare_retune(report_path: Path) -> Dict[str, Any]:
@@ -554,7 +603,8 @@ def compare_retune(report_path: Path) -> Dict[str, Any]:
         if state in adopted and medians.get(state):
             drift = {
                 k: round(medians[state][k] - adopted[state][k], 4)
-                for k in adopted[state] if k in medians[state]
+                for k in adopted[state]
+                if k in medians[state]
             }
             entry["median_drift_vs_adopted"] = drift
         comparison[state] = entry
@@ -576,9 +626,7 @@ def write_report(
 ) -> Tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     json_path = out_dir / f"retune-{label}.json"
-    json_path.write_text(
-        json.dumps(payload, indent=2, default=str), encoding="utf-8"
-    )
+    json_path.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     md_path = out_dir / f"retune-{label}.md"
     md_path.write_text(_render_markdown(label, payload), encoding="utf-8")
     return json_path, md_path
@@ -589,33 +637,46 @@ def _render_markdown(label: str, payload: Dict[str, Any]) -> str:
     refresh = payload.get("refresh")
     if refresh:
         status = "OK" if refresh.get("ok") else f"FAILED ({refresh.get('returncode')})"
-        lines += [f"Data refresh: {status} in {refresh.get('seconds')}s "
-                  f"(log: {refresh.get('log')})", ""]
-    lines += ["## Previous-month scorecard (shipped configs)", "",
-              "| strategy | symbol | trades | PF | net | ret% | win% | maxDD% |",
-              "|---|---|---|---|---|---|---|---|"]
+        lines += [
+            f"Data refresh: {status} in {refresh.get('seconds')}s "
+            f"(log: {refresh.get('log')})",
+            "",
+        ]
+    lines += [
+        "## Previous-month scorecard (shipped configs)",
+        "",
+        "| strategy | symbol | trades | PF | net | ret% | win% | maxDD% |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
     for row in payload.get("scorecard", []):
         if "error" in row:
-            lines.append(f"| {row['strategy']} | {row['symbol']} | "
-                         f"ERROR: {row['error']} | | | | | |")
+            lines.append(
+                f"| {row['strategy']} | {row['symbol']} | "
+                f"ERROR: {row['error']} | | | | | |"
+            )
         else:
             lines.append(
                 f"| {row['strategy']} | {row['symbol']} | "
                 f"{row['closed_trades']} | {row['profit_factor']} | "
                 f"{row['net_pnl']} | {row['return_pct']} | "
-                f"{row['win_rate_pct']} | {row['max_drawdown_pct']} |")
+                f"{row['win_rate_pct']} | {row['max_drawdown_pct']} |"
+            )
     lines.append("")
     retune = payload.get("retune")
     if retune:
-        status = ("OK" if retune.get("ok")
-                  else f"FAILED (rc={retune.get('returncode')})")
-        lines += [f"## Re-tune ({RETUNE_STRATEGY}, {retune.get('window')}): "
-                  f"{status} in {retune.get('seconds')}s", ""]
+        status = "OK" if retune.get("ok") else f"FAILED (rc={retune.get('returncode')})"
+        lines += [
+            f"## Re-tune ({RETUNE_STRATEGY}, {retune.get('window')}): "
+            f"{status} in {retune.get('seconds')}s",
+            "",
+        ]
     env_overrides = payload.get("env_overrides")
     if env_overrides:
-        lines += ["Tuning env overrides (injected by the driver): "
-                  + ", ".join(f"`{k}={v}`"
-                              for k, v in sorted(env_overrides.items())), ""]
+        lines += [
+            "Tuning env overrides (injected by the driver): "
+            + ", ".join(f"`{k}={v}`" for k, v in sorted(env_overrides.items())),
+            "",
+        ]
     lines += _render_comparison(payload.get("comparison") or {})
     return "\n".join(lines)
 
@@ -642,8 +703,12 @@ def _render_comparison(comparison: Dict[str, Any]) -> List[str]:
         and NO table - a table of nulls reads like a valid null result.
     """
     if comparison.get("error"):
-        return [f"**RE-TUNE PRODUCED NO MEASUREMENT**: {comparison['error']}",
-                "", "No adoption decision is possible from this run.", ""]
+        return [
+            f"**RE-TUNE PRODUCED NO MEASUREMENT**: {comparison['error']}",
+            "",
+            "No adoption decision is possible from this run.",
+            "",
+        ]
     if not comparison:
         return []
     lines = [
@@ -654,8 +719,7 @@ def _render_comparison(comparison: Dict[str, Any]) -> List[str]:
         "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     unadopted = [s for s, e in comparison.items() if not e.get("adopted_params")]
-    lines += [_comparison_row(state, entry)
-              for state, entry in comparison.items()]
+    lines += [_comparison_row(state, entry) for state, entry in comparison.items()]
     return lines + _comparison_notes(unadopted)
 
 
@@ -675,49 +739,66 @@ def _comparison_row(state: str, entry: Dict[str, Any]) -> str:
         f"{_cell(entry.get('verdict'))} | "
         f"{_cell(med.get('score'), 'not measured')} | "
         f"{_cell(med.get('edge_vs_default'), 'not measured')} | "
-        f"{_cell(med.get('edge_vs_tuned'), 'not measured')} |")
+        f"{_cell(med.get('edge_vs_tuned'), 'not measured')} |"
+    )
 
 
 def _comparison_notes(unadopted: List[str]) -> List[str]:
     """Render the prose that keeps the table from being misread."""
-    lines = ["",
-             "Adoption rule (pre-registered): fresh tuned params replace "
-             "the adopted set ONLY if they beat BOTH the defaults (leg 1, "
-             "'beats defaults') and the currently adopted params (leg 2, "
-             "'beats adopted') out-of-sample. All three arms are scored "
-             "on the same unseen test windows.", ""]
-    lines += ["The last three columns score the object this driver "
-              "actually DEPLOYS: the coordinate-wise median of the fold "
-              "winners, rebuilt at each fold from the folds strictly "
-              "before it (prequential, leak-free) and scored on that "
-              "fold's unseen test window. The 'tuned' column is a set of "
-              "per-fold winners that nothing installs. Where 'median vs "
-              "tuned' is negative the fold-winner edge OVERSTATES what "
-              "the deployed vector delivers. The rule above is "
-              "pre-registered on the tuned arm and is NOT changed by "
-              "these columns; see docs/MEDIAN-ARM.md.", ""]
+    lines = [
+        "",
+        "Adoption rule (pre-registered): fresh tuned params replace "
+        "the adopted set ONLY if they beat BOTH the defaults (leg 1, "
+        "'beats defaults') and the currently adopted params (leg 2, "
+        "'beats adopted') out-of-sample. All three arms are scored "
+        "on the same unseen test windows.",
+        "",
+    ]
+    lines += [
+        "The last three columns score the object this driver "
+        "actually DEPLOYS: the coordinate-wise median of the fold "
+        "winners, rebuilt at each fold from the folds strictly "
+        "before it (prequential, leak-free) and scored on that "
+        "fold's unseen test window. The 'tuned' column is a set of "
+        "per-fold winners that nothing installs. Where 'median vs "
+        "tuned' is negative the fold-winner edge OVERSTATES what "
+        "the deployed vector delivers. The rule above is "
+        "pre-registered on the tuned arm and is NOT changed by "
+        "these columns; see docs/MEDIAN-ARM.md.",
+        "",
+    ]
     if unadopted:
-        lines += ["States with NO adopted baseline to compare against: "
-                  + ", ".join(unadopted)
-                  + ". Leg 2 is vacuous there - a fresh set that beats the "
-                    "defaults would be a first adoption, not a replacement.",
-                  ""]
-    lines += ["`" + VERDICT_UNMEASURED_VS_ADOPTED + "` means the run "
-              "carried no adopted-params arm (--baseline-params), so leg 2 "
-              "is unanswered - which is NOT the same as the fresh params "
-              "losing. Full param medians and drift are in the JSON next "
-              "to this file.", ""]
+        lines += [
+            "States with NO adopted baseline to compare against: "
+            + ", ".join(unadopted)
+            + ". Leg 2 is vacuous there - a fresh set that beats the "
+            "defaults would be a first adoption, not a replacement.",
+            "",
+        ]
+    lines += [
+        "`" + VERDICT_UNMEASURED_VS_ADOPTED + "` means the run "
+        "carried no adopted-params arm (--baseline-params), so leg 2 "
+        "is unanswered - which is NOT the same as the fresh params "
+        "losing. Full param medians and drift are in the JSON next "
+        "to this file.",
+        "",
+    ]
     return lines
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    p.add_argument("--month", default=None,
-                   help="Report month YYYY-MM (default: previous month)")
+    p.add_argument(
+        "--month", default=None, help="Report month YYYY-MM (default: previous month)"
+    )
     p.add_argument("--symbols", default=DEFAULT_SYMBOLS)
     p.add_argument("--trials", type=int, default=25)
-    p.add_argument("--tune-months", type=int, default=36,
-                   help="Rolling re-tune window length in months")
+    p.add_argument(
+        "--tune-months",
+        type=int,
+        default=36,
+        help="Rolling re-tune window length in months",
+    )
     p.add_argument("--out-dir", default="out/monthly")
     p.add_argument("--log-dir", default=DEFAULT_LOG_DIR)
     p.add_argument("--skip-refresh", action="store_true")
@@ -736,22 +817,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     print(f"[monthly] report month {label} ({start}..{end})")
 
     payload: Dict[str, Any] = {
-        "month": label, "window": {"start": start, "end": end},
+        "month": label,
+        "window": {"start": start, "end": end},
         "generated_by": "trading_bot_v2.optimization.monthly_retune",
     }
     if not args.skip_refresh:
         print("[monthly] step 1/3: data refresh")
         payload["refresh"] = step_refresh(args.symbols, log_dir, label)
         if not payload["refresh"]["ok"]:
-            print("[monthly] WARNING: refresh failed, continuing on "
-                  "existing data")
+            print("[monthly] WARNING: refresh failed, continuing on existing data")
     if not args.skip_scorecard:
         print("[monthly] step 2/3: previous-month scorecard")
         payload["scorecard"] = step_scorecard(symbols, start, end)
     if not args.skip_tune:
-        print("[monthly] step 3/3: walk-forward re-tune "
-              f"({RETUNE_STRATEGY}, {args.tune_months}mo window, "
-              f"{args.trials} trials/fold)")
+        print(
+            "[monthly] step 3/3: walk-forward re-tune "
+            f"({RETUNE_STRATEGY}, {args.tune_months}mo window, "
+            f"{args.trials} trials/fold)"
+        )
         report_path = out_dir / f"composite_{RETUNE_STRATEGY}_{label}.json"
         out_dir.mkdir(parents=True, exist_ok=True)
         payload["retune"] = step_retune(
@@ -768,15 +851,18 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"[monthly] ERROR: {error}")
         else:
             for state, entry in payload["comparison"].items():
-                print(f"[retune] {state:>16}: "
-                      f"beats_defaults={entry.get('beats_default')} "
-                      f"beats_adopted={entry.get('beats_adopted')} "
-                      f"-> {entry.get('verdict')}")
+                print(
+                    f"[retune] {state:>16}: "
+                    f"beats_defaults={entry.get('beats_default')} "
+                    f"beats_adopted={entry.get('beats_adopted')} "
+                    f"-> {entry.get('verdict')}"
+                )
 
     json_path, md_path = write_report(out_dir, label, payload)
     print(f"[monthly] report written: {md_path} / {json_path}")
     failed = [
-        k for k in ("refresh", "retune")
+        k
+        for k in ("refresh", "retune")
         if isinstance(payload.get(k), dict) and payload[k].get("ok") is False
     ]
     return 1 if failed else 0

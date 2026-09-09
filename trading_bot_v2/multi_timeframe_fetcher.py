@@ -17,6 +17,11 @@ Features:
 
 import asyncio
 import concurrent.futures
+from datetime import datetime, timedelta
+from typing import Dict, List, Tuple, Optional, Any
+from loguru import logger
+from .pacifica_client import PacificaClient
+from .data_validation import DataValidator
 
 # Timeframe constants for clear separation of concerns
 # Regime timeframes: Used for market state detection and strategy enablement
@@ -29,12 +34,6 @@ EXECUTION_TIMEFRAMES = ["1m", "5m"]
 ALL_TIMEFRAMES = (
     EXECUTION_TIMEFRAMES + REGIME_TIMEFRAMES
 )  # ["1m", "5m", "15m", "1h", "4h"]
-import concurrent.futures
-from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any
-from loguru import logger
-from .pacifica_client import PacificaClient
-from .data_validation import DataValidator
 
 
 class MultiTimeframeFetcher:
@@ -123,62 +122,93 @@ class MultiTimeframeFetcher:
         result = {}
         if self.ws_client:
             import re
+
             ws_symbol = re.sub(r"-perp$", "", symbol, flags=re.IGNORECASE).upper()
-            logger.info(f"FAST PATH: Checking WS cache for {ws_symbol}, timeframes={timeframes}")
+            logger.info(
+                f"FAST PATH: Checking WS cache for {ws_symbol}, timeframes={timeframes}"
+            )
             for tf in timeframes:
                 ws_data = self.ws_client.get_kline_data(ws_symbol, tf)
                 # 5m is execution timing only; accept fewer WS candles to avoid slow REST fallback.
                 min_candles_needed = min(30 if tf == "5m" else 50, lookback_candles)
-                logger.debug(f"FAST PATH: {ws_symbol}_{tf} - ws_data={len(ws_data) if ws_data else 'None'}, need={min_candles_needed}")
+                logger.debug(
+                    f"FAST PATH: {ws_symbol}_{tf} - ws_data={len(ws_data) if ws_data else 'None'}, need={min_candles_needed}"
+                )
                 if ws_data and len(ws_data) >= min_candles_needed:
-                    candles_to_use = ws_data[-lookback_candles:] if len(ws_data) >= lookback_candles else ws_data
+                    candles_to_use = (
+                        ws_data[-lookback_candles:]
+                        if len(ws_data) >= lookback_candles
+                        else ws_data
+                    )
                     parsed_data = self._parse_candles(candles_to_use)
-                    close_count = len(parsed_data.get("close", [])) if parsed_data else 0
-                    logger.debug(f"FAST PATH: {ws_symbol}_{tf} - parsed close_count={close_count}")
+                    close_count = (
+                        len(parsed_data.get("close", [])) if parsed_data else 0
+                    )
+                    logger.debug(
+                        f"FAST PATH: {ws_symbol}_{tf} - parsed close_count={close_count}"
+                    )
                     if parsed_data and parsed_data.get("close"):
                         result[tf] = parsed_data
-                        logger.info(f"✅ WS SYNC HIT: {symbol} {tf} - {len(candles_to_use)} candles")
+                        logger.info(
+                            f"✅ WS SYNC HIT: {symbol} {tf} - {len(candles_to_use)} candles"
+                        )
                     else:
-                        logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - parse failed, close_count={close_count}")
+                        logger.warning(
+                            f"❌ WS SYNC MISS: {symbol} {tf} - parse failed, close_count={close_count}"
+                        )
                 else:
-                    logger.warning(f"❌ WS SYNC MISS: {symbol} {tf} - insufficient data: {len(ws_data) if ws_data else 0} < {min_candles_needed}")
+                    logger.warning(
+                        f"❌ WS SYNC MISS: {symbol} {tf} - insufficient data: {len(ws_data) if ws_data else 0} < {min_candles_needed}"
+                    )
         else:
             logger.warning(f"FAST PATH: No ws_client available for {symbol}")
 
         # If we got all timeframes from WebSocket, return immediately
         if len(result) == len(timeframes):
-            logger.info(f"✅ All {len(timeframes)} timeframes served from WebSocket for {symbol}")
+            logger.info(
+                f"✅ All {len(timeframes)} timeframes served from WebSocket for {symbol}"
+            )
             return result
 
         # Log fast path partial success
         if result:
-            logger.info(f"FAST PATH: Got {len(result)}/{len(timeframes)} timeframes from WebSocket for {symbol}: {list(result.keys())}")
+            logger.info(
+                f"FAST PATH: Got {len(result)}/{len(timeframes)} timeframes from WebSocket for {symbol}: {list(result.keys())}"
+            )
 
         # SLOW PATH: Fall back to async for missing timeframes
         missing_tfs = [tf for tf in timeframes if tf not in result]
         if missing_tfs:
-            logger.info(f"SLOW PATH: Fetching missing TFs for {symbol}: {missing_tfs} via REST API")
+            logger.info(
+                f"SLOW PATH: Fetching missing TFs for {symbol}: {missing_tfs} via REST API"
+            )
             try:
                 # Try to get the running event loop (FastAPI case)
-                loop = asyncio.get_running_loop()
+                asyncio.get_running_loop()
                 # Create a new event loop in a thread for the async work
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(
                         asyncio.run,
-                        self._fetch_all_timeframes_parallel(symbol, missing_tfs, lookback_candles)
+                        self._fetch_all_timeframes_parallel(
+                            symbol, missing_tfs, lookback_candles
+                        ),
                     )
                     rest_result = future.result(timeout=15.0)
                     result.update(rest_result or {})
             except RuntimeError:
                 # No event loop running (standalone usage), safe to use asyncio.run()
                 rest_result = asyncio.run(
-                    self._fetch_all_timeframes_parallel(symbol, missing_tfs, lookback_candles)
+                    self._fetch_all_timeframes_parallel(
+                        symbol, missing_tfs, lookback_candles
+                    )
                 )
                 result.update(rest_result or {})
             except concurrent.futures.TimeoutError:
                 logger.error(f"Timeout fetching REST data for {symbol} {missing_tfs}")
             except Exception as e:
-                logger.error(f"Error fetching REST data for {symbol}: {type(e).__name__}: {e}")
+                logger.error(
+                    f"Error fetching REST data for {symbol}: {type(e).__name__}: {e}"
+                )
 
         if not result:
             raise ValueError(
@@ -652,9 +682,7 @@ class MultiTimeframeFetcher:
                 parsed["close"].append(self._safe_float(candle.get("close")))
                 parsed["open"].append(self._safe_float(candle.get("open")))
                 parsed["volume"].append(self._safe_float(candle.get("volume")))
-                parsed["timestamp"].append(
-                    candle.get("timestamp", candle.get("t"))
-                )
+                parsed["timestamp"].append(candle.get("timestamp", candle.get("t")))
 
         # Log data quality issues
         if invalid_count > 0:

@@ -7,7 +7,6 @@ persistence round-trip, skip-on-failure behavior, and live-bot import
 independence.
 """
 
-import json
 import os
 import subprocess
 import sys
@@ -117,9 +116,7 @@ class TestChunkWindows:
 
     def test_no_coverage_yields_empty(self):
         assert (
-            compute_chunk_windows(
-                date(2024, 1, 1), 2, 3, data_start=date(2024, 6, 1)
-            )
+            compute_chunk_windows(date(2024, 1, 1), 2, 3, data_start=date(2024, 6, 1))
             == []
         )
         assert compute_chunk_windows(date(2025, 1, 1), 0, 3) == []
@@ -133,25 +130,17 @@ class TestPooledGateAggregation:
             "_data_coverage",
             lambda symbol, data_dir: (date(2024, 1, 1), date(2025, 1, 1)),
         )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_start", lambda symbol, data_dir: None
-        )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_end", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_coverage_1m_start", lambda symbol, data_dir: None)
+        monkeypatch.setattr(runner, "_coverage_1m_end", lambda symbol, data_dir: None)
         monkeypatch.setattr(
             runner,
             "_run_chunk_backtest",
-            lambda strategy, symbol, start, end, capital, **kw: list(
-                chunk_returns
-            ),
+            lambda strategy, symbol, start, end, capital, **kw: list(chunk_returns),
         )
 
     def test_pass_case(self, monkeypatch, tmp_db):
         self._patch_backtests(monkeypatch, GOOD_CHUNK)
-        result = validate_strategy(
-            "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-        )
+        result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         assert result["overall"] == "PASS"
         assert result["window_spec"] == "3x2mo@8y"
         # 2 symbols x 3 windows = 6 chunk records
@@ -167,9 +156,7 @@ class TestPooledGateAggregation:
 
     def test_fail_case(self, monkeypatch, tmp_db):
         self._patch_backtests(monkeypatch, BAD_CHUNK)
-        result = validate_strategy(
-            "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-        )
+        result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         assert result["overall"] == "FAIL"
         verdict = result["verdict"]
         by_name = {c.name: c for c in verdict.checks}
@@ -177,12 +164,8 @@ class TestPooledGateAggregation:
         assert not by_name["cross_symbol_consistency"].passed
 
     def test_no_data_yields_unknown(self, monkeypatch, tmp_db):
-        monkeypatch.setattr(
-            runner, "_data_coverage", lambda symbol, data_dir: None
-        )
-        result = validate_strategy(
-            "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-        )
+        monkeypatch.setattr(runner, "_data_coverage", lambda symbol, data_dir: None)
+        result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         assert result["overall"] == "UNKNOWN"
         assert "no candle data" in result["reason"]
 
@@ -207,15 +190,11 @@ class TestAnchorClamping:
             "_coverage_1m_end",
             lambda symbol, data_dir: m1_ends.get(symbol),
         )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_start", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_coverage_1m_start", lambda symbol, data_dir: None)
         monkeypatch.setattr(
             runner,
             "_run_chunk_backtest",
-            lambda strategy, symbol, start, end, capital, **kw: list(
-                GOOD_CHUNK
-            ),
+            lambda strategy, symbol, start, end, capital, **kw: list(GOOD_CHUNK),
         )
 
     def _capture_info_logs(self):
@@ -223,14 +202,10 @@ class TestAnchorClamping:
         from loguru import logger as loguru_logger
 
         messages = []
-        sink_id = loguru_logger.add(
-            lambda m: messages.append(str(m)), level="INFO"
-        )
+        sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="INFO")
         return messages, lambda: loguru_logger.remove(sink_id)
 
-    def test_anchor_clamped_to_min_1m_coverage_end(
-        self, monkeypatch, tmp_db
-    ):
+    def test_anchor_clamped_to_min_1m_coverage_end(self, monkeypatch, tmp_db):
         # BTC's 1m store lags the most: the anchor must clamp to it.
         self._patch_backtests(
             monkeypatch,
@@ -241,9 +216,7 @@ class TestAnchorClamping:
         )
         messages, remove = self._capture_info_logs()
         try:
-            result = validate_strategy(
-                "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-            )
+            result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         finally:
             remove()
         assert result["data_end"] == "2024-12-15"
@@ -255,9 +228,7 @@ class TestAnchorClamping:
         assert "2025-01-01" in clamp_logs[0]  # original anchor
         assert "2024-12-15" in clamp_logs[0]  # clamped anchor
 
-    def test_anchor_not_clamped_when_1m_covers_boundary(
-        self, monkeypatch, tmp_db
-    ):
+    def test_anchor_not_clamped_when_1m_covers_boundary(self, monkeypatch, tmp_db):
         self._patch_backtests(
             monkeypatch,
             {
@@ -267,9 +238,7 @@ class TestAnchorClamping:
         )
         messages, remove = self._capture_info_logs()
         try:
-            result = validate_strategy(
-                "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-            )
+            result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         finally:
             remove()
         assert result["data_end"] == "2025-01-01"
@@ -280,9 +249,7 @@ class TestAnchorClamping:
         # No 1m data for any symbol: window computation is unchanged
         # (the engine's 1m guard stays the loud failure path).
         self._patch_backtests(monkeypatch, {})
-        result = validate_strategy(
-            "mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3
-        )
+        result = validate_strategy("mean_reversion", ["SUI-USDC", "BTC-USDC"], 2, 3)
         assert result["data_end"] == "2025-01-01"
         assert result["windows"][-1][1] == "2025-01-01"
         assert result["overall"] in ("PASS", "FAIL")  # no crash
@@ -301,12 +268,8 @@ class TestResolveChunkWindows:
             "_data_coverage",
             lambda symbol, data_dir: (date(2024, 1, 1), date(2025, 1, 1)),
         )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_end", lambda symbol, data_dir: None
-        )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_start", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_coverage_1m_end", lambda symbol, data_dir: None)
+        monkeypatch.setattr(runner, "_coverage_1m_start", lambda symbol, data_dir: None)
 
     def test_windows_abut_and_end_at_the_anchor(self, monkeypatch):
         self._patch(monkeypatch)
@@ -328,9 +291,7 @@ class TestResolveChunkWindows:
         gap in the 4h store.
         """
         self._patch(monkeypatch)
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC"], 1, 3, anchor_end="2024-04-01"
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC"], 1, 3, anchor_end="2024-04-01")
         assert out["windows"] == [
             ("2024-01-01", "2024-02-01"),
             ("2024-02-01", "2024-03-01"),
@@ -340,15 +301,11 @@ class TestResolveChunkWindows:
     def test_anchor_end_never_moves_forward(self, monkeypatch):
         """An anchor past coverage is refused, not honoured."""
         self._patch(monkeypatch)
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC"], 2, 1, anchor_end="2026-01-01"
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC"], 2, 1, anchor_end="2026-01-01")
         assert out["windows"][-1][1] == "2025-01-01"
 
     def test_no_data_reports_a_reason(self, monkeypatch):
-        monkeypatch.setattr(
-            runner, "_data_coverage", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_data_coverage", lambda symbol, data_dir: None)
         out = runner.resolve_chunk_windows(["NOPE-USDC"], 2, 3)
         assert out["windows"] == []
         assert "no candle data" in out["reason"]
@@ -449,9 +406,7 @@ class TestMultiYearResolution:
         )
 
     def test_per_symbol_series_uses_each_symbols_own_history(self):
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8)
         by_symbol = out["windows_by_symbol"]
         assert set(by_symbol) == {"BTC-USDC", "SUI-USDC"}
         # BTC reaches back to its 1m floor, not to SUI's listing.
@@ -464,24 +419,18 @@ class TestMultiYearResolution:
 
     def test_1m_start_beats_5m_start(self):
         """BTC 5m reaches 2017-08 but 1m does not - never use 5m."""
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC"], 2, 6, span_years=20
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC"], 2, 6, span_years=20)
         assert out["data_start"] == "2018-01-01"
         assert out["windows"][0][0] >= "2018-01-01"
 
     def test_shared_series_is_the_intersection(self):
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8)
         # The shared series can never predate the youngest symbol.
         assert out["data_start"] == "2023-05-03"
         assert out["windows"][0][0] >= "2023-05-03"
 
     def test_coverage_reports_asymmetry(self):
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC", "SUI-USDC"], 2, 6, span_years=8)
         coverage = out["coverage"]
         assert coverage["BTC-USDC"]["data_start"] == "2018-01-01"
         assert coverage["SUI-USDC"]["data_start"] == "2023-05-03"
@@ -492,9 +441,7 @@ class TestMultiYearResolution:
         assert coverage["SUI-USDC"]["months"] < 45
         assert coverage["BTC-USDC"]["n_windows"] == 6
 
-    def test_small_store_boundary_is_not_flagged_as_asymmetry(
-        self, monkeypatch
-    ):
+    def test_small_store_boundary_is_not_flagged_as_asymmetry(self, monkeypatch):
         """BTC 1m starts 2018-01, ETH 1m 2017-08 - that is not a gap."""
         monkeypatch.setattr(
             runner,
@@ -509,9 +456,7 @@ class TestMultiYearResolution:
                 "ETH-USDC": date(2017, 8, 18),
             }[symbol],
         )
-        out = runner.resolve_chunk_windows(
-            ["BTC-USDC", "ETH-USDC"], 2, 6, span_years=8
-        )
+        out = runner.resolve_chunk_windows(["BTC-USDC", "ETH-USDC"], 2, 6, span_years=8)
         assert out["coverage"]["BTC-USDC"]["listing_limited"] is False
         assert out["coverage"]["ETH-USDC"]["listing_limited"] is False
 
@@ -523,12 +468,8 @@ class TestMultiYearResolution:
         assert len(out["windows"]) == 6
 
     def test_span_years_bounds_the_reach(self):
-        narrow = runner.resolve_chunk_windows(
-            ["BTC-USDC"], 2, 4, span_years=2
-        )
-        wide = runner.resolve_chunk_windows(
-            ["BTC-USDC"], 2, 4, span_years=8
-        )
+        narrow = runner.resolve_chunk_windows(["BTC-USDC"], 2, 4, span_years=2)
+        wide = runner.resolve_chunk_windows(["BTC-USDC"], 2, 4, span_years=8)
         assert narrow["windows"][0][0] > "2024-01-01"
         assert wide["windows"][0][0] < "2019-01-01"
 
@@ -551,16 +492,10 @@ class TestListingBoundary:
     """
 
     def test_day_ceiling_rounds_mid_day_starts_up(self):
-        assert runner._day_ceiling("2023-05-03T12:00:00") == date(
-            2023, 5, 4
-        )
-        assert runner._day_ceiling("2023-05-03T00:00:00") == date(
-            2023, 5, 3
-        )
+        assert runner._day_ceiling("2023-05-03T12:00:00") == date(2023, 5, 4)
+        assert runner._day_ceiling("2023-05-03T00:00:00") == date(2023, 5, 3)
         assert runner._day_ceiling("2023-05-03") == date(2023, 5, 3)
-        assert runner._day_ceiling("2023-05-03T00:00:01") == date(
-            2023, 5, 4
-        )
+        assert runner._day_ceiling("2023-05-03T00:00:01") == date(2023, 5, 4)
 
     def test_window_start_clears_the_listing_timestamp(self, monkeypatch):
         monkeypatch.setattr(
@@ -571,9 +506,7 @@ class TestListingBoundary:
         monkeypatch.setattr(
             runner,
             "_coverage_1m_start",
-            lambda symbol, data_dir: runner._day_ceiling(
-                "2023-05-03T12:00:00"
-            ),
+            lambda symbol, data_dir: runner._day_ceiling("2023-05-03T12:00:00"),
         )
         monkeypatch.setattr(
             runner,
@@ -619,12 +552,8 @@ class TestRegimeCoverageReporting:
             "_data_coverage",
             lambda symbol, data_dir: (date(2018, 1, 1), date(2026, 1, 1)),
         )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_start", lambda symbol, data_dir: None
-        )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_end", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_coverage_1m_start", lambda symbol, data_dir: None)
+        monkeypatch.setattr(runner, "_coverage_1m_end", lambda symbol, data_dir: None)
 
         def fake_backtest(strategy, symbol, start, end, capital, **kw):
             return {
@@ -635,9 +564,7 @@ class TestRegimeCoverageReporting:
 
         monkeypatch.setattr(runner, "_run_chunk_backtest", fake_backtest)
 
-    def test_regimes_recorded_per_chunk_and_pooled(
-        self, monkeypatch, tmp_db
-    ):
+    def test_regimes_recorded_per_chunk_and_pooled(self, monkeypatch, tmp_db):
         self._patch(
             monkeypatch,
             lambda start: (
@@ -736,12 +663,8 @@ class TestDryRun:
             "_data_coverage",
             lambda symbol, data_dir: (date(2018, 1, 1), date(2026, 1, 1)),
         )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_start", lambda symbol, data_dir: None
-        )
-        monkeypatch.setattr(
-            runner, "_coverage_1m_end", lambda symbol, data_dir: None
-        )
+        monkeypatch.setattr(runner, "_coverage_1m_start", lambda symbol, data_dir: None)
+        monkeypatch.setattr(runner, "_coverage_1m_end", lambda symbol, data_dir: None)
 
         def boom(*args, **kwargs):
             raise AssertionError("dry run must not backtest")
@@ -792,9 +715,7 @@ class TestRefreshData:
             return _Cov()
 
         def ensure(self, symbol, tf, start, end=None, **kwargs):
-            self.ensure_calls.append(
-                (symbol, tf, start, end, kwargs)
-            )
+            self.ensure_calls.append((symbol, tf, start, end, kwargs))
             return {"added": 5}
 
     @pytest.fixture(autouse=True)
@@ -828,18 +749,13 @@ class TestRefreshData:
 
         monkeypatch.setattr(runner, "run_once", fake_run_once)
         assert (
-            runner.main(
-                ["--once", "--strategies", "mean_reversion",
-                 "--refresh-data"]
-            )
+            runner.main(["--once", "--strategies", "mean_reversion", "--refresh-data"])
             == 0
         )
         assert calls[0]["refresh_data"] is True
 
         calls.clear()
-        assert (
-            runner.main(["--once", "--strategies", "mean_reversion"]) == 0
-        )
+        assert runner.main(["--once", "--strategies", "mean_reversion"]) == 0
         assert calls[0]["refresh_data"] is False
 
     def test_refresh_data_env_var_default(self, monkeypatch):
@@ -851,9 +767,7 @@ class TestRefreshData:
             return []
 
         monkeypatch.setattr(runner, "run_once", fake_run_once)
-        assert (
-            runner.main(["--once", "--strategies", "mean_reversion"]) == 0
-        )
+        assert runner.main(["--once", "--strategies", "mean_reversion"]) == 0
         assert calls[0]["refresh_data"] is True
 
     def test_refresh_skipped_by_default(self, monkeypatch, tmp_db):
@@ -875,20 +789,14 @@ class TestRefreshData:
             "refresh_market_data",
             lambda symbols, data_dir=None: refreshed.append(symbols),
         )
-        run_once(
-            ["mean_reversion"], ["SUI-USDC"], 2, 3, refresh_data=True
-        )
+        run_once(["mean_reversion"], ["SUI-USDC"], 2, 3, refresh_data=True)
         assert refreshed == [["SUI-USDC"]]
 
     def test_refresh_uses_update_mode_1m(self, monkeypatch, tmp_path):
         import trading_bot_v2.data_manager as dm
 
-        monkeypatch.setattr(
-            dm, "CandleDownloadManager", TestRefreshData._FakeManager
-        )
-        runner.refresh_market_data(
-            ["SUI-USDC", "BTC-USDC"], data_dir=str(tmp_path)
-        )
+        monkeypatch.setattr(dm, "CandleDownloadManager", TestRefreshData._FakeManager)
+        runner.refresh_market_data(["SUI-USDC", "BTC-USDC"], data_dir=str(tmp_path))
         assert len(TestRefreshData._FakeManager.instances) == 1
         mgr = TestRefreshData._FakeManager.instances[0]
         assert mgr.coverage_calls == [
@@ -899,11 +807,17 @@ class TestRefreshData:
         # internal gaps skipped.
         assert mgr.ensure_calls == [
             (
-                "SUI-USDC", "1m", "2025-01-01T00:00", None,
+                "SUI-USDC",
+                "1m",
+                "2025-01-01T00:00",
+                None,
                 {"include_internal_gaps": False},
             ),
             (
-                "BTC-USDC", "1m", "2025-01-01T00:00", None,
+                "BTC-USDC",
+                "1m",
+                "2025-01-01T00:00",
+                None,
                 {"include_internal_gaps": False},
             ),
         ]
@@ -950,9 +864,7 @@ class TestPersistence:
     def test_latest_per_strategy(self, tmp_db):
         persist_result(tmp_db, self._stub_result("mean_reversion", "FAIL"))
         persist_result(tmp_db, self._stub_result("mean_reversion", "PASS"))
-        persist_result(
-            tmp_db, self._stub_result("momentum_scalping", "FAIL")
-        )
+        persist_result(tmp_db, self._stub_result("momentum_scalping", "FAIL"))
 
         latest = tmp_db.get_latest_validation_runs()
         assert len(latest) == 2
@@ -963,20 +875,14 @@ class TestPersistence:
 
     def test_limit_and_order(self, tmp_db):
         for overall in ("FAIL", "FAIL", "PASS"):
-            persist_result(
-                tmp_db, self._stub_result("mean_reversion", overall)
-            )
-        rows = tmp_db.get_validation_runs(
-            strategy="mean_reversion", limit=2
-        )
+            persist_result(tmp_db, self._stub_result("mean_reversion", overall))
+        rows = tmp_db.get_validation_runs(strategy="mean_reversion", limit=2)
         assert len(rows) == 2
         assert rows[0]["overall"] == "PASS"  # newest first
 
 
 class TestSkipOnFailure:
-    def test_failing_strategy_skipped_run_continues(
-        self, tmp_db, monkeypatch, caplog
-    ):
+    def test_failing_strategy_skipped_run_continues(self, tmp_db, monkeypatch, caplog):
         def fake_validate(strategy, *args, **kwargs):
             if strategy == "mean_reversion":
                 raise RuntimeError("engine exploded")

@@ -5,7 +5,7 @@ All classes based on Trading Bot Custom Instructions.
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Union, Tuple
+from typing import Dict, List, Optional, Any, Tuple
 from enum import Enum
 from .config import AssetClass, TradeQuality, StrategyType, MarketState
 
@@ -175,7 +175,6 @@ class Position:
         if self.leverage <= 1:
             return 0
 
-        position_value = self.margin_used * self.leverage
         liquidation_distance = 1.0 / self.leverage
 
         if self.side == OrderSide.BUY:
@@ -548,7 +547,9 @@ class Signal:
         drop invalid signals so the rejection reason can be attributed
         instead of disappearing silently.
         """
-        return [name for name in SIGNAL_VALIDITY_FLAGS if not getattr(self, name, False)]
+        return [
+            name for name in SIGNAL_VALIDITY_FLAGS if not getattr(self, name, False)
+        ]
 
     def is_valid(self) -> bool:
         """

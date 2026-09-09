@@ -120,7 +120,9 @@ class PacificaExchange(ExchangeClient):
     @staticmethod
     def to_native_order_side(side: OrderSideInput) -> str:
         """Normalize an order side to the Pacifica wire value "bid"/"ask"."""
-        return "bid" if PacificaExchange._to_order_side(side) == OrderSide.BUY else "ask"
+        return (
+            "bid" if PacificaExchange._to_order_side(side) == OrderSide.BUY else "ask"
+        )
 
     @staticmethod
     def from_native_order_side(value: str) -> OrderSide:
@@ -267,7 +269,9 @@ class PacificaExchange(ExchangeClient):
         try:
             rows = self.rest_client.get_trades(limit=100) or []
         except Exception as exc:  # noqa: BLE001 - lookup failure is "unknown"
-            logger.warning("Pacifica fill lookup failed for %s %s: %s", symbol, order_id, exc)
+            logger.warning(
+                "Pacifica fill lookup failed for %s %s: %s", symbol, order_id, exc
+            )
             return OrderResult(
                 order_id=order_id,
                 client_order_id=client_order_id,
@@ -288,7 +292,9 @@ class PacificaExchange(ExchangeClient):
                 row, ("filled_amount", "filled_quantity", "filled_size"), 0.0
             )
             price = _first_float(
-                row, ("average_filled_price", "avg_fill_price", "average_price", "price"), 0.0
+                row,
+                ("average_filled_price", "avg_fill_price", "average_price", "price"),
+                0.0,
             )
             return OrderResult.from_fill_lookup(
                 order_id=row_id or order_id,
@@ -433,8 +439,6 @@ class PacificaExchange(ExchangeClient):
         """Instrument constraints: tick_size, lot_size, min_order_size."""
         return self.rest_client.get_instrument_info(symbol)
 
-    def get_funding_history(
-        self, symbol: str, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Funding-rate history records (passthrough)."""
         return self.rest_client.get_funding_history(symbol, limit=limit)

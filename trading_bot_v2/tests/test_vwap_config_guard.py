@@ -123,7 +123,6 @@ def clean_vwap_env(monkeypatch):
 
 
 class TestSupportedRange:
-
     def test_bounds_match_optimizer_search_space(self):
         """Guard bounds must not drift from _vwap_scalping_space()."""
         low, high = get_search_space("vwap_scalping")["sd_entry_threshold"]
@@ -144,7 +143,6 @@ class TestSupportedRange:
 
 
 class TestValidateSdEntryThreshold:
-
     @pytest.mark.parametrize(
         "value",
         [SD_ENTRY_THRESHOLD_MIN, 1.5, 2.0, 2.5, SD_ENTRY_THRESHOLD_MAX],
@@ -190,11 +188,8 @@ class TestValidateSdEntryThreshold:
 
 
 class TestConstructionPaths:
-
     def test_explicit_kwarg_is_validated(self):
-        strategy = VWAPScalpingStrategy(
-            sd_entry_threshold=UNREACHABLE_LEGACY_THRESHOLD
-        )
+        strategy = VWAPScalpingStrategy(sd_entry_threshold=UNREACHABLE_LEGACY_THRESHOLD)
         assert strategy.sd_entry_threshold == DEFAULT_SD_ENTRY_THRESHOLD
 
     def test_env_value_is_validated(self, clean_vwap_env):
@@ -251,7 +246,6 @@ class TestConstructionPaths:
 
 
 class TestThresholdIsAttainable:
-
     def test_reference_data_reaches_the_default_threshold(self):
         """
         A threshold is only meaningful if real deviations can reach it.
@@ -285,9 +279,7 @@ class TestThresholdIsAttainable:
         )
         data = _below_vwap_data()
 
-        signals = strategy.generate_signals(
-            "BTC", {"15m": data}, data["close"][-1]
-        )
+        signals = strategy.generate_signals("BTC", {"15m": data}, data["close"][-1])
 
         assert len(signals) == 1
         assert signals[0].side == OrderSide.BUY
@@ -306,9 +298,7 @@ class TestThresholdIsAttainable:
         strategy.sd_entry_threshold = UNREACHABLE_LEGACY_THRESHOLD
         data = _below_vwap_data()
 
-        signals = strategy.generate_signals(
-            "BTC", {"15m": data}, data["close"][-1]
-        )
+        signals = strategy.generate_signals("BTC", {"15m": data}, data["close"][-1])
 
         assert signals == []
 
@@ -319,7 +309,6 @@ class TestThresholdIsAttainable:
 
 
 class TestUnsupportedEnvVars:
-
     def test_unsupported_vars_are_not_read_by_the_strategy(self):
         """None of these names may become live config without updating the list."""
         import inspect

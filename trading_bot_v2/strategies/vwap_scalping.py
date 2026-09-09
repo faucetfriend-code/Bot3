@@ -71,7 +71,7 @@ RISK NOTES:
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -334,9 +334,7 @@ class VWAPScalpingStrategy:
             sd_entry_threshold
             if sd_entry_threshold is not None
             else float(
-                os.getenv(
-                    "VWAP_SD_ENTRY_THRESHOLD", str(DEFAULT_SD_ENTRY_THRESHOLD)
-                )
+                os.getenv("VWAP_SD_ENTRY_THRESHOLD", str(DEFAULT_SD_ENTRY_THRESHOLD))
             )
         )
         self.atr_stop_multiplier = (
@@ -426,7 +424,11 @@ class VWAPScalpingStrategy:
         warn_unsupported_env_vars()
 
     def _calculate_vwap_and_bands(
-        self, highs: List[float], lows: List[float], closes: List[float], volumes: List[float]
+        self,
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        volumes: List[float],
     ) -> Optional[Dict[str, float]]:
         """
         Calculate VWAP and standard deviation bands.
@@ -484,10 +486,10 @@ class VWAPScalpingStrategy:
         # Calculate volume-weighted variance
         # variance = [cumulative(vol * price^2) / cumulative(vol)] - vwap^2
         if cum_vol > 0:
-            variance = (cum_price_sq_vol / cum_vol) - (current_vwap ** 2)
+            variance = (cum_price_sq_vol / cum_vol) - (current_vwap**2)
             # Clip negative variance (floating-point errors)
             variance = max(0.0, variance)
-            stddev = variance ** 0.5
+            stddev = variance**0.5
         else:
             stddev = 0.0
 
@@ -510,7 +512,9 @@ class VWAPScalpingStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _check_cooldown(self, symbol: str) -> bool:
         """
@@ -530,7 +534,9 @@ class VWAPScalpingStrategy:
 
         if elapsed < cooldown_delta:
             remaining = (cooldown_delta - elapsed).total_seconds() / 60
-            logger.debug(f"{symbol}: VWAP scalping cooldown {remaining:.1f}min remaining")
+            logger.debug(
+                f"{symbol}: VWAP scalping cooldown {remaining:.1f}min remaining"
+            )
             return True
 
         return False
@@ -874,7 +880,8 @@ class VWAPScalpingStrategy:
                 volume_confirmation=True,  # VWAP inherently uses volume
                 multi_timeframe_alignment=True,
                 support_resistance_valid=True,  # VWAP acts as dynamic S/R
-                rrr_meets_minimum=rrr >= 0.8,  # Scalping: lower RRR OK with high win rate
+                rrr_meets_minimum=rrr
+                >= 0.8,  # Scalping: lower RRR OK with high win rate
                 liquidation_buffer_safe=True,
                 account_risk_ok=True,
                 margin_drawdown_ok=True,
@@ -916,7 +923,9 @@ class VWAPScalpingStrategy:
             logger.error(f"Error generating VWAP scalping signal for {symbol}: {e}")
             return []
 
-    def get_vwap_status(self, symbol: str, data: Dict[str, List[float]]) -> Optional[Dict]:
+    def get_vwap_status(
+        self, symbol: str, data: Dict[str, List[float]]
+    ) -> Optional[Dict]:
         """
         Get current VWAP status for monitoring/display purposes.
 

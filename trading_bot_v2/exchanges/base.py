@@ -432,7 +432,5 @@ class ExchangeClient(ABC):
         """Return instrument constraints (tick_size, lot_size, ...)."""
 
     @abstractmethod
-    def get_funding_history(
-        self, symbol: str, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Return funding-rate history records (exchange-native dicts)."""

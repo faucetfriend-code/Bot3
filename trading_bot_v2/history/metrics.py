@@ -17,7 +17,7 @@ Conventions:
       original ``StrategyMonitor._compute_profit_factor``.
 """
 
-from typing import List, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 __all__ = [
     "profit_factor",

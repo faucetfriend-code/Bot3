@@ -56,7 +56,7 @@ class TestManualTrigger:
         assert filename.startswith("trading_bot_")
         assert filename.endswith(".db")
         # trading_bot_YYYYMMDD_HHMMSS.db
-        timestamp_part = filename[len("trading_bot_"):-len(".db")]
+        timestamp_part = filename[len("trading_bot_") : -len(".db")]
         # Should parse without raising
         datetime.strptime(timestamp_part, "%Y%m%d_%H%M%S")
 

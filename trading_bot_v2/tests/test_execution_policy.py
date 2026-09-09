@@ -127,9 +127,7 @@ class TestDefaultsAreUnchanged:
         assert engine._opposing_closes_position is True
 
     def test_new_name_enables_signal_closes(self, monkeypatch):
-        engine = build_engine(
-            monkeypatch, BACKTEST_OPPOSING_CLOSES_POSITION="true"
-        )
+        engine = build_engine(monkeypatch, BACKTEST_OPPOSING_CLOSES_POSITION="true")
         assert engine._opposing_closes_position is True
 
     def test_policy_is_attached_to_the_funnel_as_a_note(self, monkeypatch):
@@ -214,9 +212,7 @@ class TestSameDirectionSkipIsCorrectPolicy:
         total_exit_qty = sum(o.quantity for o in open_exits)
         # One SL + one TP, each sized to the whole position - never 2x stacked
         # sets that would over-close.
-        assert total_exit_qty == pytest.approx(
-            2 * exchange._positions[SYMBOL].quantity
-        )
+        assert total_exit_qty == pytest.approx(2 * exchange._positions[SYMBOL].quantity)
 
     def test_pyramid_spacing_blocks_back_to_back_adds(self, monkeypatch):
         engine = build_engine(
@@ -242,8 +238,7 @@ class TestOpposingSignalPolicy:
         engine._sync_position_tracking(exchange, 1)
 
         assert (
-            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 50)
-            is False
+            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 50) is False
         )
         assert engine._funnel.reasons[REASON_EXEC_HEDGE_MODE] == 1
         assert exchange._positions[SYMBOL].side == "long"
@@ -258,10 +253,7 @@ class TestOpposingSignalPolicy:
         engine._execute_signal(make_signal(OrderSide.BUY), exchange, 0)
         engine._sync_position_tracking(exchange, 1)
 
-        assert (
-            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 50)
-            is True
-        )
+        assert engine._execute_signal(make_signal(OrderSide.SELL), exchange, 50) is True
         assert SYMBOL not in exchange._positions
 
     def test_min_hold_blocks_an_early_signal_driven_close(self, monkeypatch):
@@ -274,10 +266,7 @@ class TestOpposingSignalPolicy:
         engine._execute_signal(make_signal(OrderSide.BUY), exchange, 0)
         engine._sync_position_tracking(exchange, 1)
 
-        assert (
-            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 3)
-            is False
-        )
+        assert engine._execute_signal(make_signal(OrderSide.SELL), exchange, 3) is False
         assert engine._funnel.reasons[REASON_EXEC_MIN_HOLD] == 1
         assert SYMBOL in exchange._positions
 
@@ -325,14 +314,11 @@ class TestPositionAgeing:
 
         # Bar 23 is 3 candles after the FILL, so min-hold still blocks.
         assert (
-            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 23)
-            is False
+            engine._execute_signal(make_signal(OrderSide.SELL), exchange, 23) is False
         )
         assert engine._funnel.reasons[REASON_EXEC_MIN_HOLD] == 1
 
-    def test_sync_clears_tracking_when_sl_tp_closes_the_position(
-        self, monkeypatch
-    ):
+    def test_sync_clears_tracking_when_sl_tp_closes_the_position(self, monkeypatch):
         """Only the signal-driven close path used to pop these, so a
         SL/TP-closed position left stale bookkeeping behind forever."""
         engine = build_engine(monkeypatch)
@@ -370,9 +356,7 @@ class TestPolicyValidation:
         assert any("BACKTEST_MAX_PYRAMID_ENTRIES" in m for m in warning_log)
 
     def test_non_numeric_pyramid_entries_falls_back(self, warning_log):
-        assert (
-            validate_max_pyramid_entries("lots") == DEFAULT_MAX_PYRAMID_ENTRIES
-        )
+        assert validate_max_pyramid_entries("lots") == DEFAULT_MAX_PYRAMID_ENTRIES
         assert any("not an integer" in m for m in warning_log)
 
     def test_in_range_pyramid_entries_pass_through(self):

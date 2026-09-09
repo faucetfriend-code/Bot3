@@ -31,7 +31,13 @@ Usage:
 
 import time
 from typing import Optional
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import (
+    Counter,
+    Histogram,
+    Gauge,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+)
 from loguru import logger
 
 
@@ -44,176 +50,161 @@ class TradingMetrics:
         # Trade metrics
         # =====================================================================
         self.trades_total = Counter(
-            'bot_trades_total',
-            'Total number of trades executed',
-            ['strategy', 'symbol', 'side']
+            "bot_trades_total",
+            "Total number of trades executed",
+            ["strategy", "symbol", "side"],
         )
 
         # Position metrics
         self.open_positions = Gauge(
-            'bot_open_positions',
-            'Number of open positions',
-            ['strategy']
+            "bot_open_positions", "Number of open positions", ["strategy"]
         )
 
         # Latency metrics
         self.signal_latency = Histogram(
-            'bot_signal_latency_seconds',
-            'Signal processing latency in seconds',
-            buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0]
+            "bot_signal_latency_seconds",
+            "Signal processing latency in seconds",
+            buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0],
         )
 
         # Balance metrics
-        self.balance_usd = Gauge(
-            'bot_balance_usd',
-            'Account balance in USD'
-        )
+        self.balance_usd = Gauge("bot_balance_usd", "Account balance in USD")
 
         # Error metrics
         self.errors_total = Counter(
-            'bot_errors_total',
-            'Total number of errors',
-            ['error_type']
+            "bot_errors_total", "Total number of errors", ["error_type"]
         )
 
         # System metrics
-        self.uptime_seconds = Gauge(
-            'bot_uptime_seconds',
-            'Bot uptime in seconds'
-        )
+        self.uptime_seconds = Gauge("bot_uptime_seconds", "Bot uptime in seconds")
 
         self.last_trade_timestamp = Gauge(
-            'bot_last_trade_timestamp',
-            'Timestamp of last trade'
+            "bot_last_trade_timestamp", "Timestamp of last trade"
         )
 
         # Strategy performance
         self.strategy_pnl = Gauge(
-            'bot_strategy_pnl_usd',
-            'Strategy P&L in USD',
-            ['strategy']
+            "bot_strategy_pnl_usd", "Strategy P&L in USD", ["strategy"]
         )
 
         self.strategy_win_rate = Gauge(
-            'bot_strategy_win_rate',
-            'Strategy win rate (0-1)',
-            ['strategy']
+            "bot_strategy_win_rate", "Strategy win rate (0-1)", ["strategy"]
         )
 
         # Circuit breaker
         self.circuit_breaker_active = Gauge(
-            'bot_circuit_breaker_active',
-            'Circuit breaker status (0=inactive, 1=active)'
+            "bot_circuit_breaker_active",
+            "Circuit breaker status (0=inactive, 1=active)",
         )
 
         # =====================================================================
         # Trading Loop Profiler Metrics (Plan 02-03)
         # =====================================================================
         self.loop_duration = Histogram(
-            'bot_trading_loop_duration_seconds',
-            'Total trading loop iteration duration',
+            "bot_trading_loop_duration_seconds",
+            "Total trading loop iteration duration",
             buckets=[5, 10, 15, 20, 25, 30, 40, 50, 60, 90, 120],
         )
 
         self.loop_iteration = Gauge(
-            'bot_trading_loop_iteration',
-            'Current trading loop iteration number',
+            "bot_trading_loop_iteration",
+            "Current trading loop iteration number",
         )
 
         self.loop_phase_duration = Histogram(
-            'bot_trading_loop_phase_duration_seconds',
-            'Duration of individual trading loop phases',
-            ['phase'],
+            "bot_trading_loop_phase_duration_seconds",
+            "Duration of individual trading loop phases",
+            ["phase"],
             buckets=[0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 30.0],
         )
 
         self.loop_phase_count = Counter(
-            'bot_trading_loop_phase_count_total',
-            'Total phase executions',
-            ['phase'],
+            "bot_trading_loop_phase_count_total",
+            "Total phase executions",
+            ["phase"],
         )
 
         # =====================================================================
         # Signal Metrics (Plan 02-03)
         # =====================================================================
         self.signals_generated = Counter(
-            'bot_signals_generated_total',
-            'Total signals generated',
-            ['strategy', 'symbol', 'side'],
+            "bot_signals_generated_total",
+            "Total signals generated",
+            ["strategy", "symbol", "side"],
         )
 
         self.signal_confidence = Gauge(
-            'bot_signal_confidence',
-            'Signal confidence score (0-1)',
-            ['strategy', 'side'],
+            "bot_signal_confidence",
+            "Signal confidence score (0-1)",
+            ["strategy", "side"],
         )
 
         # =====================================================================
         # Market Regime Metrics (Plan 02-03)
         # =====================================================================
         self.market_regime = Gauge(
-            'bot_market_regime',
-            'Current market regime (0=RANGING_CALM, 1=RANGING_VOLATILE, '
-            '2=TRENDING_MODERATE, 3=TRENDING_STRONG, 4=INDECISIVE)',
-            ['symbol'],
+            "bot_market_regime",
+            "Current market regime (0=RANGING_CALM, 1=RANGING_VOLATILE, "
+            "2=TRENDING_MODERATE, 3=TRENDING_STRONG, 4=INDECISIVE)",
+            ["symbol"],
         )
 
         self.adx_value = Gauge(
-            'bot_adx_value',
-            'Average Directional Index value',
-            ['symbol'],
+            "bot_adx_value",
+            "Average Directional Index value",
+            ["symbol"],
         )
 
         self.rsi_value = Gauge(
-            'bot_rsi_value',
-            'Relative Strength Index value',
-            ['symbol'],
+            "bot_rsi_value",
+            "Relative Strength Index value",
+            ["symbol"],
         )
 
         # =====================================================================
         # System Resource Metrics (Plan 02-03)
         # =====================================================================
         self.process_cpu_percent = Gauge(
-            'bot_process_cpu_usage_percent',
-            'Bot process CPU usage percentage',
+            "bot_process_cpu_usage_percent",
+            "Bot process CPU usage percentage",
         )
 
         self.process_memory_bytes = Gauge(
-            'bot_process_memory_bytes',
-            'Bot process memory usage in bytes',
+            "bot_process_memory_bytes",
+            "Bot process memory usage in bytes",
         )
 
         # =====================================================================
         # Database Pool Metrics (Plan 02-03)
         # =====================================================================
         self.db_pool_active = Gauge(
-            'bot_db_pool_active_connections',
-            'Active database pool connections',
+            "bot_db_pool_active_connections",
+            "Active database pool connections",
         )
 
         self.db_pool_idle = Gauge(
-            'bot_db_pool_idle_connections',
-            'Idle database pool connections',
+            "bot_db_pool_idle_connections",
+            "Idle database pool connections",
         )
 
         self.db_pool_waiting = Gauge(
-            'bot_db_pool_waiting',
-            'Number of threads waiting for a database connection',
+            "bot_db_pool_waiting",
+            "Number of threads waiting for a database connection",
         )
 
         # =====================================================================
         # HTTP Metrics (Plan 02-03)
         # =====================================================================
         self.http_requests = Counter(
-            'bot_http_requests_total',
-            'Total HTTP requests',
-            ['method', 'status_code', 'endpoint'],
+            "bot_http_requests_total",
+            "Total HTTP requests",
+            ["method", "status_code", "endpoint"],
         )
 
         self.http_request_duration = Histogram(
-            'bot_http_request_duration_seconds',
-            'HTTP request duration',
-            ['method', 'endpoint'],
+            "bot_http_request_duration_seconds",
+            "HTTP request duration",
+            ["method", "endpoint"],
             buckets=[0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0],
         )
 
@@ -221,56 +212,56 @@ class TradingMetrics:
         # WebSocket Metrics (Plan 02-03)
         # =====================================================================
         self.websocket_latency = Gauge(
-            'bot_websocket_latency_seconds',
-            'WebSocket message latency',
-            ['symbol'],
+            "bot_websocket_latency_seconds",
+            "WebSocket message latency",
+            ["symbol"],
         )
 
         # =====================================================================
         # Event System Metrics (Plan 02-03)
         # =====================================================================
         self.events_published = Counter(
-            'bot_events_published_total',
-            'Total events published to event bus',
-            ['event_type'],
+            "bot_events_published_total",
+            "Total events published to event bus",
+            ["event_type"],
         )
 
         self.events_processed = Counter(
-            'bot_events_processed_total',
-            'Total events processed by event bus',
-            ['event_type'],
+            "bot_events_processed_total",
+            "Total events processed by event bus",
+            ["event_type"],
         )
 
         # =====================================================================
         # Position Reconciliation Metrics (Plan H4)
         # =====================================================================
         self.reconciliation_runs_total = Counter(
-            'bot_reconciliation_runs_total',
-            'Total position reconciliation runs executed',
+            "bot_reconciliation_runs_total",
+            "Total position reconciliation runs executed",
         )
 
         self.reconciliation_discrepancies_total = Counter(
-            'bot_reconciliation_discrepancies_total',
-            'Total position discrepancies detected during reconciliation',
-            ['discrepancy_type'],
+            "bot_reconciliation_discrepancies_total",
+            "Total position discrepancies detected during reconciliation",
+            ["discrepancy_type"],
         )
 
         self.reconciliation_last_run_timestamp = Gauge(
-            'bot_reconciliation_last_run_timestamp',
-            'Unix timestamp of the last position reconciliation run',
+            "bot_reconciliation_last_run_timestamp",
+            "Unix timestamp of the last position reconciliation run",
         )
 
         # =====================================================================
         # Database Backup Metrics (Plan H5)
         # =====================================================================
         self.backup_last_success_timestamp = Gauge(
-            'bot_backup_last_success_timestamp',
-            'Unix timestamp of the last successful database backup',
+            "bot_backup_last_success_timestamp",
+            "Unix timestamp of the last successful database backup",
         )
 
         self.backup_failures_total = Counter(
-            'bot_backup_failures_total',
-            'Total number of failed database backup attempts',
+            "bot_backup_failures_total",
+            "Total number of failed database backup attempts",
         )
 
         # Initialize start time
@@ -279,11 +270,7 @@ class TradingMetrics:
         logger.info("Prometheus metrics initialized")
 
     def record_trade(
-        self,
-        strategy: str,
-        symbol: str,
-        side: str,
-        pnl: Optional[float] = None
+        self, strategy: str, symbol: str, side: str, pnl: Optional[float] = None
     ) -> None:
         """
         Record a trade execution.
@@ -294,11 +281,7 @@ class TradingMetrics:
             side: Trade side ('long' or 'short')
             pnl: Profit/loss in USD (optional)
         """
-        self.trades_total.labels(
-            strategy=strategy,
-            symbol=symbol,
-            side=side
-        ).inc()
+        self.trades_total.labels(strategy=strategy, symbol=symbol, side=side).inc()
 
         self.last_trade_timestamp.set(time.time())
 
@@ -351,10 +334,7 @@ class TradingMetrics:
         self.uptime_seconds.set(uptime)
 
     def update_strategy_performance(
-        self,
-        strategy: str,
-        win_rate: float,
-        pnl: float
+        self, strategy: str, win_rate: float, pnl: float
     ) -> None:
         """
         Update strategy performance metrics.
@@ -425,9 +405,7 @@ class TradingMetrics:
             side: Signal side ('long' or 'short')
             confidence: Signal confidence (0-1)
         """
-        self.signals_generated.labels(
-            strategy=strategy, symbol=symbol, side=side
-        ).inc()
+        self.signals_generated.labels(strategy=strategy, symbol=symbol, side=side).inc()
         self.signal_confidence.labels(strategy=strategy, side=side).set(confidence)
 
     # =====================================================================
@@ -469,9 +447,7 @@ class TradingMetrics:
     # System Resource Methods (Plan 02-03)
     # =====================================================================
 
-    def update_system_resources(
-        self, cpu_percent: float, memory_bytes: int
-    ) -> None:
+    def update_system_resources(self, cpu_percent: float, memory_bytes: int) -> None:
         """
         Update system resource metrics.
 
@@ -486,9 +462,7 @@ class TradingMetrics:
     # Database Pool Methods (Plan 02-03)
     # =====================================================================
 
-    def update_db_pool(
-        self, active: int, idle: int, waiting: int = 0
-    ) -> None:
+    def update_db_pool(self, active: int, idle: int, waiting: int = 0) -> None:
         """
         Update database connection pool metrics.
 
@@ -524,9 +498,9 @@ class TradingMetrics:
         self.http_requests.labels(
             method=method, status_code=str(status_code), endpoint=endpoint
         ).inc()
-        self.http_request_duration.labels(
-            method=method, endpoint=endpoint
-        ).observe(duration_seconds)
+        self.http_request_duration.labels(method=method, endpoint=endpoint).observe(
+            duration_seconds
+        )
 
     # =====================================================================
     # WebSocket Methods (Plan 02-03)

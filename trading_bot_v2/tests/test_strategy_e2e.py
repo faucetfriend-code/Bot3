@@ -14,8 +14,8 @@ actual indicator thresholds for each strategy.
 import math
 import random
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Any, Optional
-from unittest.mock import MagicMock, AsyncMock, patch
+from typing import Dict, List, Optional
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -31,12 +31,13 @@ from trading_bot_v2.strategies.orderbook_imbalance import OrderBookImbalanceStra
 
 # Model / config imports
 from trading_bot_v2.models import Signal, OrderSide
-from trading_bot_v2.config import StrategyType, AssetClass, MarketState
+from trading_bot_v2.config import StrategyType, AssetClass
 
 
 # ---------------------------------------------------------------------------
 # Data Generator
 # ---------------------------------------------------------------------------
+
 
 class DataGenerator:
     """Deterministic synthetic market data for each strategy scenario."""
@@ -331,11 +332,14 @@ class DataGenerator:
 # Shared fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def mock_client():
     """Mock Pacifica client for order placement."""
     client = MagicMock()
-    client.place_order = MagicMock(return_value={"order_id": "test-order-1", "status": "filled"})
+    client.place_order = MagicMock(
+        return_value={"order_id": "test-order-1", "status": "filled"}
+    )
     client.get_balance = MagicMock(return_value={"equity": "15000", "balance": "15000"})
     client.get_positions = MagicMock(return_value=[])
     client.cancel_all_orders = MagicMock(return_value=True)
@@ -367,8 +371,8 @@ def mock_risk_manager():
 # 1. Mean Reversion E2E
 # ===========================================================================
 
-class TestMeanReversionE2E:
 
+class TestMeanReversionE2E:
     def _make_strategy(self, **kwargs):
         defaults = dict(
             rsi_oversold=35.0,
@@ -525,8 +529,8 @@ class TestMeanReversionE2E:
 # 2. MA Crossover E2E
 # ===========================================================================
 
-class TestMACrossoverE2E:
 
+class TestMACrossoverE2E:
     def _make_strategy(self, **kwargs):
         defaults = dict(
             fast_ma_period=50,
@@ -563,7 +567,7 @@ class TestMACrossoverE2E:
         current_price = data["close"][-1]
 
         # Call 1: detect crossover
-        signals_1 = strategy.generate_signals("BTC", multi_tf, current_price)
+        strategy.generate_signals("BTC", multi_tf, current_price)
 
         # The crossover should be stored
         assert "BTC" in strategy.last_crossover
@@ -572,6 +576,7 @@ class TestMACrossoverE2E:
         # Call 2: extend data by 2 continuation candles so MACD stays aligned
         # and no new crossover is detected (fast_ma already above slow_ma)
         from trading_bot_v2.indicators import calculate_sma
+
         data2 = self._extend_data_with_continuation(data, direction="up", n_candles=2)
         fast_ma = calculate_sma(data2["close"], 50)
         pullback_price = fast_ma * (1 - 0.03)  # 3% pullback from fast MA
@@ -600,6 +605,7 @@ class TestMACrossoverE2E:
 
         # Call 2: extend data by 2 continuation candles so MACD stays aligned
         from trading_bot_v2.indicators import calculate_sma
+
         data2 = self._extend_data_with_continuation(data, direction="down", n_candles=2)
         fast_ma = calculate_sma(data2["close"], 50)
         rally_price = fast_ma * (1 + 0.03)  # 3% rally from fast MA
@@ -624,6 +630,7 @@ class TestMACrossoverE2E:
         strategy.generate_signals("BTC", multi_tf, current_price)
 
         from trading_bot_v2.indicators import calculate_sma
+
         data2 = self._extend_data_with_continuation(data, direction="up", n_candles=2)
         fast_ma = calculate_sma(data2["close"], 50)
         pullback_price = fast_ma * (1 - 0.03)
@@ -633,8 +640,11 @@ class TestMACrossoverE2E:
         assert len(signals) == 1
         sig = signals[0]
         mock_client.place_order(
-            symbol=sig.asset, side="bid", quantity="1.0",
-            order_type="market", reduce_only=False,
+            symbol=sig.asset,
+            side="bid",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=False,
         )
         mock_client.place_order.assert_called_once()
 
@@ -648,6 +658,7 @@ class TestMACrossoverE2E:
         strategy.generate_signals("BTC", multi_tf, data["close"][-1])
 
         from trading_bot_v2.indicators import calculate_sma
+
         data2 = self._extend_data_with_continuation(data, direction="up", n_candles=2)
         fast_ma = calculate_sma(data2["close"], 50)
         pullback_price = fast_ma * (1 - 0.03)
@@ -660,8 +671,11 @@ class TestMACrossoverE2E:
         assert sig.stop_loss is not None
         # Simulate TP hit -> close LONG with SELL
         mock_client.place_order(
-            symbol=sig.asset, side="ask", quantity="1.0",
-            order_type="market", reduce_only=True,
+            symbol=sig.asset,
+            side="ask",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=True,
         )
         assert mock_client.place_order.call_args[1]["side"] == "ask"
         assert mock_client.place_order.call_args[1]["reduce_only"] is True
@@ -674,6 +688,7 @@ class TestMACrossoverE2E:
         strategy.generate_signals("BTC", multi_tf, data["close"][-1])
 
         from trading_bot_v2.indicators import calculate_sma
+
         data2 = self._extend_data_with_continuation(data, direction="up", n_candles=2)
         fast_ma = calculate_sma(data2["close"], 50)
         pullback_price = fast_ma * (1 - 0.03)
@@ -685,8 +700,11 @@ class TestMACrossoverE2E:
         assert sig.stop_loss is not None
         # Simulate SL hit -> close LONG with SELL
         mock_client.place_order(
-            symbol=sig.asset, side="ask", quantity="1.0",
-            order_type="market", reduce_only=True,
+            symbol=sig.asset,
+            side="ask",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=True,
         )
         assert mock_client.place_order.call_args[1]["side"] == "ask"
 
@@ -747,8 +765,8 @@ class TestMACrossoverE2E:
 # 3. Grid Trading E2E
 # ===========================================================================
 
-class TestGridTradingE2E:
 
+class TestGridTradingE2E:
     def _make_strategy(self, risk_manager=None, **kwargs):
         defaults = dict(
             grid_levels=5,
@@ -805,8 +823,12 @@ class TestGridTradingE2E:
         for level in range(1, strategy.grid_levels + 1):
             buy_price = current_price - spacing * level
             mock_client.place_order(
-                symbol="BTC", side="bid", quantity="0.1",
-                order_type="limit", price=str(buy_price), reduce_only=False,
+                symbol="BTC",
+                side="bid",
+                quantity="0.1",
+                order_type="limit",
+                price=str(buy_price),
+                reduce_only=False,
             )
         assert mock_client.place_order.call_count == strategy.grid_levels
 
@@ -882,8 +904,8 @@ class TestGridTradingE2E:
 # 4. Liquidation Capture E2E
 # ===========================================================================
 
-class TestLiquidationCaptureE2E:
 
+class TestLiquidationCaptureE2E:
     def _make_strategy(self, **kwargs):
         defaults = dict(
             price_move_threshold=0.025,
@@ -948,8 +970,11 @@ class TestLiquidationCaptureE2E:
 
         sig = signals[0]
         mock_client.place_order(
-            symbol=sig.asset, side="bid", quantity="1.0",
-            order_type="market", reduce_only=False,
+            symbol=sig.asset,
+            side="bid",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=False,
         )
         strategy.record_trade()
         assert strategy.session_trades == 1
@@ -1012,8 +1037,11 @@ class TestLiquidationCaptureE2E:
         """Too few candles -> no signal."""
         strategy = self._make_strategy()
         short_data = {
-            "high": [100] * 10, "low": [99] * 10,
-            "close": [100] * 10, "open": [100] * 10, "volume": [1000] * 10,
+            "high": [100] * 10,
+            "low": [99] * 10,
+            "close": [100] * 10,
+            "open": [100] * 10,
+            "volume": [1000] * 10,
         }
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=short_data)
 
@@ -1035,8 +1063,8 @@ class TestLiquidationCaptureE2E:
 # 5. VWAP Scalping E2E
 # ===========================================================================
 
-class TestVWAPScalpingE2E:
 
+class TestVWAPScalpingE2E:
     def _make_strategy(self, **kwargs):
         # NOTE: sd_entry_threshold is hardcoded here, so these tests say
         # nothing about whether the SHIPPED .env value is reachable. That
@@ -1102,8 +1130,11 @@ class TestVWAPScalpingE2E:
 
         sig = signals[0]
         mock_client.place_order(
-            symbol=sig.asset, side="bid", quantity="1.0",
-            order_type="market", reduce_only=False,
+            symbol=sig.asset,
+            side="bid",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=False,
         )
         mock_client.place_order.assert_called_once()
 
@@ -1160,8 +1191,10 @@ class TestVWAPScalpingE2E:
         """Too few candles -> no signal."""
         strategy = self._make_strategy()
         short_data = {
-            "high": [100] * 10, "low": [99] * 10,
-            "close": [100] * 10, "volume": [1000] * 10,
+            "high": [100] * 10,
+            "low": [99] * 10,
+            "close": [100] * 10,
+            "volume": [1000] * 10,
         }
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=short_data)
 
@@ -1173,8 +1206,8 @@ class TestVWAPScalpingE2E:
 # 6. Funding Arb E2E
 # ===========================================================================
 
-class TestFundingArbE2E:
 
+class TestFundingArbE2E:
     def _make_strategy(self, client=None, **kwargs):
         defaults = dict(
             min_funding_rate=0.0001,
@@ -1187,13 +1220,15 @@ class TestFundingArbE2E:
 
     def _make_client_with_funding(self, rate=0.0005):
         client = MagicMock()
-        client.get_market_data = MagicMock(return_value={
-            "funding_rate": rate,
-            "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
-        })
-        client.get_funding_history = MagicMock(return_value=[
-            {"funding_rate": rate} for _ in range(8)
-        ])
+        client.get_market_data = MagicMock(
+            return_value={
+                "funding_rate": rate,
+                "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
+            }
+        )
+        client.get_funding_history = MagicMock(
+            return_value=[{"funding_rate": rate} for _ in range(8)]
+        )
         client.get_balance = MagicMock(return_value={"equity": "15000"})
         return client
 
@@ -1204,7 +1239,9 @@ class TestFundingArbE2E:
         client = self._make_client_with_funding(rate=0.0005)
         strategy = self._make_strategy(client=client)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
 
         assert len(signals) == 1
@@ -1219,7 +1256,9 @@ class TestFundingArbE2E:
         client = self._make_client_with_funding(rate=-0.0005)
         strategy = self._make_strategy(client=client)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
 
         assert len(signals) == 1
@@ -1234,7 +1273,9 @@ class TestFundingArbE2E:
         client = self._make_client_with_funding(rate=0.0005)
         strategy = self._make_strategy(client=client)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         assert len(signals) == 1
 
@@ -1260,7 +1301,9 @@ class TestFundingArbE2E:
         # Force cache refresh
         strategy._last_cache_update = None
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
 
         # Should generate close signal (rate flipped)
@@ -1274,7 +1317,9 @@ class TestFundingArbE2E:
         """No client -> no signals (can't fetch funding rates)."""
         strategy = self._make_strategy(client=None)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         assert signals == []
 
@@ -1283,7 +1328,9 @@ class TestFundingArbE2E:
         client = self._make_client_with_funding(rate=0.00001)  # Below 0.01%
         strategy = self._make_strategy(client=client)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         assert signals == []
 
@@ -1295,13 +1342,17 @@ class TestFundingArbE2E:
         position the exchange does not have is now (correctly) pruned.
         """
         client = self._make_client_with_funding(rate=0.0005)
-        client.get_positions = MagicMock(return_value=[
-            {"symbol": "BTC", "side": "short", "quantity": "100.0"},
-        ])
+        client.get_positions = MagicMock(
+            return_value=[
+                {"symbol": "BTC", "side": "short", "quantity": "100.0"},
+            ]
+        )
         strategy = self._make_strategy(client=client)
         strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
         # Should not open new position (returns empty or close if rate changed)
         # With same rate, should return empty
@@ -1320,12 +1371,16 @@ class TestFundingArbE2E:
     def test_close_signal_when_opportunity_disappears(self):
         """Rate collapses to nothing -> explicit close signal, not silence."""
         client = self._make_client_with_funding(rate=0.0)
-        client.get_positions = MagicMock(return_value=[
-            {"symbol": "BTC", "side": "short", "quantity": "100.0"},
-        ])
+        client.get_positions = MagicMock(
+            return_value=[
+                {"symbol": "BTC", "side": "short", "quantity": "100.0"},
+            ]
+        )
         strategy = self._make_strategy(client=client)
 
-        multi_tf = DataGenerator.build_multi_tf_data(data_15m=DataGenerator.simple_15m_data())
+        multi_tf = DataGenerator.build_multi_tf_data(
+            data_15m=DataGenerator.simple_15m_data()
+        )
         signals = strategy.generate_signals("BTC", multi_tf, 100.0)
 
         assert len(signals) == 1
@@ -1356,8 +1411,8 @@ class TestFundingArbE2E:
 # 7. Momentum Scalping E2E
 # ===========================================================================
 
-class TestMomentumScalpingE2E:
 
+class TestMomentumScalpingE2E:
     def _make_strategy(self, **kwargs):
         defaults = dict(
             ema_fast=9,
@@ -1423,8 +1478,11 @@ class TestMomentumScalpingE2E:
 
         sig = signals[0]
         mock_client.place_order(
-            symbol=sig.asset, side="bid", quantity="1.0",
-            order_type="market", reduce_only=False,
+            symbol=sig.asset,
+            side="bid",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=False,
         )
         mock_client.place_order.assert_called_once()
 
@@ -1483,8 +1541,10 @@ class TestMomentumScalpingE2E:
         """Too few 1h candles -> no signal."""
         strategy = self._make_strategy()
         short_data = {
-            "high": [100] * 10, "low": [99] * 10,
-            "close": [100] * 10, "volume": [1000] * 10,
+            "high": [100] * 10,
+            "low": [99] * 10,
+            "close": [100] * 10,
+            "volume": [1000] * 10,
         }
         multi_tf = DataGenerator.build_multi_tf_data(data_1h=short_data)
 
@@ -1507,6 +1567,7 @@ class TestMomentumScalpingE2E:
 # ===========================================================================
 # 7b. Momentum Scalping - configuration integrity
 # ===========================================================================
+
 
 class TestMomentumScalpingConfigIntegrity:
     """
@@ -1607,7 +1668,7 @@ class TestMomentumScalpingConfigIntegrity:
         strategy = MomentumScalpingStrategy(
             atr_stop_mult=1.5,
             atr_target_mult=2.5,
-            min_rrr=3.0,          # Higher than the authored 1.667 pair
+            min_rrr=3.0,  # Higher than the authored 1.667 pair
             volume_threshold=1.0,
             min_confidence=0.10,
             cooldown_minutes=0,
@@ -1670,8 +1731,8 @@ class TestMomentumScalpingConfigIntegrity:
 # 8. Order Book Imbalance E2E
 # ===========================================================================
 
-class TestOrderBookImbalanceE2E:
 
+class TestOrderBookImbalanceE2E:
     def _make_strategy(self, **kwargs):
         defaults = dict(
             levels=10,
@@ -1701,7 +1762,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
 
         assert len(signals) == 1
@@ -1718,7 +1782,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
 
         assert len(signals) == 1
@@ -1737,14 +1804,20 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
         assert len(signals) == 1
 
         sig = signals[0]
         mock_client.place_order(
-            symbol=sig.asset, side="bid", quantity="1.0",
-            order_type="market", reduce_only=False,
+            symbol=sig.asset,
+            side="bid",
+            quantity="1.0",
+            order_type="market",
+            reduce_only=False,
         )
         mock_client.place_order.assert_called_once()
 
@@ -1758,7 +1831,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
         sig = signals[0]
 
@@ -1775,7 +1851,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
         sig = signals[0]
 
@@ -1795,7 +1874,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
         assert signals == []
 
@@ -1809,7 +1891,10 @@ class TestOrderBookImbalanceE2E:
         multi_tf = DataGenerator.build_multi_tf_data(data_15m=data_15m)
 
         signals = strategy.generate_signals(
-            "BTC", multi_tf, 100.0, orderbook=orderbook,
+            "BTC",
+            multi_tf,
+            100.0,
+            orderbook=orderbook,
         )
         assert signals == []
 
@@ -1827,8 +1912,8 @@ class TestOrderBookImbalanceE2E:
 # Cross-strategy integration tests
 # ===========================================================================
 
-class TestCrossStrategyIntegration:
 
+class TestCrossStrategyIntegration:
     def test_all_strategies_instantiate(self, mock_risk_manager, mock_client):
         """All 8 strategies can be instantiated without errors."""
         strategies = [
@@ -1843,7 +1928,9 @@ class TestCrossStrategyIntegration:
         ]
         assert len(strategies) == 8
 
-    def test_all_signals_have_correct_strategy_type(self, mock_risk_manager, mock_client):
+    def test_all_signals_have_correct_strategy_type(
+        self, mock_risk_manager, mock_client
+    ):
         """Each strategy produces signals with correct StrategyType enum."""
         expected_types = {
             "mean_reversion": StrategyType.MEAN_REVERSION,

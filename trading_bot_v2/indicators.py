@@ -3,9 +3,8 @@ Technical indicators module for trading bot.
 Provides calculations for various technical analysis indicators.
 """
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 import math
-from loguru import logger
 
 
 def calculate_sma(prices: List[float], period: int) -> float:

@@ -82,9 +82,7 @@ class TestFlatPriceEquityIsPreserved:
         ex = _frictionless_exchange()
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
         before = ex.equity()
-        ex.place_order(
-            symbol="BTC-USDC", side="bid", quantity="2", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="bid", quantity="2", order_type="market")
         assert ex.equity() == pytest.approx(before)
 
     def test_get_balance_equity_key_agrees(self):
@@ -126,24 +124,19 @@ class TestEquityTracksPriceMoves:
         ex.advance(moved, "2024-01-01T00:05:00")
         marked = ex.equity()
 
-        ex.place_order(
-            symbol="BTC-USDC", side="ask", quantity="2", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="ask", quantity="2", order_type="market")
         assert ex.equity() == pytest.approx(marked)
         assert ex.balance == pytest.approx(marked), "flat book: equity is all cash"
 
 
 class TestAccountingInvariants:
-
     def test_available_stays_bare_cash(self):
         """`available` is free margin. The engine's balance guard needs it."""
         ex = _frictionless_exchange()
         _open(ex)
         ex.advance(FLAT_BAR, "2024-01-01T00:05:00")
 
-        assert float(ex.get_account_balance()["available"]) == pytest.approx(
-            ex.balance
-        )
+        assert float(ex.get_account_balance()["available"]) == pytest.approx(ex.balance)
         assert ex.balance == pytest.approx(9800.0), "cost basis really did leave cash"
 
     def test_locked_reports_the_cost_basis(self):
@@ -172,7 +165,6 @@ class TestAccountingInvariants:
 
 
 class TestSizingIsUnaffected:
-
     def test_sizing_reads_raw_cash_not_equity(self):
         """Pins why this fix cannot change any trade.
 

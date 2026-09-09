@@ -39,18 +39,20 @@ SYMBOL_MAP = {
 
 # Map engine timeframes to Binance interval codes
 INTERVAL_MAP = {
-    "1m":  "1m",
-    "5m":  "5m",
+    "1m": "1m",
+    "5m": "5m",
     "15m": "15m",
-    "1h":  "1h",
-    "4h":  "4h",
+    "1h": "1h",
+    "4h": "4h",
 }
 
 # Approx candles per request window (Binance max is 1000)
 BINANCE_LIMIT = 1000
 
 
-def fetch_klines(interval: str, start_ms: int, end_ms: int, binance_symbol: str = "SUIUSDT") -> list:
+def fetch_klines(
+    interval: str, start_ms: int, end_ms: int, binance_symbol: str = "SUIUSDT"
+) -> list:
     """Fetch all klines for a given interval between start_ms and end_ms (epoch ms)."""
     all_rows = []
     current_start = start_ms
@@ -76,8 +78,10 @@ def fetch_klines(interval: str, start_ms: int, end_ms: int, binance_symbol: str 
         last_open_time = rows[-1][0]
         current_start = last_open_time + 1
 
-        logger.info(f"  [{interval}] fetched {len(all_rows)} candles so far "
-                    f"(last: {datetime.fromtimestamp(last_open_time/1000, tz=timezone.utc).date()})")
+        logger.info(
+            f"  [{interval}] fetched {len(all_rows)} candles so far "
+            f"(last: {datetime.fromtimestamp(last_open_time / 1000, tz=timezone.utc).date()})"
+        )
 
         # Polite rate-limiting: ~5 requests/sec (well within Binance's 1200/min)
         time.sleep(0.2)
@@ -87,12 +91,26 @@ def fetch_klines(interval: str, start_ms: int, end_ms: int, binance_symbol: str 
 
 def rows_to_dataframe(rows: list) -> pd.DataFrame:
     """Convert Binance klines list to a clean DataFrame."""
-    df = pd.DataFrame(rows, columns=[
-        "open_time", "open", "high", "low", "close", "volume",
-        "close_time", "quote_volume", "trade_count",
-        "taker_buy_volume", "taker_buy_quote", "ignore",
-    ])
-    df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.strftime("%Y-%m-%dT%H:%M:%S")
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "open_time",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "close_time",
+            "quote_volume",
+            "trade_count",
+            "taker_buy_volume",
+            "taker_buy_quote",
+            "ignore",
+        ],
+    )
+    df["timestamp"] = pd.to_datetime(df["open_time"], unit="ms", utc=True).dt.strftime(
+        "%Y-%m-%dT%H:%M:%S"
+    )
     df = df[["timestamp", "open", "high", "low", "close", "volume"]].copy()
     for col in ("open", "high", "low", "close", "volume"):
         df[col] = df[col].astype(float)
@@ -109,13 +127,20 @@ def download(
     if timeframes is None:
         timeframes = list(INTERVAL_MAP.keys())
 
-    binance_symbol = SYMBOL_MAP.get(symbol, symbol.replace("-", "").replace("/", "") + "T")
+    binance_symbol = SYMBOL_MAP.get(
+        symbol, symbol.replace("-", "").replace("/", "") + "T"
+    )
     out_dir = Path(data_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # Convert date strings to epoch ms
-    start_ms = int(datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp() * 1000)
-    end_ms = int(datetime.fromisoformat(end).replace(tzinfo=timezone.utc).timestamp() * 1000) + 86_400_000  # inclusive of end date
+    start_ms = int(
+        datetime.fromisoformat(start).replace(tzinfo=timezone.utc).timestamp() * 1000
+    )
+    end_ms = (
+        int(datetime.fromisoformat(end).replace(tzinfo=timezone.utc).timestamp() * 1000)
+        + 86_400_000
+    )  # inclusive of end date
 
     logger.info(f"Downloading {symbol} data from Binance ({binance_symbol})")
     logger.info(f"Range: {start} -> {end}")
@@ -127,7 +152,9 @@ def download(
         out_path = out_dir / f"{symbol.replace('/', '_')}_{tf}.csv"
 
         if out_path.exists():
-            logger.info(f"[{tf}] Already exists: {out_path} -- skipping (delete to re-download)")
+            logger.info(
+                f"[{tf}] Already exists: {out_path} -- skipping (delete to re-download)"
+            )
             continue
 
         logger.info(f"[{tf}] Fetching from Binance...")
@@ -145,18 +172,24 @@ def download(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Download historical OHLCV data from Binance")
+    parser = argparse.ArgumentParser(
+        description="Download historical OHLCV data from Binance"
+    )
     parser.add_argument("--start", default="2024-01-01", help="Start date (YYYY-MM-DD)")
     parser.add_argument("--end", default="2024-12-31", help="End date (YYYY-MM-DD)")
-    parser.add_argument("--symbol", default="SUI-USDC", help="Symbol name for file naming")
     parser.add_argument(
-        "--timeframes", nargs="+",
+        "--symbol", default="SUI-USDC", help="Symbol name for file naming"
+    )
+    parser.add_argument(
+        "--timeframes",
+        nargs="+",
         default=["1m", "5m", "15m", "1h", "4h"],
         choices=list(INTERVAL_MAP.keys()),
         help="Timeframes to download",
     )
     parser.add_argument(
-        "--data-dir", default="trading_bot_v2/backtesting/data",
+        "--data-dir",
+        default="trading_bot_v2/backtesting/data",
         help="Output directory for CSV files",
     )
     args = parser.parse_args()

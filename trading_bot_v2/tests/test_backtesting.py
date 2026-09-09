@@ -5,9 +5,9 @@ Uses synthetic candle data (no real API calls, no disk I/O required).
 """
 
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 from trading_bot_v2.backtesting.simulated_exchange import SimulatedExchange
-from trading_bot_v2.backtesting.performance import PerformanceTracker, BacktestResult
+from trading_bot_v2.backtesting.performance import PerformanceTracker
 from trading_bot_v2.backtesting.cost_model import CostModel
 from trading_bot_v2.backtesting.walk_forward import WalkForwardAnalyzer
 
@@ -27,8 +27,10 @@ class TestSimulatedExchange:
         ex._current_timestamp = "2024-01-01T00:00:00"
         ex.place_order("SUI-USDC", "bid", "1.0", order_type="limit", price=99.0)
         assert len(ex.trade_log) == 0  # Not filled yet
-        ex.advance({"open": 100, "high": 100, "low": 98, "close": 99, "volume": 1000},
-                   "2024-01-01T01:00:00")
+        ex.advance(
+            {"open": 100, "high": 100, "low": 98, "close": 99, "volume": 1000},
+            "2024-01-01T01:00:00",
+        )
         assert len(ex.trade_log) == 1  # Filled when low touched 98 < 99
 
     def test_fees_deducted_on_fill(self):
@@ -45,8 +47,10 @@ class TestSimulatedExchange:
         ex._current_timestamp = "2024-01-01T00:00:00"
         ex.place_order("SUI-USDC", "bid", "10.0", order_type="market")  # Buy 10 @ 100
         cash_after_buy = ex.balance
-        ex.advance({"open": 100, "high": 115, "low": 100, "close": 110, "volume": 5000},
-                   "2024-01-01T02:00:00")
+        ex.advance(
+            {"open": 100, "high": 115, "low": 100, "close": 110, "volume": 5000},
+            "2024-01-01T02:00:00",
+        )
         balance_info = ex.get_account_balance()
         total = float(balance_info["balance"])
         # total = cash + unrealised_pnl; price rose so unrealised PnL is positive
@@ -57,7 +61,7 @@ class TestPerformanceTracker:
     def test_positive_return_calculation(self):
         tracker = PerformanceTracker(initial_capital=10000.0)
         for i, eq in enumerate([10000, 10100, 10200, 10500, 11000]):
-            tracker.record_snapshot(f"2024-01-0{i+1}T00:00:00", eq, {})
+            tracker.record_snapshot(f"2024-01-0{i + 1}T00:00:00", eq, {})
         result = tracker.finalise(
             final_equity=11000.0,
             trade_log=[],
@@ -108,7 +112,9 @@ class TestWalkForwardWindows:
         mock_engine.cfg.backtest_walk_forward_test_months = 1
         wf = WalkForwardAnalyzer(mock_engine)
         windows = wf._build_windows("2023-01-01", "2024-12-31", 6, 1)
-        assert len(windows) >= 12  # At least 12 monthly test windows in 18 months of test range
+        assert (
+            len(windows) >= 12
+        )  # At least 12 monthly test windows in 18 months of test range
 
     def test_no_look_ahead_bias(self):
         mock_engine = MagicMock()

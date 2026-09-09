@@ -267,9 +267,7 @@ def normalize_funding(df: pd.DataFrame) -> pd.DataFrame:
 
 def merge_funding(*frames: pd.DataFrame) -> pd.DataFrame:
     """Merge funding frames; earlier frames win on duplicate timestamps."""
-    non_empty = [
-        normalize_funding(f) for f in frames if f is not None and not f.empty
-    ]
+    non_empty = [normalize_funding(f) for f in frames if f is not None and not f.empty]
     if not non_empty:
         return pd.DataFrame(columns=FUNDING_COLUMNS)
     merged = pd.concat(non_empty, ignore_index=True)
@@ -367,9 +365,7 @@ class FundingSource(_ThrottledHttpSource):
         """Whether this source can serve the given bot symbol."""
         return symbol in self.pair_map
 
-    def fetch(
-        self, symbol: str, start_dt: datetime, end_dt: datetime
-    ) -> pd.DataFrame:
+    def fetch(self, symbol: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
         """Fetch settlements in [start_dt, end_dt] (naive UTC, inclusive)."""
         raise NotImplementedError
 
@@ -406,9 +402,7 @@ class BinanceFundingSource(FundingSource):
     ]
     page_limit = 1000
 
-    def fetch(
-        self, symbol: str, start_dt: datetime, end_dt: datetime
-    ) -> pd.DataFrame:
+    def fetch(self, symbol: str, start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
         """Page through funding settlements covering [start_dt, end_dt]."""
         pair = self.pair_map[symbol]
         start_ms = int(start_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
@@ -652,12 +646,8 @@ class CoinbaseSource(CandleSource):
                 url,
                 {
                     "granularity": step,
-                    "start": datetime.fromtimestamp(
-                        cur, tz=timezone.utc
-                    ).isoformat(),
-                    "end": datetime.fromtimestamp(
-                        win_end, tz=timezone.utc
-                    ).isoformat(),
+                    "start": datetime.fromtimestamp(cur, tz=timezone.utc).isoformat(),
+                    "end": datetime.fromtimestamp(win_end, tz=timezone.utc).isoformat(),
                 },
             )
             if isinstance(page, list):
@@ -669,9 +659,9 @@ class CoinbaseSource(CandleSource):
         df = pd.DataFrame(
             [
                 {
-                    "timestamp": datetime.fromtimestamp(
-                        r[0], tz=timezone.utc
-                    ).replace(tzinfo=None),
+                    "timestamp": datetime.fromtimestamp(r[0], tz=timezone.utc).replace(
+                        tzinfo=None
+                    ),
                     "open": float(r[3]),
                     "high": float(r[2]),
                     "low": float(r[1]),
@@ -756,9 +746,7 @@ class CandleDownloadManager:
 
     def save_funding_store(self, symbol: str, df: pd.DataFrame) -> None:
         """Write a canonical funding frame to the parquet store."""
-        normalize_funding(df).to_parquet(
-            self.funding_store_path(symbol), index=False
-        )
+        normalize_funding(df).to_parquet(self.funding_store_path(symbol), index=False)
 
     def funding_coverage(self, symbol: str) -> Coverage:
         """Coverage summary for a symbol's funding store.
@@ -778,9 +766,7 @@ class CandleDownloadManager:
             return Coverage(symbol, FUNDING_KEY, None, None, 0, [])
         first = df["timestamp"].iloc[0]
         last = df["timestamp"].iloc[-1]
-        gaps = self.missing_ranges(
-            df, FUNDING_KEY, _parse_dt(first), _parse_dt(last)
-        )
+        gaps = self.missing_ranges(df, FUNDING_KEY, _parse_dt(first), _parse_dt(last))
         gap_strs = [
             (a.strftime(CANONICAL_TS_FORMAT), b.strftime(CANONICAL_TS_FORMAT))
             for a, b in gaps
@@ -866,9 +852,7 @@ class CandleDownloadManager:
         added_total = 0
         for gap_start, gap_end in ranges:
             summary["requested_ranges"].append((gap_start, gap_end))
-            fetched = self._download_funding_range(
-                symbol, gap_start, gap_end + step
-            )
+            fetched = self._download_funding_range(symbol, gap_start, gap_end + step)
             if fetched.empty:
                 summary["unfilled_ranges"].append((gap_start, gap_end))
                 continue
@@ -1104,7 +1088,9 @@ class CandleDownloadManager:
             raise ValueError(f"Unsupported timeframe: {tf}")
         step = timedelta(minutes=TF_MINUTES[tf])
         start_dt = _parse_dt(start)
-        now_clamp = _floor_dt(datetime.now(timezone.utc).replace(tzinfo=None), tf) - step
+        now_clamp = (
+            _floor_dt(datetime.now(timezone.utc).replace(tzinfo=None), tf) - step
+        )
         end_dt = _parse_dt(end) if end is not None else now_clamp
         end_dt = min(end_dt, now_clamp)
         df = self.load_store(symbol, tf)
@@ -1181,13 +1167,9 @@ class CandleDownloadManager:
         if src.empty:
             return 0
         src = src.copy()
-        src["timestamp"] = pd.to_datetime(
-            src["timestamp"], format=CANONICAL_TS_FORMAT
-        )
+        src["timestamp"] = pd.to_datetime(src["timestamp"], format=CANONICAL_TS_FORMAT)
         src = src.set_index("timestamp")
-        agg = src.resample(
-            RESAMPLE_RULES[target_tf], label="left", closed="left"
-        ).agg(
+        agg = src.resample(RESAMPLE_RULES[target_tf], label="left", closed="left").agg(
             open=("open", "first"),
             high=("high", "max"),
             low=("low", "min"),
@@ -1252,9 +1234,7 @@ def _format_coverage_table(coverages: List[Coverage]) -> str:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point for backfill / update / coverage reporting."""
-    parser = argparse.ArgumentParser(
-        description="Historical candle download manager"
-    )
+    parser = argparse.ArgumentParser(description="Historical candle download manager")
     parser.add_argument(
         "--symbols",
         default="BTC-USDC,ETH-USDC,SUI-USDC",
@@ -1353,15 +1333,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                         break
                 else:
                     logger.info(f"No external file for {symbol} {tf}, skipped")
-        coverages = [
-            mgr.coverage(sym, tf) for sym in symbols for tf in timeframes
-        ]
+        coverages = [mgr.coverage(sym, tf) for sym in symbols for tf in timeframes]
         print(_format_coverage_table(coverages))
         return 0
 
-    resample_targets = [
-        tf for tf in ("15m", "1h", "4h") if tf in timeframes
-    ]
+    resample_targets = [tf for tf in ("15m", "1h", "4h") if tf in timeframes]
     for symbol in symbols:
         if not args.funding_only:
             # 1. Consolidate legacy CSVs (incl. 5m/1h resample bases).
@@ -1371,9 +1347,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             for tf in consolidate_tfs:
                 self_added = mgr.consolidate_csvs(symbol, tf)
                 if self_added:
-                    logger.info(
-                        f"{symbol} {tf}: consolidated +{self_added} from CSVs"
-                    )
+                    logger.info(f"{symbol} {tf}: consolidated +{self_added} from CSVs")
 
             # 2. Cheap pre-pass: build higher TFs from 5m (complete buckets
             #    only) before touching the network.
@@ -1386,7 +1360,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                     cov = mgr.coverage(symbol, tf)
                     upd_start = cov.end or args.start
                     mgr.ensure(
-                        symbol, tf, upd_start, args.end,
+                        symbol,
+                        tf,
+                        upd_start,
+                        args.end,
                         include_internal_gaps=False,
                     )
                 else:

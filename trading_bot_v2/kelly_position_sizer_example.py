@@ -43,7 +43,7 @@ def example_basic_usage():
     account_balance = 10000.0  # $10,000 account
     quantity = kelly_sizer.calculate_position_size(signal, account_balance)
 
-    print(f"\nSignal Details:")
+    print("\nSignal Details:")
     print(f"  Strategy: {signal.strategy.value}")
     print(f"  Entry: ${signal.entry_price:,.2f}")
     print(f"  Stop Loss: ${signal.stop_loss:,.2f}")
@@ -182,13 +182,13 @@ def example_strategy_performance_review():
 
             # Interpretation
             if recommended_fraction >= 0.5:
-                print(f"  [+] Strong performance - use standard sizing")
+                print("  [+] Strong performance - use standard sizing")
             elif recommended_fraction >= 0.33:
-                print(f"  [!] Moderate performance - use conservative sizing")
+                print("  [!] Moderate performance - use conservative sizing")
             else:
-                print(f"  [-] Weak performance - use very conservative sizing")
+                print("  [-] Weak performance - use very conservative sizing")
         else:
-            print(f"  [.] Insufficient data - using fallback sizing")
+            print("  [.] Insufficient data - using fallback sizing")
 
         print()
 

@@ -6,7 +6,7 @@ Used by both the API server and trading bot components.
 """
 
 import time
-from typing import Dict, List, Optional
+from typing import Dict, List
 from datetime import datetime
 from .database import get_db_connection
 from loguru import logger

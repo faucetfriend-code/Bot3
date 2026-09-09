@@ -72,19 +72,25 @@ CHILD_ENV_FLAG = "BACKFILL_MEDIAN_ARM_CHILD"
 
 def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__.split("\n")[1])
-    p.add_argument("--report", required=True,
-                   help="Composite tuning report JSON to backfill")
-    p.add_argument("--mode", default="prequential",
-                   choices=("prequential", "cross-symbol"))
-    p.add_argument("--symbol", default=None,
-                   help="cross-symbol mode: symbol to score on")
-    p.add_argument("--start", default=None,
-                   help="cross-symbol mode: window start (inclusive)")
-    p.add_argument("--end", default=None,
-                   help="cross-symbol mode: window end (exclusive)")
+    p.add_argument(
+        "--report", required=True, help="Composite tuning report JSON to backfill"
+    )
+    p.add_argument(
+        "--mode", default="prequential", choices=("prequential", "cross-symbol")
+    )
+    p.add_argument(
+        "--symbol", default=None, help="cross-symbol mode: symbol to score on"
+    )
+    p.add_argument(
+        "--start", default=None, help="cross-symbol mode: window start (inclusive)"
+    )
+    p.add_argument(
+        "--end", default=None, help="cross-symbol mode: window end (exclusive)"
+    )
     p.add_argument("--capital", type=float, default=10000.0)
-    p.add_argument("--directional-gate", default="enforce",
-                   choices=("off", "log", "enforce"))
+    p.add_argument(
+        "--directional-gate", default="enforce", choices=("off", "log", "enforce")
+    )
     p.add_argument("--log-level", default="WARNING")
     p.add_argument("--out", default=None, help="Write JSON results here")
     return p.parse_args(argv)
@@ -106,8 +112,10 @@ def _reexec_in_child(strategy: str, argv: List[str]) -> int:
     env = dict(os.environ, **_retune_env(strategy))
     env[CHILD_ENV_FLAG] = "1"
     cmd = [sys.executable, "-m", __spec__.name] + list(argv)
-    print(f"[backfill] re-exec with "
-          f"{', '.join(f'{k}={v}' for k, v in sorted(_retune_env(strategy).items()))}")
+    print(
+        f"[backfill] re-exec with "
+        f"{', '.join(f'{k}={v}' for k, v in sorted(_retune_env(strategy).items()))}"
+    )
     return subprocess.run(cmd, env=env).returncode
 
 
@@ -133,7 +141,9 @@ def _mean(values: List[float]) -> Optional[float]:
 
 
 def score_prequential(
-    adapter: Any, report: Dict[str, Any], ns: Namespace,
+    adapter: Any,
+    report: Dict[str, Any],
+    ns: Namespace,
     adopted: Dict[str, Dict[str, float]],
 ) -> List[Dict[str, Any]]:
     """Score the leak-free median arm fold by fold.
@@ -162,29 +172,33 @@ def score_prequential(
         cache: Dict[str, Any] = {}
         medians = prequential_medians(prior, states)
         med_scores = _arm_state_scores(adapter, cache, ns, medians, te_s, te_e)
-        adopted_scores = _arm_state_scores(
-            adapter, cache, ns, adopted, te_s, te_e)
+        adopted_scores = _arm_state_scores(adapter, cache, ns, adopted, te_s, te_e)
         for state in states:
             if state in medians:
-                rows.append({
-                    "fold": fold_no,
-                    "test": [te_s, te_e],
-                    "state": state,
-                    "median_params": medians[state],
-                    "median_from_folds": len(prior[state]),
-                    "test_median": med_scores[state],
-                    "test_adopted": adopted_scores.get(state),
-                    "test_tuned": _cell_score(fold, state, "test_tuned"),
-                    "test_tuned_n": _cell_n(fold, state, "test_tuned"),
-                    "test_default": _cell_score(fold, state, "test_default"),
-                    "test_default_n": _cell_n(fold, state, "test_default"),
-                })
+                rows.append(
+                    {
+                        "fold": fold_no,
+                        "test": [te_s, te_e],
+                        "state": state,
+                        "median_params": medians[state],
+                        "median_from_folds": len(prior[state]),
+                        "test_median": med_scores[state],
+                        "test_adopted": adopted_scores.get(state),
+                        "test_tuned": _cell_score(fold, state, "test_tuned"),
+                        "test_tuned_n": _cell_n(fold, state, "test_tuned"),
+                        "test_default": _cell_score(fold, state, "test_default"),
+                        "test_default_n": _cell_n(fold, state, "test_default"),
+                    }
+                )
             winner = _fold_winner_params(fold, state)
             if winner:
                 prior.setdefault(state, []).append(winner)
-        print(f"[backfill] fold {fold_no} scored "
-              f"{sum(1 for r in rows if r['fold'] == fold_no)} median cells "
-              f"({te_s}..{te_e})", flush=True)
+        print(
+            f"[backfill] fold {fold_no} scored "
+            f"{sum(1 for r in rows if r['fold'] == fold_no)} median cells "
+            f"({te_s}..{te_e})",
+            flush=True,
+        )
     return rows
 
 
@@ -203,18 +217,22 @@ def aggregate_prequential(
     """
     out: Dict[str, Any] = {}
     for state in report["states"]:
-        cells = [r for r in rows if r["state"] == state
-                 and r["test_median"]["score"] is not None]
+        cells = [
+            r
+            for r in rows
+            if r["state"] == state and r["test_median"]["score"] is not None
+        ]
         if not cells:
             out[state] = {"median_folds": 0}
             continue
         med = [c["test_median"]["score"] for c in cells]
         tuned = [c["test_tuned"] for c in cells if c["test_tuned"] is not None]
-        dflt = [c["test_default"] for c in cells
-                if c["test_default"] is not None]
-        adopted = [c["test_adopted"]["score"] for c in cells
-                   if c.get("test_adopted")
-                   and c["test_adopted"]["score"] is not None]
+        dflt = [c["test_default"] for c in cells if c["test_default"] is not None]
+        adopted = [
+            c["test_adopted"]["score"]
+            for c in cells
+            if c.get("test_adopted") and c["test_adopted"]["score"] is not None
+        ]
         entry = {
             "median_folds": len(med),
             "median": _mean(med),
@@ -223,28 +241,35 @@ def aggregate_prequential(
             "default_same_folds": _mean(dflt),
             "adopted_same_folds": _mean(adopted) if adopted else None,
             "full_report_tuned_mean": (report.get("summary") or {})
-            .get(state, {}).get("tuned"),
+            .get(state, {})
+            .get("tuned"),
             "full_report_default_mean": (report.get("summary") or {})
-            .get(state, {}).get("default"),
+            .get(state, {})
+            .get("default"),
             "full_report_edge": (report.get("summary") or {})
-            .get(state, {}).get("edge"),
+            .get(state, {})
+            .get("edge"),
         }
         entry["gap_median_minus_tuned"] = (
-            None if entry["tuned_same_folds"] is None
-            else entry["median"] - entry["tuned_same_folds"])
+            None
+            if entry["tuned_same_folds"] is None
+            else entry["median"] - entry["tuned_same_folds"]
+        )
         entry["edge_median_vs_default"] = (
-            None if entry["default_same_folds"] is None
-            else entry["median"] - entry["default_same_folds"])
+            None
+            if entry["default_same_folds"] is None
+            else entry["median"] - entry["default_same_folds"]
+        )
         entry["edge_median_vs_adopted"] = (
-            None if entry["adopted_same_folds"] is None
-            else entry["median"] - entry["adopted_same_folds"])
+            None
+            if entry["adopted_same_folds"] is None
+            else entry["median"] - entry["adopted_same_folds"]
+        )
         out[state] = entry
     return out
 
 
-def median_geometry(
-    report: Dict[str, Any], space: Dict[str, Any]
-) -> Dict[str, Any]:
+def median_geometry(report: Dict[str, Any], space: Dict[str, Any]) -> Dict[str, Any]:
     """Is the deployed median a vector anyone actually tuned?
 
     A coordinate-wise median is trivially inside each parameter's own
@@ -264,14 +289,14 @@ def median_geometry(
     """
     out: Dict[str, Any] = {}
     for state in report["states"]:
-        winners = [w for w in (_fold_winner_params(f, state)
-                               for f in report["folds"]) if w]
+        winners = [
+            w for w in (_fold_winner_params(f, state) for f in report["folds"]) if w
+        ]
         if len(winners) < 2:
             out[state] = {"winners": len(winners)}
             continue
         keys = sorted(winners[0])
-        median = {k: round(statistics.median([w[k] for w in winners]), 4)
-                  for k in keys}
+        median = {k: round(statistics.median([w[k] for w in winners]), 4) for k in keys}
         in_range = all(
             min(w[k] for w in winners) <= median[k] <= max(w[k] for w in winners)
             for k in keys
@@ -279,7 +304,8 @@ def median_geometry(
         dists = [_normalised_distance(median, w, space, keys) for w in winners]
         pairwise = [
             _normalised_distance(a, b, space, keys)
-            for i, a in enumerate(winners) for b in winners[i + 1:]
+            for i, a in enumerate(winners)
+            for b in winners[i + 1 :]
         ]
         out[state] = {
             "winners": len(winners),
@@ -294,8 +320,10 @@ def median_geometry(
 
 
 def _normalised_distance(
-    a: Dict[str, float], b: Dict[str, float],
-    space: Dict[str, Any], keys: List[str],
+    a: Dict[str, float],
+    b: Dict[str, float],
+    space: Dict[str, Any],
+    keys: List[str],
 ) -> float:
     """Euclidean distance with each axis scaled to its search range."""
     total = 0.0
@@ -305,12 +333,16 @@ def _normalised_distance(
         if span == 0:
             continue
         total += ((a[k] - b[k]) / span) ** 2
-    return total ** 0.5
+    return total**0.5
 
 
 def run_cross_symbol(
-    adapter: Any, report: Dict[str, Any], ns: Namespace,
-    adopted: Dict[str, Dict[str, float]], start: str, end: str,
+    adapter: Any,
+    report: Dict[str, Any],
+    ns: Namespace,
+    adopted: Dict[str, Dict[str, float]],
+    start: str,
+    end: str,
 ) -> Dict[str, Any]:
     """Score defaults, fresh medians and adopted params on one symbol.
 
@@ -332,11 +364,16 @@ def run_cross_symbol(
     cache: Dict[str, Any] = {}
     medians = {s: p for s, p in _fresh_medians(report).items() if s in states}
     default_result = adapter.run_backtest(
-        ns.strategy, {}, start, end, symbol=ns.symbol,
+        ns.strategy,
+        {},
+        start,
+        end,
+        symbol=ns.symbol,
         initial_capital=ns.capital,
     )
     defaults = _state_scores(
-        adapter, default_result, states, ns.objective, ns.capital, start, end)
+        adapter, default_result, states, ns.objective, ns.capital, start, end
+    )
     print(f"[backfill] {ns.symbol}: defaults scored", flush=True)
     fresh = _arm_state_scores(adapter, cache, ns, medians, start, end)
     print(f"[backfill] {ns.symbol}: fresh medians scored", flush=True)
@@ -351,16 +388,15 @@ def run_cross_symbol(
             "adopted_params": adopted.get(state),
             "adopted": adopted_scores.get(state),
         }
-        entry["fresh_vs_default"] = _delta(entry["fresh_median"],
-                                           entry["default"])
-        entry["adopted_vs_default"] = _delta(entry["adopted"],
-                                             entry["default"])
+        entry["fresh_vs_default"] = _delta(entry["fresh_median"], entry["default"])
+        entry["adopted_vs_default"] = _delta(entry["adopted"], entry["default"])
         out[state] = entry
     return out
 
 
-def _delta(arm: Optional[Dict[str, Any]],
-           ref: Optional[Dict[str, Any]]) -> Optional[float]:
+def _delta(
+    arm: Optional[Dict[str, Any]], ref: Optional[Dict[str, Any]]
+) -> Optional[float]:
     """Score difference between two arms, or None when either is absent."""
     if not arm or not ref:
         return None
@@ -368,41 +404,52 @@ def _delta(arm: Optional[Dict[str, Any]],
     return None if a is None or r is None else a - r
 
 
-def _build_namespace(report: Dict[str, Any], args: argparse.Namespace,
-                     symbol: str) -> Namespace:
+def _build_namespace(
+    report: Dict[str, Any], args: argparse.Namespace, symbol: str
+) -> Namespace:
     return Namespace(
-        strategy=report["strategy"], symbol=symbol,
-        objective=report["objective"], capital=args.capital,
+        strategy=report["strategy"],
+        symbol=symbol,
+        objective=report["objective"],
+        capital=args.capital,
     )
 
 
 def _print_prequential(agg: Dict[str, Any], geo: Dict[str, Any]) -> None:
     print(f"\n{'=' * 104}")
-    print("PREQUENTIAL MEDIAN ARM (median of folds 1..k-1, scored on "
-          "fold k's unseen test window)")
+    print(
+        "PREQUENTIAL MEDIAN ARM (median of folds 1..k-1, scored on "
+        "fold k's unseen test window)"
+    )
     print(f"{'=' * 104}")
-    print(f"  {'state':>16} {'folds':>6} {'median':>9} {'tuned':>9} "
-          f"{'default':>9} {'adopted':>9} {'med-tuned':>10} {'med-def':>9} "
-          f"{'med-adopt':>10}")
+    print(
+        f"  {'state':>16} {'folds':>6} {'median':>9} {'tuned':>9} "
+        f"{'default':>9} {'adopted':>9} {'med-tuned':>10} {'med-def':>9} "
+        f"{'med-adopt':>10}"
+    )
     for state, row in agg.items():
         if not row.get("median_folds"):
             print(f"  {state:>16} {0:>6}   (no median arm)")
             continue
-        print(f"  {state:>16} {row['median_folds']:>6} "
-              f"{row['median']:>+9.3f} {_f(row['tuned_same_folds']):>9} "
-              f"{_f(row['default_same_folds']):>9} "
-              f"{_f(row['adopted_same_folds']):>9} "
-              f"{_f(row['gap_median_minus_tuned']):>10} "
-              f"{_f(row['edge_median_vs_default']):>9} "
-              f"{_f(row['edge_median_vs_adopted']):>10}")
+        print(
+            f"  {state:>16} {row['median_folds']:>6} "
+            f"{row['median']:>+9.3f} {_f(row['tuned_same_folds']):>9} "
+            f"{_f(row['default_same_folds']):>9} "
+            f"{_f(row['adopted_same_folds']):>9} "
+            f"{_f(row['gap_median_minus_tuned']):>10} "
+            f"{_f(row['edge_median_vs_default']):>9} "
+            f"{_f(row['edge_median_vs_adopted']):>10}"
+        )
     print("\nGEOMETRY of the full-report median vs the winners it came from")
     for state, row in geo.items():
         if row.get("winners", 0) < 2:
             continue
-        print(f"  {state:>16} in-range={row['median_within_winner_range']} "
-              f"nearest_winner={row['nearest_winner_distance']} "
-              f"mean_pairwise={row['mean_pairwise_winner_distance']} "
-              f"unlike_any_winner={row['unlike_any_winner']}")
+        print(
+            f"  {state:>16} in-range={row['median_within_winner_range']} "
+            f"nearest_winner={row['nearest_winner_distance']} "
+            f"mean_pairwise={row['mean_pairwise_winner_distance']} "
+            f"unlike_any_winner={row['unlike_any_winner']}"
+        )
 
 
 def _f(value: Optional[float]) -> str:
@@ -413,19 +460,23 @@ def _print_cross_symbol(symbol: str, result: Dict[str, Any]) -> None:
     print(f"\n{'=' * 104}")
     print(f"CROSS-SYMBOL: {symbol}")
     print(f"{'=' * 104}")
-    print(f"  {'state':>16} {'default':>9} {'n':>5} {'fresh med':>10} "
-          f"{'n':>5} {'adopted':>9} {'n':>5} {'fresh-def':>10} "
-          f"{'adopt-def':>10}")
+    print(
+        f"  {'state':>16} {'default':>9} {'n':>5} {'fresh med':>10} "
+        f"{'n':>5} {'adopted':>9} {'n':>5} {'fresh-def':>10} "
+        f"{'adopt-def':>10}"
+    )
     for state, row in result.items():
         fresh = row.get("fresh_median") or {}
         adopted = row.get("adopted") or {}
-        print(f"  {state:>16} {_f(row['default']['score']):>9} "
-              f"{row['default']['n']:>5} {_f(fresh.get('score')):>10} "
-              f"{str(fresh.get('n', '-')):>5} "
-              f"{_f(adopted.get('score')):>9} "
-              f"{str(adopted.get('n', '-')):>5} "
-              f"{_f(row['fresh_vs_default']):>10} "
-              f"{_f(row['adopted_vs_default']):>10}")
+        print(
+            f"  {state:>16} {_f(row['default']['score']):>9} "
+            f"{row['default']['n']:>5} {_f(fresh.get('score')):>10} "
+            f"{str(fresh.get('n', '-')):>5} "
+            f"{_f(adopted.get('score')):>9} "
+            f"{str(adopted.get('n', '-')):>5} "
+            f"{_f(row['fresh_vs_default']):>10} "
+            f"{_f(row['adopted_vs_default']):>10}"
+        )
 
 
 def _child_main(args: argparse.Namespace, report: Dict[str, Any]) -> int:
@@ -456,19 +507,22 @@ def _child_main(args: argparse.Namespace, report: Dict[str, Any]) -> int:
         payload["folds"] = rows
         payload["summary"] = aggregate_prequential(rows, report)
         payload["geometry"] = median_geometry(
-            report, get_search_space(report["strategy"]))
+            report, get_search_space(report["strategy"])
+        )
         _print_prequential(payload["summary"], payload["geometry"])
     else:
         symbol = args.symbol or report["symbol"]
         ns = _build_namespace(report, args, symbol)
         payload.update({"symbol": symbol, "window": [args.start, args.end]})
         payload["summary"] = run_cross_symbol(
-            adapter, report, ns, adopted, args.start, args.end)
+            adapter, report, ns, adopted, args.start, args.end
+        )
         _print_cross_symbol(symbol, payload["summary"])
     if args.out:
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         Path(args.out).write_text(
-            json.dumps(payload, indent=2, default=str), encoding="utf-8")
+            json.dumps(payload, indent=2, default=str), encoding="utf-8"
+        )
         print(f"\nresults -> {args.out}")
     return 0
 

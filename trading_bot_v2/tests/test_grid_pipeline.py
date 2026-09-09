@@ -26,7 +26,6 @@ import pytest
 from trading_bot_v2.grid_lifecycle_manager import (
     GRID_ALLOWED_REGIMES,
     GridLifecycleManager,
-    GridState,
 )
 from trading_bot_v2.models import OrderSide, Signal
 from trading_bot_v2.strategies.grid_trading import GridTradingStrategy
@@ -155,16 +154,10 @@ class TestRegimeChangeUnwind:
 
         fetcher = Mock()
         fetcher.get_candles_multi_tf.side_effect = RuntimeError("no data")
-        bot_stub = SimpleNamespace(
-            grid_lifecycle=manager, multi_tf_fetcher=fetcher
-        )
-        handler = MethodType(
-            TradingBot._handle_regime_changed_for_grids, bot_stub
-        )
+        bot_stub = SimpleNamespace(grid_lifecycle=manager, multi_tf_fetcher=fetcher)
+        handler = MethodType(TradingBot._handle_regime_changed_for_grids, bot_stub)
 
-        event = SimpleNamespace(
-            data={"symbol": "SUI", "new_regime": "trending_strong"}
-        )
+        event = SimpleNamespace(data={"symbol": "SUI", "new_regime": "trending_strong"})
         handler(event)
 
         assert not manager.has_active_grid("SUI")
@@ -379,11 +372,21 @@ class TestReadoptionSpacingUnits:
         orders = []
         for price in (96000, 97000, 98000):
             orders.append(
-                {"symbol": "BTC", "side": "bid", "price": str(price), "quantity": "0.01"}
+                {
+                    "symbol": "BTC",
+                    "side": "bid",
+                    "price": str(price),
+                    "quantity": "0.01",
+                }
             )
         for price in (102000, 103000, 104000):
             orders.append(
-                {"symbol": "BTC", "side": "ask", "price": str(price), "quantity": "0.01"}
+                {
+                    "symbol": "BTC",
+                    "side": "ask",
+                    "price": str(price),
+                    "quantity": "0.01",
+                }
             )
         client.get_orders.return_value = orders
 
@@ -449,9 +452,7 @@ class TestGridRegistrationGeometry:
             market_regime=None,
         )
         stub._get_ticker_ws = lambda symbol: {"last": 1.0}
-        stub._place_grid_orders = MethodType(
-            TradingBot._place_grid_orders, stub
-        )
+        stub._place_grid_orders = MethodType(TradingBot._place_grid_orders, stub)
         stub._calculate_grid_levels = MethodType(
             TradingBot._calculate_grid_levels, stub
         )

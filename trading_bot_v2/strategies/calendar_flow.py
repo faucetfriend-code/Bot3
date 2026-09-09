@@ -137,8 +137,8 @@ class CalendarFlowStrategy:
 
     def _now(self) -> datetime:
         """Return current UTC time - simulated candle time in backtesting."""
-        now = self._sim_time if self._sim_time is not None else datetime.now(
-            timezone.utc
+        now = (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
         )
         if now.tzinfo is None:
             # Backtest sim times are naive candle timestamps; treat as UTC.
@@ -155,12 +155,21 @@ class CalendarFlowStrategy:
         """00:00 UTC on the 1st of the month after dt's month."""
         if dt.month == 12:
             return dt.replace(
-                year=dt.year + 1, month=1, day=1,
-                hour=0, minute=0, second=0, microsecond=0,
+                year=dt.year + 1,
+                month=1,
+                day=1,
+                hour=0,
+                minute=0,
+                second=0,
+                microsecond=0,
             )
         return dt.replace(
-            month=dt.month + 1, day=1,
-            hour=0, minute=0, second=0, microsecond=0,
+            month=dt.month + 1,
+            day=1,
+            hour=0,
+            minute=0,
+            second=0,
+            microsecond=0,
         )
 
     def _active_window(
@@ -291,9 +300,7 @@ class CalendarFlowStrategy:
             )
             return signals
         try:
-            atr_value = calculate_atr(
-                highs[:n], lows[:n], closes[:n], self.atr_period
-            )
+            atr_value = calculate_atr(highs[:n], lows[:n], closes[:n], self.atr_period)
         except ValueError:
             atr_value = 0.0
         if atr_value <= 0:

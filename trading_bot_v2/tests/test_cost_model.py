@@ -34,8 +34,7 @@ from trading_bot_v2.models import OrderSide, Signal
 from trading_bot_v2.config import AssetClass, StrategyType
 
 
-CANDLE = {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0,
-          "volume": 10000.0}
+CANDLE = {"open": 100.0, "high": 101.0, "low": 99.0, "close": 100.0, "volume": 10000.0}
 
 
 def _clear_cost_env(monkeypatch):
@@ -58,8 +57,13 @@ def _clear_cost_env(monkeypatch):
             monkeypatch.delenv(f"{prefix}_{root}", raising=False)
 
 
-def _signal(entry_price=100.0, take_profit=105.0, stop_loss=98.0,
-            asset="BTC-USDC", strategy=StrategyType.GRID_TRADING):
+def _signal(
+    entry_price=100.0,
+    take_profit=105.0,
+    stop_loss=98.0,
+    asset="BTC-USDC",
+    strategy=StrategyType.GRID_TRADING,
+):
     return Signal(
         strategy=strategy,
         asset=asset,
@@ -74,6 +78,7 @@ def _signal(entry_price=100.0, take_profit=105.0, stop_loss=98.0,
 # ---------------------------------------------------------------------------
 # Symbol parsing
 # ---------------------------------------------------------------------------
+
 
 class TestSymbolRoot:
     @pytest.mark.parametrize(
@@ -94,6 +99,7 @@ class TestSymbolRoot:
 # ---------------------------------------------------------------------------
 # Profile resolution (warn-and-fall-back house pattern)
 # ---------------------------------------------------------------------------
+
 
 class TestProfileResolution:
     def test_unknown_profile_falls_back(self, monkeypatch):
@@ -126,6 +132,7 @@ class TestProfileResolution:
 # Maker vs taker  (the pin the follow-up asked for)
 # ---------------------------------------------------------------------------
 
+
 class TestMakerTakerSeparation:
     def test_table_charges_maker_less_than_taker(self, monkeypatch):
         _clear_cost_env(monkeypatch)
@@ -143,8 +150,10 @@ class TestMakerTakerSeparation:
         ex._current_price = 100.0
         ex._current_timestamp = "2024-01-01T00:00:00"
         ex.place_order("BTC-USDC", "bid", "1.0", order_type="limit", price=99.0)
-        ex.advance({"open": 100, "high": 100, "low": 98, "close": 99,
-                    "volume": 1000}, "2024-01-01T01:00:00")
+        ex.advance(
+            {"open": 100, "high": 100, "low": 98, "close": 99, "volume": 1000},
+            "2024-01-01T01:00:00",
+        )
 
         fill = ex.trade_log[-1]
         assert fill["role"] == "maker"
@@ -176,9 +185,7 @@ class TestMakerTakerSeparation:
         maker_ex = SimulatedExchange(initial_capital=10000.0)
         maker_ex._current_price = 100.0
         maker_ex._current_timestamp = "2024-01-01T00:00:00"
-        maker_ex.place_order(
-            "BTC-USDC", "bid", "1.0", order_type="limit", price=100.0
-        )
+        maker_ex.place_order("BTC-USDC", "bid", "1.0", order_type="limit", price=100.0)
         maker_ex.advance(CANDLE, "2024-01-01T01:00:00")
 
         assert maker_ex.trade_log[-1]["fee"] < taker_ex.trade_log[-1]["fee"]
@@ -189,8 +196,10 @@ class TestMakerTakerSeparation:
         ex._current_price = 100.0
         ex._current_timestamp = "2024-01-01T00:00:00"
         ex.place_order("BTC-USDC", "ask", "1.0", order_type="stop", price=98.0)
-        ex.advance({"open": 100, "high": 100, "low": 97, "close": 98,
-                    "volume": 1000}, "2024-01-01T01:00:00")
+        ex.advance(
+            {"open": 100, "high": 100, "low": 97, "close": 98, "volume": 1000},
+            "2024-01-01T01:00:00",
+        )
         assert ex.trade_log[-1]["role"] == "taker"
 
 
@@ -198,22 +207,19 @@ class TestMakerTakerSeparation:
 # Per-symbol overrides
 # ---------------------------------------------------------------------------
 
+
 class TestPerSymbolOverrides:
     def test_per_symbol_fee_override_applies(self, monkeypatch):
         _clear_cost_env(monkeypatch)
         monkeypatch.setenv("BACKTEST_TAKER_FEE_PCT_SUI", "0.0011")
         table = CostTable.from_env(profile=PROFILE_PACIFICA)
-        assert table.fee_pct("SUI-USDC", LiquidityRole.TAKER) == pytest.approx(
-            0.0011
-        )
+        assert table.fee_pct("SUI-USDC", LiquidityRole.TAKER) == pytest.approx(0.0011)
         # Other symbols untouched.
         assert table.fee_pct("BTC-USDC", LiquidityRole.TAKER) == pytest.approx(
             PACIFICA_TAKER_FEE_PCT
         )
 
-    def test_per_symbol_override_applies_in_legacy_profile_too(
-        self, monkeypatch
-    ):
+    def test_per_symbol_override_applies_in_legacy_profile_too(self, monkeypatch):
         _clear_cost_env(monkeypatch)
         monkeypatch.setenv("BACKTEST_MAKER_FEE_PCT_BTC", "0.0")
         table = CostTable.from_env(profile=PROFILE_LEGACY)
@@ -249,9 +255,7 @@ class TestPerSymbolOverrides:
         btc_fee = ex.trade_log[1]["fee"]
         assert sui_fee > btc_fee
 
-    def test_unknown_symbol_uses_conservative_fallback_spread(
-        self, monkeypatch
-    ):
+    def test_unknown_symbol_uses_conservative_fallback_spread(self, monkeypatch):
         _clear_cost_env(monkeypatch)
         table = CostTable.from_env(profile=PROFILE_PACIFICA)
         assert table.slippage_pct("PEPE-USDC") == pytest.approx(
@@ -263,6 +267,7 @@ class TestPerSymbolOverrides:
 # ---------------------------------------------------------------------------
 # Dynamic slippage
 # ---------------------------------------------------------------------------
+
 
 class TestDynamicSlippage:
     def test_thinner_symbol_costs_more(self, monkeypatch):
@@ -322,6 +327,7 @@ class TestDynamicSlippage:
 # Legacy compatibility
 # ---------------------------------------------------------------------------
 
+
 class TestLegacyProfileUnchanged:
     def test_legacy_slippage_is_flat_and_symbol_blind(self, monkeypatch):
         _clear_cost_env(monkeypatch)
@@ -331,13 +337,11 @@ class TestLegacyProfileUnchanged:
             maker_fee_pct=LEGACY_MAKER_FEE_PCT,
         )
         for symbol in ("BTC-USDC", "SUI-USDC", "PEPE-USDC"):
-            assert table.slippage_pct(
-                symbol, 999999, 0.9, 1.0
-            ) == pytest.approx(LEGACY_SLIPPAGE_PCT)
+            assert table.slippage_pct(symbol, 999999, 0.9, 1.0) == pytest.approx(
+                LEGACY_SLIPPAGE_PCT
+            )
 
-    def test_legacy_round_trip_cost_matches_historic_formula(
-        self, monkeypatch
-    ):
+    def test_legacy_round_trip_cost_matches_historic_formula(self, monkeypatch):
         _clear_cost_env(monkeypatch)
         model = CostModel(slippage_pct=0.002, taker_fee_pct=0.0006)
         assert model.round_trip_cost_pct == pytest.approx(0.0032)
@@ -366,6 +370,7 @@ class TestLegacyProfileUnchanged:
 # Order-type aware take-profit haircut
 # ---------------------------------------------------------------------------
 
+
 class TestRoleAwareHaircut:
     def test_entry_role_mirrors_engine_limit_rule(self, monkeypatch):
         _clear_cost_env(monkeypatch)
@@ -389,9 +394,10 @@ class TestRoleAwareHaircut:
         legacy = CostModel(profile=PROFILE_LEGACY)
         pacifica = CostModel(profile=PROFILE_PACIFICA)
         grid_signal = _signal(entry_price=102.0, asset="BTC-USDC")
-        assert pacifica.round_trip_cost_for(
-            grid_signal, 100.0
-        ) < legacy.round_trip_cost_for(grid_signal, 100.0) / 5
+        assert (
+            pacifica.round_trip_cost_for(grid_signal, 100.0)
+            < legacy.round_trip_cost_for(grid_signal, 100.0) / 5
+        )
 
     def test_haircut_can_be_disabled(self, monkeypatch):
         _clear_cost_env(monkeypatch)
@@ -414,9 +420,9 @@ class TestRoleAwareHaircut:
         model = CostModel(profile=PROFILE_PACIFICA)
         btc = _signal(asset="BTC-USDC", entry_price=100.0)
         sui = _signal(asset="SUI-USDC", entry_price=100.0)
-        assert model.round_trip_cost_for(
-            sui, 100.0
-        ) > model.round_trip_cost_for(btc, 100.0)
+        assert model.round_trip_cost_for(sui, 100.0) > model.round_trip_cost_for(
+            btc, 100.0
+        )
 
     def test_missing_levels_are_left_alone(self, monkeypatch):
         _clear_cost_env(monkeypatch)

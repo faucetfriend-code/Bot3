@@ -36,14 +36,17 @@ import subprocess
 from pathlib import Path
 from typing import List, Optional
 
+
 def _force_utf8_stdout() -> None:
     """Force UTF-8 on Windows terminals (CLI only - importing this
     module must not replace sys.stdout, or pytest capture breaks)."""
     if sys.platform == "win32" and hasattr(sys.stdout, "buffer"):
         import io
+
         sys.stdout = io.TextIOWrapper(
             sys.stdout.buffer, encoding="utf-8", errors="replace"
         )
+
 
 # ---------------------------------------------------------------------------
 # Strategies
@@ -79,19 +82,36 @@ def _non_backtestable_display_names() -> List[str]:
         if key in STRATEGY_KEY_TO_DISPLAY
     ]
 
+
 # ---------------------------------------------------------------------------
 # ANSI colour helpers
 # ---------------------------------------------------------------------------
 _USE_COLOUR = sys.stdout.isatty() or os.getenv("FORCE_COLOR")
 
+
 def _c(code, text):
     return f"\033[{code}m{text}\033[0m" if _USE_COLOUR else text
 
-def green(t):  return _c("32", t)
-def red(t):    return _c("31", t)
-def yellow(t): return _c("33", t)
-def dim(t):    return _c("2",  t)
-def bold(t):   return _c("1",  t)
+
+def green(t):
+    return _c("32", t)
+
+
+def red(t):
+    return _c("31", t)
+
+
+def yellow(t):
+    return _c("33", t)
+
+
+def dim(t):
+    return _c("2", t)
+
+
+def bold(t):
+    return _c("1", t)
+
 
 # ---------------------------------------------------------------------------
 # Worker script that runs inside the subprocess
@@ -150,6 +170,7 @@ except Exception as exc:
 print(json.dumps(out))
 """
 
+
 # ---------------------------------------------------------------------------
 # Result container
 # ---------------------------------------------------------------------------
@@ -159,17 +180,17 @@ class StrategyResult:
         self.ok = False
         self.error: Optional[str] = None
         self.elapsed_sec: float = 0.0
-        self.total_return_pct  = 0.0
-        self.sharpe            = 0.0
-        self.sortino           = 0.0
-        self.max_dd_pct        = 0.0
-        self.win_rate_pct      = 0.0
-        self.profit_factor     = 0.0
-        self.closed_trades     = 0
-        self.total_fills       = 0
-        self.total_fees        = 0.0
-        self.final_equity      = 0.0
-        self.calmar            = 0.0
+        self.total_return_pct = 0.0
+        self.sharpe = 0.0
+        self.sortino = 0.0
+        self.max_dd_pct = 0.0
+        self.win_rate_pct = 0.0
+        self.profit_factor = 0.0
+        self.closed_trades = 0
+        self.total_fills = 0
+        self.total_fees = 0.0
+        self.final_equity = 0.0
+        self.calmar = 0.0
         # Signal-funnel diagnostics (SignalFunnel.to_dict() payload)
         self.diagnostics: dict = {}
         # P5 validation fields (filled by apply_validation_stats)
@@ -190,8 +211,17 @@ def run_single_strategy(
     r = StrategyResult(name)
     t0 = time.time()
 
-    cmd = [sys.executable, "-c", _WORKER_SCRIPT,
-           symbol, start, end, str(capital), name, report_path]
+    cmd = [
+        sys.executable,
+        "-c",
+        _WORKER_SCRIPT,
+        symbol,
+        start,
+        end,
+        str(capital),
+        name,
+        report_path,
+    ]
 
     try:
         proc = subprocess.run(
@@ -208,7 +238,9 @@ def run_single_strategy(
             if line.startswith("{"):
                 json_line = line
         if json_line is None:
-            r.error = "No JSON output" + (f": {proc.stderr[-200:]}" if proc.stderr else "")
+            r.error = "No JSON output" + (
+                f": {proc.stderr[-200:]}" if proc.stderr else ""
+            )
             return r
 
         data = json.loads(json_line)
@@ -216,20 +248,20 @@ def run_single_strategy(
             r.error = data.get("error", "unknown error")
             return r
 
-        r.ok               = True
+        r.ok = True
         r.total_return_pct = data["total_return_pct"]
-        r.sharpe           = data["sharpe"]
-        r.sortino          = data["sortino"]
-        r.max_dd_pct       = data["max_dd_pct"]
-        r.win_rate_pct     = data["win_rate_pct"]
-        r.profit_factor    = data["profit_factor"]
-        r.closed_trades    = data["closed_trades"]
-        r.total_fills      = data["total_fills"]
-        r.total_fees       = data["total_fees"]
-        r.final_equity     = data["final_equity"]
-        r.calmar           = data["calmar"]
-        r.trade_returns    = data.get("trade_returns", [])
-        r.diagnostics      = data.get("diagnostics", {}) or {}
+        r.sharpe = data["sharpe"]
+        r.sortino = data["sortino"]
+        r.max_dd_pct = data["max_dd_pct"]
+        r.win_rate_pct = data["win_rate_pct"]
+        r.profit_factor = data["profit_factor"]
+        r.closed_trades = data["closed_trades"]
+        r.total_fills = data["total_fills"]
+        r.total_fees = data["total_fees"]
+        r.final_equity = data["final_equity"]
+        r.calmar = data["calmar"]
+        r.trade_returns = data.get("trade_returns", [])
+        r.diagnostics = data.get("diagnostics", {}) or {}
 
     except subprocess.TimeoutExpired:
         r.error = "timed out (>300 s)"
@@ -262,6 +294,7 @@ def apply_validation_stats(results: List[StrategyResult]) -> None:
     try:
         from trading_bot_v2.database import DatabaseManager
         from trading_bot_v2.regime_param_overlay import resolve_strategy_key
+
         db = DatabaseManager()
     except Exception:
         db = None
@@ -293,17 +326,17 @@ def apply_validation_stats(results: List[StrategyResult]) -> None:
 # Table formatting
 # ---------------------------------------------------------------------------
 _COLS = {
-    "Strategy":   20,
-    "Return":      9,
-    "Sharpe":      7,
-    "MaxDD":       7,
-    "WinRate":     8,
+    "Strategy": 20,
+    "Return": 9,
+    "Sharpe": 7,
+    "MaxDD": 7,
+    "WinRate": 8,
     "ProfFactor": 11,
-    "PSR":         6,
-    "Calmar":      7,
-    "Closed":      7,
-    "Fees":        8,
-    "Outcome":    24,
+    "PSR": 6,
+    "Calmar": 7,
+    "Closed": 7,
+    "Fees": 8,
+    "Outcome": 24,
 }
 
 
@@ -320,12 +353,15 @@ def _outcome(r: "StrategyResult") -> str:
 
     return funnel_one_liner(r.diagnostics)
 
+
 def _header() -> str:
     return "  ".join(bold(k.ljust(v)) for k, v in _COLS.items())
+
 
 def _sep() -> str:
     total = sum(_COLS.values()) + 2 * (len(_COLS) - 1)
     return dim("-" * total)
+
 
 def _row(r: StrategyResult) -> str:
     name = r.name.ljust(_COLS["Strategy"])
@@ -367,22 +403,25 @@ def _row(r: StrategyResult) -> str:
         return green(s) if v >= 0.95 else yellow(s) if v >= 0.5 else red(s)
 
     calmar = ("--" if r.calmar == 0 else f"{r.calmar:.2f}").ljust(_COLS["Calmar"])
-    fees   = f"${r.total_fees:.2f}".ljust(_COLS["Fees"])
+    fees = f"${r.total_fees:.2f}".ljust(_COLS["Fees"])
     closed = str(r.closed_trades).ljust(_COLS["Closed"])
 
-    return "  ".join([
-        name,
-        ret(r.total_return_pct),
-        sharpe(r.sharpe),
-        dd(r.max_dd_pct),
-        wr(r.win_rate_pct),
-        pf(r.profit_factor),
-        psr(r.psr),
-        calmar,
-        closed,
-        fees,
-        _outcome(r).ljust(_COLS["Outcome"]),
-    ])
+    return "  ".join(
+        [
+            name,
+            ret(r.total_return_pct),
+            sharpe(r.sharpe),
+            dd(r.max_dd_pct),
+            wr(r.win_rate_pct),
+            pf(r.profit_factor),
+            psr(r.psr),
+            calmar,
+            closed,
+            fees,
+            _outcome(r).ljust(_COLS["Outcome"]),
+        ]
+    )
+
 
 def _verdict(r: StrategyResult) -> str:
     if not r.ok:
@@ -428,7 +467,8 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument(
-        "--symbol", "-s",
+        "--symbol",
+        "-s",
         default=getattr(cfg, "backtest_symbol", "SUI-USDC"),
         help="Symbol to backtest  (default: %(default)s)",
     )
@@ -443,7 +483,8 @@ def main():
         help="End date YYYY-MM-DD  (default: %(default)s)",
     )
     parser.add_argument(
-        "--capital", "-c",
+        "--capital",
+        "-c",
         type=float,
         default=getattr(cfg, "backtest_initial_capital", 10000.0),
         help="Initial capital in USDC  (default: %(default)s)",
@@ -463,15 +504,15 @@ def main():
     )
     args = parser.parse_args()
 
-    symbol     = args.symbol
-    start      = args.start
-    end        = args.end
-    capital    = args.capital
+    symbol = args.symbol
+    start = args.start
+    end = args.end
+    capital = args.capital
 
     # Exclude strategies the engine cannot backtest (live-only data
     # surfaces); they are reported as N/A instead of a zero row.
     non_backtestable = _non_backtestable_display_names()
-    excluded   = [s for s in args.strategies if s in non_backtestable]
+    excluded = [s for s in args.strategies if s in non_backtestable]
     strategies = [s for s in args.strategies if s not in non_backtestable]
 
     report_dir: Optional[Path] = None
@@ -484,7 +525,9 @@ def main():
     print(bold(f"  Strategy Sweep  --  {symbol}"))
     print(f"  Period   : {start} -> {end}")
     print(f"  Capital  : ${capital:,.0f}")
-    print(f"  Runs     : {len(strategies)} strategies (sequential, isolated subprocesses)")
+    print(
+        f"  Runs     : {len(strategies)} strategies (sequential, isolated subprocesses)"
+    )
     if excluded:
         print(f"  Excluded : {', '.join(excluded)}  " + dim("(not backtestable)"))
     if report_dir:
@@ -499,18 +542,26 @@ def main():
         print(f"  [{i:02d}/{len(strategies):02d}]  {label}", end="", flush=True)
 
         rp = str(report_dir / f"{name}.html") if report_dir else ""
-        r  = run_single_strategy(name, symbol, start, end, capital, report_path=rp)
+        r = run_single_strategy(name, symbol, start, end, capital, report_path=rp)
         results.append(r)
 
         elapsed = f"{r.elapsed_sec:.1f}s"
         if not r.ok:
-            status = red(f"FAILED ({r.error or 'no output'})") if r.error else dim("no trades")
+            status = (
+                red(f"FAILED ({r.error or 'no output'})")
+                if r.error
+                else dim("no trades")
+            )
         elif r.closed_trades == 0:
             status = dim(f"0 trades  {elapsed}")
         elif r.total_return_pct >= 0:
-            status = green(f"{r.total_return_pct:+.2f}%  {r.closed_trades} closed  {elapsed}")
+            status = green(
+                f"{r.total_return_pct:+.2f}%  {r.closed_trades} closed  {elapsed}"
+            )
         else:
-            status = red(f"{r.total_return_pct:+.2f}%  {r.closed_trades} closed  {elapsed}")
+            status = red(
+                f"{r.total_return_pct:+.2f}%  {r.closed_trades} closed  {elapsed}"
+            )
 
         print(f"  {status}", flush=True)
 
@@ -524,9 +575,10 @@ def main():
     print("  " + _header())
     print("  " + _sep())
 
-    with_trades    = sorted(
+    with_trades = sorted(
         [r for r in results if r.ok and r.closed_trades > 0],
-        key=lambda r: r.total_return_pct, reverse=True,
+        key=lambda r: r.total_return_pct,
+        reverse=True,
     )
     without_trades = [r for r in results if not r.ok or r.closed_trades == 0]
 
@@ -566,7 +618,7 @@ def main():
     # ---- aggregate summary -------------------------------------------------
     print()
     positive = [r for r in with_trades if r.total_return_pct >= 0]
-    losing   = [r for r in with_trades if r.total_return_pct < 0]
+    losing = [r for r in with_trades if r.total_return_pct < 0]
     no_trade = [r for r in without_trades]
 
     if positive:

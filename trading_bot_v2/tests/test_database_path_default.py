@@ -75,7 +75,7 @@ def test_no_second_literal_default_anywhere():
             if not (isinstance(first, ast.Constant) and first.value == "DATABASE_PATH"):
                 continue
             assert len(node.args) > 1, (
-                f"{module.__name__}: os.getenv('DATABASE_PATH') with no " f"default"
+                f"{module.__name__}: os.getenv('DATABASE_PATH') with no default"
             )
             fallback = node.args[1]
             assert isinstance(fallback, ast.Name) and (

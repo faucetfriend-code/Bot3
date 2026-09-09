@@ -88,10 +88,7 @@ class TestWindowBoundaryMath:
     def test_31_day_month_window_opens_two_days_before_boundary(self):
         # Feb 1 boundary - 2 days = Jan 30 00:00
         assert self._window(datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc))
-        assert (
-            self._window(datetime(2024, 1, 29, 23, 59, tzinfo=timezone.utc))
-            is None
-        )
+        assert self._window(datetime(2024, 1, 29, 23, 59, tzinfo=timezone.utc)) is None
 
     def test_window_spans_boundary_with_single_anchor(self):
         # Late Jan and early Feb resolve to the SAME window (anchor 2024-02)
@@ -105,17 +102,11 @@ class TestWindowBoundaryMath:
         w = self._window(datetime(2024, 2, 3, 23, 59, tzinfo=timezone.utc))
         assert w is not None
         assert w[4] == datetime(2024, 2, 4, 0, 0, tzinfo=timezone.utc)
-        assert (
-            self._window(datetime(2024, 2, 4, 0, 0, tzinfo=timezone.utc))
-            is None
-        )
+        assert self._window(datetime(2024, 2, 4, 0, 0, tzinfo=timezone.utc)) is None
 
     def test_february_non_leap_month_end(self):
         # Mar 1 2023 boundary - 2 days = Feb 27 00:00
-        assert (
-            self._window(datetime(2023, 2, 26, 23, 59, tzinfo=timezone.utc))
-            is None
-        )
+        assert self._window(datetime(2023, 2, 26, 23, 59, tzinfo=timezone.utc)) is None
         w = self._window(datetime(2023, 2, 27, 0, 0, tzinfo=timezone.utc))
         assert w is not None and w[1] == "2023-03"
 
@@ -123,10 +114,7 @@ class TestWindowBoundaryMath:
         # Mar 1 2024 boundary - 2 days = Feb 28 00:00 (leap year has Feb 29)
         w = self._window(datetime(2024, 2, 29, 12, 0, tzinfo=timezone.utc))
         assert w is not None and w[1] == "2024-03"
-        assert (
-            self._window(datetime(2024, 2, 27, 23, 59, tzinfo=timezone.utc))
-            is None
-        )
+        assert self._window(datetime(2024, 2, 27, 23, 59, tzinfo=timezone.utc)) is None
 
     def test_year_rollover_dec_to_jan(self):
         w = self._window(datetime(2024, 12, 30, 0, 0, tzinfo=timezone.utc))
@@ -136,10 +124,7 @@ class TestWindowBoundaryMath:
         assert w[4] == datetime(2025, 1, 4, 0, 0, tzinfo=timezone.utc)
 
     def test_mid_month_is_outside_all_windows_by_default(self):
-        assert (
-            self._window(datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc))
-            is None
-        )
+        assert self._window(datetime(2024, 1, 15, 12, 0, tzinfo=timezone.utc)) is None
 
     def test_short_window_when_enabled(self):
         w = self._window(
@@ -157,9 +142,7 @@ class TestLongWindowSignals:
 
     def test_long_fires_inside_window(self):
         strategy = make_strategy()
-        signals = signals_at(
-            strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
         s = signals[0]
         assert s.strategy == StrategyType.CALENDAR_FLOW
@@ -187,27 +170,17 @@ class TestLongWindowSignals:
 
     def test_dedup_across_repeated_calls_in_same_window(self):
         strategy = make_strategy()
-        first = signals_at(
-            strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc)
-        )
-        second = signals_at(
-            strategy, datetime(2024, 1, 30, 4, 0, tzinfo=timezone.utc)
-        )
-        third = signals_at(
-            strategy, datetime(2024, 2, 2, 12, 0, tzinfo=timezone.utc)
-        )
+        first = signals_at(strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc))
+        second = signals_at(strategy, datetime(2024, 1, 30, 4, 0, tzinfo=timezone.utc))
+        third = signals_at(strategy, datetime(2024, 2, 2, 12, 0, tzinfo=timezone.utc))
         assert len(first) == 1
         assert second == []
         assert third == []  # same window across the boundary - still deduped
 
     def test_fires_again_next_month(self):
         strategy = make_strategy()
-        jan = signals_at(
-            strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc)
-        )
-        feb = signals_at(
-            strategy, datetime(2024, 2, 28, 0, 0, tzinfo=timezone.utc)
-        )
+        jan = signals_at(strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc))
+        feb = signals_at(strategy, datetime(2024, 2, 28, 0, 0, tzinfo=timezone.utc))
         assert len(jan) == 1 and len(feb) == 1
         assert jan[0].indicators["window_anchor"] == "2024-02"
         assert feb[0].indicators["window_anchor"] == "2024-03"
@@ -222,9 +195,7 @@ class TestLongWindowSignals:
     def test_late_entry_inside_window_still_fires_once(self):
         # First call happens mid-window (bot restarted): entry still fires
         strategy = make_strategy()
-        signals = signals_at(
-            strategy, datetime(2024, 2, 1, 8, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 2, 1, 8, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
 
 
@@ -233,16 +204,12 @@ class TestShortWindow:
 
     def test_short_disabled_by_default(self):
         strategy = make_strategy()
-        signals = signals_at(
-            strategy, datetime(2024, 1, 12, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 1, 12, 0, 0, tzinfo=timezone.utc))
         assert signals == []
 
     def test_short_fires_when_enabled(self):
         strategy = make_strategy(enable_short=True)
-        signals = signals_at(
-            strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
         s = signals[0]
         assert s.side == OrderSide.SELL
@@ -251,12 +218,8 @@ class TestShortWindow:
 
     def test_short_deduped_within_month(self):
         strategy = make_strategy(enable_short=True)
-        first = signals_at(
-            strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc)
-        )
-        second = signals_at(
-            strategy, datetime(2024, 1, 13, 0, 0, tzinfo=timezone.utc)
-        )
+        first = signals_at(strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc))
+        second = signals_at(strategy, datetime(2024, 1, 13, 0, 0, tzinfo=timezone.utc))
         assert len(first) == 1
         assert second == []
 
@@ -267,17 +230,13 @@ class TestTimeExit:
     def test_time_exit_matches_full_window_length_at_open(self):
         # Window: Jan 30 00:00 -> Feb 4 00:00 = 5 days = 120 hours
         strategy = make_strategy()
-        signals = signals_at(
-            strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 1, 30, 0, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
         assert signals[0].indicators["time_exit_hours"] == pytest.approx(120.0)
 
     def test_time_exit_is_remaining_hours_for_late_entry(self):
         strategy = make_strategy()
-        signals = signals_at(
-            strategy, datetime(2024, 2, 1, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 2, 1, 0, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
         assert signals[0].indicators["time_exit_hours"] == pytest.approx(72.0)
 
@@ -291,9 +250,7 @@ class TestTimeExit:
     def test_short_window_time_exit(self):
         # Short window: Jan 10 -> Jan 15 = 120 hours
         strategy = make_strategy(enable_short=True)
-        signals = signals_at(
-            strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc)
-        )
+        signals = signals_at(strategy, datetime(2024, 1, 10, 0, 0, tzinfo=timezone.utc))
         assert len(signals) == 1
         assert signals[0].indicators["time_exit_hours"] == pytest.approx(120.0)
 

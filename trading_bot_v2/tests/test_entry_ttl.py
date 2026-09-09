@@ -46,12 +46,15 @@ class TestEntryTTL:
         ex = _exchange()
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
         # Resting long entry below market + naked exit set
-        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1",
-                       order_type="limit", price=99.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="stop", price=97.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="limit", price=103.0)
+        ex.place_order(
+            symbol="BTC-USDC", side="bid", quantity="1", order_type="limit", price=99.0
+        )
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="stop", price=97.0
+        )
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="limit", price=103.0
+        )
         assert len(_open_orders(ex, "BTC-USDC")) == 3
 
         engine = _engine_with(ex)
@@ -68,12 +71,13 @@ class TestEntryTTL:
         ex = _exchange()
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
         # Market entry fills immediately -> position exists
-        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1",
-                       order_type="market")
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="stop", price=97.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="limit", price=103.0)
+        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1", order_type="market")
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="stop", price=97.0
+        )
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="limit", price=103.0
+        )
         assert "BTC-USDC" in ex._positions
 
         engine = _engine_with(ex)
@@ -87,17 +91,18 @@ class TestEntryTTL:
     def test_naked_takeprofit_cannot_invert_after_expiry(self):
         ex = _exchange()
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
-        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1",
-                       order_type="limit", price=99.0)
-        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1",
-                       order_type="limit", price=103.0)  # the would-be TP
+        ex.place_order(
+            symbol="BTC-USDC", side="bid", quantity="1", order_type="limit", price=99.0
+        )
+        ex.place_order(
+            symbol="BTC-USDC", side="ask", quantity="1", order_type="limit", price=103.0
+        )  # the would-be TP
 
         engine = _engine_with(ex)
         engine._pending_entry_ttl["BTC-USDC"] = 5
         engine._expire_stale_entries(ex, candle_idx=5)
 
         # Price rallies through the old TP level - nothing may fill
-        rally = {"open": 100, "high": 105, "low": 100, "close": 104,
-                 "volume": 1000}
+        rally = {"open": 100, "high": 105, "low": 100, "close": 104, "volume": 1000}
         ex.advance(rally, "2024-01-01T00:05:00")
         assert "BTC-USDC" not in ex._positions

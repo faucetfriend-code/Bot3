@@ -8,14 +8,13 @@ Validates the entire component-based system integration.
 import pytest
 import time
 from unittest.mock import Mock, patch, MagicMock
-from trading_bot_v2.event_system import EventBus, EventType, get_event_bus
+from trading_bot_v2.event_system import EventType, get_event_bus
 from trading_bot_v2.component_registry import get_component_registry
 from trading_bot_v2.component_interfaces import (
     ExecutionInterface,
     RiskInterface,
     GridInterface,
     RegimeInterface,
-    StrategyInterface,
     DatabaseInterface,
 )
 from trading_bot_v2.models import Signal, OrderSide
@@ -155,7 +154,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
@@ -219,7 +223,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
@@ -247,7 +256,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
@@ -326,7 +340,7 @@ class TestEndToEndTradingFlow:
         health_status = registry.validate_dependencies()
 
         # Verify all components are healthy
-        assert health_status["all_healthy"] == True
+        assert health_status["all_healthy"] is True
         assert len(health_status["healthy"]) == len(mock_components)
         assert len(health_status["unhealthy"]) == 0
 
@@ -344,7 +358,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=mock_ws),
         ):
@@ -375,7 +394,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):
@@ -403,7 +427,12 @@ class TestEndToEndTradingFlow:
             patch("trading_bot_v2.trading_bot.RiskManager"),
             patch("trading_bot_v2.trading_bot.StrategyManager"),
             patch("trading_bot_v2.trading_bot.GridLifecycleManager"),
-            patch("trading_bot_v2.trading_bot.config", risk_profile="medium", enable_websocket=False, circuit_breaker_loss_pct=0.1),
+            patch(
+                "trading_bot_v2.trading_bot.config",
+                risk_profile="medium",
+                enable_websocket=False,
+                circuit_breaker_loss_pct=0.1,
+            ),
             patch("trading_bot_v2.trading_bot.make_regime_detector"),
             patch("trading_bot_v2.trading_bot.get_ws_client", return_value=None),
         ):

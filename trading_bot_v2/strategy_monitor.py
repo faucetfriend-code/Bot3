@@ -52,7 +52,9 @@ class CorrelationAlert:
     strategy_b: str
     correlation: float
     window_days: int
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -67,7 +69,9 @@ class DecayAlert:
     baseline_sharpe: float
     decay_pct: float
     trade_count: int
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -98,7 +102,9 @@ class HealthReport:
     correlation_matrix: Dict[str, Dict[str, Optional[float]]]
     correlation_alerts: List[CorrelationAlert]
     decay_alerts: List[DecayAlert]
-    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    timestamp: str = field(
+        default_factory=lambda: datetime.now(timezone.utc).isoformat()
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -192,8 +198,7 @@ class StrategyMonitor:
         """
         alter_statements = [
             "ALTER TABLE strategy_health_snapshots ADD COLUMN profit_factor REAL",
-            "ALTER TABLE strategy_health_snapshots "
-            "ADD COLUMN max_drawdown_pct REAL",
+            "ALTER TABLE strategy_health_snapshots ADD COLUMN max_drawdown_pct REAL",
         ]
         try:
             with get_db_connection() as conn:
@@ -384,9 +389,7 @@ class StrategyMonitor:
                 elif sb in matrix and sa in matrix[sb]:
                     matrix[sa][sb] = matrix[sb][sa]
                 else:
-                    matrix[sa][sb] = self.calculate_rolling_correlation(
-                        sa, sb, days
-                    )
+                    matrix[sa][sb] = self.calculate_rolling_correlation(sa, sb, days)
 
         return matrix
 
@@ -499,7 +502,10 @@ class StrategyMonitor:
                 if pair_key in seen_pairs:
                     continue
                 corr_val = corr_matrix.get(sa, {}).get(sb)
-                if corr_val is not None and abs(corr_val) >= self._correlation_threshold:
+                if (
+                    corr_val is not None
+                    and abs(corr_val) >= self._correlation_threshold
+                ):
                     alert = CorrelationAlert(
                         strategy_a=sa,
                         strategy_b=sb,
@@ -568,9 +574,7 @@ class StrategyMonitor:
             # Non-positive notional counts as 0.0 so tagging coverage
             # stays visible.
             pnl_pct = (pnl_val / notional) * 100.0 if notional > 0 else 0.0
-            grouped.setdefault(strat_key, {}).setdefault(regime_key, []).append(
-                pnl_pct
-            )
+            grouped.setdefault(strat_key, {}).setdefault(regime_key, []).append(pnl_pct)
 
         attribution: Dict[str, Dict[str, Dict[str, Any]]] = {}
         for strat_key, regimes in grouped.items():
@@ -586,9 +590,7 @@ class StrategyMonitor:
                     "trade_count": trade_count,
                     "win_rate": round(win_rate, 4),
                     "profit_factor": (
-                        round(profit_factor, 4)
-                        if profit_factor is not None
-                        else None
+                        round(profit_factor, 4) if profit_factor is not None else None
                     ),
                     "avg_pnl_pct": round(avg_pnl, 4),
                     "total_pnl_pct": round(total_pnl, 4),
@@ -598,9 +600,7 @@ class StrategyMonitor:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    def _get_returns_in_window(
-        self, strategy: str, cutoff_iso: str
-    ) -> List[float]:
+    def _get_returns_in_window(self, strategy: str, cutoff_iso: str) -> List[float]:
         """Return list of pnl_pct values after ``cutoff_iso`` for a strategy."""
         # Try database first for large histories
         try:
@@ -620,11 +620,7 @@ class StrategyMonitor:
         # Fall back to in-memory cache
         with self._lock:
             cache = self._returns_cache.get(strategy, [])
-        return [
-            pnl
-            for ts, pnl in cache
-            if ts >= cutoff_iso
-        ]
+        return [pnl for ts, pnl in cache if ts >= cutoff_iso]
 
     def _compute_sharpe(
         self, returns: List[float], risk_free_rate: float = 0.0
@@ -686,9 +682,7 @@ class StrategyMonitor:
         except Exception as exc:
             logger.warning(f"Failed to persist correlation: {exc}")
 
-    def _save_health_snapshot(
-        self, health_map: Dict[str, StrategyHealth]
-    ) -> None:
+    def _save_health_snapshot(self, health_map: Dict[str, StrategyHealth]) -> None:
         """Persist daily health snapshots using INSERT OR REPLACE logic."""
         today = date.today().isoformat()
         try:
@@ -781,9 +775,7 @@ class StrategyMonitor:
     # ------------------------------------------------------------------
     # Cache loading (call on startup to hydrate from DB)
     # ------------------------------------------------------------------
-    def load_returns_from_db(
-        self, days: Optional[int] = None
-    ) -> Dict[str, int]:
+    def load_returns_from_db(self, days: Optional[int] = None) -> Dict[str, int]:
         """
         Hydrate the in-memory returns cache from the database.
 
@@ -817,7 +809,7 @@ class StrategyMonitor:
                     loaded[strategy] = len(self._returns_cache[strategy])
 
             logger.info(
-                f"Loaded returns from DB: "
+                "Loaded returns from DB: "
                 + ", ".join(f"{s}: {n}" for s, n in loaded.items())
             )
         except Exception as exc:

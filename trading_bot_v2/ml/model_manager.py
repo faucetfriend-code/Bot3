@@ -13,7 +13,6 @@ Features:
 """
 
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -36,9 +35,7 @@ METADATA_SUFFIX = ".meta.json"
 LATEST_MODEL_TYPE_FILE = "LATEST_MODEL"
 
 
-def write_latest_model_type(
-    model_type: str, models_dir: Optional[Path] = None
-) -> None:
+def write_latest_model_type(model_type: str, models_dir: Optional[Path] = None) -> None:
     """Record the most recently trained model type ("gmm" or "hmm").
 
     Args:
@@ -74,6 +71,7 @@ def read_latest_model_type(models_dir: Optional[Path] = None) -> Optional[str]:
 # ---------------------------------------------------------------------------
 # Model metadata
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class ModelMetadata:
@@ -126,6 +124,7 @@ class ModelMetadata:
 # ---------------------------------------------------------------------------
 # Model manager
 # ---------------------------------------------------------------------------
+
 
 class ModelManager:
     """Manages persistence and versioning of GMM regime detection models.
@@ -212,9 +211,7 @@ class ModelManager:
         """
         from datetime import datetime, timezone
 
-        version = datetime.now(timezone.utc).strftime(
-            f"{model_type}_%Y%m%d_%H%M%S"
-        )
+        version = datetime.now(timezone.utc).strftime(f"{model_type}_%Y%m%d_%H%M%S")
 
         # Build the model payload
         payload = {
@@ -230,7 +227,9 @@ class ModelManager:
             payload.update(extra_payload)
 
         # Write model file
-        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        model_path = (
+            self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        )
         joblib.dump(payload, model_path, compress=3)
         logger.info(f"GMM model saved: {model_path}")
 
@@ -269,9 +268,7 @@ class ModelManager:
     # Load
     # ------------------------------------------------------------------
 
-    def load_model(
-        self, version: Optional[str] = None
-    ) -> Optional[Tuple]:
+    def load_model(self, version: Optional[str] = None) -> Optional[Tuple]:
         """Load a persisted GMM model.
 
         Args:
@@ -289,7 +286,9 @@ class ModelManager:
             logger.debug("No model version found")
             return None
 
-        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        model_path = (
+            self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        )
 
         if not model_path.exists():
             logger.warning(f"Model file not found: {model_path}")
@@ -371,7 +370,9 @@ class ModelManager:
         Returns:
             ``True`` if deleted, ``False`` if not found.
         """
-        model_path = self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        model_path = (
+            self.models_dir / f"{self.file_prefix}_{version}{MODEL_FILE_SUFFIX}"
+        )
         meta_path = self.models_dir / f"{self.file_prefix}_{version}{METADATA_SUFFIX}"
 
         deleted = False

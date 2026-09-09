@@ -76,10 +76,10 @@ PACIFICA_MAKER_FEE_PCT = 0.00015
 # ---------------------------------------------------------------------------
 # Half-spread per symbol root, i.e. the cost of crossing the book once.
 DEFAULT_HALF_SPREAD_PCT: Dict[str, float] = {
-    "BTC": 0.00005,   # 0.5 bp
-    "ETH": 0.00006,   # 0.6 bp
-    "SOL": 0.00010,   # 1.0 bp
-    "SUI": 0.00020,   # 2.0 bp
+    "BTC": 0.00005,  # 0.5 bp
+    "ETH": 0.00006,  # 0.6 bp
+    "SOL": 0.00010,  # 1.0 bp
+    "SUI": 0.00020,  # 2.0 bp
 }
 # Applied to any symbol not in the table above.
 FALLBACK_HALF_SPREAD_PCT = 0.00025
@@ -156,9 +156,7 @@ def _env_float(
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        logger.warning(
-            f"{name}={raw!r} is not a number - falling back to {default}"
-        )
+        logger.warning(f"{name}={raw!r} is not a number - falling back to {default}")
         return default
     if not (minimum <= value <= maximum):
         logger.warning(
@@ -187,9 +185,7 @@ def _env_bool(name: str, default: bool) -> bool:
         return True
     if lowered in ("0", "false", "no", "off"):
         return False
-    logger.warning(
-        f"{name}={raw!r} is not a boolean - falling back to {default}"
-    )
+    logger.warning(f"{name}={raw!r} is not a boolean - falling back to {default}")
     return default
 
 
@@ -243,11 +239,7 @@ class SymbolCosts:
 
     def fee_pct(self, role: LiquidityRole) -> float:
         """Return the fee fraction for a fill in ``role``."""
-        return (
-            self.maker_fee_pct
-            if role == LiquidityRole.MAKER
-            else self.taker_fee_pct
-        )
+        return self.maker_fee_pct if role == LiquidityRole.MAKER else self.taker_fee_pct
 
 
 class CostTable:
@@ -333,9 +325,7 @@ class CostTable:
         """
         resolved_profile = resolve_cost_profile(profile)
 
-        base_slip = (
-            slippage_pct if slippage_pct is not None else LEGACY_SLIPPAGE_PCT
-        )
+        base_slip = slippage_pct if slippage_pct is not None else LEGACY_SLIPPAGE_PCT
         base_taker = (
             taker_fee_pct if taker_fee_pct is not None else LEGACY_TAKER_FEE_PCT
         )
@@ -394,9 +384,7 @@ class CostTable:
         if self.read_env_overrides and root:
             maker = _env_float(f"BACKTEST_MAKER_FEE_PCT_{root}", maker)
             taker = _env_float(f"BACKTEST_TAKER_FEE_PCT_{root}", taker)
-            half_spread = _env_float(
-                f"BACKTEST_HALF_SPREAD_PCT_{root}", half_spread
-            )
+            half_spread = _env_float(f"BACKTEST_HALF_SPREAD_PCT_{root}", half_spread)
             per_symbol_flat = os.getenv(f"BACKTEST_SLIPPAGE_PCT_{root}")
             if per_symbol_flat is not None and per_symbol_flat != "":
                 flat_slippage = _env_float(
@@ -471,7 +459,7 @@ class CostTable:
             slip += costs.vol_coef * bar_range_pct
         if notional > 0 and bar_notional > 0:
             participation = notional / bar_notional
-            slip += costs.impact_coef * (participation ** 0.5)
+            slip += costs.impact_coef * (participation**0.5)
         return min(slip, costs.max_slippage_pct)
 
     def describe(self, symbol: str) -> str:
@@ -580,9 +568,7 @@ class CostModel:
             else LiquidityRole.TAKER
         )
 
-    def round_trip_cost_for(
-        self, signal: Signal, current_price: float
-    ) -> float:
+    def round_trip_cost_for(self, signal: Signal, current_price: float) -> float:
         """Return the round-trip cost fraction charged against a signal.
 
         Args:
@@ -620,14 +606,10 @@ class CostModel:
             return
 
         risk = abs(current_price - signal.stop_loss)
-        gross_rr = (
-            abs(signal.take_profit - current_price) / risk if risk else 0.0
-        )
+        gross_rr = abs(signal.take_profit - current_price) / risk if risk else 0.0
 
         if self.tp_haircut_enabled:
-            cost_drag = (
-                self.round_trip_cost_for(signal, current_price) * current_price
-            )
+            cost_drag = self.round_trip_cost_for(signal, current_price) * current_price
             signal.take_profit = (
                 signal.take_profit - cost_drag
                 if signal.take_profit > current_price

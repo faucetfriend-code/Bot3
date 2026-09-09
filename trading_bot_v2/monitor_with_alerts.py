@@ -75,7 +75,6 @@ def analyze_results(data):
         )
         return
 
-    alerts = []
     critical_issues = []
     warnings = []
 

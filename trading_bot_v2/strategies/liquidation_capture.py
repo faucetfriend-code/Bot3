@@ -37,7 +37,7 @@ This strategy benefits MOST from lower timeframe data.
 """
 
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
@@ -258,7 +258,9 @@ class LiquidationCaptureStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _can_trade(self) -> bool:
         """
@@ -275,7 +277,10 @@ class LiquidationCaptureStrategy:
         if self.last_trade_time is not None:
             current_session = now.hour // 4
             last_session = self.last_trade_time.hour // 4
-            if now.date() != self.last_trade_time.date() or current_session != last_session:
+            if (
+                now.date() != self.last_trade_time.date()
+                or current_session != last_session
+            ):
                 self.session_trades = 0
                 logger.debug("LiquidationCapture: 4h session reset")
 

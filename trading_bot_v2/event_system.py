@@ -169,6 +169,7 @@ class EventBus:
                 callback(event)
             except Exception as e:
                 import traceback
+
                 error_info = {
                     "event_type": event.event_type.value,
                     "error": str(e),
@@ -256,9 +257,9 @@ class EventBus:
         return {
             "total_subscribers": sum(subscriber_counts.values()),
             "subscriber_counts": subscriber_counts,
-            "total_published": published_count,      # monotonic, never saturates
-            "history_window": len(history),          # capped at max_history
-            "total_events": len(history),            # kept for back-compat
+            "total_published": published_count,  # monotonic, never saturates
+            "history_window": len(history),  # capped at max_history
+            "total_events": len(history),  # kept for back-compat
             "event_counts": event_counts,
             "max_history": self._max_history,
         }

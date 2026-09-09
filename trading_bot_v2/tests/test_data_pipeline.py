@@ -12,11 +12,8 @@ Covers:
 """
 
 import os
-import time
 from datetime import datetime, timedelta, timezone
-from unittest.mock import MagicMock, patch
 
-import pytest
 
 # Ensure we use SQLite for tests
 os.environ["DATABASE_BACKEND"] = "sqlite"
@@ -28,7 +25,6 @@ from trading_bot_v2.data_validation import (
     DataValidator,
     OHLCVValidator,
     TradeValidator,
-    DatabaseValidator,
     ValidationResult,
     ValidationIssue,
     ValidationSeverity,
@@ -133,9 +129,7 @@ class TestValidationResult:
     def test_summary_fail(self):
         result = ValidationResult(record_count=10)
         result.add_issue(
-            ValidationIssue(
-                code="E1", message="e1", severity=ValidationSeverity.ERROR
-            )
+            ValidationIssue(code="E1", message="e1", severity=ValidationSeverity.ERROR)
         )
         summary = result.summary()
         assert "FAIL" in summary
@@ -197,8 +191,6 @@ class TestOHLCVValidator:
         assert "NON_POSITIVE_PRICE" in codes
 
     def test_nan_price(self):
-        import math
-
         candle = {
             "timestamp": "2025-01-15T12:00:00Z",
             "open": float("nan"),
@@ -960,9 +952,7 @@ class TestValidatorFacade:
             }
             for i in range(3)
         ]
-        result = self.validator.validate_candle_batch(
-            candles, expected_timeframe="1m"
-        )
+        result = self.validator.validate_candle_batch(candles, expected_timeframe="1m")
         # Batch sets record_count=3, each candle merges +1, total 6
         assert result.record_count == 6
 

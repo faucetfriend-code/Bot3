@@ -35,7 +35,6 @@ Based on Strategy Review Document: Trend Following MA Crossover
 
 import os
 from typing import List, Dict, Any, Optional, Tuple
-from datetime import datetime
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
@@ -56,9 +55,7 @@ DEFAULT_MIN_ENTRY_BARS = 1
 DEFAULT_MAX_ENTRY_BARS = 5
 
 
-def validate_entry_window(
-    min_bars: int, max_bars: int
-) -> Tuple[int, int]:
+def validate_entry_window(min_bars: int, max_bars: int) -> Tuple[int, int]:
     """
     Validate the (min, max) entry-window pair, falling back on nonsense.
 
@@ -113,9 +110,7 @@ def _env_int(var_name: str, default: int) -> int:
     try:
         return int(raw)
     except ValueError:
-        logger.warning(
-            f"Invalid int for {var_name}={raw!r}, using default {default}"
-        )
+        logger.warning(f"Invalid int for {var_name}={raw!r}, using default {default}")
         return default
 
 
@@ -211,10 +206,26 @@ class MACrossoverStrategy:
             if volume_confirmation_threshold is not None
             else float(os.getenv("MA_CROSSOVER_VOLUME_THRESHOLD", "1.2"))
         )
-        self.macd_fast = macd_fast if macd_fast is not None else int(os.getenv("MA_CROSSOVER_MACD_FAST", "12"))
-        self.macd_slow = macd_slow if macd_slow is not None else int(os.getenv("MA_CROSSOVER_MACD_SLOW", "26"))
-        self.macd_signal = macd_signal if macd_signal is not None else int(os.getenv("MA_CROSSOVER_MACD_SIGNAL", "9"))
-        self.atr_period = atr_period if atr_period is not None else int(os.getenv("MA_CROSSOVER_ATR_PERIOD", "14"))
+        self.macd_fast = (
+            macd_fast
+            if macd_fast is not None
+            else int(os.getenv("MA_CROSSOVER_MACD_FAST", "12"))
+        )
+        self.macd_slow = (
+            macd_slow
+            if macd_slow is not None
+            else int(os.getenv("MA_CROSSOVER_MACD_SLOW", "26"))
+        )
+        self.macd_signal = (
+            macd_signal
+            if macd_signal is not None
+            else int(os.getenv("MA_CROSSOVER_MACD_SIGNAL", "9"))
+        )
+        self.atr_period = (
+            atr_period
+            if atr_period is not None
+            else int(os.getenv("MA_CROSSOVER_ATR_PERIOD", "14"))
+        )
         self.atr_stop_multiplier = (
             atr_stop_multiplier
             if atr_stop_multiplier is not None

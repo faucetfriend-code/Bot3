@@ -337,9 +337,9 @@ def test_legacy_blend_collapses_to_two_terms_without_5m_data():
     rng = random.Random(42)
     closes = _consolidation_then_selloff(rng)
 
-    signal = strategy.generate_signals(
-        "SUI-PERP", _multi_tf(closes, rng), closes[-1]
-    )[0]
+    signal = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])[
+        0
+    ]
 
     rsi_strength, bb_proximity = _long_components(signal, strategy)
     assert signal.confidence == pytest.approx(
@@ -353,9 +353,9 @@ def test_legacy_blend_collapses_on_the_short_path_too():
     rng = random.Random(42)
     closes = _consolidation_then_rally(rng)
 
-    signal = strategy.generate_signals(
-        "SUI-PERP", _multi_tf(closes, rng), closes[-1]
-    )[0]
+    signal = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])[
+        0
+    ]
 
     assert signal.side is OrderSide.SELL
     rsi_strength, bb_proximity = _short_components(signal, strategy)
@@ -377,9 +377,9 @@ def test_off_blend_renormalises_the_two_real_terms(series, components):
     rng = random.Random(42)
     closes = series(rng)
 
-    signal = strategy.generate_signals(
-        "SUI-PERP", _multi_tf(closes, rng), closes[-1]
-    )[0]
+    signal = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])[
+        0
+    ]
 
     rsi_strength, bb_proximity = components(signal, strategy)
     expected = (4.0 / 7.0) * rsi_strength + (3.0 / 7.0) * bb_proximity
@@ -398,15 +398,13 @@ def test_rsi_1h_blend_actually_reads_the_1h_slice():
     aligned = _multi_tf(closes, rng)
     divergent = {"15m": aligned["15m"], "1h": _neutral_1h(random.Random(7))}
 
-    legacy_aligned = _build("legacy").generate_signals(
-        "SUI-PERP", aligned, closes[-1]
-    )[0]
+    legacy_aligned = _build("legacy").generate_signals("SUI-PERP", aligned, closes[-1])[
+        0
+    ]
     legacy_divergent = _build("legacy").generate_signals(
         "SUI-PERP", divergent, closes[-1]
     )[0]
-    real_aligned = _build("rsi_1h").generate_signals(
-        "SUI-PERP", aligned, closes[-1]
-    )[0]
+    real_aligned = _build("rsi_1h").generate_signals("SUI-PERP", aligned, closes[-1])[0]
     real_divergent = _build("rsi_1h").generate_signals(
         "SUI-PERP", divergent, closes[-1]
     )[0]
@@ -427,7 +425,9 @@ def test_indicators_never_relabel_the_trigger_rsi_as_1h():
     rng = random.Random(42)
     closes = _consolidation_then_selloff(rng)
     frames = {"15m": _multi_tf(closes, rng)["15m"], "1h": _neutral_1h(random.Random(7))}
-    execution = {"5m": _multi_tf(_consolidation_then_selloff(random.Random(3)), rng)["15m"]}
+    execution = {
+        "5m": _multi_tf(_consolidation_then_selloff(random.Random(3)), rng)["15m"]
+    }
 
     signal = strategy.generate_signals(
         "SUI-PERP", frames, closes[-1], execution_tf_data=execution
@@ -466,9 +466,9 @@ def test_notes_label_every_rsi_with_its_own_timeframe():
     rng = random.Random(42)
     closes = _consolidation_then_selloff(rng)
 
-    signal = strategy.generate_signals(
-        "SUI-PERP", _multi_tf(closes, rng), closes[-1]
-    )[0]
+    signal = strategy.generate_signals("SUI-PERP", _multi_tf(closes, rng), closes[-1])[
+        0
+    ]
 
     assert "RSI_15m=" in signal.notes
 

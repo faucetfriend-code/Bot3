@@ -6,11 +6,9 @@ Monitors specifically for new trades created by the bot's autonomous signal gene
 
 import requests
 import time
-import json
 import logging
 import sys
 from datetime import datetime
-import os
 
 # Configure logging
 logging.basicConfig(

@@ -15,7 +15,7 @@ import json
 import os
 import time
 import threading
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Dict, Any, Optional, Callable, List, Union
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -196,9 +196,7 @@ class PacificaWebSocketClient:
         clean_symbol = symbol.upper().replace("-PERP", "")
         return self._orderbook_cache.get(clean_symbol)
 
-    def get_orderbook_imbalance(
-        self, symbol: str, levels: int = 10
-    ) -> Optional[float]:
+    def get_orderbook_imbalance(self, symbol: str, levels: int = 10) -> Optional[float]:
         """
         Calculate order book imbalance for a symbol.
 
@@ -251,7 +249,9 @@ class PacificaWebSocketClient:
         }
 
         asyncio.run_coroutine_threadsafe(self._send_subscription(payload), self._loop)
-        logger.info(f"📚 Subscribed to orderbook: {clean_symbol} (agg_level={agg_level})")
+        logger.info(
+            f"📚 Subscribed to orderbook: {clean_symbol} (agg_level={agg_level})"
+        )
 
     def bootstrap_kline_cache(
         self,
@@ -279,7 +279,7 @@ class PacificaWebSocketClient:
             use_disk_cache: Whether to use disk caching (default: True)
             max_concurrent: Maximum concurrent API requests (default: 3)
         """
-        from datetime import datetime, timedelta
+        from datetime import timedelta
         from concurrent.futures import ThreadPoolExecutor, as_completed
         import json
         import os
@@ -312,7 +312,9 @@ class PacificaWebSocketClient:
                 with open(cache_file, "r") as f:
                     cached_data = json.load(f)
 
-                cache_time = datetime.fromisoformat(cached_data.get("timestamp", "2000-01-01"))
+                cache_time = datetime.fromisoformat(
+                    cached_data.get("timestamp", "2000-01-01")
+                )
                 cache_age_hours = (datetime.now() - cache_time).total_seconds() / 3600
 
                 if cache_age_hours < cache_max_age_hours:
@@ -330,7 +332,9 @@ class PacificaWebSocketClient:
                     )
                     return  # Skip API calls entirely
                 else:
-                    logger.info(f"📁 Disk cache expired ({cache_age_hours:.1f}h old), refreshing...")
+                    logger.info(
+                        f"📁 Disk cache expired ({cache_age_hours:.1f}h old), refreshing..."
+                    )
             except Exception as e:
                 logger.warning(f"Failed to load disk cache: {e}")
 
@@ -350,7 +354,9 @@ class PacificaWebSocketClient:
                 minutes = config["minutes"]
                 interval_lookback = config["lookback"]
 
-                start_time = datetime.now() - timedelta(minutes=minutes * interval_lookback)
+                start_time = datetime.now() - timedelta(
+                    minutes=minutes * interval_lookback
+                )
 
                 candles = rest_client.get_candles(
                     market=f"{symbol}-PERP",
@@ -363,15 +369,17 @@ class PacificaWebSocketClient:
                     cache_key = f"{symbol.upper()}_{interval}"
                     internal_candles = []
                     for c in candles:
-                        internal_candles.append({
-                            "timestamp": c.get("t") or c.get("timestamp", 0),
-                            "open": float(c.get("o") or c.get("open", 0)),
-                            "high": float(c.get("h") or c.get("high", 0)),
-                            "low": float(c.get("l") or c.get("low", 0)),
-                            "close": float(c.get("c") or c.get("close", 0)),
-                            "volume": float(c.get("v") or c.get("volume", 0)),
-                            "trades": int(c.get("n") or c.get("trades", 0)),
-                        })
+                        internal_candles.append(
+                            {
+                                "timestamp": c.get("t") or c.get("timestamp", 0),
+                                "open": float(c.get("o") or c.get("open", 0)),
+                                "high": float(c.get("h") or c.get("high", 0)),
+                                "low": float(c.get("l") or c.get("low", 0)),
+                                "close": float(c.get("c") or c.get("close", 0)),
+                                "volume": float(c.get("v") or c.get("volume", 0)),
+                                "trades": int(c.get("n") or c.get("trades", 0)),
+                            }
+                        )
 
                     internal_candles.sort(key=lambda x: x["timestamp"])
                     return (cache_key, internal_candles[-250:], None)
@@ -402,8 +410,11 @@ class PacificaWebSocketClient:
             delay_between_batches = 0.5  # 500ms between batches
 
             for i in range(0, len(tasks), batch_size):
-                batch = tasks[i:i + batch_size]
-                futures = {executor.submit(fetch_candles, sym, intv): (sym, intv) for sym, intv in batch}
+                batch = tasks[i : i + batch_size]
+                futures = {
+                    executor.submit(fetch_candles, sym, intv): (sym, intv)
+                    for sym, intv in batch
+                }
 
                 for future in as_completed(futures):
                     cache_key, candles, error = future.result()
@@ -423,7 +434,7 @@ class PacificaWebSocketClient:
         elapsed = time.time() - start_time
         logger.info(
             f"✅ Bootstrap complete: {successful}/{len(tasks)} pairs in {elapsed:.1f}s "
-            f"({elapsed/max(successful,1)*1000:.0f}ms avg)"
+            f"({elapsed / max(successful, 1) * 1000:.0f}ms avg)"
         )
 
         # Save to disk cache
@@ -544,7 +555,11 @@ class PacificaWebSocketClient:
                     self._reconnect_delay = 1
                     logger.success(
                         f"Connected to Pacifica WebSocket: {self._ws_url}"
-                        + (" (public data only — testnet keys, live endpoint)" if self._skip_private_channels else "")
+                        + (
+                            " (public data only — testnet keys, live endpoint)"
+                            if self._skip_private_channels
+                            else ""
+                        )
                     )
 
                     # Authenticate for private channels.

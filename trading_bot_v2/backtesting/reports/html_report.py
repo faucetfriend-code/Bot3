@@ -25,18 +25,18 @@ def generate_html_report(result, output_path: str) -> None:
         peak = max(peak, eq)
         drawdowns.append(round((peak - eq) / peak * 100, 2))
 
-    ts_json = str(timestamps[:500])   # Downsample for chart performance
+    ts_json = str(timestamps[:500])  # Downsample for chart performance
     eq_json = str(equities[:500])
     dd_json = str(drawdowns[:500])
 
     trade_rows = ""
     for t in result.trade_log[:200]:
         trade_rows += (
-            f"<tr><td>{t.get('timestamp','')[:16]}</td>"
-            f"<td>{t.get('side','')}</td>"
-            f"<td>{t.get('quantity','')}</td>"
-            f"<td>{t.get('fill_price','')}</td>"
-            f"<td>${t.get('fee',0):.4f}</td></tr>\n"
+            f"<tr><td>{t.get('timestamp', '')[:16]}</td>"
+            f"<td>{t.get('side', '')}</td>"
+            f"<td>{t.get('quantity', '')}</td>"
+            f"<td>{t.get('fill_price', '')}</td>"
+            f"<td>${t.get('fee', 0):.4f}</td></tr>\n"
         )
 
     ret_color = "green" if result.total_return_pct >= 0 else "red"

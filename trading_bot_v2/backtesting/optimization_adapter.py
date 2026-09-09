@@ -141,9 +141,7 @@ class OptimizationAdapter:
 
         return value - drawdown_penalty - trade_penalty - return_penalty
 
-    def _create_strategy_config(
-        self, strategy: str, params: Dict[str, Any]
-    ) -> Any:
+    def _create_strategy_config(self, strategy: str, params: Dict[str, Any]) -> Any:
         """
         Create a config object with the optimized strategy parameters.
 
@@ -378,15 +376,11 @@ class OptimizationAdapter:
         max_dd_pct = max_dd * 100
 
         if objective == "sharpe_ratio":
-            value = (
-                mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
-            )
+            value = mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
         elif objective == "sortino_ratio":
             downside = [r for r in returns if r < 0]
             if downside:
-                downside_std = math.sqrt(
-                    sum(r**2 for r in downside) / len(downside)
-                )
+                downside_std = math.sqrt(sum(r**2 for r in downside) / len(downside))
                 value = (
                     mean_r / downside_std * math.sqrt(trades_per_year)
                     if downside_std > 0
@@ -395,9 +389,7 @@ class OptimizationAdapter:
             else:
                 # No losing trades: fall back to the Sharpe form
                 value = (
-                    mean_r / std_r * math.sqrt(trades_per_year)
-                    if std_r > 0
-                    else 0.0
+                    mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
                 )
         elif objective == "total_return_pct":
             value = total_return_pct
@@ -427,9 +419,7 @@ class OptimizationAdapter:
 
         return value
 
-    def get_best_params(
-        self, strategy: str, study: Any
-    ) -> Dict[str, Any]:
+    def get_best_params(self, strategy: str, study: Any) -> Dict[str, Any]:
         """
         Extract best parameters from an Optuna study.
 

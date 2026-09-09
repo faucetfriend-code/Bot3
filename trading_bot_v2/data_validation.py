@@ -21,7 +21,6 @@ Environment Variables:
 
 import logging
 import os
-import statistics
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
@@ -40,9 +39,13 @@ STRICT_MODE: bool = os.getenv("VALIDATION_STRICT_MODE", "false").lower() in (
     "1",
     "yes",
 )
-MAX_PRICE_CHANGE_PCT: float = float(os.getenv("VALIDATION_MAX_PRICE_CHANGE_PCT", "0.50"))
+MAX_PRICE_CHANGE_PCT: float = float(
+    os.getenv("VALIDATION_MAX_PRICE_CHANGE_PCT", "0.50")
+)
 MIN_VOLUME: float = float(os.getenv("VALIDATION_MIN_VOLUME", "0.0"))
-CANDLE_TOLERANCE_PCT: float = float(os.getenv("VALIDATION_CANDLE_TOLERANCE_PCT", "0.001"))
+CANDLE_TOLERANCE_PCT: float = float(
+    os.getenv("VALIDATION_CANDLE_TOLERANCE_PCT", "0.001")
+)
 
 
 # ============================================================================
@@ -225,8 +228,12 @@ class OHLCVValidator:
             return result
 
         # --- Positive price validation ---
-        price_fields = {"open": candle["open"], "high": candle["high"],
-                        "low": candle["low"], "close": candle["close"]}
+        price_fields = {
+            "open": candle["open"],
+            "high": candle["high"],
+            "low": candle["low"],
+            "close": candle["close"],
+        }
         for name, price in price_fields.items():
             try:
                 price_val = float(price)
@@ -266,7 +273,7 @@ class OHLCVValidator:
 
         # --- OHLC relationship checks ---
         try:
-            o, h, l, c = (
+            o, h, lo, c = (
                 float(candle["open"]),
                 float(candle["high"]),
                 float(candle["low"]),
@@ -286,26 +293,26 @@ class OHLCVValidator:
                     )
                 )
 
-            if l > min(o, c) + tolerance:
+            if lo > min(o, c) + tolerance:
                 result.add_issue(
                     ValidationIssue(
                         code="LOW高于OL",
-                        message=f"Low ({l}) is greater than min(open={o}, close={c})",
+                        message=f"Low ({lo}) is greater than min(open={o}, close={c})",
                         severity=ValidationSeverity.ERROR,
                         field="low",
-                        value=l,
+                        value=lo,
                         expected=f"<= min(open, close) = {min(o, c)}",
                     )
                 )
 
-            if l > h + tolerance:
+            if lo > h + tolerance:
                 result.add_issue(
                     ValidationIssue(
                         code="LOW_EXCEEDS_HIGH",
-                        message=f"Low ({l}) exceeds high ({h})",
+                        message=f"Low ({lo}) exceeds high ({h})",
                         severity=ValidationSeverity.ERROR,
                         field="low",
-                        value=l,
+                        value=lo,
                     )
                 )
         except (TypeError, ValueError):
@@ -501,7 +508,7 @@ class OHLCVValidator:
                             code="LARGE_TIME_GAP",
                             message=(
                                 f"Gap of {actual_interval}s between candles "
-                                f"at index {i-1} and {i} "
+                                f"at index {i - 1} and {i} "
                                 f"(expected ~{expected_interval}s for {expected_timeframe})"
                             ),
                             severity=ValidationSeverity.WARNING,
@@ -654,7 +661,7 @@ class TradeValidator:
                 result.add_issue(
                     ValidationIssue(
                         code="MISSING_EXIT_PRICE",
-                        message=f"Closed trade missing exit_price",
+                        message="Closed trade missing exit_price",
                         severity=ValidationSeverity.ERROR,
                         field="exit_price",
                     )
@@ -725,9 +732,7 @@ class TradeValidator:
 
         return result
 
-    def validate_trade_batch(
-        self, trades: List[Dict[str, Any]]
-    ) -> ValidationResult:
+    def validate_trade_batch(self, trades: List[Dict[str, Any]]) -> ValidationResult:
         """Validate a batch of trades, including cross-record checks."""
         result = ValidationResult(record_count=len(trades))
 
@@ -862,14 +867,17 @@ class DatabaseValidator:
                 prev_ts = None
                 gap_count = 0
                 for row in rows:
-                    ts_val = row[0] if not isinstance(row, dict) else row.get("timestamp")
-                    close_val = row[1] if not isinstance(row, dict) else row.get("close")
+                    ts_val = (
+                        row[0] if not isinstance(row, dict) else row.get("timestamp")
+                    )
                     vol_val = row[2] if not isinstance(row, dict) else row.get("volume")
 
                     if prev_ts is not None and ts_val is not None:
                         try:
                             if isinstance(ts_val, str):
-                                curr_dt = datetime.fromisoformat(ts_val.replace("Z", "+00:00"))
+                                curr_dt = datetime.fromisoformat(
+                                    ts_val.replace("Z", "+00:00")
+                                )
                             elif isinstance(ts_val, datetime):
                                 curr_dt = ts_val
                             else:
@@ -877,7 +885,9 @@ class DatabaseValidator:
                                 continue
 
                             if isinstance(prev_ts, str):
-                                prev_dt = datetime.fromisoformat(prev_ts.replace("Z", "+00:00"))
+                                prev_dt = datetime.fromisoformat(
+                                    prev_ts.replace("Z", "+00:00")
+                                )
                             elif isinstance(prev_ts, datetime):
                                 prev_dt = prev_ts
                             else:
@@ -939,9 +949,7 @@ class DatabaseValidator:
 
         return result
 
-    def check_trade_integrity(
-        self, hours_back: int = 168
-    ) -> ValidationResult:
+    def check_trade_integrity(self, hours_back: int = 168) -> ValidationResult:
         """
         Check trade data integrity in the database.
 
@@ -1063,7 +1071,9 @@ class DatabaseValidator:
                         ).fetchone()
 
                     if row:
-                        latest = row[1] if not isinstance(row, dict) else row.get("latest")
+                        latest = (
+                            row[1] if not isinstance(row, dict) else row.get("latest")
+                        )
                         result.record_count = 1
                         if latest is not None:
                             staleness = self._compute_staleness(latest)
@@ -1112,8 +1122,16 @@ class DatabaseValidator:
 
                     if rows:
                         for row in rows:
-                            sym = row[0] if not isinstance(row, dict) else row.get("symbol")
-                            latest = row[1] if not isinstance(row, dict) else row.get("latest")
+                            sym = (
+                                row[0]
+                                if not isinstance(row, dict)
+                                else row.get("symbol")
+                            )
+                            latest = (
+                                row[1]
+                                if not isinstance(row, dict)
+                                else row.get("latest")
+                            )
                             if latest is not None:
                                 staleness = self._compute_staleness(latest)
                                 if staleness > max_staleness_seconds:
@@ -1192,8 +1210,7 @@ class DataValidator:
         self.trade_validator = TradeValidator()
         self.db_validator = DatabaseValidator()
         logger.info(
-            f"DataValidator initialized (backend={get_backend()}, "
-            f"strict={STRICT_MODE})"
+            f"DataValidator initialized (backend={get_backend()}, strict={STRICT_MODE})"
         )
 
     def validate_candle(
@@ -1273,19 +1290,13 @@ class DataValidator:
 
         # Summary
         all_valid = all(
-            r.get("is_valid", True)
-            for r in results.values()
-            if isinstance(r, dict)
+            r.get("is_valid", True) for r in results.values() if isinstance(r, dict)
         )
         total_errors = sum(
-            r.get("error_count", 0)
-            for r in results.values()
-            if isinstance(r, dict)
+            r.get("error_count", 0) for r in results.values() if isinstance(r, dict)
         )
         total_warnings = sum(
-            r.get("warning_count", 0)
-            for r in results.values()
-            if isinstance(r, dict)
+            r.get("warning_count", 0) for r in results.values() if isinstance(r, dict)
         )
 
         results["summary"] = {

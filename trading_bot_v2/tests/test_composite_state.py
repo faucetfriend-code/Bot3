@@ -34,9 +34,7 @@ class TestDirectionTagging:
         ex._current_regime = "vol_low"
         ex._current_direction = "bull"
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
-        ex.place_order(
-            symbol="BTC-USDC", side="bid", quantity="1", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1", order_type="market")
         assert ex.trade_log[-1]["direction"] == "bull"
         assert ex.trade_log[-1]["regime"] == "vol_low"
         assert ex._positions["BTC-USDC"].entry_direction == "bull"
@@ -48,15 +46,11 @@ class TestDirectionTagging:
         ex._current_regime = "vol_low"
         ex._current_direction = "bull"
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
-        ex.place_order(
-            symbol="BTC-USDC", side="bid", quantity="1", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1", order_type="market")
         ex._current_direction = "bear"
         ex._current_regime = "vol_high"
         ex.advance(FLAT_BAR, "2024-01-01T01:00:00")
-        ex.place_order(
-            symbol="BTC-USDC", side="ask", quantity="1", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="ask", quantity="1", order_type="market")
         closing = ex.trade_log[-1]
         assert closing["direction"] == "bull"
         assert closing["regime"] == "vol_low"
@@ -64,9 +58,7 @@ class TestDirectionTagging:
     def test_untagged_run_defaults_to_empty_string(self):
         ex = _exchange()
         ex.advance(FLAT_BAR, "2024-01-01T00:00:00")
-        ex.place_order(
-            symbol="BTC-USDC", side="bid", quantity="1", order_type="market"
-        )
+        ex.place_order(symbol="BTC-USDC", side="bid", quantity="1", order_type="market")
         assert ex.trade_log[-1]["direction"] == ""
 
 
@@ -134,6 +126,4 @@ class TestCompositeTradeFilter:
     def test_open_fills_excluded(self):
         adapter, result = self._result_with(self.TRADES)
         for key in ("vol_low", "vol_low:bull", "vol_low:trend"):
-            assert all(
-                t["pnl"] != 0 for t in adapter.get_regime_trades(result, key)
-            )
+            assert all(t["pnl"] != 0 for t in adapter.get_regime_trades(result, key))

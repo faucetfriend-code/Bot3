@@ -101,7 +101,7 @@ import json
 import os
 import statistics
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from loguru import logger
@@ -306,23 +306,32 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     p.add_argument("--end", default="2026-07-01")
     p.add_argument("--train-months", type=int, default=12)
     p.add_argument("--test-months", type=int, default=6)
-    p.add_argument("--step-months", type=int, default=None,
-                   help="Fold step (default: test-months, non-overlapping tests)")
+    p.add_argument(
+        "--step-months",
+        type=int,
+        default=None,
+        help="Fold step (default: test-months, non-overlapping tests)",
+    )
     p.add_argument("--trials", type=int, default=25)
     p.add_argument("--states", default=",".join(DEFAULT_STATES))
-    p.add_argument("--min-state-trades", type=int,
-                   default=DEFAULT_MIN_STATE_TRADES)
+    p.add_argument("--min-state-trades", type=int, default=DEFAULT_MIN_STATE_TRADES)
     p.add_argument(
-        "--objective", default="sharpe_ratio",
+        "--objective",
+        default="sharpe_ratio",
         choices=(
-            "sharpe_ratio", "sortino_ratio", "total_return_pct",
-            "calmar_ratio", "profit_factor",
+            "sharpe_ratio",
+            "sortino_ratio",
+            "total_return_pct",
+            "calmar_ratio",
+            "profit_factor",
         ),
         help="Canonical long-form metric name (default: sharpe_ratio)",
     )
     p.add_argument("--capital", type=float, default=10000.0)
     p.add_argument(
-        "--seed", type=int, default=0,
+        "--seed",
+        type=int,
+        default=0,
         help=(
             "Run-level seed. Each fold's Optuna seed is derived from it "
             "plus the fold's own window/strategy/symbol (see fold_seed), "
@@ -332,7 +341,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     )
     p.add_argument("--report", default=None, help="Write JSON report here")
     p.add_argument(
-        "--baseline-params", default=None,
+        "--baseline-params",
+        default=None,
         help=(
             "Path to a JSON file mapping composite state -> parameter "
             'dict, e.g. {"vol_low:trend": {"rsi_oversold": 32.75}}. Each '
@@ -344,7 +354,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--no-trial-registry", action="store_true",
+        "--no-trial-registry",
+        action="store_true",
         help=(
             "Do not record this run's trials in the trial_registry. "
             "Leave off for any run whose search should count toward the "
@@ -354,7 +365,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--log-level", default="WARNING",
+        "--log-level",
+        default="WARNING",
         help=(
             "loguru sink level for this run (default: WARNING). "
             "Deliberately NOT read from LOG_LEVEL: .env pins that to "
@@ -363,7 +375,8 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
-        "--directional-gate", default=None,
+        "--directional-gate",
+        default=None,
         choices=("off", "log", "enforce"),
         help=(
             "Force DIRECTIONAL_GATE for this run. Set via os.environ "
@@ -378,9 +391,9 @@ def _parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 def _add_months(iso: str, months: int) -> str:
     dt = datetime.fromisoformat(iso)
     month = dt.month - 1 + months
-    return dt.replace(
-        year=dt.year + month // 12, month=month % 12 + 1
-    ).strftime("%Y-%m-%d")
+    return dt.replace(year=dt.year + month // 12, month=month % 12 + 1).strftime(
+        "%Y-%m-%d"
+    )
 
 
 def _folds(start: str, end: str, train_m: int, test_m: int, step_m: int):
@@ -527,7 +540,8 @@ def record_fold_trials(
 
     state = optuna.trial.TrialState
     scored = [
-        t for t in study.trials
+        t
+        for t in study.trials
         if t.state in (state.COMPLETE, state.PRUNED) and t.value is not None
     ]
     if not scored:
@@ -536,16 +550,14 @@ def record_fold_trials(
     sr_variance: Optional[float] = None
     if objective == "sharpe_ratio":
         values = [
-            t.value for t in scored
+            t.value
+            for t in scored
             if t.state == state.COMPLETE and t.value > _NO_SCORE_SENTINEL / 2
         ]
         if len(values) >= 2:
             sr_variance = statistics.variance(values)
 
-    source = (
-        f"composite/{strategy}/{symbol}/"
-        f"{train[0]}_{train[1]}/{test[0]}_{test[1]}"
-    )
+    source = f"composite/{strategy}/{symbol}/{train[0]}_{train[1]}/{test[0]}_{test[1]}"
     try:
         return DatabaseManager().save_trial_registry_entry(
             strategy=strategy,
@@ -661,8 +673,12 @@ def _cached_backtest(
     key = json.dumps(params, sort_keys=True)
     if key not in cache:
         cache[key] = adapter.run_backtest(
-            strategy, params, start, end,
-            symbol=symbol, initial_capital=capital,
+            strategy,
+            params,
+            start,
+            end,
+            symbol=symbol,
+            initial_capital=capital,
         )
     return cache[key]
 
@@ -694,12 +710,23 @@ def _arm_state_scores(
     out: Dict[str, Dict[str, Any]] = {}
     for state, params in arm_params.items():
         result = _cached_backtest(
-            adapter, cache, args.strategy, params, te_s, te_e,
-            args.symbol, args.capital,
+            adapter,
+            cache,
+            args.strategy,
+            params,
+            te_s,
+            te_e,
+            args.symbol,
+            args.capital,
         )
         out[state] = _state_scores(
-            adapter, result, [state], args.objective, args.capital,
-            te_s, te_e,
+            adapter,
+            result,
+            [state],
+            args.objective,
+            args.capital,
+            te_s,
+            te_e,
         )[state]
     return out
 
@@ -716,9 +743,7 @@ def _baseline_state_scores(
     return _arm_state_scores(adapter, cache, args, baseline, te_s, te_e)
 
 
-def coordinate_median(
-    param_sets: List[Dict[str, Any]]
-) -> Optional[Dict[str, float]]:
+def coordinate_median(param_sets: List[Dict[str, Any]]) -> Optional[Dict[str, float]]:
     """Coordinate-wise median of a list of parameter vectors.
 
     Each parameter's median is taken independently, which is exactly
@@ -802,9 +827,7 @@ def _paired_mean(
     return {"n": n, "arm": sum(arm_vals) / n, "ref": sum(ref_vals) / n}
 
 
-def _summarize_state(
-    folds: List[Dict[str, Any]], state: str
-) -> Dict[str, Any]:
+def _summarize_state(folds: List[Dict[str, Any]], state: str) -> Dict[str, Any]:
     """Aggregate one state's four arms into a single out-of-sample row.
 
     Every comparison is a PAIRED difference: each pair is averaged only
@@ -833,19 +856,19 @@ def _summarize_state(
         entry = {"folds": 0}
     tuned_base = _paired_mean(folds, state, "test_tuned", "test_baseline")
     if tuned_base:
-        entry.update({
-            "baseline_folds": tuned_base["n"],
-            "baseline": tuned_base["ref"],
-            "baseline_tuned": tuned_base["arm"],
-            "edge_vs_baseline": tuned_base["arm"] - tuned_base["ref"],
-        })
+        entry.update(
+            {
+                "baseline_folds": tuned_base["n"],
+                "baseline": tuned_base["ref"],
+                "baseline_tuned": tuned_base["arm"],
+                "edge_vs_baseline": tuned_base["arm"] - tuned_base["ref"],
+            }
+        )
     entry.update(_median_arm_summary(folds, state))
     return entry
 
 
-def _median_arm_summary(
-    folds: List[Dict[str, Any]], state: str
-) -> Dict[str, Any]:
+def _median_arm_summary(folds: List[Dict[str, Any]], state: str) -> Dict[str, Any]:
     """Aggregate the prequential-median arm against the other three.
 
     The median-vs-baseline block is the one that governs adoption: the
@@ -863,34 +886,38 @@ def _median_arm_summary(
     out: Dict[str, Any] = {}
     med_def = _paired_mean(folds, state, "test_median", "test_default")
     if med_def:
-        out.update({
-            "median_folds": med_def["n"],
-            "median": med_def["arm"],
-            "median_default": med_def["ref"],
-            "edge_median_vs_default": med_def["arm"] - med_def["ref"],
-        })
+        out.update(
+            {
+                "median_folds": med_def["n"],
+                "median": med_def["arm"],
+                "median_default": med_def["ref"],
+                "edge_median_vs_default": med_def["arm"] - med_def["ref"],
+            }
+        )
     med_tuned = _paired_mean(folds, state, "test_median", "test_tuned")
     if med_tuned:
-        out.update({
-            "median_tuned_folds": med_tuned["n"],
-            "median_on_tuned_folds": med_tuned["arm"],
-            "median_tuned": med_tuned["ref"],
-            "edge_median_vs_tuned": med_tuned["arm"] - med_tuned["ref"],
-        })
+        out.update(
+            {
+                "median_tuned_folds": med_tuned["n"],
+                "median_on_tuned_folds": med_tuned["arm"],
+                "median_tuned": med_tuned["ref"],
+                "edge_median_vs_tuned": med_tuned["arm"] - med_tuned["ref"],
+            }
+        )
     med_base = _paired_mean(folds, state, "test_median", "test_baseline")
     if med_base:
-        out.update({
-            "median_baseline_folds": med_base["n"],
-            "median_on_baseline_folds": med_base["arm"],
-            "median_baseline": med_base["ref"],
-            "edge_median_vs_baseline": med_base["arm"] - med_base["ref"],
-        })
+        out.update(
+            {
+                "median_baseline_folds": med_base["n"],
+                "median_on_baseline_folds": med_base["arm"],
+                "median_baseline": med_base["ref"],
+                "edge_median_vs_baseline": med_base["arm"] - med_base["ref"],
+            }
+        )
     return out
 
 
-def _summarize(
-    folds: List[Dict[str, Any]], states: List[str]
-) -> Dict[str, Any]:
+def _summarize(folds: List[Dict[str, Any]], states: List[str]) -> Dict[str, Any]:
     """Aggregate the per-fold arms into one out-of-sample row per state.
 
     Args:
@@ -910,25 +937,32 @@ def _print_summary(summary: Dict[str, Any], states: List[str]) -> None:
     per-fold winners that nothing ever deploys. Read them in that order.
     """
     print(f"\n{'=' * 110}")
-    print("OUT-OF-SAMPLE SUMMARY (mean across folds; median arm = "
-          "prequential, folds 1..k-1 -> fold k)")
+    print(
+        "OUT-OF-SAMPLE SUMMARY (mean across folds; median arm = "
+        "prequential, folds 1..k-1 -> fold k)"
+    )
     print(f"{'=' * 110}")
-    print(f"  {'state':>16} {'folds':>6} {'tuned':>9} {'default':>9} "
-          f"{'edge':>8} {'adopted':>9} {'vs adopt':>9} {'median':>9} "
-          f"{'med-def':>8} {'med-tuned':>10}")
+    print(
+        f"  {'state':>16} {'folds':>6} {'tuned':>9} {'default':>9} "
+        f"{'edge':>8} {'adopted':>9} {'vs adopt':>9} {'median':>9} "
+        f"{'med-def':>8} {'med-tuned':>10}"
+    )
     for state in states:
         row = summary.get(state) or {}
-        tail = (f"{_fmt(row.get('baseline')):>9} "
-                f"{_fmt(row.get('edge_vs_baseline')):>9} "
-                f"{_fmt(row.get('median')):>9} "
-                f"{_fmt(row.get('edge_median_vs_default')):>8} "
-                f"{_fmt(row.get('edge_median_vs_tuned')):>10}")
+        tail = (
+            f"{_fmt(row.get('baseline')):>9} "
+            f"{_fmt(row.get('edge_vs_baseline')):>9} "
+            f"{_fmt(row.get('median')):>9} "
+            f"{_fmt(row.get('edge_median_vs_default')):>8} "
+            f"{_fmt(row.get('edge_median_vs_tuned')):>10}"
+        )
         if not row.get("folds"):
-            print(f"  {state:>16} {0:>6} {'n/a':>9} {'n/a':>9} {'n/a':>8} "
-                  f"{tail}")
+            print(f"  {state:>16} {0:>6} {'n/a':>9} {'n/a':>9} {'n/a':>8} {tail}")
             continue
-        print(f"  {state:>16} {row['folds']:>6} {row['tuned']:>+9.3f} "
-              f"{row['default']:>+9.3f} {row['edge']:>+8.3f} {tail}")
+        print(
+            f"  {state:>16} {row['folds']:>6} {row['tuned']:>+9.3f} "
+            f"{row['default']:>+9.3f} {row['edge']:>+8.3f} {tail}"
+        )
 
 
 def run(argv: Optional[List[str]] = None) -> int:
@@ -970,11 +1004,15 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     print(f"COMPOSITE TUNING: {args.strategy} {args.symbol}")
     print(f"  states : {states}")
-    print(f"  folds  : {len(folds)} (train {args.train_months}mo, "
-          f"test {args.test_months}mo, step {step_m}mo)")
+    print(
+        f"  folds  : {len(folds)} (train {args.train_months}mo, "
+        f"test {args.test_months}mo, step {step_m}mo)"
+    )
     print(f"  trials : {args.trials}/fold, objective {args.objective}")
-    print(f"  adopted-baseline arm: "
-          f"{sorted(baseline) if baseline else 'none (--baseline-params unset)'}")
+    print(
+        f"  adopted-baseline arm: "
+        f"{sorted(baseline) if baseline else 'none (--baseline-params unset)'}"
+    )
 
     report: Dict[str, Any] = {
         "strategy": args.strategy,
@@ -1001,28 +1039,36 @@ def run(argv: Optional[List[str]] = None) -> int:
         # never its ordinal position: the same window must produce the
         # same trial sequence whether it is fold 2 of five or fold 3 of
         # ten. See ``fold_seed``.
-        seed = fold_seed(
-            args.seed, args.strategy, args.symbol, tr_s, tr_e, te_s, te_e
+        seed = fold_seed(args.seed, args.strategy, args.symbol, tr_s, tr_e, te_s, te_e)
+        print(
+            f"\nFOLD {fold_no}/{len(folds)}: train {tr_s}..{tr_e} "
+            f"-> test {te_s}..{te_e} (seed {seed})",
+            flush=True,
         )
-        print(f"\nFOLD {fold_no}/{len(folds)}: train {tr_s}..{tr_e} "
-              f"-> test {te_s}..{te_e} (seed {seed})", flush=True)
 
         trial_records: List[Dict[str, Any]] = []
 
         def objective_fn(trial):
             params = _suggest(trial, space)
             result = adapter.run_backtest(
-                args.strategy, params, tr_s, tr_e,
-                symbol=args.symbol, initial_capital=args.capital,
+                args.strategy,
+                params,
+                tr_s,
+                tr_e,
+                symbol=args.symbol,
+                initial_capital=args.capital,
             )
             scores = _state_scores(
-                adapter, result, states, args.objective,
-                args.capital, tr_s, tr_e,
+                adapter,
+                result,
+                states,
+                args.objective,
+                args.capital,
+                tr_s,
+                tr_e,
             )
             trial_records.append({"params": params, "scores": scores})
-            pooled = [
-                s["score"] for s in scores.values() if s["score"] is not None
-            ]
+            pooled = [s["score"] for s in scores.values() if s["score"] is not None]
             return sum(pooled) / len(pooled) if pooled else -1e9
 
         sampler = optuna.samplers.TPESampler(seed=seed)
@@ -1031,24 +1077,39 @@ def run(argv: Optional[List[str]] = None) -> int:
 
         if not args.no_trial_registry:
             record_fold_trials(
-                study, args.strategy, args.symbol, args.objective,
-                [tr_s, tr_e], [te_s, te_e],
+                study,
+                args.strategy,
+                args.symbol,
+                args.objective,
+                [tr_s, tr_e],
+                [te_s, te_e],
             )
 
         # Per-state winner selection from the shared trial pool
         fold_out: Dict[str, Any] = {
-            "train": [tr_s, tr_e], "test": [te_s, te_e],
-            "seed": seed, "base_seed": args.seed,
+            "train": [tr_s, tr_e],
+            "test": [te_s, te_e],
+            "seed": seed,
+            "base_seed": args.seed,
             "seed_namespace": _FOLD_SEED_NAMESPACE,
             "states": {},
         }
         default_result = adapter.run_backtest(
-            args.strategy, {}, te_s, te_e,
-            symbol=args.symbol, initial_capital=args.capital,
+            args.strategy,
+            {},
+            te_s,
+            te_e,
+            symbol=args.symbol,
+            initial_capital=args.capital,
         )
         default_scores = _state_scores(
-            adapter, default_result, states, args.objective,
-            args.capital, te_s, te_e,
+            adapter,
+            default_result,
+            states,
+            args.objective,
+            args.capital,
+            te_s,
+            te_e,
         )
 
         # Cache test backtests: states often elect the same winner
@@ -1072,7 +1133,8 @@ def run(argv: Optional[List[str]] = None) -> int:
                 cell["median_from_folds"] = len(prior_winners[state])
                 cell["test_median"] = median_scores[state]
             eligible = [
-                r for r in trial_records
+                r
+                for r in trial_records
                 if r["scores"][state]["score"] is not None
                 and r["scores"][state]["n"] >= args.min_state_trades
             ]
@@ -1085,19 +1147,31 @@ def run(argv: Optional[List[str]] = None) -> int:
             tuned = _state_scores(
                 adapter,
                 _cached_backtest(
-                    adapter, test_cache, args.strategy, winner["params"],
-                    te_s, te_e, args.symbol, args.capital,
+                    adapter,
+                    test_cache,
+                    args.strategy,
+                    winner["params"],
+                    te_s,
+                    te_e,
+                    args.symbol,
+                    args.capital,
                 ),
-                [state], args.objective, args.capital, te_s, te_e,
+                [state],
+                args.objective,
+                args.capital,
+                te_s,
+                te_e,
             )[state]
             base = default_scores[state]
-            cell.update({
-                "params": winner["params"],
-                "train_score": winner["scores"][state]["score"],
-                "train_n": winner["scores"][state]["n"],
-                "test_tuned": tuned,
-                "test_default": base,
-            })
+            cell.update(
+                {
+                    "params": winner["params"],
+                    "train_score": winner["scores"][state]["score"],
+                    "train_n": winner["scores"][state]["n"],
+                    "test_tuned": tuned,
+                    "test_default": base,
+                }
+            )
             fold_out["states"][state] = cell
             prior_winners.setdefault(state, []).append(winner["params"])
             line = (
@@ -1109,12 +1183,15 @@ def run(argv: Optional[List[str]] = None) -> int:
             )
             if state in baseline:
                 adopted_cell = baseline_scores[state]
-                line += (f" vs adopted {_fmt(adopted_cell['score'])} "
-                         f"(n={adopted_cell['n']})")
+                line += (
+                    f" vs adopted {_fmt(adopted_cell['score'])} (n={adopted_cell['n']})"
+                )
             if state in medians:
                 med_cell = median_scores[state]
-                line += (f" vs median[{len(prior_winners[state]) - 1}f] "
-                         f"{_fmt(med_cell['score'])} (n={med_cell['n']})")
+                line += (
+                    f" vs median[{len(prior_winners[state]) - 1}f] "
+                    f"{_fmt(med_cell['score'])} (n={med_cell['n']})"
+                )
             print(line, flush=True)
 
         report["folds"].append(fold_out)

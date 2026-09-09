@@ -95,9 +95,7 @@ def derived_requirements() -> Dict[str, int]:
     }
 
 
-def classify_cell(
-    cell: Dict[str, Any], requirements: Dict[str, int]
-) -> str:
+def classify_cell(cell: Dict[str, Any], requirements: Dict[str, int]) -> str:
     """Grade one (strategy, regime) cell against the derived requirement.
 
     Args:
@@ -116,10 +114,7 @@ def classify_cell(
         for n in (cell.get("by_symbol") or {}).values()
         if int(n) >= requirements["per_symbol"]
     )
-    if (
-        trades >= requirements["pooled"]
-        and eligible >= requirements["min_symbols"]
-    ):
+    if trades >= requirements["pooled"] and eligible >= requirements["min_symbols"]:
         return "tunable"
     return "thin"
 
@@ -239,17 +234,14 @@ def run_census(
         started = time.time()
         for symbol in resolved["symbols"]:
             for start, end in by_symbol_windows.get(symbol) or windows:
-                logger.info(
-                    f"[census/{strategy}] {symbol} {start} -> {end}"
-                )
+                logger.info(f"[census/{strategy}] {symbol} {start} -> {end}")
                 try:
                     chunk = _census_chunk(
                         strategy, symbol, start, end, capital, data_dir
                     )
                 except Exception as e:  # noqa: BLE001 - one bad chunk
                     logger.error(
-                        f"[census/{strategy}] {symbol} {start}..{end} "
-                        f"failed: {e}"
+                        f"[census/{strategy}] {symbol} {start}..{end} failed: {e}"
                     )
                     continue
                 _accumulate(cells, symbol, chunk["trade_log"])
@@ -331,8 +323,7 @@ def format_census_table(census: Dict[str, Any]) -> str:
     lines.append("REGIME x STRATEGY TRADE CENSUS")
     lines.append(rule)
     lines.append(
-        f"  windows: {census['window_spec']} | symbols: "
-        f"{','.join(census['symbols'])}"
+        f"  windows: {census['window_spec']} | symbols: {','.join(census['symbols'])}"
     )
     lines.append(
         f"  a cell is TUNABLE at >= {req['pooled']} pooled closed trades "
@@ -360,9 +351,11 @@ def format_census_table(census: Dict[str, Any]) -> str:
 
     lines.append("-" * width)
     lines.append("  * = tunable (sample supports a graded verdict)")
-    lines.append("  ! = traded but BELOW the derived requirement -> a "
-                 "per-regime study here can only ever return "
-                 "INSUFFICIENT_DATA")
+    lines.append(
+        "  ! = traded but BELOW the derived requirement -> a "
+        "per-regime study here can only ever return "
+        "INSUFFICIENT_DATA"
+    )
     lines.append(rule)
 
     lines.append("")
@@ -380,12 +373,8 @@ def format_census_table(census: Dict[str, Any]) -> str:
         pf = profit_factor(cell)
         pf_s = f"{pf:.2f}" if pf is not None else "inf"
         wr = cell["wins"] / trades * 100 if trades else 0.0
-        mark = {"tunable": "*", "thin": "!", "none": " "}[
-            classify_cell(cell, req)
-        ]
-        symbols = ",".join(
-            f"{s}:{n}" for s, n in sorted(cell["by_symbol"].items())
-        )
+        mark = {"tunable": "*", "thin": "!", "none": " "}[classify_cell(cell, req)]
+        symbols = ",".join(f"{s}:{n}" for s, n in sorted(cell["by_symbol"].items()))
         lines.append(
             f"  {strategy:<20}{regime:<20}{str(trades) + mark:>7}"
             f"{wr:>7.1f}%{pf_s:>8}{cell['pnl']:>11.1f}  {symbols}"
@@ -400,9 +389,7 @@ def format_census_table(census: Dict[str, Any]) -> str:
         if not total:
             lines.append(f"  {strategy:<20} no closed trades")
             continue
-        top = sorted(
-            cells.items(), key=lambda kv: -int(kv[1]["trades"])
-        )[0]
+        top = sorted(cells.items(), key=lambda kv: -int(kv[1]["trades"]))[0]
         lines.append(
             f"  {strategy:<20} {total:>5} trades | dominant regime "
             f"{top[0]} at {int(top[1]['trades']) / total * 100:.0f}% | "
@@ -430,7 +417,7 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--strategies",
         default=",".join(DEFAULT_STRATEGIES),
         help="Comma-separated snake_case strategy keys "
-             f"(default: {','.join(DEFAULT_STRATEGIES)})",
+        f"(default: {','.join(DEFAULT_STRATEGIES)})",
     )
     parser.add_argument(
         "--symbols",
@@ -440,14 +427,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--windows", type=int, default=6)
     parser.add_argument("--window-months", type=int, default=2)
     parser.add_argument("--span-years", type=int, default=DEFAULT_SPAN_YEARS)
-    parser.add_argument(
-        "--window-mode", choices=["spread", "recent"], default="spread"
-    )
+    parser.add_argument("--window-mode", choices=["spread", "recent"], default="spread")
     parser.add_argument("--capital", type=float, default=DEFAULT_CAPITAL)
     parser.add_argument(
         "--data-dir",
         help="Candle store. Pass an ABSOLUTE path from a git worktree: "
-             "BACKTEST_DATA_DIR is relative and .env overrides the shell.",
+        "BACKTEST_DATA_DIR is relative and .env overrides the shell.",
     )
     parser.add_argument(
         "--shared-windows",
