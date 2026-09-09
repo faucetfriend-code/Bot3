@@ -1362,15 +1362,11 @@ class PortfolioValidation:
         if return_edge > 0 and drawdown_edge > 0:
             headline = "PORTFOLIO BEATS ITS PARTS on both return and drawdown"
         elif return_edge > 0:
-            headline = (
-                "PORTFOLIO BEATS ITS PARTS on return but runs a deeper " "drawdown"
-            )
+            headline = "PORTFOLIO BEATS ITS PARTS on return but runs a deeper drawdown"
         elif drawdown_edge > 0:
             headline = "PORTFOLIO IS SAFER THAN ITS PARTS but gives up return"
         else:
-            headline = (
-                "PORTFOLIO IS WORSE THAN ITS PARTS on both return and " "drawdown"
-            )
+            headline = "PORTFOLIO IS WORSE THAN ITS PARTS on both return and drawdown"
         return {
             "headline": headline,
             "return_edge_pct": return_edge,
@@ -1511,7 +1507,7 @@ def format_correlation_matrix(
     lines = [header]
     for row in names:
         cells = "".join(f"{matrix[row].get(col, 0.0):>+9.2f}" for col in names)
-        lines.append(f"{row[:width - 1]:<{width}}{cells}")
+        lines.append(f"{row[: width - 1]:<{width}}{cells}")
     return lines
 
 
@@ -1565,9 +1561,7 @@ def format_report(campaign: PortfolioValidation) -> str:
         f"{_fmt_pct(campaign.mean('drawdown_edge_pct')):>9}"
     )
     add("")
-    add(
-        "  Blend = equal-weight blend of the isolated runs (the naive " "sum-of-parts)."
-    )
+    add("  Blend = equal-weight blend of the isolated runs (the naive sum-of-parts).")
     add(
         "  Additive stack (each strategy given the FULL account, which is "
         f"what reading the sweep side by side implies): "

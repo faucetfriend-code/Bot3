@@ -1,5 +1,26 @@
 # CLAUDE.md
 
+## Credential shadowing in .env (FIXED 2026-09-08)
+
+Until 2026-09-08 `.env` assigned `BLOFIN_API_KEY`, `BLOFIN_API_SECRET` and
+`BLOFIN_PASSPHRASE` twice: real values near the top, empty strings ~300 lines
+lower under `EXCHANGE=blofin`. python-dotenv's last-assignment-wins rule made
+the live credentials resolve empty, hidden by `BLOFIN_DEMO=true` using the
+separate `BLOFIN_DEMO_*` names. The empty duplicates were deleted on
+2026-09-08 (audit finding T5); each credential is now assigned once.
+
+Guard: `trading_bot_v2/config_validation.py` runs at startup, warns on any
+key assigned more than once (names only, never values) and refuses to start
+when `EXCHANGE=blofin` with `BLOFIN_DEMO=false` and any live credential is
+empty. If you ever re-add a `BLOFIN_*` line lower in `.env`, the warning will
+tell you.
+
+The live Blofin credentials are also mirrored in `Agent OS/.env` under the
+`TBB_` prefix (`TBB_BloFinAPI`, `TBB_Blofin_secret_key`, `TBB_Passphrase`).
+The `DFB_` prefix there belongs to the Discord follow bot, a different account;
+do not cross them. Neither bot reads `Agent OS/.env` at runtime.
+
+
 ## Project Overview
 
 Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures (testnet). 8 strategies with ADX-based regime detection, Kelly Criterion position sizing, and circuit breaker risk management. Python 3.14, FastAPI, SQLite, WebSocket.
@@ -24,21 +45,42 @@ taskkill /F /PID <pid>
 
 ## Testing
 
+**There is one test location: `trading_bot_v2/tests/`.** Nothing under
+`trading_bot_v2/` outside that directory is collected. The old root-level
+`trading_bot_v2/test_*.py` surface was retired on 2026-08-02 (see below).
+
 ```bash
 # All tests (from Bot3 directory)
 pytest trading_bot_v2/tests/ -v
+
+# Equivalent - the package has no other test location
+pytest trading_bot_v2/ -q
 
 # Key test files:
 pytest trading_bot_v2/tests/test_signal_routing.py -v      # Signal pipeline
 pytest trading_bot_v2/tests/test_strategy_e2e.py -v         # Strategy end-to-end
 pytest trading_bot_v2/tests/test_component_orchestration.py -v  # Component integration
 
-# Legacy tests also exist at trading_bot_v2/test_*.py (root level)
-pytest trading_bot_v2/test_strategy_manager.py -v
-
 # By pattern
 pytest trading_bot_v2/ -k "mean_reversion"
+
+# Timing-sensitive tests are excluded by default (addopts = -m 'not perf')
+pytest trading_bot_v2/ -m perf
 ```
+
+`tests/conftest.py` has a session-scoped autouse fixture that repoints
+`DATABASE_PATH` at a throwaway file, so the suite can never write to the
+live `trading_bot.db`. **That protection only covers tests collected under
+`tests/`** - which is the main reason the root-level files were retired
+rather than left in place. Put new tests in `tests/`.
+
+Retired 2026-08-02: 17 root-level files. Most were print-only scripts with
+zero assertions; the rest were actively unsafe (one wrote a real BTC-PERP
+trade into the live database on every run, one hit the live Pacifica API
+with real credentials, three drove Playwright against a spawned server and
+POSTed `/api/bot/start`), or tested `_archive/hub_system.py`, which was
+deleted with them. Seven files with genuine coverage were migrated into
+`tests/`. Git history has all of it.
 
 ## Architecture
 
@@ -240,6 +282,71 @@ Key variables:
   in play (a 200-period slow MA needs 201) or that strategy generates nothing.
 - `BACKTEST_WARMUP_CANDLES=0` - Candles loaded before the window start so bar 1
   of the replay already has a full history slice. 0 = mirror the lookback.
+
+### API server access control (live-readiness audit T1, 2026-09-08)
+
+The control interface can place real orders, so it is no longer an open
+`0.0.0.0` server. None of these are in `.env` yet; the defaults apply.
+
+- `API_HOST=127.0.0.1` - Bind address for uvicorn. Loopback by default. Set it
+  to a LAN/Tailscale address only together with `API_TOKEN`; a non-loopback
+  bind without a token refuses to start.
+- `API_PORT=8000` - Bind port.
+- `API_TOKEN` (unset) - Shared secret sent as the `X-Api-Token` header. Required
+  on every non-GET route and every `/api/debug/*` route when set. When unset,
+  those routes are allowed only while `API_HOST` is loopback AND the actual
+  connection peer is loopback AND no `X-Forwarded-For`/`Forwarded` header is
+  present. Reverse-proxy or tunnel exposure therefore requires `API_TOKEN`
+  regardless of bind host, because proxied requests are rejected without it.
+  The dashboard prompts for it once on the first 401 and keeps it in
+  `localStorage.apiToken`.
+- `ENABLE_DEBUG_ROUTES=false` - The signal-firing debug routes
+  (`/api/debug/trigger-signals`, `test-signal-handler`,
+  `call-actual-generate-signals`, `call-generate-signals`) and
+  `/api/debug/clear-regime-cache` are now POST, return 404 unless this is true,
+  and require the token. Read-only `/api/debug/*` GETs stay but require the
+  token. `GET /api/debug/test-order` was deleted outright (it placed an order).
+
+### Venue-side stop protection (live-readiness audit T4, 2026-09-08)
+
+Before this, `signal.stop_loss` sized every position and was never sent to
+an exchange. Now Blofin entries carry `slTriggerPrice` (executes at market),
+the fill path verifies the TP/SL row landed (`orders-tpsl-pending`) and
+installs a standalone reduce-only one if not, the trailing stop on migrated
+positions is mirrored onto the venue (`amend-order` -> `amend-tpsl` ->
+cancel + re-place), and a repair sweep (startup + hourly reconciliation +
+after `POST /api/orders/cancel-all`) re-installs any missing stop. The
+positions table gained `entry_order_id`, `venue_stop_id`, `venue_stop_price`,
+`venue_stop_state` (attached | standalone | missing | unsupported). Pacifica
+reports `unsupported`; only the local loop check protects it. None of these
+are in `.env` yet; the defaults apply.
+
+- `VENUE_STOP_FAILURE_POLICY=close` - When a filled entry cannot get a venue
+  stop after the one retry: `close` flattens it reduce-only and logs ERROR
+  (safe default for unattended live); `local` keeps it with state `missing`,
+  enforces the stored stop in the loop and logs ERROR every cycle.
+- `VENUE_STOP_MIN_MOVE_PCT=0.1` - Trailing-stop moves smaller than this (in
+  percent of the last venue level) are not sent to the venue.
+- `VENUE_STOP_MAX_AMEND_FAILURES=5` - Consecutive amend failures before the
+  migrated position falls back to the local stop (ERROR, state `missing`).
+- `MIGRATED_CLOSE_MAX_ATTEMPTS=5` - Retries for an unconfirmed migrated-position
+  close (was read only in `migrated_position_manager.py`; now also in config).
+- `ENTRY_FILL_MAX_LOOKUPS=10` - Fill lookups before an accepted-but-unconfirmed
+  entry is recorded as unconfirmed (was read only in `trading_bot.py`).
+- `POST /api/orders/cancel-all?include_stops=true` - The endpoint keeps
+  protective stops by default and re-verifies them afterwards; the flag is
+  the operator's explicit "strip the stops too".
+
+Operator step still outstanding: kill the bot process against the demo
+account with an open position and confirm the venue stop fires on its own
+(the process-loss case is not simulated in the suite).
+
+Startup also runs `trading_bot_v2/config_validation.py`: it warns on any `.env`
+key assigned more than once (names only) and refuses to start when the active
+exchange is live (`BLOFIN_DEMO=false` / `TESTNET=false`) but its credentials
+resolve empty - exactly the shadowing bug described at the top of this file.
+`tests/test_api_access_control.py` enforces that no GET route can reach order
+placement and that every mutating/debug route declares the token dependency.
 
 ## Troubleshooting
 

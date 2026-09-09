@@ -67,9 +67,7 @@ def _load_ml_detector(model: Optional[str]):
     return detector, model
 
 
-def _dwell_stats(
-    regimes: List[str], hours_per_bar: float = 4.0
-) -> Dict[str, Any]:
+def _dwell_stats(regimes: List[str], hours_per_bar: float = 4.0) -> Dict[str, Any]:
     """Compute dwell segments, medians, and flips for a regime series.
 
     Args:
@@ -155,9 +153,7 @@ def run_shadow_report(
     features = extractor.extract_batch(
         closes, candles["high"], candles["low"], candles["volume"]
     )
-    feature_matrix = np.array(
-        [f.to_array() for f in features], dtype=np.float64
-    )
+    feature_matrix = np.array([f.to_array() for f in features], dtype=np.float64)
 
     adx_detector = MarketRegimeDetector()  # no event bus / db: pure analysis
     window_frames = getattr(ml_detector.config, "window_frames", 64)
@@ -244,9 +240,7 @@ def print_report(result: Dict[str, Any]) -> None:
     )
 
     # Confusion summary
-    ml_labels = sorted(
-        {ml for row in result["confusion"].values() for ml in row}
-    )
+    ml_labels = sorted({ml for row in result["confusion"].values() for ml in row})
     print("\nConfusion (rows = ADX regime, cols = ML regime):")
     header = f"  {'ADX v ML':<20}"
     for label in ml_labels:
@@ -261,9 +255,7 @@ def print_report(result: Dict[str, Any]) -> None:
 
     # Dwell comparison
     print("\nDwell comparison (ADX vs ML):")
-    print(
-        f"  {'metric':<22} {'ADX':>12} {'ML':>12}"
-    )
+    print(f"  {'metric':<22} {'ADX':>12} {'ML':>12}")
     adx_d, ml_d = result["adx_dwell"], result["ml_dwell"]
     for key, label in [
         ("segments", "segments"),

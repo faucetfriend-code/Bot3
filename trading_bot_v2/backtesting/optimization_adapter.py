@@ -141,9 +141,7 @@ class OptimizationAdapter:
 
         return value - drawdown_penalty - trade_penalty - return_penalty
 
-    def _create_strategy_config(
-        self, strategy: str, params: Dict[str, Any]
-    ) -> Any:
+    def _create_strategy_config(self, strategy: str, params: Dict[str, Any]) -> Any:
         """
         Create a config object with the optimized strategy parameters.
 
@@ -267,21 +265,39 @@ class OptimizationAdapter:
         self, result: BacktestResult, regime: str
     ) -> List[Dict[str, Any]]:
         """
-        Filter closed trades whose entry regime matches the target.
+        Filter closed trades whose entry state matches the target.
+
+        Accepts a plain regime ("RANGING_CALM", "vol_low") or a
+        composite "REGIME:DIRECTION" key ("VOL_LOW:TREND") matching the
+        trade log's (regime, direction) tags. Direction "trend" matches
+        bull OR bear; "bull"/"bear"/"neutral" match exactly.
 
         Args:
-            result: BacktestResult with a regime-tagged trade_log
-            regime: Target regime (enum value or name, case-insensitive)
+            result: BacktestResult with a regime/direction-tagged trade_log
+            regime: Target state (enum value or name, case-insensitive)
 
         Returns:
-            List of closed-trade dicts (pnl != 0) tagged with the regime
+            List of closed-trade dicts (pnl != 0) matching the state
         """
         target = str(getattr(regime, "value", regime)).strip().lower()
+        direction = None
+        if ":" in target:
+            target, direction = target.split(":", 1)
+
+        def _direction_matches(trade: Dict[str, Any]) -> bool:
+            if direction is None:
+                return True
+            tag = str(trade.get("direction", "")).strip().lower()
+            if direction == "trend":
+                return tag in ("bull", "bear")
+            return tag == direction
+
         return [
             t
             for t in result.trade_log
             if t.get("pnl", 0) != 0
             and str(t.get("regime", "")).strip().lower() == target
+            and _direction_matches(t)
         ]
 
     def calculate_objective_from_trades(
@@ -360,15 +376,11 @@ class OptimizationAdapter:
         max_dd_pct = max_dd * 100
 
         if objective == "sharpe_ratio":
-            value = (
-                mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
-            )
+            value = mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
         elif objective == "sortino_ratio":
             downside = [r for r in returns if r < 0]
             if downside:
-                downside_std = math.sqrt(
-                    sum(r**2 for r in downside) / len(downside)
-                )
+                downside_std = math.sqrt(sum(r**2 for r in downside) / len(downside))
                 value = (
                     mean_r / downside_std * math.sqrt(trades_per_year)
                     if downside_std > 0
@@ -377,9 +389,7 @@ class OptimizationAdapter:
             else:
                 # No losing trades: fall back to the Sharpe form
                 value = (
-                    mean_r / std_r * math.sqrt(trades_per_year)
-                    if std_r > 0
-                    else 0.0
+                    mean_r / std_r * math.sqrt(trades_per_year) if std_r > 0 else 0.0
                 )
         elif objective == "total_return_pct":
             value = total_return_pct
@@ -409,9 +419,7 @@ class OptimizationAdapter:
 
         return value
 
-    def get_best_params(
-        self, strategy: str, study: Any
-    ) -> Dict[str, Any]:
+    def get_best_params(self, strategy: str, study: Any) -> Dict[str, Any]:
         """
         Extract best parameters from an Optuna study.
 

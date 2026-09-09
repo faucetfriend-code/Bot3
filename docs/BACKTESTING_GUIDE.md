@@ -1096,6 +1096,54 @@ Re-run the study to get diagnostics.
 
 ## Reading the results
 
+### Superseded numbers: the equity-accounting fix (2026-07-29)
+
+`SimulatedExchange.get_account_balance()` used to report `cash +
+unrealised_pnl`. Because opening a position debits its whole cost basis
+(`quantity * entry_price`) from cash and only credits it back on close, an
+open position read as an instant loss of its entire notional. Equity now adds
+that cost basis back (`SimulatedExchange.equity()`), pinned by
+`trading_bot_v2/tests/test_simulated_equity.py`.
+
+**Every equity-curve metric published before this date is wrong and should be
+re-run before being quoted.** Measured on BTC-USDC, 2022-07-01..2024-07-01:
+
+| strategy | metric | before | after |
+|---|---|---|---|
+| VWAPScalping | return % | -4.95 | **-3.01** |
+| | max DD % | 5.06 | **3.13** |
+| | Sharpe | +0.163 | **-10.939** |
+| MomentumScalping | return % | 0.99 | 0.99 |
+| | max DD % | 2.25 | **0.26** |
+| | Sharpe | +0.251 | **+3.482** |
+| GridTrading | max DD % | 4.20 | **0.51** |
+| | Sharpe | +0.104 | **-2.055** |
+
+Trade counts, profit factor and win rate are **identical in every arm** - the
+engine sizes from `exchange.balance` (raw cash) directly, so no trade changed.
+
+Read the Sharpe column carefully: before the fix, all three strategies sat in
+a narrow +0.10..+0.25 band and could not be told apart, because the phantom
+equity swing as each position opened and closed dominated the variance. After
+it, they separate by sign and magnitude. **Any past decision made on backtest
+Sharpe, Sortino, Calmar or max drawdown was made on noise.** Max drawdown was
+inflated by 3.7x to 8.6x.
+
+**What is NOT superseded**, because these paths already read realised trade
+P&L rather than the equity curve:
+
+- `profit_factor`, `win_rate_pct`, `closed_trades` and the trade log.
+- The **promotion gate and the chunked validation runner**, including check 3
+  (`psr_or_dsr`): `validation/runner.py` builds its returns from
+  `closed_trade_returns(result.trade_log, capital)`. The 2026-07-28 8-year
+  campaign verdicts stand.
+- `docs/REGIME-CENSUS.md` - `validation/regime_census.py` sums `trade["pnl"]`.
+- **Regime-conditional** Optuna objectives, which recompute from trade P&L
+  (`optimization_adapter.py`). **Pooled/full-run** objectives do read
+  `result.sharpe_ratio` / `total_return_pct` / `max_drawdown_pct`, so any
+  full-run study optimising Sharpe, Calmar or return was optimising a
+  distorted metric and is superseded.
+
 | Metric | Meaning | Target |
 |---|---|---|
 | Return | Total % on starting capital | > 0% |

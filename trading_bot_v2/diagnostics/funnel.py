@@ -204,9 +204,7 @@ class SignalFunnel:
             cell = self.by_strategy[strategy] = {}
         cell[stage] = cell.get(stage, 0) + n
 
-    def reject(
-        self, reason: str, n: int = 1, strategy: Optional[str] = None
-    ) -> None:
+    def reject(self, reason: str, n: int = 1, strategy: Optional[str] = None) -> None:
         """Record ``n`` rejections attributed to an interned reason.
 
         Args:
@@ -289,9 +287,7 @@ class SignalFunnel:
         raw = self.get(STAGE_RAW_SIGNALS)
         after_conf = max(0, raw - self.get(STAGE_CONFIDENCE_DROPPED))
         after_conflict = max(0, after_conf - self.get(STAGE_CONFLICT_DROPPED))
-        after_validity = max(
-            0, after_conflict - self.get(STAGE_VALIDITY_DROPPED)
-        )
+        after_validity = max(0, after_conflict - self.get(STAGE_VALIDITY_DROPPED))
         return {
             "confidence_survived": after_conf,
             "conflict_survived": after_conflict,
@@ -431,8 +427,7 @@ class SignalFunnel:
             )
         if diagnosis == DIAGNOSIS_NO_OPPORTUNITIES:
             return (
-                f"invoked on {invoked} bars, 0 signals emitted - no setup "
-                f"ever matched"
+                f"invoked on {invoked} bars, 0 signals emitted - no setup ever matched"
             )
         # all_discarded_downstream
         stage = self.binding_stage()
@@ -546,9 +541,7 @@ class NullFunnel:
     def count_strategy(self, strategy: str, stage: str, n: int = 1) -> None:
         """No-op."""
 
-    def reject(
-        self, reason: str, n: int = 1, strategy: Optional[str] = None
-    ) -> None:
+    def reject(self, reason: str, n: int = 1, strategy: Optional[str] = None) -> None:
         """No-op."""
 
     def record_regime(self, regime: str) -> None:

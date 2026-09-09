@@ -167,13 +167,17 @@ def probabilistic_sharpe_ratio(
     n = len(returns)
     if n < 3:
         return PSRResult(
-            value=None, reason=f"insufficient observations (n={n} < 3)", n=n,
+            value=None,
+            reason=f"insufficient observations (n={n} < 3)",
+            n=n,
             benchmark_sr=benchmark_sr,
         )
     _, std, skew, kurt = _moments(returns)
     if std <= 0:
         return PSRResult(
-            value=None, reason="zero variance in returns", n=n,
+            value=None,
+            reason="zero variance in returns",
+            n=n,
             benchmark_sr=benchmark_sr,
         )
     sr = sharpe_ratio(returns)
@@ -191,9 +195,7 @@ def probabilistic_sharpe_ratio(
         )
     stat = (sr - benchmark_sr) * math.sqrt(n - 1) / math.sqrt(denom_sq)
     value = float(norm.cdf(stat))
-    return PSRResult(
-        value=value, reason=None, sr=sr, benchmark_sr=benchmark_sr, n=n
-    )
+    return PSRResult(value=value, reason=None, sr=sr, benchmark_sr=benchmark_sr, n=n)
 
 
 def expected_max_sharpe(n_trials: int, var_sharpe: float) -> float:
@@ -470,9 +472,7 @@ def sample_adequacy(
     return n_observations >= required, required
 
 
-def closed_trade_returns(
-    trade_log: List[dict], initial_capital: float
-) -> List[float]:
+def closed_trade_returns(trade_log: List[dict], initial_capital: float) -> List[float]:
     """Extract per-trade fractional returns from a backtest trade log.
 
     Closing fills carry pnl != 0 (opening fills have pnl == 0), the

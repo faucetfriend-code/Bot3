@@ -46,6 +46,7 @@ from trading_bot_v2.ml.model_manager import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_price_series(n: int = 300, seed: int = 7):
     """Build a synthetic OHLCV dict long enough for feature extraction."""
     rng = np.random.default_rng(seed)
@@ -139,12 +140,11 @@ def temp_db():
 # Task 1: loaded-model config regression
 # ---------------------------------------------------------------------------
 
+
 class TestLoadedConfigRegression:
     """A persisted model's config must be what predict-time code reads."""
 
-    def test_loaded_config_replaces_constructor_default(
-        self, tmp_path, market_data
-    ):
+    def test_loaded_config_replaces_constructor_default(self, tmp_path, market_data):
         extractor = FeatureExtractor()
         feats = extractor.extract_batch(
             market_data["close"],
@@ -155,9 +155,7 @@ class TestLoadedConfigRegression:
         X = np.array([f.to_array() for f in feats])
 
         # Train + save with a non-default confidence threshold
-        trained = _gmm_with_tmp_manager(
-            tmp_path, GMMConfig(confidence_threshold=2.0)
-        )
+        trained = _gmm_with_tmp_manager(tmp_path, GMMConfig(confidence_threshold=2.0))
         assert trained.train_on_features(X, auto_save=True) is not None
 
         # Fresh detector with the DEFAULT config loads the artifact
@@ -174,9 +172,7 @@ class TestLoadedConfigRegression:
         result = loaded.predict(market_data)
         assert result.used_fallback is True
 
-    def test_predict_without_fallback_returns_raw_result(
-        self, tmp_path, market_data
-    ):
+    def test_predict_without_fallback_returns_raw_result(self, tmp_path, market_data):
         extractor = FeatureExtractor()
         feats = extractor.extract_batch(
             market_data["close"],
@@ -186,9 +182,7 @@ class TestLoadedConfigRegression:
         )
         X = np.array([f.to_array() for f in feats])
 
-        trained = _gmm_with_tmp_manager(
-            tmp_path, GMMConfig(confidence_threshold=2.0)
-        )
+        trained = _gmm_with_tmp_manager(tmp_path, GMMConfig(confidence_threshold=2.0))
         assert trained.train_on_features(X, auto_save=True) is not None
 
         loaded = _gmm_with_tmp_manager(tmp_path)
@@ -207,6 +201,7 @@ class TestLoadedConfigRegression:
 # Task 2: trainer guardrails + round-trip
 # ---------------------------------------------------------------------------
 
+
 class TestTrainerPipeline:
     """Training pipeline guardrails and persist/reload round-trips."""
 
@@ -215,15 +210,11 @@ class TestTrainerPipeline:
         start = datetime(2024, 1, 1)
         with open(path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(
-                ["timestamp", "open", "high", "low", "close", "volume"]
-            )
+            writer.writerow(["timestamp", "open", "high", "low", "close", "volume"])
             price = 100.0
             for i in range(n):
                 ts = (start + timedelta(hours=4 * i)).isoformat()
-                writer.writerow(
-                    [ts, price, price * 1.01, price * 0.99, price, 1000.0]
-                )
+                writer.writerow([ts, price, price * 1.01, price * 0.99, price, 1000.0])
         return path
 
     def test_refuses_insufficient_candles(self, tmp_path):
@@ -263,9 +254,7 @@ class TestTrainerPipeline:
         pytest.importorskip("hmmlearn")
         X = _synthetic_two_cluster_features()
         trained = _hmm_with_tmp_manager(tmp_path, HMMConfig(n_states=2))
-        summary = trained.train_on_features(
-            X, lengths=[len(X)], auto_save=True
-        )
+        summary = trained.train_on_features(X, lengths=[len(X)], auto_save=True)
         assert summary is not None
         transmat = np.asarray(summary["transmat"])
         assert transmat.shape == (2, 2)
@@ -287,16 +276,14 @@ class TestTrainerPipeline:
         assert read_latest_model_type(Path(tmp_path)) == "gmm"
 
         hmm = _hmm_with_tmp_manager(tmp_path, HMMConfig(n_states=2))
-        assert (
-            hmm.train_on_features(X, lengths=[len(X)], auto_save=True)
-            is not None
-        )
+        assert hmm.train_on_features(X, lengths=[len(X)], auto_save=True) is not None
         assert read_latest_model_type(Path(tmp_path)) == "hmm"
 
 
 # ---------------------------------------------------------------------------
 # Task 3: HMM smoothing + label mapping
 # ---------------------------------------------------------------------------
+
 
 class TestHMMSmoothing:
     """Filtered HMM classification is stickier than raw GMM frames."""
@@ -309,28 +296,17 @@ class TestHMMSmoothing:
         assert gmm.train_on_features(X, auto_save=False) is not None
 
         hmm = _hmm_with_tmp_manager(tmp_path, HMMConfig(n_states=2))
-        assert (
-            hmm.train_on_features(X, lengths=[len(X)], auto_save=False)
-            is not None
-        )
+        assert hmm.train_on_features(X, lengths=[len(X)], auto_save=False) is not None
 
         warmup = 20  # let the forward filter accumulate evidence
         gmm_labels = []
         hmm_labels = []
         for t in range(warmup, len(X)):
-            gmm_labels.append(
-                gmm.predict_from_features(X[: t + 1]).latent_regime
-            )
-            hmm_labels.append(
-                hmm.predict_from_features(X[: t + 1]).latent_regime
-            )
+            gmm_labels.append(gmm.predict_from_features(X[: t + 1]).latent_regime)
+            hmm_labels.append(hmm.predict_from_features(X[: t + 1]).latent_regime)
 
         def count_flips(labels):
-            return sum(
-                1
-                for i in range(1, len(labels))
-                if labels[i] != labels[i - 1]
-            )
+            return sum(1 for i in range(1, len(labels)) if labels[i] != labels[i - 1])
 
         gmm_flips = count_flips(gmm_labels)
         hmm_flips = count_flips(hmm_labels)
@@ -361,6 +337,7 @@ class TestHMMSmoothing:
 # Task 4: shadow-mode wiring in MarketRegimeDetector
 # ---------------------------------------------------------------------------
 
+
 def _fake_ml_result(regime=MarketRegime.RANGING_CALM, confidence=0.91):
     return GMMRegimeResult(
         system_regime=regime,
@@ -389,9 +366,7 @@ class TestShadowMode:
     def test_refresh_writes_shadow_row_agree(self, market_data, monkeypatch):
         monkeypatch.setenv("ML_REGIME_SHADOW", "true")
         fake_ml = MagicMock()
-        fake_ml.predict.return_value = _fake_ml_result(
-            MarketRegime.RANGING_CALM
-        )
+        fake_ml.predict.return_value = _fake_ml_result(MarketRegime.RANGING_CALM)
         det = self._detector_with_shadow(fake_ml)
 
         result = self._drive(
@@ -409,14 +384,10 @@ class TestShadowMode:
         # Shadow prediction must never take the ADX fallback path
         assert fake_ml.predict.call_args[1]["allow_fallback"] is False
 
-    def test_refresh_writes_shadow_row_disagree(
-        self, market_data, monkeypatch
-    ):
+    def test_refresh_writes_shadow_row_disagree(self, market_data, monkeypatch):
         monkeypatch.setenv("ML_REGIME_SHADOW", "true")
         fake_ml = MagicMock()
-        fake_ml.predict.return_value = _fake_ml_result(
-            MarketRegime.TRENDING_MODERATE
-        )
+        fake_ml.predict.return_value = _fake_ml_result(MarketRegime.TRENDING_MODERATE)
         det = self._detector_with_shadow(fake_ml)
 
         result = self._drive(
@@ -455,9 +426,7 @@ class TestShadowMode:
         assert result == MarketRegime.RANGING_CALM
         assert det._db.save_regime_shadow.call_count == 0
 
-    def test_shadow_exception_does_not_propagate(
-        self, market_data, monkeypatch
-    ):
+    def test_shadow_exception_does_not_propagate(self, market_data, monkeypatch):
         monkeypatch.setenv("ML_REGIME_SHADOW", "true")
         fake_ml = MagicMock()
         fake_ml.predict.side_effect = RuntimeError("model exploded")
@@ -497,6 +466,7 @@ class TestShadowMode:
 # ---------------------------------------------------------------------------
 # Shadow persistence + endpoint summary shape
 # ---------------------------------------------------------------------------
+
 
 class TestShadowPersistence:
     """regime_shadow table round-trip and summary computation."""

@@ -9,9 +9,8 @@ This module provides:
 - Error handling and graceful degradation
 """
 
-import asyncio
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Any, Tuple
 from loguru import logger
 
@@ -172,9 +171,6 @@ class PacificaMarketDataHandler:
             mid_price = (
                 (best_bid + best_ask) / 2 if best_bid > 0 and best_ask > 0 else 0.0
             )
-
-            # Calculate spread
-            spread = best_ask - best_bid if best_bid > 0 and best_ask > 0 else 0.0
 
             return {
                 "symbol": symbol,

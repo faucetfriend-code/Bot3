@@ -286,9 +286,7 @@ class _MetricAccumulator:
         record["p001"] = _round(_percentile(ordered, 0.1))
         record["p999"] = _round(_percentile(ordered, 99.9))
         approach = self.closest_approach()
-        record["closest_approach"] = (
-            None if approach is None else _round(approach)
-        )
+        record["closest_approach"] = None if approach is None else _round(approach)
         record["histogram"] = _histogram(ordered)
         return record
 
@@ -438,9 +436,7 @@ def calibration_dir(directory: Optional[Path] = None) -> Path:
     return CALIBRATION_DIR
 
 
-def artifact_path(
-    strategy: str, symbol: str, directory: Optional[Path] = None
-) -> Path:
+def artifact_path(strategy: str, symbol: str, directory: Optional[Path] = None) -> Path:
     """Return the artifact path for one (symbol, strategy) pair.
 
     Args:
@@ -454,9 +450,7 @@ def artifact_path(
     return calibration_dir(directory) / f"{symbol}_{strategy}.json"
 
 
-def write_artifact(
-    payload: Dict[str, Any], path: Path
-) -> Path:
+def write_artifact(payload: Dict[str, Any], path: Path) -> Path:
     """Write an artifact as stable, diffable JSON.
 
     Args:
@@ -713,9 +707,7 @@ def threshold_verdicts(
         for metric_name, record in (payload.get("metrics") or {}).items():
             if not isinstance(record, dict):
                 continue
-            for verdict in _verdicts_for_metric(
-                metric_name, record, params, sym
-            ):
+            for verdict in _verdicts_for_metric(metric_name, record, params, sym):
                 per_key.setdefault((verdict.metric, verdict.param_key), []).append(
                     verdict
                 )
@@ -724,9 +716,7 @@ def threshold_verdicts(
     hard: List[ThresholdVerdict] = []
     warnings: List[ThresholdVerdict] = []
     for verdicts in per_key.values():
-        unreachable = [
-            v for v in verdicts if v.severity == SEVERITY_UNREACHABLE
-        ]
+        unreachable = [v for v in verdicts if v.severity == SEVERITY_UNREACHABLE]
         if unreachable and len(unreachable) == n_symbols:
             hard.append(unreachable[0])
         elif unreachable:
@@ -752,7 +742,7 @@ def threshold_verdicts(
 
 
 def binding_metric(
-    summary: Dict[str, Dict[str, Any]]
+    summary: Dict[str, Dict[str, Any]],
 ) -> Optional[Tuple[str, Dict[str, Any]]]:
     """Return the gate that most constrained a run.
 
@@ -828,8 +818,7 @@ def describe_gate(name: str, record: Dict[str, Any]) -> str:
             f"{key}"
         )
     return (
-        f"{name} passes on {record.get('pass_rate', 0.0):.2%} of "
-        f"{record['count']} bars"
+        f"{name} passes on {record.get('pass_rate', 0.0):.2%} of {record['count']} bars"
     )
 
 

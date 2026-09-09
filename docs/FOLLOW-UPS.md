@@ -151,6 +151,137 @@ Worth doing: have the runner record the resolved anchor and the store's trailing
 `validation_runs`, so a result carries the data state that produced it. Consider defaulting
 campaigns to a pinned anchor with an explicit `--to-now` opt-in.
 
+## 8f. Composite walk-forward tuning was not reproducible across runs (FIXED 2026-08-02)
+
+Same family as 8e, different mechanism, and it hit the tuned arm rather than the
+engine.
+
+`run_composite_tuning` seeded each fold's Optuna sampler with
+`TPESampler(seed=args.seed + fold_no)`, where `fold_no` is the fold's **ordinal
+position in the sequence**. The sampler and the study were both created fresh
+inside the fold loop, so no Optuna state ever crossed a fold boundary — the
+carry was entirely through the seed. A fold covering train 2021-07..2022-07 /
+test 2022-07..2023-01 was seed `0+2` when it was fold 2 of a five-fold run and
+seed `0+3` when it was fold 3 of a ten-fold run. Different seed, different trial
+sequence, different winner, different tuned score, with the run's fold count as
+the only input that changed.
+
+Measured directly, `mean_reversion`/BTC-USDC, `--trials 2`, `--seed 0`, gate
+enforce, two runs offset by six months so the shared window sits at a different
+ordinal in each:
+
+| state | tuned as fold 2/2 | tuned as fold 1/1 | default (both) |
+|---|---|---|---|
+| vol_low:trend | +1.780 (n=96) | -0.574 (n=123) | -1.006 (n=57) |
+| vol_low:neutral | -1.044 (n=103) | -1.931 (n=112) | -2.873 (n=60) |
+| vol_mid:trend | -2.808 (n=52) | -2.362 (n=57) | -2.075 (n=36) |
+| vol_mid:neutral | -4.138 (n=50) | -2.483 (n=73) | -1.118 (n=35) |
+| vol_high:trend | +0.689 (n=23) | +0.158 (n=27) | +1.335 (n=19) |
+| vol_high:neutral | -3.280 (n=32) | -3.410 (n=34) | -5.259 (n=21) |
+
+All six default arms match to the last digit; not one tuned arm does. This made
+month-over-month tuned comparison — the entire purpose of the monthly re-tune
+cadence — invalid whenever the fold count moved.
+
+Fixed: `run_composite_tuning.fold_seed` derives the seed from the fold's
+**identity** instead —
+`sha256("composite-fold-seed/v1" | --seed | strategy | symbol | train_start |
+train_end | test_start | test_end)`, first four bytes, masked to 32 bits.
+`hashlib` and not builtin `hash()`, which is salted per process by
+`PYTHONHASHSEED`. `--seed` still moves every fold together. The resolved seed is
+now written into each fold record in the report JSON, so an artifact is
+self-describing. After the fix both ordinals resolve to seed `3027525560` and the
+same table reproduces exactly - all six tuned scores, all six trade counts and
+all six winner parameter vectors identical, with the default column unchanged
+from the table above.
+
+**What it invalidates:** every tuned-arm number in `out/composite_*.json` and
+`out/monthly/*.json` predates the fix and will not reproduce. That includes
+`out/composite_mr_gateenforce.json`, the provenance of `ADOPTED_PARAMS` in
+`monthly_retune.py` — those values are left untouched but are no longer
+re-derivable. Default and adopted-baseline arms are unaffected (their parameters
+are fixed inputs, not search output); the prequential-median arm is built from
+fold winners and moves with them. Never compare a pre-fix tuned number with a
+post-fix one. Full write-up: `docs/NEUTRAL-STATE-WINDOW-CHECK.md`.
+
+**Same class, also fixed (2026-08-02):** `optuna_runner._build_sampler` hard-coded
+`seed=42` for both samplers, for every study it ever built, regardless of strategy,
+symbol, regime, objective or window. A constant seed rather than a positional one,
+but the same failure: searches that are presented as independent were not.
+
+An earlier revision of this item said the constant was "stable and reproducible, so
+not the same defect" and was "left alone deliberately" because changing it "would
+shift every regime-study number." **That rationale was wrong on the first half and
+did not survive an inventory on the second.**
+
+- Wrong on substance: stability is not independence. Optuna draws its startup trials
+  from the seed alone, so every study opened on the identical trial 0 — measured, all
+  13 studies in `optimization_studies.db`: `atr_stop_multiplier 2.397988, bb_std_dev
+  2.597991, min_confidence 0.396806, rsi_overbought 74.014286, rsi_oversold 32.490802`.
+  `n_startup_trials = min(20, n_trials // 5)` is a floor, not a cap: study 2 pruned
+  every trial, TPE acquired no observations, kept drawing from the seeded path, and
+  **11 of its 25 trials are identical to study 1's — a different regime**. Heavy
+  pruning is the *normal* failure mode of a regime study (the `REGIME_OPT_MIN_TRADES`
+  gate), so the shared draw dominated exactly where it hurt most, and
+  `run_regime_optimization.py` loops the regimes in one process and prints them side
+  by side as per-regime findings.
+- Overstated on cost: what the "shift every number" argument protected was 13 stale
+  studies from a single session on 2026-07-20 plus one dormant `regime_param_overlays`
+  row. None is consumed at runtime (`ENABLE_REGIME_PARAM_OVERLAYS` defaults false and
+  is absent from `.env`), none is cited anywhere in `docs/`, and none is the provenance
+  of `ADOPTED_PARAMS` — that comes from `run_composite_tuning`, a disjoint code path.
+  The cost of fixing it was thirteen unreproducible throwaway studies; the cost of
+  deferring it was every future regime comparison.
+
+Fixed: `optuna_runner.study_seed` derives each study's sampler seed from the study's
+**identity** — `sha256("optuna-study-seed/v1" | base_seed | strategy |
+sorted(symbols) | regime | objective | sorted(windows))`, first four bytes, masked to
+32 bits. That is exactly what already distinguishes a study *name* (strategy, regime,
+objective) plus the two things the name omits but that change what is searched: the
+symbols and the window series. Symbols are sorted and joined so `optimize_chunked`,
+which scores several symbols inside one objective, cannot have its seed moved by
+argument ordering; windows are sorted for the same reason. Deliberately excluded:
+sampler kind, trial budget (a 50-trial pilot stays a prefix of the 100-trial run) and
+the walk-forward scoring flags — each of those is a paired comparison over one
+identity, where sharing the opening draw removes nuisance variance instead of
+manufacturing agreement. The hashing itself now lives once, in
+`optimization/seeding.py`, shared with `run_composite_tuning.fold_seed`, which
+continues to produce byte-identical seeds (`3027525560` for the fold above).
+
+`OptunaRunner(seed=...)` is the base, wired to `--seed` on both `run_optimize` and
+`run_regime_optimization`, so deliberate reproduction still works the way the
+composite runner's `--seed` does. The resolved seed is written onto every study as
+the `sampler_seed` / `sampler_seed_base` / `sampler_seed_namespace` user attrs and
+into the run log, so a stored study is self-describing.
+
+This also fixes the same constant in `backtesting/walk_forward.py`: `_run_optimized`
+called `optimize()` once per window and `run_chunked_walk_forward` called
+`optimize_chunked()` once per fold, so every window and every fold repeated seed 42.
+The window (or the fold's train-window series) is part of the identity, so they now
+search independently — which is what the aggregate out-of-sample PSR/DSR already
+assumed they did.
+
+Measured before/after, two studies differing **only** in regime (`mean_reversion`,
+BTC-USDC, 2024-01-01..2024-02-01, 2 trials):
+
+| | before | after |
+|-|-|-|
+| RANGING\_CALM | `rsi_oversold 34.156425, rsi_overbought 55.119944, bb_std_dev 2.699273, atr_stop_multiplier 1.565818, min_confidence 0.449485` (seed 42) | `rsi_oversold 34.105669, rsi_overbought 66.020566, bb_std_dev 2.941006, atr_stop_multiplier 2.905977, min_confidence 0.560802` (seed 2458413708) |
+| RANGING\_VOLATILE | *byte-identical to the row above* | `rsi_oversold 44.340096, rsi_overbought 72.061965, bb_std_dev 2.122105, atr_stop_multiplier 1.619272, min_confidence 0.567565` (seed 3196994939) |
+
+**What it invalidates:** the 13 studies stored in
+`trading_bot_v2/optimization/optimization_studies.db` and the dormant
+`regime_param_overlays` row derived from them will not reproduce — a re-run of the
+same command now explores a different sequence and can elect different winners.
+Any `trial_registry` rows those studies wrote keep their recorded N (the count of
+configurations explored is unchanged in expectation, and the DSR consumes only the
+count), but re-running to regenerate them will not reproduce the same values.
+Not affected: `ADOPTED_PARAMS`, everything in `out/composite_*.json` and
+`out/monthly/*.json`, and every campaign/census/validation artifact — none of them
+comes from `OptunaRunner`. Nothing that was reproducible from a *seeded* base is
+lost going forward: `--seed N` plus the identity reproduces any post-fix study
+exactly.
+
 ## 8a. Calibration's hard criterion should probably not be `max`
 
 Phase 4 shipped (commit 9cbc86b) and works, but calibrating over 2.5 years qualified the

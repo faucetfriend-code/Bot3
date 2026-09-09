@@ -7,7 +7,7 @@ with the trading bot for optimal position sizing based on historical performance
 
 from .kelly_position_sizer import KellyPositionSizer
 from .database import DatabaseManager
-from core_logic.models import Signal, OrderSide
+from .models import Signal, OrderSide
 from .config import StrategyType, AssetClass, TradeQuality, MarketState
 
 
@@ -43,7 +43,7 @@ def example_basic_usage():
     account_balance = 10000.0  # $10,000 account
     quantity = kelly_sizer.calculate_position_size(signal, account_balance)
 
-    print(f"\nSignal Details:")
+    print("\nSignal Details:")
     print(f"  Strategy: {signal.strategy.value}")
     print(f"  Entry: ${signal.entry_price:,.2f}")
     print(f"  Stop Loss: ${signal.stop_loss:,.2f}")
@@ -182,13 +182,13 @@ def example_strategy_performance_review():
 
             # Interpretation
             if recommended_fraction >= 0.5:
-                print(f"  💪 Strong performance - use standard sizing")
+                print("  [+] Strong performance - use standard sizing")
             elif recommended_fraction >= 0.33:
-                print(f"  ⚠️ Moderate performance - use conservative sizing")
+                print("  [!] Moderate performance - use conservative sizing")
             else:
-                print(f"  🔴 Weak performance - use very conservative sizing")
+                print("  [-] Weak performance - use very conservative sizing")
         else:
-            print(f"  ⏳ Insufficient data - using fallback sizing")
+            print("  [.] Insufficient data - using fallback sizing")
 
         print()
 
@@ -256,12 +256,12 @@ Integration Steps:
             self.kelly_sizer.update_kelly_fraction(0.5)
 
 Benefits:
-✅ Position sizing adapts to actual strategy performance
-✅ New strategies start with conservative fallback sizing
-✅ Winning strategies get larger allocations automatically
-✅ Losing strategies get smaller allocations (or 1% minimum)
-✅ Hard 10% cap prevents over-concentration
-✅ Fractional Kelly (0.5x) provides safety margin
+- Position sizing adapts to actual strategy performance
+- New strategies start with conservative fallback sizing
+- Winning strategies get larger allocations automatically
+- Losing strategies get smaller allocations (or 1% minimum)
+- Hard 10% cap prevents over-concentration
+- Fractional Kelly (0.5x) provides safety margin
     """)
 
 
@@ -282,7 +282,7 @@ if __name__ == "__main__":
         print("=" * 80 + "\n")
 
     except Exception as e:
-        print(f"\n❌ Error running examples: {e}")
+        print(f"\n[ERROR] Error running examples: {e}")
         import traceback
 
         traceback.print_exc()

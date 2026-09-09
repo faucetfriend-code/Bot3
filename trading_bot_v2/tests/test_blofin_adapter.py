@@ -127,9 +127,39 @@ CANDLES_RESPONSE = {
     "code": "0",
     "msg": "success",
     "data": [
-        ["1784601000000", "65239.2", "65273.9", "65239", "65270.2", "111", "0.1114", "7267.95492", "0"],
-        ["1784600100000", "65258", "65293.2", "65145.3", "65239.2", "68032", "68.0329", "4437022.27509", "1"],
-        ["1784599200000", "65208.2", "65387.8", "65208", "65261.2", "44325", "44.3256", "2893329.08561", "1"],
+        [
+            "1784601000000",
+            "65239.2",
+            "65273.9",
+            "65239",
+            "65270.2",
+            "111",
+            "0.1114",
+            "7267.95492",
+            "0",
+        ],
+        [
+            "1784600100000",
+            "65258",
+            "65293.2",
+            "65145.3",
+            "65239.2",
+            "68032",
+            "68.0329",
+            "4437022.27509",
+            "1",
+        ],
+        [
+            "1784599200000",
+            "65208.2",
+            "65387.8",
+            "65208",
+            "65261.2",
+            "44325",
+            "44.3256",
+            "2893329.08561",
+            "1",
+        ],
     ],
 }
 
@@ -149,8 +179,16 @@ FUNDING_HISTORY_RESPONSE = {
     "code": "0",
     "msg": "success",
     "data": [
-        {"instId": "BTC-USDT", "fundingRate": "0.000025", "fundingTime": "1784592000000"},
-        {"instId": "BTC-USDT", "fundingRate": "-0.000024", "fundingTime": "1784563200000"},
+        {
+            "instId": "BTC-USDT",
+            "fundingRate": "0.000025",
+            "fundingTime": "1784592000000",
+        },
+        {
+            "instId": "BTC-USDT",
+            "fundingRate": "-0.000024",
+            "fundingTime": "1784563200000",
+        },
     ],
 }
 
@@ -265,7 +303,9 @@ FILLS_RESPONSE = {
 ORDER_ACK_RESPONSE = {
     "code": "0",
     "msg": "success",
-    "data": [{"orderId": "28150801", "clientOrderId": "test123", "code": "0", "msg": ""}],
+    "data": [
+        {"orderId": "28150801", "clientOrderId": "test123", "code": "0", "msg": ""}
+    ],
 }
 
 
@@ -307,9 +347,7 @@ def _route_get(client, routes):
 
 def _make_public_client(**kwargs) -> BlofinClient:
     """Credential-less client (public surface only), mocked session."""
-    client = BlofinClient(
-        api_key="", api_secret="", passphrase="", demo=True, **kwargs
-    )
+    client = BlofinClient(api_key="", api_secret="", passphrase="", demo=True, **kwargs)
     client.session = MagicMock()
     return client
 
@@ -323,9 +361,7 @@ class TestSigning:
     def test_known_vector_signature(self):
         """Signature matches an independently computed known vector."""
         secret = "test-secret"
-        prehash = (
-            "/api/v1/trade/order" + "POST" + "1597026383085" + "n0nce" + '{"a":1}'
-        )
+        prehash = "/api/v1/trade/order" + "POST" + "1597026383085" + "n0nce" + '{"a":1}'
         expected_hex = hmac.new(
             secret.encode(), prehash.encode(), hashlib.sha256
         ).hexdigest()
@@ -409,7 +445,9 @@ class TestSigning:
             return _response(ORDER_ACK_RESPONSE)
 
         client.session.post.side_effect = fake_post
-        client._post("/api/v1/trade/cancel-order", {"instId": "BTC-USDT", "orderId": "1"})
+        client._post(
+            "/api/v1/trade/cancel-order", {"instId": "BTC-USDT", "orderId": "1"}
+        )
         headers = captured["headers"]
         expected = BlofinClient.sign(
             "test-secret",
@@ -548,9 +586,7 @@ class TestOrderWireFormat:
         client, captured = self._client_with_order_capture()
         ack = client.place_order("BTC", "buy", 0.05, "limit", price=64000.04)
         body = captured["body"]
-        assert captured["url"] == (
-            BLOFIN_DEMO_REST_URL + "/api/v1/trade/order"
-        )
+        assert captured["url"] == (BLOFIN_DEMO_REST_URL + "/api/v1/trade/order")
         assert body["instId"] == "BTC-USDT"
         assert body["side"] == "buy"
         assert body["orderType"] == "limit"
@@ -639,9 +675,7 @@ class TestOrderWireFormat:
         client.session.post.side_effect = fake_post
         result = client.cancel_all_orders()
         assert captured["url"].endswith("/api/v1/trade/cancel-batch-orders")
-        assert captured["body"] == [
-            {"instId": "BTC-USDT", "orderId": "2075705202"}
-        ]
+        assert captured["body"] == [{"instId": "BTC-USDT", "orderId": "2075705202"}]
         assert result == {"success": True, "data": {"cancelled": 1}}
 
 
@@ -948,7 +982,17 @@ class TestWsDataClient:
             {
                 "arg": {"channel": "candle15m", "instId": "BTC-USDT"},
                 "data": [
-                    ["1784600100000", "65258", "65293.2", "65145.3", "65239.2", "68032", "68.0329", "4437022", "1"]
+                    [
+                        "1784600100000",
+                        "65258",
+                        "65293.2",
+                        "65145.3",
+                        "65239.2",
+                        "68032",
+                        "68.0329",
+                        "4437022",
+                        "1",
+                    ]
                 ],
             }
         )
@@ -957,7 +1001,17 @@ class TestWsDataClient:
             {
                 "arg": {"channel": "candle15m", "instId": "BTC-USDT"},
                 "data": [
-                    ["1784600100000", "65258", "65295.0", "65145.3", "65250.0", "68100", "68.1", "4437100", "1"]
+                    [
+                        "1784600100000",
+                        "65258",
+                        "65295.0",
+                        "65145.3",
+                        "65250.0",
+                        "68100",
+                        "68.1",
+                        "4437100",
+                        "1",
+                    ]
                 ],
             }
         )

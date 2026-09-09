@@ -37,15 +37,13 @@ import json
 import logging
 import math
 import os
-import sys
 import threading
 import time
-from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Generator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -713,7 +711,7 @@ class TradingLoopProfiler:
                         "total_time": round(info[2], 6),
                         "cumulative_time": round(info[3], 6),
                     }
-                    for (mod, func, *_) , info in cpu_stats["top_functions"]
+                    for (mod, func, *_), info in cpu_stats["top_functions"]
                 ],
             }
 

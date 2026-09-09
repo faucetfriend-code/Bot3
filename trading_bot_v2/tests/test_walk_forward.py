@@ -57,9 +57,7 @@ class TestLegacyMode:
         engine.run.return_value = _make_result([50.0, -20.0, 30.0, 10.0])
 
         wf = WalkForwardAnalyzer(engine)
-        results = wf.run(
-            start="2024-01-01", end="2024-07-01", symbol="SUI-USDC"
-        )
+        results = wf.run(start="2024-01-01", end="2024-07-01", symbol="SUI-USDC")
 
         assert isinstance(results, list)
         assert all(isinstance(r, BacktestResult) for r in results)
@@ -71,7 +69,9 @@ class TestLegacyMode:
         wf = WalkForwardAnalyzer(_mock_engine())
         with pytest.raises(ValueError, match="requires a strategy"):
             wf.run(
-                start="2024-01-01", end="2024-07-01", symbol="SUI-USDC",
+                start="2024-01-01",
+                end="2024-07-01",
+                symbol="SUI-USDC",
                 optimize=True,
             )
 
@@ -97,8 +97,9 @@ class TestOptimizeModeMocked:
             best_trial = StubBest()
 
         class StubAdapter:
-            def run_backtest(self, strategy, params, start, end, symbol,
-                             initial_capital):
+            def run_backtest(
+                self, strategy, params, start, end, symbol, initial_capital
+            ):
                 assert params == best_params
                 return _make_result([40.0, -10.0, 25.0], start=start, end=end)
 
@@ -152,9 +153,7 @@ class TestOptimizeModeMocked:
         # Sharpe objective -> observed trial variance, not the fallback
         assert report.dsr.var_fallback is False
         assert report.profit_factor > 1.0
-        assert report.total_return_pct == pytest.approx(
-            sum(report.oos_returns) * 100
-        )
+        assert report.total_return_pct == pytest.approx(sum(report.oos_returns) * 100)
 
 
 @pytest.fixture

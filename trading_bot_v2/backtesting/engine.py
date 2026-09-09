@@ -89,6 +89,7 @@ STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
     "OrderBookImbalance": "enable_orderbook_imbalance",
     "SessionRangeBreakout": "enable_session_range_breakout",
     "CalendarFlow": "enable_calendar_flow",
+    "VWAPPullback": "enable_vwap_pullback",
 }
 
 # ---------------------------------------------------------------------------
@@ -287,6 +288,7 @@ class BacktestEngine:
     def __init__(self, override_config=None):
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
+
         self.cfg = override_config or live_config
         # Signal funnel for this run (replaced in run(); NullFunnel until
         # then so _execute_signal is safe to call standalone in tests).
@@ -306,6 +308,19 @@ class BacktestEngine:
         self._position_entry_count: Dict[str, int] = {}
         # symbol -> replay index of the most recent entry into the position
         self._position_last_entry_candle: Dict[str, int] = {}
+        # Entry-TTL tracking for resting limit entries carrying
+        # indicators["entry_ttl_candles"] (maker-mode entries): asset ->
+        # replay index after which an UNFILLED entry and its exit orders
+        # are cancelled. Without this, a never-filled entry leaves naked
+        # exit orders that can fill as an inverted position.
+        self._pending_entry_ttl: Dict[str, int] = {}
+        # Trailing-stop tracking for signals carrying
+        # indicators["trailing"] = {activation_r, trail_r, risk}: the
+        # stop ratchets behind the favourable extreme once the trade is
+        # activation_r x risk in profit. The ratchet replaces the REAL
+        # resting stop order, so fills keep the exchange's stop
+        # semantics (tie-breaks, fees, roles).
+        self._position_trailing: Dict[str, Dict] = {}
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
         self._position_time_exit: Dict[str, Dict] = {}
@@ -327,9 +342,7 @@ class BacktestEngine:
         - the code it gates sizes the order to the existing position and exits
         it - so the name has always described something the engine does not do.
         """
-        hedge_raw = _env_or_cfg(
-            self.cfg, "backtest_hedge_mode", "BACKTEST_HEDGE_MODE"
-        )
+        hedge_raw = _env_or_cfg(self.cfg, "backtest_hedge_mode", "BACKTEST_HEDGE_MODE")
         self._hedge_mode = _as_bool(hedge_raw) if hedge_raw is not None else False
 
         opposing_raw = _env_or_cfg(
@@ -710,7 +723,9 @@ class BacktestEngine:
     ) -> BacktestResult:
         symbol = symbol or self.cfg.backtest_symbol
         initial_capital = initial_capital or self.cfg.backtest_initial_capital
-        strategy_filter = strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
+        strategy_filter = (
+            strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
+        )
 
         # Initialise per-run state
         self._resolve_execution_policy()
@@ -718,6 +733,8 @@ class BacktestEngine:
         self._position_entry_count = {}
         self._position_last_entry_candle = {}
         self._position_time_exit = {}
+        self._pending_entry_ttl = {}
+        self._position_trailing = {}
         self._sim_dt = None
         # Signal funnel: a backtest always wants diagnostics (the cost is
         # a handful of dict increments per bar - see the <3% benchmark in
@@ -741,9 +758,7 @@ class BacktestEngine:
         )
 
         # --- Build components ---
-        funding_schedule = self._resolve_funding_schedule(
-            symbol, funnel, start, end
-        )
+        funding_schedule = self._resolve_funding_schedule(symbol, funnel, start, end)
         exchange = SimulatedExchange(
             initial_capital=initial_capital,
             slippage_pct=self.cfg.backtest_slippage_pct,
@@ -770,7 +785,7 @@ class BacktestEngine:
                     f"no strategy will match"
                 )
             for name, flag in STRATEGY_ENABLE_FLAGS.items():
-                strategy_kwargs[flag] = (name == strategy_filter)
+                strategy_kwargs[flag] = name == strategy_filter
             logger.info(f"Single-strategy mode: only {strategy_filter} enabled")
 
         # Force-disable strategies that can never work against the
@@ -803,9 +818,7 @@ class BacktestEngine:
             _strategy_key = DISPLAY_TO_STRATEGY_KEY.get(_display_name)
             if not _strategy_key:
                 continue
-            _params = getattr(
-                self.cfg, f"_optimization_params_{_strategy_key}", None
-            )
+            _params = getattr(self.cfg, f"_optimization_params_{_strategy_key}", None)
             if _params:
                 _applied = apply_params_to_strategy(
                     _strategy_obj, _strategy_key, _params
@@ -876,15 +889,15 @@ class BacktestEngine:
 
             # --- Build multi-timeframe bundles ---
             i_15m = self._nearest_idx(idx_map["15m"], sorted_ts["15m"], ts)
-            i_1h  = self._nearest_idx(idx_map["1h"],  sorted_ts["1h"],  ts)
-            i_4h  = self._nearest_idx(idx_map["4h"],  sorted_ts["4h"],  ts)
-            i_1m  = self._nearest_idx(idx_map["1m"],  sorted_ts["1m"],  ts)
+            i_1h = self._nearest_idx(idx_map["1h"], sorted_ts["1h"], ts)
+            i_4h = self._nearest_idx(idx_map["4h"], sorted_ts["4h"], ts)
+            i_1m = self._nearest_idx(idx_map["1m"], sorted_ts["1m"], ts)
 
             # Regime / structure timeframes (required by StrategyManager)
             multi_tf_data = {
                 "15m": self._history(candles["15m"], i_15m, lookback),
-                "1h":  self._history(candles["1h"],  i_1h,  lookback),
-                "4h":  self._history(candles["4h"],  i_4h,  lookback),
+                "1h": self._history(candles["1h"], i_1h, lookback),
+                "4h": self._history(candles["4h"], i_4h, lookback),
             }
 
             # Execution timeframes (optional, for precise entry)
@@ -915,6 +928,14 @@ class BacktestEngine:
             if sim_dt is not None:
                 strategy_manager.regime_detector._clock = lambda dt=sim_dt: dt
 
+            # --- Expire unfilled maker entries past their TTL ---
+            if self._pending_entry_ttl:
+                self._expire_stale_entries(exchange, i)
+
+            # --- Ratchet trailing stops behind the favourable extreme ---
+            if self._position_trailing:
+                self._apply_trailing_stops(exchange, candle_5m)
+
             # --- Time-based exits (signals carrying time_exit_hours) ---
             if sim_dt is not None and self._position_time_exit:
                 self._apply_time_exits(exchange, sim_dt)
@@ -934,10 +955,26 @@ class BacktestEngine:
             # Expose the confirmed regime to the exchange so every fill
             # is regime-tagged (reuses the cache populated during signal
             # generation - no recomputation).
-            regime_obj = strategy_manager.regime_detector.get_current_regime(
-                symbol
-            )
+            regime_obj = strategy_manager.regime_detector.get_current_regime(symbol)
             exchange._current_regime = getattr(regime_obj, "value", "") or ""
+
+            # Expose the directional-bias state the same way, so every
+            # fill carries the (regime, direction) composite state the
+            # regime-variant tuner scores on. Computed regardless of
+            # DIRECTIONAL_GATE mode - tagging is observation, not
+            # enforcement. Cheap: the trend leg is two EMAs over the
+            # history slice and the funding leg is cached per hour.
+            try:
+                bias = strategy_manager.directional_bias_engine.compute(
+                    symbol, multi_tf_data, now=sim_dt
+                )
+                exchange._current_direction = {
+                    "long": "bull",
+                    "short": "bear",
+                }.get(bias.combined, "neutral")
+            except Exception as e:
+                exchange._current_direction = ""
+                logger.debug(f"Direction tagging skipped at {ts}: {e}")
 
             # --- Execute signals ---
             for signal in signals:
@@ -1031,7 +1068,9 @@ class BacktestEngine:
     # Signal execution
     # ------------------------------------------------------------------
 
-    def _execute_signal(self, signal, exchange: SimulatedExchange, candle_idx: int) -> bool:
+    def _execute_signal(
+        self, signal, exchange: SimulatedExchange, candle_idx: int
+    ) -> bool:
         """
         Translate a Signal object into a SimulatedExchange order.
 
@@ -1104,9 +1143,7 @@ class BacktestEngine:
                 # the same reason. No strategy that shipped before
                 # FundingArb sets the flag, so the default path is
                 # untouched.
-                explicit_close = bool(
-                    (signal.indicators or {}).get("close_position")
-                )
+                explicit_close = bool((signal.indicators or {}).get("close_position"))
                 # Opposing direction - signal-driven close, if permitted
                 if not self._opposing_closes_position and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
@@ -1117,9 +1154,7 @@ class BacktestEngine:
                     )
                     return False
 
-                open_candle = self._position_open_candle.get(
-                    signal.asset, candle_idx
-                )
+                open_candle = self._position_open_candle.get(signal.asset, candle_idx)
                 candles_held = candle_idx - open_candle
                 if candles_held < self._min_hold_candles and not explicit_close:
                     funnel.count(STAGE_EXECUTION_BLOCKED)
@@ -1206,7 +1241,10 @@ class BacktestEngine:
         # now to keep min-hold ageing identical to the pre-policy engine. A
         # resting limit entry has no position yet; _sync_position_tracking()
         # stamps that one from the bar it actually fills on.
-        if position_after is not None and signal.asset not in self._position_open_candle:
+        if (
+            position_after is not None
+            and signal.asset not in self._position_open_candle
+        ):
             self._position_open_candle[signal.asset] = candle_idx
 
         if is_pyramid_add:
@@ -1216,6 +1254,28 @@ class BacktestEngine:
         else:
             self._position_entry_count[signal.asset] = 1
         self._position_last_entry_candle[signal.asset] = candle_idx
+
+        # Track entry TTL for resting maker entries. Only armed when the
+        # entry did NOT fill inside place_order (position_after is None):
+        # a filled market/limit entry needs no expiry.
+        entry_ttl = (signal.indicators or {}).get("entry_ttl_candles")
+        if entry_ttl and position_after is None:
+            self._pending_entry_ttl[signal.asset] = candle_idx + int(entry_ttl)
+
+        # Track trailing-stop config if the signal requests one
+        trailing = (signal.indicators or {}).get("trailing")
+        if trailing and float(trailing.get("risk", 0)) > 0:
+            self._position_trailing[signal.asset] = {
+                "activation_r": float(trailing.get("activation_r", 1.0)),
+                "trail_r": float(trailing.get("trail_r", 1.0)),
+                "risk": float(trailing.get("risk")),
+                "side": "long" if side == "bid" else "short",
+                "strategy": signal.strategy.value,
+                "peak": None,  # set from bars once a position exists
+                "active": False,
+                "placed_stop": signal.stop_loss,
+                "seen_position": position_after is not None,
+            }
 
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
@@ -1261,6 +1321,118 @@ class BacktestEngine:
     # ------------------------------------------------------------------
     # Time-based exits
     # ------------------------------------------------------------------
+
+    def _expire_stale_entries(
+        self, exchange: SimulatedExchange, candle_idx: int
+    ) -> None:
+        """Cancel unfilled maker entries (and their exits) past their TTL.
+
+        Armed by _execute_signal when a resting limit entry carries
+        indicators["entry_ttl_candles"]. If the entry filled meanwhile
+        (a position exists) the tracking is simply dropped; otherwise
+        every open order for the asset is cancelled together - entry and
+        exit set - so no naked exit order can outlive its entry.
+        """
+        for asset in list(self._pending_entry_ttl):
+            if asset in exchange._positions:
+                # Entry filled - the exits are live and legitimate now
+                del self._pending_entry_ttl[asset]
+                continue
+            if candle_idx < self._pending_entry_ttl[asset]:
+                continue
+            exchange.cancel_all_orders(asset)
+            del self._pending_entry_ttl[asset]
+            self._position_time_exit.pop(asset, None)
+            logger.debug(
+                f"entry_ttl: cancelled unfilled entry + exits for {asset} "
+                f"at candle {candle_idx}"
+            )
+
+    def _apply_trailing_stops(
+        self, exchange: SimulatedExchange, candle_5m: Dict
+    ) -> None:
+        """Ratchet trailing stops behind each tracked position's peak.
+
+        Once a position is activation_r x risk in favour, its resting
+        stop order is cancelled and re-placed at peak - trail_r x risk
+        (mirrored for shorts). The stop only ever tightens, and a
+        replacement placed this bar can first fill on the NEXT bar -
+        a deliberate one-bar lag that avoids peeking inside the bar
+        that set the peak. Trailing-mode signals carry no take-profit,
+        so cancel_all_orders only ever touches the stop.
+        """
+        high = float(candle_5m.get("high", 0) or 0)
+        low = float(candle_5m.get("low", 0) or 0)
+        if high <= 0 or low <= 0:
+            return
+
+        # Minimum improvement before replacing the resting stop, to
+        # avoid cancelling/re-placing on every bar of a slow grind.
+        RATCHET_EPS_R = 0.05
+
+        for asset in list(self._position_trailing):
+            cfg = self._position_trailing[asset]
+            pos = exchange._positions.get(asset)
+
+            if pos is None:
+                if cfg["seen_position"]:
+                    # Position closed (stop/time exit) - done
+                    del self._position_trailing[asset]
+                elif not any(
+                    o.symbol == asset and o.status == "open"
+                    for o in exchange._orders.values()
+                ):
+                    # Entry never filled and its orders are gone (TTL)
+                    del self._position_trailing[asset]
+                continue
+
+            cfg["seen_position"] = True
+            risk = cfg["risk"]
+            entry = pos.entry_price
+
+            if cfg["side"] == "long":
+                cfg["peak"] = max(cfg["peak"] or high, high)
+                if not cfg["active"]:
+                    cfg["active"] = cfg["peak"] >= entry + cfg["activation_r"] * risk
+                if not cfg["active"]:
+                    continue
+                new_stop = cfg["peak"] - cfg["trail_r"] * risk
+                improves = (
+                    cfg["placed_stop"] is None
+                    or new_stop >= cfg["placed_stop"] + RATCHET_EPS_R * risk
+                )
+                stop_side = "ask"
+            else:
+                cfg["peak"] = min(cfg["peak"] or low, low)
+                if not cfg["active"]:
+                    cfg["active"] = cfg["peak"] <= entry - cfg["activation_r"] * risk
+                if not cfg["active"]:
+                    continue
+                new_stop = cfg["peak"] + cfg["trail_r"] * risk
+                improves = (
+                    cfg["placed_stop"] is None
+                    or new_stop <= cfg["placed_stop"] - RATCHET_EPS_R * risk
+                )
+                stop_side = "bid"
+
+            if not improves:
+                continue
+
+            exchange.cancel_all_orders(asset)
+            # Keep the owning strategy's attribution on the ratcheted stop
+            exchange._current_strategy = cfg.get("strategy", "")
+            exchange.place_order(
+                symbol=asset,
+                side=stop_side,
+                quantity=str(pos.quantity),
+                order_type="stop",
+                price=new_stop,
+            )
+            cfg["placed_stop"] = new_stop
+            logger.debug(
+                f"trailing: {asset} {cfg['side']} stop ratcheted to "
+                f"{new_stop:.4f} (peak {cfg['peak']:.4f})"
+            )
 
     def _apply_time_exits(self, exchange: SimulatedExchange, sim_dt: datetime) -> None:
         """
@@ -1319,7 +1491,7 @@ class BacktestEngine:
         session windows within the slice.
         """
         start = max(0, up_to - lookback + 1)
-        return {k: candles[k][start: up_to + 1] for k in candles}
+        return {k: candles[k][start : up_to + 1] for k in candles}
 
     @staticmethod
     def _nearest_idx(idx_map: Dict, sorted_ts: List[str], ts) -> int:

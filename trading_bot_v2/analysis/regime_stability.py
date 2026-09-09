@@ -52,9 +52,7 @@ def _parse_timestamp(raw: Any) -> datetime:
     return datetime.fromisoformat(text)
 
 
-def run_analysis(
-    symbol: str, start: str, end: str, data_dir: str
-) -> Dict[str, Any]:
+def run_analysis(symbol: str, start: str, end: str, data_dir: str) -> Dict[str, Any]:
     """Replay 4h candles through the detector and collect regime stats.
 
     Args:
@@ -177,14 +175,18 @@ def print_report(result: Dict[str, Any]) -> None:
     print("=" * 68)
 
     transitions = result["transitions"]
-    print(f"\nConfirmed transitions: {len(transitions)} "
-          f"({result['flips_per_week']:.2f} flips/week)")
+    print(
+        f"\nConfirmed transitions: {len(transitions)} "
+        f"({result['flips_per_week']:.2f} flips/week)"
+    )
     for t in transitions:
         adx = f"{t['adx']:.1f}" if t["adx"] is not None else "n/a"
         print(f"  {t['time']}  {t['old']} -> {t['new']}  (ADX={adx})")
 
     print("\nDwell-time distribution (hours per continuous segment):")
-    header = f"  {'regime':<20} {'segs':>5} {'median':>8} {'mean':>8} {'min':>7} {'max':>8}"
+    header = (
+        f"  {'regime':<20} {'segs':>5} {'median':>8} {'mean':>8} {'min':>7} {'max':>8}"
+    )
     print(header)
     for regime, s in sorted(result["dwell_stats"].items()):
         print(
@@ -193,9 +195,7 @@ def print_report(result: Dict[str, Any]) -> None:
         )
 
     print("\nPct of time per regime:")
-    for regime, pct in sorted(
-        result["pct_time"].items(), key=lambda kv: -kv[1]
-    ):
+    for regime, pct in sorted(result["pct_time"].items(), key=lambda kv: -kv[1]):
         print(f"  {regime:<20} {pct:>6.1f}%")
     print()
 

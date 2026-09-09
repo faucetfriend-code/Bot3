@@ -30,7 +30,6 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 
 # Copy application code
-COPY core_logic/ ./core_logic/
 COPY trading_bot_v2/ ./trading_bot_v2/
 
 # Create necessary directories

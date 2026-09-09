@@ -252,9 +252,7 @@ def calibrate_strategy(
 
     loader = BacktestDataLoader(symbol=symbol, data_dir=resolved_dir)
     candles = {
-        timeframe: loader.get_candles(
-            timeframe, start, end, warmup_candles=lookback
-        )
+        timeframe: loader.get_candles(timeframe, start, end, warmup_candles=lookback)
         for timeframe in timeframes
     }
 
@@ -268,12 +266,9 @@ def calibrate_strategy(
         )
 
     others = [tf for tf in timeframes if tf != spec.driver]
-    sorted_ts = {
-        tf: [str(t) for t in candles[tf]["timestamp"]] for tf in others
-    }
+    sorted_ts = {tf: [str(t) for t in candles[tf]["timestamp"]] for tf in others}
     idx_map = {
-        tf: {ts: i for i, ts in enumerate(candles[tf]["timestamp"])}
-        for tf in others
+        tf: {ts: i for i, ts in enumerate(candles[tf]["timestamp"])} for tf in others
     }
 
     strategy = spec.factory()
@@ -316,9 +311,7 @@ def calibrate_strategy(
         )
 
     provenance = {
-        "generated_at": datetime.now(timezone.utc).strftime(
-            "%Y-%m-%dT%H:%M:%SZ"
-        ),
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "window_start": start,
         "window_end": end,
         "driver_timeframe": spec.driver,

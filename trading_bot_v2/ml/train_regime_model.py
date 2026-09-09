@@ -109,10 +109,7 @@ def _print_cluster_table(
             system = _DEFAULT_REGIME_MAP[_LatentRegime(label)].value
         except (ValueError, KeyError):
             system = "?"
-        row = (
-            f"  {idx:>3} {label:<10} {system:<18} "
-            f"{sizes.get(idx, 0):>8}"
-        )
+        row = f"  {idx:>3} {label:<10} {system:<18} {sizes.get(idx, 0):>8}"
         for j in range(means_raw.shape[1]):
             row += f" {means_raw[idx, j]:>12.5f}"
         print(row)
@@ -266,9 +263,7 @@ def main() -> None:
     )
     parser.add_argument("--start", default="2024-01-01")
     parser.add_argument("--end", default="2025-12-31")
-    parser.add_argument(
-        "--model", choices=["gmm", "hmm", "both"], default="both"
-    )
+    parser.add_argument("--model", choices=["gmm", "hmm", "both"], default="both")
     parser.add_argument(
         "--data-dir",
         default=os.getenv("BACKTEST_DATA_DIR", DEFAULT_DATA_DIR),

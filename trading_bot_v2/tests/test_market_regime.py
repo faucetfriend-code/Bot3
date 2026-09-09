@@ -38,36 +38,132 @@ class TestMarketRegimeDetector:
         """Sample OHLCV market data for testing (30 candles - meets min 29 requirement)."""
         return {
             "high": [
-                1.05, 1.08, 1.06, 1.09, 1.07,
-                1.10, 1.08, 1.11, 1.09, 1.12,
-                1.10, 1.13, 1.11, 1.14, 1.12,
-                1.15, 1.13, 1.16, 1.14, 1.17,
-                1.15, 1.18, 1.16, 1.19, 1.17,
-                1.20, 1.18, 1.21, 1.19, 1.22,
+                1.05,
+                1.08,
+                1.06,
+                1.09,
+                1.07,
+                1.10,
+                1.08,
+                1.11,
+                1.09,
+                1.12,
+                1.10,
+                1.13,
+                1.11,
+                1.14,
+                1.12,
+                1.15,
+                1.13,
+                1.16,
+                1.14,
+                1.17,
+                1.15,
+                1.18,
+                1.16,
+                1.19,
+                1.17,
+                1.20,
+                1.18,
+                1.21,
+                1.19,
+                1.22,
             ],
             "low": [
-                1.02, 1.05, 1.03, 1.06, 1.04,
-                1.07, 1.05, 1.08, 1.06, 1.09,
-                1.07, 1.10, 1.08, 1.11, 1.09,
-                1.12, 1.10, 1.13, 1.11, 1.14,
-                1.12, 1.15, 1.13, 1.16, 1.14,
-                1.17, 1.15, 1.18, 1.16, 1.19,
+                1.02,
+                1.05,
+                1.03,
+                1.06,
+                1.04,
+                1.07,
+                1.05,
+                1.08,
+                1.06,
+                1.09,
+                1.07,
+                1.10,
+                1.08,
+                1.11,
+                1.09,
+                1.12,
+                1.10,
+                1.13,
+                1.11,
+                1.14,
+                1.12,
+                1.15,
+                1.13,
+                1.16,
+                1.14,
+                1.17,
+                1.15,
+                1.18,
+                1.16,
+                1.19,
             ],
             "close": [
-                1.04, 1.07, 1.05, 1.08, 1.06,
-                1.09, 1.07, 1.10, 1.08, 1.11,
-                1.09, 1.12, 1.10, 1.13, 1.11,
-                1.14, 1.12, 1.15, 1.13, 1.16,
-                1.14, 1.17, 1.15, 1.18, 1.16,
-                1.19, 1.17, 1.20, 1.18, 1.21,
+                1.04,
+                1.07,
+                1.05,
+                1.08,
+                1.06,
+                1.09,
+                1.07,
+                1.10,
+                1.08,
+                1.11,
+                1.09,
+                1.12,
+                1.10,
+                1.13,
+                1.11,
+                1.14,
+                1.12,
+                1.15,
+                1.13,
+                1.16,
+                1.14,
+                1.17,
+                1.15,
+                1.18,
+                1.16,
+                1.19,
+                1.17,
+                1.20,
+                1.18,
+                1.21,
             ],
             "volume": [
-                1000, 1100, 1050, 1150, 1080,
-                1180, 1120, 1200, 1140, 1220,
-                1160, 1240, 1180, 1260, 1200,
-                1280, 1220, 1300, 1240, 1320,
-                1260, 1340, 1280, 1360, 1300,
-                1380, 1320, 1400, 1340, 1420,
+                1000,
+                1100,
+                1050,
+                1150,
+                1080,
+                1180,
+                1120,
+                1200,
+                1140,
+                1220,
+                1160,
+                1240,
+                1180,
+                1260,
+                1200,
+                1280,
+                1220,
+                1300,
+                1240,
+                1320,
+                1260,
+                1340,
+                1280,
+                1360,
+                1300,
+                1380,
+                1320,
+                1400,
+                1340,
+                1420,
             ],
         }
 
@@ -287,7 +383,7 @@ class TestMarketRegimeDetector:
         assert not regime_detector.is_grid_allowed(MarketRegime.TRENDING_MODERATE)
 
     def test_get_strategy_weights(self, regime_detector):
-        """Test strategy weight allocation by regime (Jul 2026 weights with OrderBookImbalance + SessionRangeBreakout + CalendarFlow overlays)."""
+        """Test strategy weight allocation by regime (Jul 2026 weights with OrderBookImbalance + SessionRangeBreakout + CalendarFlow + VWAPPullback overlays)."""
         weights_volatile = regime_detector.get_strategy_weights(
             MarketRegime.RANGING_VOLATILE
         )
@@ -296,6 +392,7 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.15,
         }
 
         weights_calm = regime_detector.get_strategy_weights(MarketRegime.RANGING_CALM)
@@ -305,6 +402,7 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.15,
         }
 
         weights_trending = regime_detector.get_strategy_weights(
@@ -316,17 +414,19 @@ class TestMarketRegimeDetector:
             "OrderBookImbalance": 0.2,
             "SessionRangeBreakout": 0.15,
             "CalendarFlow": 0.1,
+            "VWAPPullback": 0.25,
         }
 
-        # SessionRangeBreakout and CalendarFlow are overlays in all five
-        # ADX regimes. MarketRegime also carries the VOL_* values of the
-        # realized-volatility taxonomy (REGIME_MODE=volatility), which
-        # this detector never emits and has no weights for - see
-        # volatility_regime.VolatilityRegimeDetector.
+        # SessionRangeBreakout, CalendarFlow and VWAPPullback are overlays
+        # in all five ADX regimes. MarketRegime also carries the VOL_*
+        # values of the realized-volatility taxonomy
+        # (REGIME_MODE=volatility), which this detector never emits and
+        # has no weights for - see volatility_regime.VolatilityRegimeDetector.
         for regime in ADX_REGIMES:
             regime_weights = regime_detector.get_strategy_weights(regime)
             assert "SessionRangeBreakout" in regime_weights
             assert "CalendarFlow" in regime_weights
+            assert "VWAPPullback" in regime_weights
 
     def test_foreign_taxonomy_regimes_get_no_weights(self, regime_detector):
         """The ADX detector does not claim to map another taxonomy."""

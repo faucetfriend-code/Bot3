@@ -143,24 +143,19 @@ def render_funnel_report(
         if stage not in stages:
             continue
         lines.append(
-            f"  {stage:<26} {stages.get(stage, 0):>10}   "
-            f"{_attrition(stages, stage)}"
+            f"  {stage:<26} {stages.get(stage, 0):>10}   {_attrition(stages, stage)}"
         )
     lines.append(f"  {rule}")
 
     by_strategy: Dict[str, Dict[str, int]] = payload.get("by_strategy") or {}
     if by_strategy:
         lines.append("  BY STRATEGY")
-        lines.append(
-            f"  {'  strategy':<26} {'invoked':>10} {'raw':>8} {'dropped':>9}"
-        )
+        lines.append(f"  {'  strategy':<26} {'invoked':>10} {'raw':>8} {'dropped':>9}")
         for name in sorted(by_strategy):
             cell = by_strategy[name] or {}
             dropped = sum(cell.get(s, 0) for s in DROP_STAGES)
             if not (
-                cell.get("strategy_invoked", 0)
-                or cell.get("raw_signals", 0)
-                or dropped
+                cell.get("strategy_invoked", 0) or cell.get("raw_signals", 0) or dropped
             ):
                 # Selected by the regime but disabled for this run.
                 continue
@@ -285,9 +280,7 @@ def _gate_bound(record: Dict[str, Any]) -> str:
     return f"[{low_text}, {high_text}]"
 
 
-def _gate_metric_lines(
-    gate_metrics: Dict[str, Any], rule: str
-) -> List[str]:
+def _gate_metric_lines(gate_metrics: Dict[str, Any], rule: str) -> List[str]:
     """Render the GATE METRICS block.
 
     Args:
@@ -298,9 +291,7 @@ def _gate_metric_lines(
         Report lines, including the trailing rule.
     """
     lines = ["  GATE METRICS"]
-    lines.append(
-        f"  {'  metric':<20}{'observed':>26}  {'gate':>14}  {'pass':>8}"
-    )
+    lines.append(f"  {'  metric':<20}{'observed':>26}  {'gate':>14}  {'pass':>8}")
     for name, record in sorted(gate_metrics.items()):
         if not isinstance(record, dict):
             lines.append(f"  {'  ' + str(name):<20}{str(record):>26}")

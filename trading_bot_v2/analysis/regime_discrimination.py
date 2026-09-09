@@ -573,9 +573,7 @@ def label_bars_two_axis(
         names=eff_names,
         **kwargs,
     )
-    return [
-        None if v is None or e is None else f"{v}|{e}" for v, e in zip(vol, eff)
-    ]
+    return [None if v is None or e is None else f"{v}|{e}" for v, e in zip(vol, eff)]
 
 
 def label_bars(
@@ -996,9 +994,7 @@ def run_baselines(
 # ----------------------------------------------------------------------
 
 
-def epsilon_squared_coded(
-    codes: Any, ranks: Any, n: int, n_groups: int
-) -> float:
+def epsilon_squared_coded(codes: Any, ranks: Any, n: int, n_groups: int) -> float:
     """Vectorised Kruskal-Wallis epsilon-squared over integer group codes.
 
     Arithmetically identical to ``epsilon_squared`` - the same H statistic
@@ -1027,9 +1023,7 @@ def epsilon_squared_coded(
         return 0.0
     grand = (n + 1) / 2.0
     means = totals[live] / counts[live]
-    h_stat = (
-        12.0 / (n * (n + 1)) * float(np.sum(counts[live] * (means - grand) ** 2))
-    )
+    h_stat = 12.0 / (n * (n + 1)) * float(np.sum(counts[live] * (means - grand) ** 2))
     return h_stat / (n - 1)
 
 
@@ -1081,9 +1075,7 @@ def _partial(fn: Callable[..., Any], **kwargs: Any) -> Callable[..., Any]:
         A two-argument callable ``(bars, params) -> labels``.
     """
 
-    def bound(bars: Sequence[BarFeatures], params: RegimeParams) -> List[
-        Optional[str]
-    ]:
+    def bound(bars: Sequence[BarFeatures], params: RegimeParams) -> List[Optional[str]]:
         return fn(bars, params, **kwargs)
 
     return bound
@@ -1781,7 +1773,7 @@ def print_knee(result: Dict[str, Any]) -> None:
         ),
     ):
         print(f"\n{title} (medians, normalised so unconditional = 1.00):")
-        header = f"  {col:<14}{'n':>7}{'fwd_vol':>10}" f"{'efficiency':>12}{'|ret|':>9}"
+        header = f"  {col:<14}{'n':>7}{'fwd_vol':>10}{'efficiency':>12}{'|ret|':>9}"
         print(header)
         print("  " + "-" * (len(header) - 2))
         for row in result[key]:

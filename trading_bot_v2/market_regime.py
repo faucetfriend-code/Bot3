@@ -106,7 +106,9 @@ class MarketRegime(Enum):
 
     TRENDING_STRONG = "trending_strong"  # ADX > 25 (held until ADX < 22)
     TRENDING_MODERATE = "trending_moderate"  # 20 < ADX <= 25, ADX flat/rising
-    RANGING_VOLATILE = "ranging_volatile"  # ADX <= 20, vol score > 65 (enter 68 / exit 60 bands)
+    RANGING_VOLATILE = (
+        "ranging_volatile"  # ADX <= 20, vol score > 65 (enter 68 / exit 60 bands)
+    )
     RANGING_CALM = "ranging_calm"  # ADX <= 20, low volatility
     INDECISIVE = "indecisive"  # 20 < ADX <= 25 with falling ADX slope
 
@@ -253,7 +255,9 @@ class MarketRegimeDetector:
         # Regime caching to prevent unnecessary recalculation
         self._regime_cache: Dict[str, Dict] = {}
         self._pending_regime_changes: Dict[str, Dict] = {}
-        self._cache_ttl_hours = 1  # Recalculate every 1 hour (was 4h - too slow for regime changes)
+        self._cache_ttl_hours = (
+            1  # Recalculate every 1 hour (was 4h - too slow for regime changes)
+        )
 
         # Dwell-time tracking: when each symbol's confirmed regime last
         # switched (set only on confirmed old -> new transitions) and when
@@ -307,7 +311,10 @@ class MarketRegimeDetector:
         GMM detector is ready and a model is loaded.
         """
         if self._ml_initialised:
-            return self._gmm_detector is not None and self._gmm_detector.is_model_available()
+            return (
+                self._gmm_detector is not None
+                and self._gmm_detector.is_model_available()
+            )
 
         self._ml_initialised = True
 
@@ -338,7 +345,9 @@ class MarketRegimeDetector:
                 )
             return available
         except ImportError as exc:
-            logger.warning(f"Cannot initialise GMM detector (missing dependency): {exc}")
+            logger.warning(
+                f"Cannot initialise GMM detector (missing dependency): {exc}"
+            )
             self._use_ml_regime = False
             return False
         except Exception as exc:
@@ -439,9 +448,7 @@ class MarketRegimeDetector:
             if not self._initialise_shadow():
                 return
 
-            result = self._shadow_detector.predict(
-                market_data, allow_fallback=False
-            )
+            result = self._shadow_detector.predict(market_data, allow_fallback=False)
             ml_regime = result.system_regime.value
             self._db.save_regime_shadow(
                 symbol=symbol,
@@ -453,9 +460,7 @@ class MarketRegimeDetector:
                 detected_at=self._clock(),
             )
         except Exception as exc:
-            logger.warning(
-                f"Shadow regime observation failed for {symbol}: {exc}"
-            )
+            logger.warning(f"Shadow regime observation failed for {symbol}: {exc}")
 
     def detect_regime(
         self,
@@ -529,8 +534,6 @@ class MarketRegimeDetector:
         # --- ML regime detection attempt (when enabled) ---
         if self._initialise_gmm() and self._gmm_detector is not None:
             try:
-                from .ml.gmm_regime import GMMRegimeResult
-
                 result = self._gmm_detector.predict(market_data)
                 if not result.used_fallback:
                     # GMM was confident enough — use its result
@@ -789,9 +792,7 @@ class MarketRegimeDetector:
         # confirmed switch. Detection already ran and logged above.
         last_switch = self._last_confirmed_switch.get(symbol)
         if last_switch is not None:
-            hours_since_switch = (
-                self._clock() - last_switch
-            ).total_seconds() / 3600.0
+            hours_since_switch = (self._clock() - last_switch).total_seconds() / 3600.0
             if hours_since_switch < self.min_dwell_hours:
                 logger.info(
                     f"Regime switch suppressed for {symbol} by min dwell: "
@@ -881,9 +882,7 @@ class MarketRegimeDetector:
                     detected_at=timestamp,
                 )
             except Exception as e:
-                logger.error(
-                    f"Failed to persist regime transition for {symbol}: {e}"
-                )
+                logger.error(f"Failed to persist regime transition for {symbol}: {e}")
 
     def get_current_regime(self, symbol: str) -> Optional[MarketRegime]:
         """
@@ -1084,6 +1083,7 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.25,  # Trend-side continuation at VWAP
             },
             MarketRegime.TRENDING_MODERATE: {
                 "MACrossover": 0.4,  # Balanced with momentum
@@ -1091,12 +1091,14 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow confirmation
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.25,  # Trend-side continuation at VWAP
             },
             MarketRegime.RANGING_VOLATILE: {
                 "GridTrading": 0.8,
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
             MarketRegime.RANGING_CALM: {
                 "MeanReversion": 0.6,
@@ -1104,12 +1106,14 @@ class MarketRegimeDetector:
                 "OrderBookImbalance": 0.2,  # Flow-based overlay
                 "SessionRangeBreakout": 0.15,  # Time-gated ORB overlay
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
             MarketRegime.INDECISIVE: {
                 "LiquidationCapture": 0.6,  # Conservative approach
                 "OrderBookImbalance": 0.4,  # Flow-based (best in choppy markets)
                 "SessionRangeBreakout": 0.2,  # ORB thrives on post-chop expansion
                 "CalendarFlow": 0.1,  # Calendar-gated TOM overlay
+                "VWAPPullback": 0.15,  # Self-gated by its own 4h stack
             },
         }
 

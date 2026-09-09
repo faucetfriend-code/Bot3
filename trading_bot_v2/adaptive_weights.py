@@ -266,9 +266,7 @@ class AdaptiveWeightManager:
             multipliers: Dict[str, Dict[str, float]] = {}
             evidence: Dict[str, Dict[str, Dict[str, Any]]] = {}
             for (regime_key, strategy_key), mult in self._multipliers.items():
-                multipliers.setdefault(regime_key, {})[strategy_key] = round(
-                    mult, 4
-                )
+                multipliers.setdefault(regime_key, {})[strategy_key] = round(mult, 4)
             for (regime_key, strategy_key), cell in self._cells.items():
                 evidence.setdefault(regime_key, {})[strategy_key] = {
                     "trade_count": cell.get("trade_count", 0),
@@ -349,9 +347,7 @@ class AdaptiveWeightManager:
             if trade_count < self.min_trades:
                 mult = 1.0  # Evidence gate: fall back to static weights
             else:
-                score = (
-                    self.RECENT_BLEND * recent + self.LIFETIME_BLEND * lifetime
-                )
+                score = self.RECENT_BLEND * recent + self.LIFETIME_BLEND * lifetime
                 mult = self._score_to_multiplier(score)
 
             multipliers[key] = mult

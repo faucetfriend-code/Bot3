@@ -44,6 +44,7 @@ MIN_CANDLES: int = DEFAULT_ATR_MEAN_PERIOD + DEFAULT_ATR_PERIOD + 1
 # Data classes
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True, slots=True)
 class MarketFeatures:
     """Container for the 6 statistical features extracted from OHLCV data.
@@ -92,6 +93,7 @@ class MarketFeatures:
 # ---------------------------------------------------------------------------
 # Feature extractor
 # ---------------------------------------------------------------------------
+
 
 class FeatureExtractor:
     """Extracts statistical features from OHLCV data for GMM regime detection.
@@ -170,7 +172,9 @@ class FeatureExtractor:
         closes_arr = np.asarray(closes, dtype=np.float64)
         highs_arr = np.asarray(highs, dtype=np.float64) if highs is not None else None
         lows_arr = np.asarray(lows, dtype=np.float64) if lows is not None else None
-        volumes_arr = np.asarray(volumes, dtype=np.float64) if volumes is not None else None
+        volumes_arr = (
+            np.asarray(volumes, dtype=np.float64) if volumes is not None else None
+        )
 
         n = len(closes_arr)
         if n < MIN_CANDLES:
@@ -220,7 +224,9 @@ class FeatureExtractor:
         closes_arr = np.asarray(closes, dtype=np.float64)
         highs_arr = np.asarray(highs, dtype=np.float64) if highs is not None else None
         lows_arr = np.asarray(lows, dtype=np.float64) if lows is not None else None
-        volumes_arr = np.asarray(volumes, dtype=np.float64) if volumes is not None else None
+        volumes_arr = (
+            np.asarray(volumes, dtype=np.float64) if volumes is not None else None
+        )
 
         n = len(closes_arr)
         if n < MIN_CANDLES:
@@ -237,7 +243,9 @@ class FeatureExtractor:
             window_closes = closes_arr[: end_idx + 1]
             window_highs = highs_arr[: end_idx + 1] if highs_arr is not None else None
             window_lows = lows_arr[: end_idx + 1] if lows_arr is not None else None
-            window_vols = volumes_arr[: end_idx + 1] if volumes_arr is not None else None
+            window_vols = (
+                volumes_arr[: end_idx + 1] if volumes_arr is not None else None
+            )
 
             try:
                 feat = MarketFeatures(

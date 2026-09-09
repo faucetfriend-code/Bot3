@@ -124,15 +124,13 @@ class TestMetricsMatchLegacyHelpers:
 
     @pytest.mark.parametrize("series", SERIES)
     def test_profit_factor_identical(self, monitor, series):
-        assert monitor._compute_profit_factor(series) == metrics.profit_factor(
-            series
-        )
+        assert monitor._compute_profit_factor(series) == metrics.profit_factor(series)
 
     @pytest.mark.parametrize("series", SERIES)
     def test_max_drawdown_identical(self, monitor, series):
-        assert monitor._compute_max_drawdown_pct(
+        assert monitor._compute_max_drawdown_pct(series) == metrics.max_drawdown_pct(
             series
-        ) == metrics.max_drawdown_pct(series)
+        )
 
     def test_profit_factor_known_values(self):
         assert metrics.profit_factor([2.0, -1.0, 4.0, -1.0]) == pytest.approx(3.0)
@@ -210,7 +208,15 @@ class TestTradeStoreRoundTrip:
         assert len(store.get_closed_trades(exchange="pacifica")) == 1
         assert store.get_closed_trades(exchange="blofin") == []
 
-    def test_filters(self, temp_db):
+    @pytest.mark.parametrize("active_exchange", ["pacifica", "blofin"])
+    def test_filters(self, temp_db, monkeypatch, active_exchange):
+        # Both exchanges are live, so the filters must behave identically
+        # whichever one is active.  EXCHANGE is pinned rather than read
+        # from the ambient environment (the operator's .env sets it): a
+        # test that depends on whichever default happens to be configured
+        # flips every time the default moves and covers only one exchange.
+        monkeypatch.setenv("EXCHANGE", active_exchange)
+        other_exchange = "blofin" if active_exchange == "pacifica" else "pacifica"
         store = TradeStore(db=temp_db.DatabaseManager())
         old_ts = (NOW - timedelta(days=10)).isoformat()
         store.record_trade(
@@ -232,7 +238,8 @@ class TestTradeStoreRoundTrip:
                 exchange="blofin",
             )
         )
-        # open trade must never appear in closed queries
+        # Open trade must never appear in closed queries.  Left untagged
+        # on purpose: it must pick up the active exchange, whichever that is.
         store.record_trade(
             {
                 "symbol": "ETH",
@@ -248,18 +255,21 @@ class TestTradeStoreRoundTrip:
 
         assert len(store.get_closed_trades()) == 2
         assert [
-            t["strategy"]
-            for t in store.get_closed_trades(strategy="MEAN_REVERSION")
+            t["strategy"] for t in store.get_closed_trades(strategy="MEAN_REVERSION")
         ] == ["MEAN_REVERSION"]
         assert [
             t["regime"] for t in store.get_closed_trades(regime="ranging_volatile")
         ] == ["ranging_volatile"]
-        assert [
-            t["symbol"] for t in store.get_closed_trades(exchange="blofin")
-        ] == ["BTC"]
-        assert [t["symbol"] for t in store.get_closed_trades(symbol="SUI")] == [
+        # Explicit per-exchange filtering: each tagged trade is reachable
+        # by its own exchange and invisible under the other one.
+        assert [t["symbol"] for t in store.get_closed_trades(exchange="blofin")] == [
+            "BTC"
+        ]
+        assert [t["symbol"] for t in store.get_closed_trades(exchange="pacifica")] == [
             "SUI"
         ]
+        assert store.get_closed_trades(exchange="mockswap") == []
+        assert [t["symbol"] for t in store.get_closed_trades(symbol="SUI")] == ["SUI"]
         # since: only the recent trade has exit_time >= NOW - 1 day
         recent = store.get_closed_trades(since=NOW - timedelta(days=1))
         assert [t["symbol"] for t in recent] == ["SUI"]
@@ -270,7 +280,13 @@ class TestTradeStoreRoundTrip:
         # open trades
         open_trades = store.get_open_trades()
         assert [t["symbol"] for t in open_trades] == ["ETH"]
-        assert open_trades[0]["exchange"] == "pacifica"
+        # Untagged writes take the active exchange, and the open-trade
+        # exchange filter agrees with the tag it was given.
+        assert open_trades[0]["exchange"] == active_exchange
+        assert [
+            t["symbol"] for t in store.get_open_trades(exchange=active_exchange)
+        ] == ["ETH"]
+        assert store.get_open_trades(exchange=other_exchange) == []
 
     def test_get_recent_trades_shape_and_filter(self, temp_db):
         store = TradeStore(db=temp_db.DatabaseManager())
@@ -285,9 +301,7 @@ class TestTradeStoreRoundTrip:
 
     def test_database_get_trades_exchange_passthrough(self, temp_db):
         dbm = temp_db.DatabaseManager()
-        TradeStore(db=dbm).record_trade(
-            _closed_trade(symbol="BTC", exchange="blofin")
-        )
+        TradeStore(db=dbm).record_trade(_closed_trade(symbol="BTC", exchange="blofin"))
         rows = dbm.get_trades(limit=100, exchange="blofin")
         assert [r["symbol"] for r in rows] == ["BTC"]
         assert rows[0]["exchange"] == "blofin"
@@ -305,9 +319,7 @@ class TestAggregate:
         store.record_trade(_closed_trade(pnl=10.0))
         store.record_trade(_closed_trade(pnl=-5.0))
         # GRID_TRADING / untagged regime: pnl +2
-        store.record_trade(
-            _closed_trade(strategy="GRID_TRADING", regime=None, pnl=2.0)
-        )
+        store.record_trade(_closed_trade(strategy="GRID_TRADING", regime=None, pnl=2.0))
 
         agg = store.aggregate(group_by=("strategy", "regime"))
 
@@ -397,12 +409,8 @@ class TestConsumerParity:
             assert mgr.refresh(force=True) is True
 
         # +2 pnl-pct expectancy -> score 2.0 -> saturates the 1.5 clamp
-        m_legacy = mgr_legacy.get_multiplier(
-            MarketRegime.RANGING_CALM, "MeanReversion"
-        )
-        m_store = mgr_store.get_multiplier(
-            MarketRegime.RANGING_CALM, "MeanReversion"
-        )
+        m_legacy = mgr_legacy.get_multiplier(MarketRegime.RANGING_CALM, "MeanReversion")
+        m_store = mgr_store.get_multiplier(MarketRegime.RANGING_CALM, "MeanReversion")
         assert m_legacy == pytest.approx(1.5)
         assert m_store == pytest.approx(m_legacy)
 

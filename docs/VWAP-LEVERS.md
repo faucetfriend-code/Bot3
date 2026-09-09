@@ -1,10 +1,12 @@
-# VWAP scalping: three levers, measured
+# VWAP scalping: four levers, measured
 
-**Run date:** 2026-07-29. **Verdict: no.** None of the three levers proposed for
-`vwap_scalping` produces an edge, and the third one explains why the other two
-cannot: the strategy's gross, frictionless edge is about **1.8 basis points per
-round trip** and it pays about **14 basis points** to trade. Nothing that
-re-partitions or re-thresholds a 2 bp signal closes an 8 bp gap.
+**Run date:** 2026-07-29. **Verdict: no.** None of the four levers produces an
+edge. Levers 1-3 were the parameters; lever 3 argued the other two could not
+matter because the frictionless edge is ~1.8 bp against ~14 bp of friction.
+**Lever 4, added later the same day, is the one that mattered**: the stop was
+taken from the 1m ATR on a 15m setup and sat inside the entry bar's own range
+99.3% of the time. Fixing it is worth +0.17 of profit factor, more than every
+parameter lever combined - and still only reaches PF 0.91.
 
 Everything below is BTC-USDC only, contiguous, seeded (`BACKTEST_SEED=0`),
 `DATA_AUTODOWNLOAD=false`, anchored at `2026-07-01`, cost profile `pacifica`,
@@ -16,6 +18,7 @@ funding model `flat`. Reproduce commands are inline.
 | 2. entry threshold, fixed sweep | PF **0.86** (at the 3.0 guard ceiling) | 448 | +0.12, for -91% sample |
 | 2. entry threshold, **out-of-sample walk-forward** | PF **0.85**, Sharpe **-0.086** | 1230 | +0.11, IS/OOS gap 0.357 |
 | 3. execution costs | PF 1.14 only at **zero fees and zero slippage** | 1216 | unreachable |
+| **4. stop geometry** | PF **0.91** (`atr_structure`) | 2803 | **+0.17, for -42% sample** |
 
 Nothing clears 1.0. The gate wants 1.3.
 
@@ -269,7 +272,16 @@ happens separately). Every PF in this repo is a pre-fee number. That is why
 the frictionless row shows PF 1.138 - slippage moves fill prices and therefore
 PF, fees do not.
 
-### An accounting bug found on the way
+### An accounting bug found on the way (FIXED 2026-07-29)
+
+> **Fixed.** `SimulatedExchange.equity()` now adds the open cost basis back;
+> see `docs/BACKTESTING_GUIDE.md` "Superseded numbers" for the before/after
+> table and the list of what was and was not affected. The correction is
+> larger than estimated below: on this same window VWAP's max drawdown falls
+> 5.06% -> 3.13% and its Sharpe moves +0.163 -> **-10.939**. The conclusions
+> in this document are unchanged, because all of them rest on profit factor
+> and trade counts, neither of which moved.
+
 
 `SimulatedExchange.get_account_balance()` returns `cash + unrealised_pnl`, but
 opening a position debits its whole cost basis from cash and only the
@@ -339,9 +351,93 @@ ever becomes a real gate, so the dimensions can legitimately come back.
 
 ---
 
+## Lever 4 - the stop geometry (added 2026-07-29)
+
+The three levers above all hold the **stop** fixed, and the stop turned out to
+be the biggest lever of the four.
+
+`vwap_scalping.py` took its stop from `1.5 x ATR` of the **1m** series
+whenever 1m was supplied ("better precision for SL/TP placement"), even
+though the setup is 15m structure. The module docstring had always claimed
+"Stop Loss: Beyond nearest SD band or 1.5x ATR", but the band branch was
+never written - both directions assigned `atr_stop` with the comment "Use the
+tighter stop (ATR-based) for better RRR".
+
+Measured on BTC 2022-07..2024-07 at the 6538 bars that clear a 2.0 SD gate:
+
+| | median |
+|---|---|
+| distance to take-profit (VWAP) | 1.133% of price |
+| stop = 1.5 x ATR(1m) | **0.138%** |
+| stop = 1.5 x ATR(15m) | 0.522% |
+| ATR(15m) / ATR(1m) | **5.08x** |
+| **stop tighter than the entry bar's own high-low range** | **99.3% of signals** |
+
+The stop sat inside the noise of the bar the trade was entered on. That is
+the mechanism behind the 18.1% win rate and the 82% stop-exit share.
+
+`VWAP_STOP_SOURCE` (`atr_execution` / `atr_structure` / `sd_band`) and
+`VWAP_ENTRY_CONFIRMATION` (`adverse` / `turning` / `none`) now make both
+switchable; neither key is in `.env`, so a shell export reaches them. Both
+default to the shipped behaviour so this table's control is a real control.
+
+48 contiguous 2-month BTC windows, 2018-07..2026-07, anchored 2026-07-01:
+
+| stop | confirmation | closed trades | PF | PSR |
+|---|---|---|---|---|
+| `atr_execution` | `adverse` (shipped) | 4851 | **0.74** | 0.0000 |
+| `atr_execution` | `none` | 5077 | 0.73 | 0.0000 |
+| `atr_execution` | `turning` | 2285 | 0.77 | 0.0000 |
+| **`atr_structure`** | **`adverse`** | **2803** | **0.91** | 0.0181 |
+| `atr_structure` | `none` | 2837 | 0.90 | 0.0113 |
+| `atr_structure` | `turning` | 1528 | 0.90 | 0.0413 |
+| `sd_band` | `adverse` | 4019 | 0.77 | 0.0000 |
+| `sd_band` | `none` | 4089 | 0.79 | 0.0000 |
+| `sd_band` | `turning` | 2003 | 0.83 | 0.0016 |
+
+**+0.17 of profit factor, the largest effect in this document** - bigger than
+the threshold lever's +0.12, and unlike that one it does not require an
+out-of-range threshold or a 91% cut in sample. It still does not reach 1.0.
+
+Three further readings:
+
+**The MACD confirmation has never been a filter.** `adverse` and `none` differ
+by 4.5% of trades and 0.01 of PF under the shipped stop (4851/0.74 vs
+5077/0.73), and by 1.2% and 0.01 under the fixed one. Measured directly on a
+year of 15m BTC: at bars where the deviation gate opens, the histogram sign
+`adverse` demands **already holds 99.0% of the time** (397 of 401). When price
+is 2+ SD below a rolling volume-weighted mean the histogram is essentially
+always negative, so the gate is implied by the deviation condition. The
+"sellers exhausted" reasoning in the source describes a gate that does not
+gate; VWAP has had exactly one entry condition its whole life.
+
+**`turning` filters but pays nothing.** It is a real gate - only 14.7% of
+opened bars pass - and it halves the sample (2803 -> 1528) for the same PF
+(0.91 vs 0.90). Momentum inflection carries no edge here.
+
+**`sd_band` is worse than simply using the right ATR** (0.77 vs 0.91), so the
+placement the docstring always described is not the one that helps.
+
+Note the trade count *falls* when the stop widens (4851 -> 2803): wider stops
+hold positions longer, so fewer re-entry opportunities occur.
+
+---
+
 ## Verdict
 
-**VWAP scalping has no edge that any of these three levers can reach.** The
+**VWAP scalping has no edge that any of these four levers can reach.** Lever 4
+is the one that was worth finding - it is a genuine implementation defect, and
+correcting it is worth more than every parameter in the search space combined -
+but PF 0.91 is still PF 0.91.
+
+The stop fix does change what the earlier frictionless number means. The
+"1.8 bp gross edge" in lever 3 was measured with the noise stop in place, so
+it describes what survived after the geometry had already mangled the trades,
+not the raw signal. PF is booked pre-fee (see the note in lever 3), and at
+PF 0.91 the strategy loses money **before fees are charged at all** - so the
+conclusion survives the correction, by a different route than lever 3 took.
+
+ The
 strategy is not mis-mapped, it is not mis-thresholded, and it is not badly
 executed. It is a high-frequency mean-reversion signal worth under 2 bp a
 round trip on an instrument that costs 14 bp to trade, and the census cell

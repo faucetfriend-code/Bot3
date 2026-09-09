@@ -36,6 +36,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from ..models import OrderSide, OrderType
+from ..order_result import OrderResult, OrderResultStatus
 from .base import (
     ExchangeBalance,
     ExchangeCapabilities,
@@ -77,6 +78,7 @@ class BlofinExchange(ExchangeClient):
         native_position_sides=("long", "short", "net"),
         amounts_as_strings=True,  # Contract counts sent as strings
         min_order_size_source="instruments_endpoint",
+        supports_venue_stops=True,  # TP/SL rows via /trade/order-tpsl
     )
 
     def __init__(self, rest_client: Any = None, ws_client: Any = None):
@@ -127,11 +129,7 @@ class BlofinExchange(ExchangeClient):
     @staticmethod
     def to_native_order_side(side: OrderSideInput) -> str:
         """Normalize an order side to the Blofin wire value "buy"/"sell"."""
-        return (
-            "buy"
-            if BlofinExchange._to_order_side(side) == OrderSide.BUY
-            else "sell"
-        )
+        return "buy" if BlofinExchange._to_order_side(side) == OrderSide.BUY else "sell"
 
     @staticmethod
     def from_native_order_side(value: str) -> OrderSide:
@@ -192,13 +190,19 @@ class BlofinExchange(ExchangeClient):
         quantity: float,
         order_type: OrderTypeInput = OrderType.MARKET,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Place an order with normalized vocabulary.
 
         Delegates to ``BlofinClient.place_order`` with exact lowercase
         "buy"/"sell" and "market"/"limit"; the native client converts
         the base quantity to contracts, rounds to lot size, and rejects
-        below-minimum sizes with a clear error.
+        below-minimum sizes with a clear error.  ``reduce_only``,
+        ``client_order_id`` and ``stop_loss`` (forwarded as
+        ``sl_trigger_price``, attached to the entry) are forwarded only
+        when set so legacy positional mocks keep matching.
 
         Returns:
             Pacifica-style ack dict {"success": bool, "data":
@@ -208,20 +212,157 @@ class BlofinExchange(ExchangeClient):
         type_str = self._to_order_type(order_type).value  # "market" / "limit"
         if type_str == OrderType.LIMIT.value and price is None:
             raise ValueError("Price is required for limit orders")
+        extra: Dict[str, Any] = {}
+        if reduce_only:
+            extra["reduce_only"] = True
+        if client_order_id:
+            extra["client_order_id"] = client_order_id
+        if stop_loss is not None:
+            extra["sl_trigger_price"] = stop_loss
         return self.rest_client.place_order(
             symbol=symbol,
             side=side_str,
             quantity=quantity,
             order_type=type_str,
             price=price,
+            **extra,
+        )
+
+    # ------------------------------------------------------------------
+    # Venue-side protective stops (TP/SL rows)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _to_position_side_str(side: Any) -> str:
+        """Normalize PositionSide / OrderSide / strings to "long"/"short"."""
+        value = getattr(side, "value", side)
+        lowered = str(value).strip().lower()
+        return "short" if lowered in ("short", "sell", "ask") else "long"
+
+    @staticmethod
+    def _stop_result(ack: Any, fallback_error: str) -> OrderResult:
+        """Normalize a TP/SL ack; never a fabricated success."""
+        result = OrderResult.from_ack(ack)
+        if not result.accepted and not result.error:
+            result.error = fallback_error
+        return result
+
+    def install_stop(
+        self,
+        symbol: str,
+        side: Any,
+        quantity: float,
+        stop_price: float,
+    ) -> OrderResult:
+        """Place a standalone reduce-only TP/SL row (never raises)."""
+        try:
+            ack = self.rest_client.place_tpsl(
+                symbol, self._to_position_side_str(side), quantity, stop_price
+            )
+        except Exception as exc:  # noqa: BLE001 - protective path must not raise
+            logger.error("Blofin install_stop %s failed: %s", symbol, exc)
+            return OrderResult(
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        return self._stop_result(ack, "order-tpsl not accepted")
+
+    def amend_stop(
+        self,
+        symbol: str,
+        side: Any,
+        new_stop_price: float,
+        entry_order_id: Optional[str] = None,
+        stop_id: Optional[str] = None,
+    ) -> OrderResult:
+        """Move the stop via the amend-order -> amend-tpsl -> replace cascade."""
+        try:
+            ack = self.rest_client.amend_stop(
+                symbol,
+                entry_order_id,
+                new_stop_price,
+                self._to_position_side_str(side),
+                tpsl_id=stop_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - protective path must not raise
+            logger.error("Blofin amend_stop %s failed: %s", symbol, exc)
+            return OrderResult(
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        return self._stop_result(ack, "amend cascade failed")
+
+    def cancel_stop(self, symbol: str, stop_id: str) -> OrderResult:
+        """Cancel one TP/SL row (never raises)."""
+        try:
+            ack = self.rest_client.cancel_tpsl(symbol, stop_id)
+        except Exception as exc:  # noqa: BLE001 - protective path must not raise
+            logger.error("Blofin cancel_stop %s/%s failed: %s", symbol, stop_id, exc)
+            return OrderResult(
+                status=OrderResultStatus.UNKNOWN.value,
+                error=f"{type(exc).__name__}: {exc}",
+            )
+        return self._stop_result(ack, "cancel-tpsl not accepted")
+
+    def list_stops(self, symbol: str) -> List[Dict[str, Any]]:
+        """Pending TP/SL rows for ``symbol``; raises on transport failure."""
+        return self.rest_client.get_pending_tpsl(symbol)
+
+    def get_order_fill(
+        self,
+        symbol: str,
+        order_id: Optional[str] = None,
+        client_order_id: Optional[str] = None,
+        requested_quantity: Optional[float] = None,
+    ) -> OrderResult:
+        """Resolve an accepted order's fills via the native client.
+
+        Uses ``BlofinClient.get_order_status`` (orders-pending ->
+        orders-history -> fills-history).  Transport failures yield an
+        UNKNOWN result, never a fill.
+        """
+        if not order_id and not client_order_id:
+            return OrderResult(
+                status=OrderResultStatus.UNKNOWN.value, error="no order id"
+            )
+        try:
+            info = self.rest_client.get_order_status(
+                symbol, order_id or "", client_order_id=client_order_id
+            )
+        except Exception as exc:  # noqa: BLE001 - lookup failure is "unknown"
+            logger.warning(
+                "Blofin fill lookup failed for %s %s: %s", symbol, order_id, exc
+            )
+            return OrderResult(
+                order_id=order_id,
+                client_order_id=client_order_id,
+                status=OrderResultStatus.UNKNOWN.value,
+                error=str(exc),
+            )
+        return OrderResult.from_fill_lookup(
+            order_id=info.get("order_id") or order_id,
+            state=str(info.get("state", "unknown")),
+            filled_quantity=float(info.get("filled_quantity", 0.0) or 0.0),
+            avg_fill_price=info.get("avg_fill_price"),
+            requested_quantity=requested_quantity,
+            client_order_id=info.get("client_order_id") or client_order_id,
+            raw=info,
         )
 
     def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """Cancel a single order (passthrough)."""
         return self.rest_client.cancel_order(symbol=symbol, order_id=order_id)
 
-    def cancel_all_orders(self, symbol: Optional[str] = None) -> Dict[str, Any]:
-        """Cancel all open orders, optionally for one symbol."""
+    def cancel_all_orders(
+        self, symbol: Optional[str] = None, include_stops: bool = False
+    ) -> Dict[str, Any]:
+        """Cancel all open orders, optionally for one symbol.
+
+        Protective TP/SL rows are kept unless ``include_stops`` is True
+        (forwarded only when set so legacy mocks keep matching).
+        """
+        if include_stops:
+            return self.rest_client.cancel_all_orders(symbol=symbol, include_stops=True)
         return self.rest_client.cancel_all_orders(symbol=symbol)
 
     def get_positions(self) -> List[ExchangePosition]:
@@ -332,8 +473,6 @@ class BlofinExchange(ExchangeClient):
         """Instrument constraints in base units (tick/lot/min sizes)."""
         return self.rest_client.get_instrument_info(symbol)
 
-    def get_funding_history(
-        self, symbol: str, limit: int = 8
-    ) -> List[Dict[str, Any]]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Funding-rate history records (passthrough)."""
         return self.rest_client.get_funding_history(symbol, limit=limit)

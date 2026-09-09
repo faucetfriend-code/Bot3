@@ -53,9 +53,7 @@ def payload_from_trial(trial: Any) -> Dict[str, Any]:
         "by_strategy": attrs.get("by_strategy") or {},
         "regimes": attrs.get("regimes") or {},
         "notes": (
-            {"gate_metrics": attrs["gate_metrics"]}
-            if attrs.get("gate_metrics")
-            else {}
+            {"gate_metrics": attrs["gate_metrics"]} if attrs.get("gate_metrics") else {}
         ),
         "diagnosis": attrs.get("outcome", ""),
         "headline": attrs.get("headline", ""),
@@ -126,12 +124,8 @@ def _load_study(study_name: str, db_path: Optional[str]):
 
         from ..optimization.optuna_runner import DEFAULT_DB_PATH
 
-        db_path = str(
-            Path(__file__).parent.parent / "optimization" / DEFAULT_DB_PATH
-        )
-    return optuna.load_study(
-        study_name=study_name, storage=f"sqlite:///{db_path}"
-    )
+        db_path = str(Path(__file__).parent.parent / "optimization" / DEFAULT_DB_PATH)
+    return optuna.load_study(study_name=study_name, storage=f"sqlite:///{db_path}")
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -145,21 +139,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     """
     parser = argparse.ArgumentParser(
         prog="python -m trading_bot_v2.diagnostics.explain",
-        description=(
-            "Explain why an optimization study's trials did or did not trade"
-        ),
+        description=("Explain why an optimization study's trials did or did not trade"),
     )
     parser.add_argument("--study", help="Exact study name")
-    parser.add_argument(
-        "--strategy", help="Strategy key - explains its latest study"
-    )
+    parser.add_argument("--strategy", help="Strategy key - explains its latest study")
     parser.add_argument("--db", default=None, help="Study database path")
     parser.add_argument(
         "--trial", type=int, default=None, help="Explain one trial by number"
     )
-    parser.add_argument(
-        "--top", type=int, default=1, help="How many trials to explain"
-    )
+    parser.add_argument("--top", type=int, default=1, help="How many trials to explain")
     parser.add_argument(
         "--all", action="store_true", help="Explain every instrumented trial"
     )

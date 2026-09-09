@@ -128,9 +128,7 @@ def score_for_outcome(
             score - it is pruned before the backtest runs.
     """
     if outcome is TrialOutcome.INFEASIBLE_CONFIG:
-        raise ValueError(
-            "infeasible_config trials are pruned, not scored"
-        )
+        raise ValueError("infeasible_config trials are pruned, not scored")
 
     if outcome is TrialOutcome.TRADED:
         if objective_value is None:

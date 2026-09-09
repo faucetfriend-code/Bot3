@@ -58,16 +58,12 @@ class TestAdxExitBand:
 
     def test_adx_26_enters_trending_strong(self, market_data):
         det = make_detector()
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=26.0
-        ):
+        with patch("trading_bot_v2.market_regime.calculate_adx", return_value=26.0):
             assert det.detect_regime(market_data) == MarketRegime.TRENDING_STRONG
 
     def test_adx_23_holds_trending_strong(self, market_data):
         det = make_detector()
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=23.0
-        ):
+        with patch("trading_bot_v2.market_regime.calculate_adx", return_value=23.0):
             regime = det.detect_regime(
                 market_data, previous_regime=MarketRegime.TRENDING_STRONG
             )
@@ -75,17 +71,16 @@ class TestAdxExitBand:
 
     def test_adx_23_without_previous_is_not_strong(self, market_data):
         det = make_detector()
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=23.0
-        ):
+        with patch("trading_bot_v2.market_regime.calculate_adx", return_value=23.0):
             regime = det.detect_regime(market_data)
             assert regime != MarketRegime.TRENDING_STRONG
 
     def test_adx_21_exits_trending_strong(self, market_data):
         det = make_detector()
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=21.0
-        ), patch.object(det, "_adx_slope_falling", return_value=False):
+        with (
+            patch("trading_bot_v2.market_regime.calculate_adx", return_value=21.0),
+            patch.object(det, "_adx_slope_falling", return_value=False),
+        ):
             regime = det.detect_regime(
                 market_data, previous_regime=MarketRegime.TRENDING_STRONG
             )
@@ -93,9 +88,7 @@ class TestAdxExitBand:
 
     def test_adx_exactly_22_holds(self, market_data):
         det = make_detector()
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=22.0
-        ):
+        with patch("trading_bot_v2.market_regime.calculate_adx", return_value=22.0):
             regime = det.detect_regime(
                 market_data, previous_regime=MarketRegime.TRENDING_STRONG
             )
@@ -106,23 +99,18 @@ class TestVolScoreBands:
     """RANGING_VOLATILE enter (68) / exit (60) bands at ADX <= 20."""
 
     def _detect(self, det, market_data, vol_score, previous):
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=18.0
-        ), patch.object(
-            det, "_calculate_volatility_score", return_value=vol_score
+        with (
+            patch("trading_bot_v2.market_regime.calculate_adx", return_value=18.0),
+            patch.object(det, "_calculate_volatility_score", return_value=vol_score),
         ):
             return det.detect_regime(market_data, previous_regime=previous)
 
     def test_no_previous_uses_raw_65_threshold(self, market_data):
         det = make_detector()
         assert (
-            self._detect(det, market_data, 66.0, None)
-            == MarketRegime.RANGING_VOLATILE
+            self._detect(det, market_data, 66.0, None) == MarketRegime.RANGING_VOLATILE
         )
-        assert (
-            self._detect(det, market_data, 64.0, None)
-            == MarketRegime.RANGING_CALM
-        )
+        assert self._detect(det, market_data, 64.0, None) == MarketRegime.RANGING_CALM
 
     def test_entering_from_calm_requires_above_68(self, market_data):
         det = make_detector()
@@ -165,9 +153,7 @@ class TestAdxSlopeIndecisive:
             "trading_bot_v2.market_regime.calculate_adx",
             side_effect=[23.0, 21.0],
         ):
-            assert (
-                det.detect_regime(market_data) == MarketRegime.TRENDING_MODERATE
-            )
+            assert det.detect_regime(market_data) == MarketRegime.TRENDING_MODERATE
 
     def test_flat_slope_gives_trending_moderate(self, market_data):
         det = make_detector()
@@ -175,9 +161,7 @@ class TestAdxSlopeIndecisive:
             "trading_bot_v2.market_regime.calculate_adx",
             side_effect=[23.0, 23.0],
         ):
-            assert (
-                det.detect_regime(market_data) == MarketRegime.TRENDING_MODERATE
-            )
+            assert det.detect_regime(market_data) == MarketRegime.TRENDING_MODERATE
 
     def test_insufficient_data_treated_as_not_falling(self):
         det = make_detector()
@@ -188,12 +172,8 @@ class TestAdxSlopeIndecisive:
             "volume": [1000.0] * 30,
         }
         # 30 - 3 = 27 < 29 required, slope check returns False
-        with patch(
-            "trading_bot_v2.market_regime.calculate_adx", return_value=23.0
-        ):
-            assert (
-                det.detect_regime(short_data) == MarketRegime.TRENDING_MODERATE
-            )
+        with patch("trading_bot_v2.market_regime.calculate_adx", return_value=23.0):
+            assert det.detect_regime(short_data) == MarketRegime.TRENDING_MODERATE
 
 
 class TestMinDwell:
@@ -261,9 +241,7 @@ class TestMinDwell:
         # Single divergent detection does not switch
         t1 = t0 + timedelta(hours=2)
         assert (
-            self._drive(
-                det, sym, market_data, MarketRegime.TRENDING_STRONG, t1
-            )
+            self._drive(det, sym, market_data, MarketRegime.TRENDING_STRONG, t1)
             == MarketRegime.RANGING_CALM
         )
 
@@ -353,9 +331,7 @@ class TestTransitionObservability:
         assert kwargs["old_regime"] == "ranging_calm"
         assert kwargs["new_regime"] == "trending_strong"
 
-    def test_transition_persists_to_regime_history_table(
-        self, market_data, temp_db
-    ):
+    def test_transition_persists_to_regime_history_table(self, market_data, temp_db):
         db_manager = temp_db.DatabaseManager()
         det = make_detector()
         det._db = db_manager
@@ -426,9 +402,7 @@ class TestTradesRegimeMigration:
         )
         assert trade_id is not None
         with temp_db.get_db_connection() as conn:
-            cursor = conn.execute(
-                "SELECT regime FROM trades WHERE id = ?", (trade_id,)
-            )
+            cursor = conn.execute("SELECT regime FROM trades WHERE id = ?", (trade_id,))
             assert cursor.fetchone()[0] == "ranging_calm"
 
 
@@ -475,9 +449,7 @@ class TestRegimeAttribution:
             }
         )
 
-        with patch(
-            "trading_bot_v2.strategy_monitor.get_event_bus"
-        ) as mock_bus:
+        with patch("trading_bot_v2.strategy_monitor.get_event_bus") as mock_bus:
             mock_bus.return_value = MagicMock()
             monitor = StrategyMonitor()
 

@@ -20,11 +20,109 @@ from enum import Enum
 from typing import Dict, Any, List, Optional, Set
 import json
 import os
+import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from .config import config
+from .exit_sizing import (
+    ClosePlan,
+    normalize_position_side,
+    plan_close_quantity,
+    remaining_exchange_quantity,
+)
+from .order_result import OrderResult
+
+
+def _send_telegram_error_alert(error_type: str, message: str, context: str) -> bool:
+    """Best-effort Telegram alert; shares the migrated manager's hook.
+
+    Imported lazily so this module stays importable without httpx and so
+    tests can monkeypatch this name.  Returns False when Telegram is
+    disabled; transport failures are logged by the hook, never raised.
+    """
+    from .migrated_position_manager import _send_telegram_error_alert as _send
+
+    return _send(error_type, message, context)
+
+
+def _max_flatten_attempts() -> int:
+    """GRID_FLATTEN_MAX_ATTEMPTS env var (default 5, minimum 1)."""
+    raw = os.getenv("GRID_FLATTEN_MAX_ATTEMPTS", "").strip()
+    try:
+        return max(1, int(raw)) if raw else 5
+    except ValueError:
+        return 5
+
+
+@dataclass
+class CloseOutcome:
+    """Result of one reduce-only close attempt against a grid position.
+
+    Attributes:
+        status: "flat" (exchange already flat, nothing sent), "closed"
+            (confirmed fully executed), "partial", "rejected",
+            "unconfirmed" (accepted but no fill evidence) or "error"
+            (the order call raised).
+        requested: Quantity submitted (0.0 when nothing was sent).
+        executed: Confirmed executed quantity.
+        detail: Human-readable explanation for logs / result dicts.
+    """
+
+    status: str
+    requested: float = 0.0
+    executed: float = 0.0
+    detail: str = ""
+
+    @property
+    def confirmed_flat(self) -> bool:
+        """True only when the exchange confirms nothing remains to close."""
+        return self.status in ("flat", "closed")
+
+
+_PROTECTIVE_ORDER_TYPES = (
+    "tpsl",
+    "stop",
+    "stop_loss",
+    "stop_market",
+    "conditional",
+    "trigger",
+)
+
+
+def is_protective_order(order: Any) -> bool:
+    """True for TP/SL (venue stop) rows, which must never count as grid orders.
+
+    Recognizes a ``tpsl_id``/``tpslId`` marker (top level or under
+    ``raw``), a stop-type ``order_type``, an ``sl_trigger_price`` and a
+    reduce-only flag - grid levels are plain limit orders and never
+    reduce-only.
+
+    Args:
+        order: Bot-native order dict from ``client.get_orders()``.
+
+    Returns:
+        True when the row is a protective order.
+    """
+    if not isinstance(order, dict):
+        return False
+    raw = order.get("raw") if isinstance(order.get("raw"), dict) else {}
+    if order.get("tpsl_id") or order.get("tpslId") or raw.get("tpslId"):
+        return True
+    order_type = str(
+        order.get("order_type") or order.get("orderType") or raw.get("orderType") or ""
+    ).lower()
+    if order_type in _PROTECTIVE_ORDER_TYPES:
+        return True
+    if (
+        order.get("sl_trigger_price")
+        or order.get("slTriggerPrice")
+        or raw.get("slTriggerPrice")
+    ):
+        return True
+    reduce_only = order.get("reduce_only", raw.get("reduceOnly"))
+    return reduce_only in (True, "true", "True", 1)
 
 
 class GridState(Enum):
@@ -41,9 +139,7 @@ class GridState(Enum):
 # churned on every border flicker; new grids are still only CREATED in
 # ranging regimes (StrategyManager Step 2.25 + _handle_grid_signals).
 # Grids are unwound when a TRENDING_* regime is confirmed.
-GRID_ALLOWED_REGIMES = frozenset(
-    {"ranging_calm", "ranging_volatile", "indecisive"}
-)
+GRID_ALLOWED_REGIMES = frozenset({"ranging_calm", "ranging_volatile", "indecisive"})
 
 
 @dataclass
@@ -112,7 +208,16 @@ class GridLifecycleManager:
         self._metrics: Dict[str, GridMetrics] = {}
 
         # Last time we checked for fills
-        self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(hours=1)
+        self._last_fill_check: datetime = datetime.now(timezone.utc) - timedelta(
+            hours=1
+        )
+
+        # symbol -> pending-flatten marker.  A force exit that could not
+        # confirm every position flat keeps its grid state and lands here
+        # with an attempt counter; monitor_grids retries it each loop up
+        # to GRID_FLATTEN_MAX_ATTEMPTS.  In-memory only (lost on restart).
+        self._pending_flattens: Dict[str, Dict[str, Any]] = {}
+        self._max_flatten_attempts = _max_flatten_attempts()
 
     # =========================
     # ORDER-ID TRACKING HELPERS
@@ -199,7 +304,9 @@ class GridLifecycleManager:
                 issues = []
 
                 # Check for missing center price
-                if not grid_data.get("center_price") and not grid_data.get("initial_center"):
+                if not grid_data.get("center_price") and not grid_data.get(
+                    "initial_center"
+                ):
                     issues.append("missing_center_price")
 
                 # Check for incomplete metadata
@@ -210,7 +317,11 @@ class GridLifecycleManager:
                 # Check for invalid state
                 state_value = grid_data.get("state")
                 if state_value is not None:
-                    state_str = state_value.value if hasattr(state_value, "value") else str(state_value)
+                    state_str = (
+                        state_value.value
+                        if hasattr(state_value, "value")
+                        else str(state_value)
+                    )
                     if state_str not in [s.value for s in GridState]:
                         issues.append("invalid_state")
 
@@ -235,7 +346,9 @@ class GridLifecycleManager:
                 repaired_count += exchange_repaired
 
         except Exception as e:
-            logger.error(f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True)
+            logger.error(
+                f"Error in detect_and_repair_orphaned_grids: {e}", exc_info=True
+            )
 
         return repaired_count
 
@@ -257,7 +370,9 @@ class GridLifecycleManager:
                 if center_price:
                     grid_data["center_price"] = center_price
                     grid_data["initial_center"] = center_price
-                    logger.info(f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}")
+                    logger.info(
+                        f"🔧 Reconstructed center price for {symbol}: ${center_price:.4f}"
+                    )
                 else:
                     return False
 
@@ -300,7 +415,9 @@ class GridLifecycleManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error repairing orphaned grid for {symbol}: {e}", exc_info=True
+            )
             return False
 
     def _close_unrecoverable_grid(self, symbol: str, reason: str) -> None:
@@ -324,7 +441,9 @@ class GridLifecycleManager:
                     del data_dict[symbol]
 
         except Exception as e:
-            logger.error(f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error closing unrecoverable grid for {symbol}: {e}", exc_info=True
+            )
 
     def _calculate_center_from_exchange_orders(self, symbol: str) -> Optional[float]:
         """Calculate grid center price from current exchange orders."""
@@ -335,14 +454,22 @@ class GridLifecycleManager:
             if not symbol_orders:
                 return None
 
-            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            buy_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]
+            ]
+            sell_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]
+            ]
 
             if not buy_orders or not sell_orders:
                 return None
 
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
-            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
+            sell_prices = [
+                float(o.get("price", 0)) for o in sell_orders if o.get("price")
+            ]
 
             if not buy_prices or not sell_prices:
                 return None
@@ -350,7 +477,9 @@ class GridLifecycleManager:
             return (max(buy_prices) + min(sell_prices)) / 2
 
         except Exception as e:
-            logger.error(f"Error calculating center from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error calculating center from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _calculate_spacing_from_exchange_orders(self, symbol: str) -> Optional[float]:
@@ -359,8 +488,12 @@ class GridLifecycleManager:
             orders = self.client.get_orders()
             symbol_orders = [o for o in orders if o.get("symbol") == symbol]
 
-            buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-            sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+            buy_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]
+            ]
+            sell_orders = [
+                o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]
+            ]
 
             if not buy_orders or not sell_orders:
                 return None
@@ -379,15 +512,21 @@ class GridLifecycleManager:
             spacings = []
             for i in range(len(buy_prices) - 1):
                 if buy_prices[i + 1] > 0:
-                    spacings.append((buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1])
+                    spacings.append(
+                        (buy_prices[i] - buy_prices[i + 1]) / buy_prices[i + 1]
+                    )
             for i in range(len(sell_prices) - 1):
                 if sell_prices[i] > 0:
-                    spacings.append((sell_prices[i + 1] - sell_prices[i]) / sell_prices[i])
+                    spacings.append(
+                        (sell_prices[i + 1] - sell_prices[i]) / sell_prices[i]
+                    )
 
             return sum(spacings) / len(spacings) if spacings else None
 
         except Exception as e:
-            logger.error(f"Error calculating spacing from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error calculating spacing from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _count_levels_from_exchange_orders(self, symbol: str) -> Optional[int]:
@@ -396,7 +535,9 @@ class GridLifecycleManager:
             orders = self.client.get_orders()
             return len([o for o in orders if o.get("symbol") == symbol])
         except Exception as e:
-            logger.error(f"Error counting levels from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error counting levels from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _estimate_capital_from_exchange_orders(self, symbol: str) -> Optional[float]:
@@ -409,13 +550,18 @@ class GridLifecycleManager:
             for order in symbol_orders:
                 price = float(order.get("price", 0))
                 quantity = float(
-                    order.get("quantity") or order.get("size") or order.get("amount") or order.get("initial_amount", 0)
+                    order.get("quantity")
+                    or order.get("size")
+                    or order.get("amount")
+                    or order.get("initial_amount", 0)
                 )
                 total_value += price * quantity
 
             return total_value if total_value > 0 else None
         except Exception as e:
-            logger.error(f"Error estimating capital from exchange orders for {symbol}: {e}")
+            logger.error(
+                f"Error estimating capital from exchange orders for {symbol}: {e}"
+            )
             return None
 
     def _sync_grids_from_exchange(self) -> int:
@@ -432,6 +578,10 @@ class GridLifecycleManager:
             orders_by_symbol: Dict[str, list] = {}
 
             for order in orders:
+                # Protective TP/SL rows (venue stops) are never grid
+                # levels: a protected position must not look like a grid.
+                if is_protective_order(order):
+                    continue
                 symbol = order.get("symbol")
                 if symbol:
                     if symbol not in orders_by_symbol:
@@ -443,15 +593,29 @@ class GridLifecycleManager:
                     continue
 
                 if len(symbol_orders) >= 5:
-                    buy_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["bid", "buy"]]
-                    sell_orders = [o for o in symbol_orders if o.get("side", "").lower() in ["ask", "sell"]]
+                    buy_orders = [
+                        o
+                        for o in symbol_orders
+                        if o.get("side", "").lower() in ["bid", "buy"]
+                    ]
+                    sell_orders = [
+                        o
+                        for o in symbol_orders
+                        if o.get("side", "").lower() in ["ask", "sell"]
+                    ]
 
                     if buy_orders and sell_orders:
-                        logger.info(f"🔍 Found potential orphaned grid on exchange: {symbol}")
+                        logger.info(
+                            f"🔍 Found potential orphaned grid on exchange: {symbol}"
+                        )
 
-                        if self._readopt_orphaned_grid_from_exchange(symbol, buy_orders, sell_orders):
+                        if self._readopt_orphaned_grid_from_exchange(
+                            symbol, buy_orders, sell_orders
+                        ):
                             repaired_count += 1
-                            logger.info(f"✅ Re-adopted orphaned grid from exchange: {symbol}")
+                            logger.info(
+                                f"✅ Re-adopted orphaned grid from exchange: {symbol}"
+                            )
 
         except Exception as e:
             logger.error(f"Error syncing grids from exchange: {e}", exc_info=True)
@@ -484,7 +648,9 @@ class GridLifecycleManager:
             # _check_emergency_stop short-circuits on ≤ 0; without this the
             # grid runs unprotected at the per-symbol level.
             emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
             if buy_prices:
                 emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
             else:
@@ -511,9 +677,7 @@ class GridLifecycleManager:
             # only fills of these orders are attributed to the grid.
             readopted_ids = {
                 oid
-                for oid in (
-                    self._extract_order_id_from_order(o) for o in all_orders
-                )
+                for oid in (self._extract_order_id_from_order(o) for o in all_orders)
                 if oid
             }
             if readopted_ids:
@@ -529,7 +693,9 @@ class GridLifecycleManager:
             return True
 
         except Exception as e:
-            logger.error(f"Error readopting orphaned grid for {symbol}: {e}", exc_info=True)
+            logger.error(
+                f"Error readopting orphaned grid for {symbol}: {e}", exc_info=True
+            )
             return False
 
     def _validate_grid_integrity(self) -> None:
@@ -552,7 +718,9 @@ class GridLifecycleManager:
 
                 if issues:
                     issues_found += 1
-                    logger.warning(f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}")
+                    logger.warning(
+                        f"⚠️ Grid integrity issues for {symbol}: {', '.join(issues)}"
+                    )
 
                     if "invalid_spacing" in issues:
                         center_ref = (
@@ -569,7 +737,9 @@ class GridLifecycleManager:
                     valid_grids += 1
 
             if issues_found > 0:
-                logger.info(f"Grid integrity check: {valid_grids} valid, {issues_found} with issues")
+                logger.info(
+                    f"Grid integrity check: {valid_grids} valid, {issues_found} with issues"
+                )
             else:
                 logger.debug(f"Grid integrity check: all {valid_grids} grids valid")
 
@@ -589,7 +759,9 @@ class GridLifecycleManager:
             logger.info("🔧 Initializing GridLifecycleManager repair system...")
 
             if self.db:
-                loaded_grids = self.load_grid_states(regime_detector=self.regime_detector)
+                loaded_grids = self.load_grid_states(
+                    regime_detector=self.regime_detector
+                )
                 logger.info(f"📊 Loaded {len(loaded_grids)} grids from database")
 
             orphaned_repaired = self.detect_and_repair_orphaned_grids()
@@ -661,7 +833,9 @@ class GridLifecycleManager:
             return 0.0
         return self._grids[symbol].get("grid_spacing", 0.0)
 
-    def update_grid_spacing(self, symbol: str, new_spacing: float, reason: str = "dynamic"):
+    def update_grid_spacing(
+        self, symbol: str, new_spacing: float, reason: str = "dynamic"
+    ):
         """Update the grid spacing (for dynamic spacing adjustments)."""
         if symbol not in self._grids:
             logger.warning(f"Cannot update spacing - no grid for {symbol}")
@@ -673,7 +847,9 @@ class GridLifecycleManager:
             f"📊 Grid {symbol} spacing updated: ${old_spacing:.4f} → ${new_spacing:.4f} ({reason})"
         )
 
-    def recenter_grid(self, symbol: str, new_center: float, reason: str = "signal_refresh") -> bool:
+    def recenter_grid(
+        self, symbol: str, new_center: float, reason: str = "signal_refresh"
+    ) -> bool:
         """
         Soft recenter: shift UNFILLED limit orders toward new center price.
         Does NOT touch filled positions.
@@ -698,10 +874,15 @@ class GridLifecycleManager:
 
         # Safety: enforce minimum time between refreshes (45 minutes)
         last_refresh = self.get_last_refresh_time(symbol)
-        if last_refresh and (datetime.now(timezone.utc) - last_refresh).total_seconds() < 2700:
-            remaining = 2700 - (datetime.now(timezone.utc) - last_refresh).total_seconds()
+        if (
+            last_refresh
+            and (datetime.now(timezone.utc) - last_refresh).total_seconds() < 2700
+        ):
+            remaining = (
+                2700 - (datetime.now(timezone.utc) - last_refresh).total_seconds()
+            )
             logger.info(
-                f"Refresh skipped for {symbol} - cooldown {remaining/60:.1f}min remaining"
+                f"Refresh skipped for {symbol} - cooldown {remaining / 60:.1f}min remaining"
             )
             return False
 
@@ -715,7 +896,6 @@ class GridLifecycleManager:
         try:
             # Calculate shift delta
             delta = new_center - current_center
-            spacing = grid.get("grid_spacing", 0)
 
             # Resolve correct tick size for this symbol from the exchange.
             # Falls back to a sane default ONLY if instrument info is unavailable.
@@ -750,13 +930,15 @@ class GridLifecycleManager:
             # can decide whether the recenter as a whole was successful.
             # Previously, partial failures left center_price updated as if all
             # replacements had worked — corrupting the in-memory model.
-            orders_to_replace = []   # legs that pass safety checks
-            skipped_legs     = []    # legs we deliberately skipped (price shift cap)
+            orders_to_replace = []  # legs that pass safety checks
+            skipped_legs = []  # legs we deliberately skipped (price shift cap)
             for order in symbol_orders:
                 order_id = order.get("id") or order.get("order_id")
                 old_price = float(order.get("price", 0))
                 side = order.get("side", "").lower()
-                quantity = float(order.get("quantity") or order.get("size") or order.get("amount", 0))
+                quantity = float(
+                    order.get("quantity") or order.get("size") or order.get("amount", 0)
+                )
 
                 if not order_id or not old_price or not quantity:
                     continue
@@ -774,7 +956,9 @@ class GridLifecycleManager:
 
                 # Round to tick size resolved above
                 new_price = round(new_price / tick_size) * tick_size
-                orders_to_replace.append((order_id, side, quantity, old_price, new_price))
+                orders_to_replace.append(
+                    (order_id, side, quantity, old_price, new_price)
+                )
 
             # Phase 1: cancel-then-replace each leg, tracking failures
             failed_replacements = []
@@ -800,9 +984,7 @@ class GridLifecycleManager:
                     tracked_ids = grid.get("order_ids")
                     if tracked_ids is not None:
                         tracked_ids.discard(str(order_id))
-                        replacement_id = self._extract_order_id_from_response(
-                            new_order
-                        )
+                        replacement_id = self._extract_order_id_from_response(new_order)
                         if replacement_id:
                             tracked_ids.add(replacement_id)
 
@@ -815,15 +997,17 @@ class GridLifecycleManager:
                         f"(state={state}, side={side}, qty={quantity}, "
                         f"price ${old_price:.4f}→${new_price:.4f}): {e}"
                     )
-                    failed_replacements.append({
-                        "order_id":  order_id,
-                        "side":      side,
-                        "quantity":  quantity,
-                        "old_price": old_price,
-                        "new_price": new_price,
-                        "state":     state,
-                        "error":     str(e),
-                    })
+                    failed_replacements.append(
+                        {
+                            "order_id": order_id,
+                            "side": side,
+                            "quantity": quantity,
+                            "old_price": old_price,
+                            "new_price": new_price,
+                            "state": state,
+                            "error": str(e),
+                        }
+                    )
 
                     # Cancelled-but-not-replaced legs are no longer live:
                     # drop them from the tracked ID set.
@@ -843,11 +1027,13 @@ class GridLifecycleManager:
                     f"failed {len(failed_replacements)}."
                 )
                 # Track in grid metadata so monitor / supervisor can see it
-                grid.setdefault("recenter_failures", []).append({
-                    "ts":      datetime.now(timezone.utc).isoformat(),
-                    "reason":  reason,
-                    "orphans": failed_replacements,
-                })
+                grid.setdefault("recenter_failures", []).append(
+                    {
+                        "ts": datetime.now(timezone.utc).isoformat(),
+                        "reason": reason,
+                        "orphans": failed_replacements,
+                    }
+                )
                 return False
 
             # All legs that we attempted succeeded → safe to update metadata
@@ -912,6 +1098,10 @@ class GridLifecycleManager:
         Returns:
             True if grid was removed, False if no grid existed
         """
+        # An explicit clear abandons any in-flight flatten retry.
+        if self._pending_flattens.pop(symbol, None) is not None:
+            logger.warning(f"Pending flatten marker dropped for {symbol} (clear_grid)")
+
         if symbol in self._grids:
             del self._grids[symbol]
             logger.info(f"📊 Grid cleared from memory for {symbol}")
@@ -988,9 +1178,7 @@ class GridLifecycleManager:
         }
 
         if order_ids is not None:
-            self._grids[symbol]["order_ids"] = {
-                str(oid) for oid in order_ids if oid
-            }
+            self._grids[symbol]["order_ids"] = {str(oid) for oid in order_ids if oid}
 
         # Initialize exposure tracking at zero
         self.risk_manager.grid_exposure[symbol] = 0.0
@@ -1130,59 +1318,280 @@ class GridLifecycleManager:
     # CORE EXIT LOGIC
     # =========================
 
-    def _force_exit(self, symbol: str, reason: str):
+    def _force_exit(self, symbol: str, reason: str) -> Dict[str, Any]:
         """
         HARD EXIT:
         - Cancel all orders
-        - Close all positions
-        - Clear RiskManager exposure
-        - Remove grid state
+        - Close all positions (reduce-only, sized from the exchange)
+        - Clear RiskManager exposure and remove grid state ONLY when every
+          position is confirmed flat; otherwise keep the grid state and
+          record a pending-flatten marker that monitor_grids retries.
+
+        Returns:
+            Dict with ``positions_closed``, ``positions_pending``,
+            ``errors`` and ``flat`` (True when the grid was fully cleared).
         """
+        result: Dict[str, Any] = {
+            "symbol": symbol,
+            "reason": reason,
+            "flat": False,
+            "positions_closed": [],
+            "positions_pending": [],
+            "errors": [],
+        }
         try:
-            # Cancel all open orders
             self.client.cancel_all_orders(symbol)
             logger.info(f"All orders cancelled for {symbol} ({reason})")
         except Exception as e:
             logger.error(f"Order cancel failed for {symbol}: {e}")
+            result["errors"].append(f"Order cancel failed: {e}")
 
         try:
-            # Close all open positions (market)
             positions = self.client.get_positions()
-            for pos in positions:
-                if pos.get("symbol") != symbol:
-                    continue
-
-                qty = abs(float(pos.get("amount", 0)))
-                if qty <= 0:
-                    continue
-
-                # Pacifica reports position sides as lowercase "long"/"short".
-                # Normalize defensively (older code paths used "bid"/"ask");
-                # the previous check (side == "bid") sent "buy" for LONG
-                # positions, DOUBLING them instead of closing.
-                raw_side = str(pos.get("side", "")).lower()
-                if "long" in raw_side or "bid" in raw_side or "buy" in raw_side:
-                    close_side = "sell"
-                else:
-                    close_side = "buy"
-
-                self.client.place_order(symbol, close_side, qty, "market")
-                logger.critical(f"Position flattened: {symbol} {close_side} {qty}")
-
         except Exception as e:
             logger.critical(f"POSITION FLATTEN FAILED for {symbol}: {e}")
+            result["errors"].append(f"Get positions failed: {e}")
+            self._mark_pending_flatten(symbol, reason, result)
+            return result
 
-        # Reset risk manager exposure
+        for pos in positions or []:
+            if not isinstance(pos, dict) or pos.get("symbol") != symbol:
+                continue
+            self._flatten_one_position(symbol, pos, reason, result)
+
+        if result["positions_pending"] or result["errors"]:
+            self._mark_pending_flatten(symbol, reason, result)
+            return result
+
+        self._complete_force_exit(symbol, reason)
+        result["flat"] = True
+        return result
+
+    def _flatten_one_position(
+        self, symbol: str, pos: Dict[str, Any], reason: str, result: Dict[str, Any]
+    ) -> None:
+        """Close one exchange position; failures never abort the caller's loop."""
+        side: Optional[str] = None
+        qty = 0.0
+        try:
+            qty = abs(float(pos.get("amount", 0) or 0))
+            if qty <= 0:
+                return
+            # Pacifica reports "long"/"short"; older paths used "bid"/"ask".
+            side = normalize_position_side(pos.get("side"))
+            if side is None:
+                raise ValueError(f"unrecognized position side {pos.get('side')!r}")
+            outcome = self._close_position_reduce_only(symbol, side, qty, reason)
+        except Exception as e:  # noqa: BLE001 - isolate per position
+            logger.error(f"POSITION FLATTEN FAILED for {symbol} {side} {qty}: {e}")
+            result["errors"].append(f"{side} {qty}: {e}")
+            result["positions_pending"].append(
+                {"side": side, "qty": qty, "status": "error", "detail": str(e)}
+            )
+            return
+
+        entry = {
+            "side": side,
+            "qty": qty,
+            "requested": outcome.requested,
+            "executed": outcome.executed,
+            "status": outcome.status,
+            "detail": outcome.detail,
+        }
+        if outcome.confirmed_flat:
+            result["positions_closed"].append(entry)
+            logger.critical(
+                f"Position flattened: {symbol} {side} {qty} ({outcome.status})"
+            )
+            return
+        result["positions_pending"].append(entry)
+        result["errors"].append(f"{side} {qty}: {outcome.status} - {outcome.detail}")
+
+    def _close_position_reduce_only(
+        self, symbol: str, position_side: str, qty: float, reason: str
+    ) -> CloseOutcome:
+        """Send a reduce-only market close sized from the exchange position.
+
+        Args:
+            symbol: Trading symbol.
+            position_side: "long" / "short" (any spelling accepted by
+                ``exit_sizing``; unknown sides are sent as sells and can
+                only be confirmed by ack fills).
+            qty: Locally believed open quantity.
+            reason: Exit reason for logs.
+
+        Returns:
+            CloseOutcome - only ``confirmed_flat`` outcomes may be
+            accounted as closed by the caller.
+        """
+        plan = plan_close_quantity(self.client, symbol, position_side, qty)
+        if plan.already_flat:
+            logger.warning(
+                f"Close {symbol} {position_side} ({reason}): exchange already "
+                f"flat - no order sent"
+            )
+            return CloseOutcome("flat", 0.0, 0.0, "exchange already flat")
+        if plan.clamped:
+            logger.warning(
+                f"Close {symbol} {position_side}: clamping {qty:.6f} to exchange "
+                f"quantity {plan.quantity:.6f}"
+            )
+        close_side = "buy" if position_side == "short" else "sell"
+        try:
+            ack = self.client.place_order(
+                symbol, close_side, plan.quantity, "market", reduce_only=True
+            )
+        except Exception as exc:  # noqa: BLE001 - outcome is ambiguous
+            detail = f"{type(exc).__name__}: {exc}"
+            logger.error(f"CLOSE RAISED {symbol} {position_side} ({reason}): {detail}")
+            return CloseOutcome("error", plan.quantity, 0.0, detail)
+        order = OrderResult.from_ack(ack)
+        if not order.accepted:
+            detail = order.error or "order rejected"
+            logger.error(
+                f"CLOSE REJECTED {symbol} {position_side} {plan.quantity:.6f} "
+                f"({reason}): {detail} - position kept, no accounting applied"
+            )
+            return CloseOutcome("rejected", plan.quantity, 0.0, detail)
+        executed = self._confirmed_executed_quantity(
+            symbol, position_side, plan, order, qty
+        )
+        if executed is None:
+            return CloseOutcome(
+                "unconfirmed", plan.quantity, 0.0, "accepted but fill unconfirmed"
+            )
+        if executed + 1e-9 < plan.quantity:
+            return CloseOutcome(
+                "partial",
+                plan.quantity,
+                executed,
+                f"partial execution {executed:.6f}/{plan.quantity:.6f}",
+            )
+        return CloseOutcome("closed", plan.quantity, executed, "confirmed")
+
+    def _confirmed_executed_quantity(
+        self,
+        symbol: str,
+        side: str,
+        plan: ClosePlan,
+        order: OrderResult,
+        local_before: float,
+    ) -> Optional[float]:
+        """Executed quantity confirmed by ack fills or the exchange position.
+
+        Returns:
+            Executed quantity, or None when it cannot be confirmed.
+        """
+        if order.has_fills:
+            return min(plan.quantity, order.filled_quantity)
+        remaining_after = remaining_exchange_quantity(self.client, symbol, side)
+        if remaining_after is None:
+            return None
+        before = (
+            plan.exchange_quantity
+            if plan.exchange_quantity is not None
+            else local_before
+        )
+        return max(0.0, min(plan.quantity, before - remaining_after))
+
+    def _mark_pending_flatten(
+        self, symbol: str, reason: str, result: Dict[str, Any]
+    ) -> None:
+        """Record / bump the pending-flatten marker; grid state is KEPT."""
+        marker = self._pending_flattens.get(symbol)
+        if marker is None:
+            marker = {
+                "attempts": 0,
+                "first_failed_at": time.time(),
+                "escalated": False,
+            }
+            self._pending_flattens[symbol] = marker
+        marker["attempts"] += 1
+        marker["reason"] = reason
+        marker["last_attempt_at"] = time.time()
+        marker["positions_pending"] = list(result["positions_pending"])
+        marker["errors"] = list(result["errors"])
+        if symbol in self._grids:
+            self._grids[symbol]["state"] = GridState.EMERGENCY_EXIT
+        logger.error(
+            f"GRID FLATTEN INCOMPLETE for {symbol} ({reason}): "
+            f"closed={len(result['positions_closed'])}, "
+            f"pending={len(result['positions_pending'])}, "
+            f"errors={result['errors']} - attempt "
+            f"{marker['attempts']}/{self._max_flatten_attempts}; grid state "
+            f"kept for retry, no exposure reset"
+        )
+
+    def _complete_force_exit(self, symbol: str, reason: str) -> None:
+        """Accounting for a CONFIRMED flat grid: exposure, memory, DB."""
+        self._pending_flattens.pop(symbol, None)
         self.risk_manager.on_grid_emergency_exit(symbol)
-
-        # Remove grid from memory
         if symbol in self._grids:
             del self._grids[symbol]
-
-        # Remove from database persistence
         self.delete_grid_state(symbol)
-
         logger.critical(f"Grid fully exited and cleared for {symbol} ({reason})")
+
+    def retry_pending_flattens(self) -> int:
+        """Retry incomplete force exits, capped by GRID_FLATTEN_MAX_ATTEMPTS.
+
+        Called from ``monitor_grids`` each loop.  Once a marker reaches
+        the cap it is escalated exactly once (ERROR log + EventBus event)
+        and left for manual action.
+
+        Returns:
+            Number of force exits retried this call.
+        """
+        retried = 0
+        for symbol in list(self._pending_flattens):
+            marker = self._pending_flattens[symbol]
+            if marker["attempts"] >= self._max_flatten_attempts:
+                if not marker.get("escalated"):
+                    marker["escalated"] = True
+                    self._escalate_pending_flatten(symbol, marker)
+                continue
+            retried += 1
+            self._force_exit(symbol, str(marker.get("reason", "RETRY")))
+        return retried
+
+    def _escalate_pending_flatten(self, symbol: str, marker: Dict[str, Any]) -> None:
+        """Alert on a flatten that hit the retry cap: log, EventBus, Telegram.
+
+        Every channel is best effort - a failure is logged and never raised.
+        """
+        message = (
+            f"Pending grid flatten {symbol} reached the retry cap "
+            f"({self._max_flatten_attempts}); positions kept open - manual "
+            f"action required. Last errors: {marker.get('errors')}"
+        )
+        logger.error(message)
+        try:
+            from .event_system import EventType, get_event_bus
+
+            get_event_bus().publish_event(
+                EventType.CLOSE_ESCALATED,
+                {
+                    "symbol": symbol,
+                    "source_kind": "grid_flatten",
+                    "reason": marker.get("reason"),
+                    "attempts": marker.get("attempts"),
+                    "errors": list(marker.get("errors") or []),
+                },
+                "GridLifecycleManager",
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Could not publish CLOSE_ESCALATED for {symbol}: {exc}")
+        try:
+            _send_telegram_error_alert(
+                "close_escalated",
+                message,
+                f"{symbol} grid_flatten attempts={marker.get('attempts')}",
+            )
+        except Exception as exc:  # noqa: BLE001 - alerting is best effort
+            logger.warning(f"Telegram escalation for {symbol} failed: {exc}")
+
+    def get_pending_flattens(self) -> Dict[str, Dict[str, Any]]:
+        """Return a copy of the pending-flatten markers (for status/tests)."""
+        return {symbol: dict(m) for symbol, m in self._pending_flattens.items()}
 
     def _partial_exit(
         self, symbol: str, reason: str, trend_direction: str
@@ -1268,29 +1677,46 @@ class GridLifecycleManager:
                 against_trend = True
 
             if against_trend:
-                # CLOSE against-trend position
+                # CLOSE against-trend position.  Sized from the exchange,
+                # reduce-only, and accounted as closed ONLY on confirmed
+                # execution; a rejection / exception leaves the DB row and
+                # closed_positions untouched and fails the partial exit so
+                # the caller falls back to _force_exit (which retries).
                 try:
-                    close_side = "buy" if position_side == "short" else "sell"
-                    self.client.place_order(symbol, close_side, qty, "market")
-
-                    result["closed_positions"].append(
-                        {"side": position_side, "qty": qty, "reason": "against_trend"}
+                    outcome = self._close_position_reduce_only(
+                        symbol, position_side, qty, "against_trend"
                     )
-
-                    logger.warning(
-                        f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
-                        f"(trend={trend_direction})"
-                    )
-
-                    # Update database record
-                    self._update_position_status(
-                        symbol, position_side, qty, "closed", "against_trend"
-                    )
-
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001 - status stays unchanged
                     logger.error(f"Failed to close position for {symbol}: {e}")
                     result["errors"].append(f"Close position failed: {e}")
+                    return result
+                if not outcome.confirmed_flat:
+                    logger.error(
+                        f"Against-trend close NOT confirmed for {symbol} "
+                        f"{position_side} {qty}: {outcome.status} - "
+                        f"{outcome.detail}; status left unchanged"
+                    )
+                    result["errors"].append(
+                        f"Close position failed ({position_side} {qty}): "
+                        f"{outcome.status} - {outcome.detail}"
+                    )
                     return result  # Fail if any close fails
+
+                result["closed_positions"].append(
+                    {
+                        "side": position_side,
+                        "qty": qty,
+                        "executed": outcome.executed,
+                        "reason": "against_trend",
+                    }
+                )
+                logger.warning(
+                    f"📊 Against-trend position CLOSED: {symbol} {position_side} {qty} "
+                    f"(trend={trend_direction}, {outcome.status})"
+                )
+                self._update_position_status(
+                    symbol, position_side, qty, "closed", "against_trend"
+                )
             else:
                 # KEEP with-trend position (migrate to trend-following)
                 # Get entry price from position data (or use current price as fallback)
@@ -1432,8 +1858,18 @@ class GridLifecycleManager:
             "grids_monitored": 0,
             "new_fills": 0,
             "completed_round_trips": 0,
+            "flatten_retries": 0,
             "alerts": [],
         }
+
+        # Incomplete force exits are retried BEFORE the active-grid pass so
+        # a grid parked in EMERGENCY_EXIT keeps being flattened each loop.
+        if self._pending_flattens:
+            try:
+                results["flatten_retries"] = self.retry_pending_flattens()
+            except Exception as e:  # noqa: BLE001 - never block monitoring
+                logger.error(f"Pending flatten retry error: {e}")
+                results["alerts"].append(f"Flatten retry error: {e}")
 
         if not self._grids:
             return results
@@ -1656,7 +2092,9 @@ class GridLifecycleManager:
             return 3, 2
         return 5, 1
 
-    def _replenish_order(self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float):
+    def _replenish_order(
+        self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float
+    ):
         """
         Place a counter order when a grid order is filled.
 
@@ -1705,9 +2143,7 @@ class GridLifecycleManager:
             # used when the grid levels were originally placed
             # (TradingBot._calculate_grid_levels). The previous hardcoded
             # 0.01 tick collapsed sub-cent ladders on low-priced symbols.
-            tick_decimals, lot_decimals = self._round_decimals_for_price(
-                fill_price
-            )
+            tick_decimals, lot_decimals = self._round_decimals_for_price(fill_price)
             counter_price = round(counter_price, tick_decimals)
 
             if counter_price <= 0:
@@ -1721,7 +2157,9 @@ class GridLifecycleManager:
             min_lot = 10 ** (-lot_decimals)
 
             if counter_quantity < min_lot:
-                logger.warning(f"Counter quantity too small for {symbol}: {counter_quantity}")
+                logger.warning(
+                    f"Counter quantity too small for {symbol}: {counter_quantity}"
+                )
                 return
 
             # Place the counter order
@@ -1732,9 +2170,7 @@ class GridLifecycleManager:
             # Register the replacement order ID so its future fill is
             # attributed to the grid (only for ID-tracking grids).
             if grid.get("order_ids") is not None:
-                new_order_id = self._extract_order_id_from_response(
-                    order_result
-                )
+                new_order_id = self._extract_order_id_from_response(order_result)
                 if new_order_id:
                     grid["order_ids"].add(new_order_id)
                 else:
@@ -1952,8 +2388,7 @@ class GridLifecycleManager:
                 synced_ids = {
                     oid
                     for oid in (
-                        self._extract_order_id_from_order(o)
-                        for o in limit_orders
+                        self._extract_order_id_from_order(o) for o in limit_orders
                     )
                     if oid
                 }
@@ -2140,19 +2575,32 @@ class GridLifecycleManager:
 
         # Build repair history JSON if present
         import json
+
         repair_history = None
         if grid.get("repair_issues") or grid.get("readopted"):
             repair_entries = grid.get("repair_history_entries", [])
             if grid.get("repair_issues"):
-                repair_entries.append({
-                    "at": grid.get("repaired_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("repaired_at"), datetime) else str(grid.get("repaired_at", "")),
-                    "issues": grid.get("repair_issues", []),
-                })
+                repair_entries.append(
+                    {
+                        "at": grid.get(
+                            "repaired_at", datetime.now(timezone.utc)
+                        ).isoformat()
+                        if isinstance(grid.get("repaired_at"), datetime)
+                        else str(grid.get("repaired_at", "")),
+                        "issues": grid.get("repair_issues", []),
+                    }
+                )
             if grid.get("readopted"):
-                repair_entries.append({
-                    "at": grid.get("readopted_at", datetime.now(timezone.utc)).isoformat() if isinstance(grid.get("readopted_at"), datetime) else str(grid.get("readopted_at", "")),
-                    "type": "readopted_from_exchange",
-                })
+                repair_entries.append(
+                    {
+                        "at": grid.get(
+                            "readopted_at", datetime.now(timezone.utc)
+                        ).isoformat()
+                        if isinstance(grid.get("readopted_at"), datetime)
+                        else str(grid.get("readopted_at", "")),
+                        "type": "readopted_from_exchange",
+                    }
+                )
             repair_history = json.dumps(repair_entries[-10:])  # Keep last 10
 
         # Serialize tracked order IDs (None => legacy grid, stored as NULL)
@@ -2255,8 +2703,10 @@ class GridLifecycleManager:
                                     f"⚠️ Grid {symbol} created in {regime_on_creation}, "
                                     f"but current regime is {current_regime_str} - CLOSING"
                                 )
-                                self.delete_grid_state(symbol)
-                                # Trigger close on exchange
+                                # Flatten on the exchange.  The DB row is
+                                # deleted only once every position is
+                                # confirmed flat (_complete_force_exit);
+                                # otherwise it survives for the next restart.
                                 self._force_exit(
                                     symbol,
                                     reason=f"REGIME_MISMATCH:{current_regime_str}",
@@ -2289,8 +2739,7 @@ class GridLifecycleManager:
                             }
                         except (ValueError, TypeError) as e:
                             logger.warning(
-                                f"Could not parse stored order_ids for "
-                                f"{symbol}: {e}"
+                                f"Could not parse stored order_ids for {symbol}: {e}"
                             )
 
                     # Initialize metrics from DB

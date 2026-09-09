@@ -9,11 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any, Tuple
 import jwt
 import time
-import uuid
-import json
 import requests
-import base58
-import base64
 from solders.keypair import Keypair
 from pydantic import BaseModel, field_validator
 import os
@@ -78,8 +74,6 @@ def sign_message(
     keypair: Keypair,
 ) -> tuple:
     """Sign a message using the provided keypair."""
-    import hashlib
-    import base64
 
     # Back to original SDK format
     message_parts = [
@@ -273,13 +267,13 @@ def verify_agent_wallet_signature(
         from solders.signature import Signature
 
         # Parse public key
-        pubkey = Pubkey.from_string(agent_wallet_public_key)
+        Pubkey.from_string(agent_wallet_public_key)
 
         # Parse signature
-        sig = Signature.from_string(signature)
+        Signature.from_string(signature)
 
         # Verify signature
-        message_bytes = message.encode("utf-8")
+        message.encode("utf-8")
 
         # Note: Full signature verification requires the signature verification
         # function from solders, which verifies ed25519 signatures
@@ -350,7 +344,7 @@ def test_pacifica_authentication(
         agent_keypair = Keypair.from_base58_string(agent_wallet_private_key)
         agent_public = str(agent_keypair.pubkey())
 
-        logger.info(f"Testing Pacifica authentication...")
+        logger.info("Testing Pacifica authentication...")
         logger.info(f"Account: {account_public_key}")
         logger.info(f"Agent Wallet: {agent_public}")
 
@@ -360,7 +354,7 @@ def test_pacifica_authentication(
             "TEST_AUTH", test_payload, agent_keypair
         )
 
-        logger.info(f"✅ Signature created successfully")
+        logger.info("✅ Signature created successfully")
         logger.info(f"Message length: {len(message)} bytes")
         logger.info(f"Signature: {signature[:50]}...")
 
@@ -369,7 +363,7 @@ def test_pacifica_authentication(
             logger.error("❌ Invalid signature format")
             return False
 
-        logger.info(f"✅ Pacifica authentication test passed")
+        logger.info("✅ Pacifica authentication test passed")
         return True
 
     except Exception as e:
@@ -445,7 +439,7 @@ def validate_pacifica_keys(
         if not account_public_key or len(account_public_key) < 32:
             return False, "Invalid account public key format"
 
-        logger.info(f"✅ Keys validated successfully")
+        logger.info("✅ Keys validated successfully")
         logger.info(f"Account: {account_public_key}")
         logger.info(f"Agent Wallet: {agent_public}")
 

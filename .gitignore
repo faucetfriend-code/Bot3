@@ -10,15 +10,25 @@ playwright-report/
 test-results/
 *.db-wal
 *.db-shm
+*.db-journal
 nul
 signals_log.csv
 backups/
-trading_bot_v2/backtesting/data/*.parquet
+# Live SQLite database at the repo root (auto-created; mutates on every run).
+/trading_bot.db
+# Per-machine Claude Code permission overrides; never shared.
+.claude/settings.local.json
+# Candle/funding store: multi-year, expensive to re-download, never committed.
+# Broadened from the data/ dir alone - no parquet anywhere is a source artefact.
+*.parquet
 trading_bot_v2/optimization/optimization_studies.db
 trading_bot_v2/.kline_cache/
-.claude/worktrees/competent-shirley-9d8d5f/
-.claude/worktrees/gracious-robinson-74ebdd/
-.claude/worktrees/kind-panini-01006e/
-.claude/worktrees/pensive-dhawan-3512b2/
-.claude/worktrees/wonderful-lichterman-e45158/
-.claude/worktrees/strange-bhabha-8f4a1f/
+# Default output of `run_backtest.py --report` at the repo root. Root-anchored
+# on purpose: backtesting/reports/html/backtest_report.html is a tracked
+# reference artefact and must keep showing up.
+/backtest_report.html
+# Agent worktrees are disposable copies of the tree (currently ~1.5 GB).
+# Blanket rule replaces the six per-worktree entries that preceded it.
+.claude/worktrees/
+.env.backup*
+.env.bak*

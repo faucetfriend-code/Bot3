@@ -126,8 +126,8 @@ class SessionRangeBreakoutStrategy:
 
     def _now(self) -> datetime:
         """Return current UTC time - simulated candle time in backtesting."""
-        now = self._sim_time if self._sim_time is not None else datetime.now(
-            timezone.utc
+        now = (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
         )
         if now.tzinfo is None:
             # Backtest sim times are naive candle timestamps; treat as UTC.
@@ -179,9 +179,7 @@ class SessionRangeBreakoutStrategy:
             dt = dt.replace(tzinfo=timezone.utc)
         return dt.astimezone(timezone.utc)
 
-    def _most_recent_session(
-        self, now: datetime
-    ) -> Optional[Tuple[str, datetime]]:
+    def _most_recent_session(self, now: datetime) -> Optional[Tuple[str, datetime]]:
         """
         Find the most recent enabled session open at or before now.
 
@@ -193,9 +191,7 @@ class SessionRangeBreakoutStrategy:
         """
         best: Optional[Tuple[str, datetime]] = None
         for name, hour, minute in self.sessions:
-            candidate = now.replace(
-                hour=hour, minute=minute, second=0, microsecond=0
-            )
+            candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if candidate > now:
                 candidate -= timedelta(days=1)
             if best is None or candidate > best[1]:
@@ -459,9 +455,7 @@ class SessionRangeBreakoutStrategy:
         )
 
         signals.append(signal)
-        self._session_trades[session_key] = (
-            self._session_trades.get(session_key, 0) + 1
-        )
+        self._session_trades[session_key] = self._session_trades.get(session_key, 0) + 1
 
         logger.info(
             f"{symbol}: ORB signal - {direction.upper()} @ ${entry_price:.4f}, "

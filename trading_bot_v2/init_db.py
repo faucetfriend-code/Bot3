@@ -13,7 +13,12 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-from .database import DatabaseManager, DATABASE_PATH, get_db_connection, get_backend
+from .database import (  # noqa: E402 - load_dotenv() must run before this import
+    DatabaseManager,
+    DATABASE_PATH,
+    get_db_connection,
+    get_backend,
+)
 
 
 def main():
@@ -37,7 +42,7 @@ def main():
 
     # Initialize DatabaseManager (this automatically runs init_database())
     print("\n[*] Initializing DatabaseManager...")
-    db = DatabaseManager()
+    DatabaseManager()
 
     # Verify tables were created
     print("\n[*] Verifying database tables...")

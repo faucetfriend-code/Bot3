@@ -60,6 +60,14 @@ from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
 from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
+from .strategies.vwap_pullback import VWAPPullbackStrategy
+from .directional_bias import (
+    GATE_ENFORCE,
+    GATE_OFF,
+    DirectionalBiasEngine,
+    resolve_gate_exempt,
+    validate_gate_mode,
+)
 from .strategies.calendar_flow import CalendarFlowStrategy
 
 
@@ -163,6 +171,7 @@ class StrategyManager:
         enable_orderbook_imbalance: Optional[bool] = None,
         enable_session_range_breakout: Optional[bool] = None,
         enable_calendar_flow: Optional[bool] = None,
+        enable_vwap_pullback: Optional[bool] = None,
         risk_manager=None,
         client=None,  # Pacifica client for funding arb API calls
         ws_client=None,  # WebSocket client for orderbook data
@@ -276,9 +285,46 @@ class StrategyManager:
                 "ENABLE_CALENDAR_FLOW", False
             )  # Default to False - ships disabled until validated
         )
+        self.enable_vwap_pullback = (
+            enable_vwap_pullback
+            if enable_vwap_pullback is not None
+            else _get_env_bool(
+                "ENABLE_VWAP_PULLBACK", False
+            )  # Default to False - ships disabled until validated
+        )
         self.risk_manager = risk_manager
         self.client = client  # Store client for funding arb
         self.ws_client = ws_client  # Store websocket client for orderbook
+
+        # Directional bias gate (HTF trend stack + funding extremes).
+        # Default "off" = shipped behaviour; "log" annotates signals only;
+        # "enforce" fails multi_timeframe_alignment on signals fighting the
+        # bias. See directional_bias.py for the full rationale.
+        self.directional_gate_mode = validate_gate_mode(os.getenv("DIRECTIONAL_GATE"))
+        self.directional_gate_exempt = resolve_gate_exempt()
+        # Strategies not admitted when the combined bias is NEUTRAL.
+        # Measured (composite tuning, 2026-07-30): mean_reversion loses
+        # in every vol tercile's neutral state under both gate arms,
+        # while all three trend states are positive under enforce.
+        # Default empty - each strategy earns its exclusion by
+        # measurement. Only consulted in enforce mode.
+        self.directional_neutral_exclude = {
+            name.strip()
+            for name in os.getenv("DIRECTIONAL_NEUTRAL_EXCLUDE", "").split(",")
+            if name.strip()
+        }
+        self.directional_bias_engine = DirectionalBiasEngine(client=client)
+        if self.directional_gate_mode != GATE_OFF:
+            logger.info(
+                f"Directional gate: mode={self.directional_gate_mode}, "
+                f"exempt={sorted(self.directional_gate_exempt)}, "
+                f"trend={self.directional_bias_engine.trend_timeframe} "
+                f"EMA {self.directional_bias_engine.ema_fast}/"
+                f"{self.directional_bias_engine.ema_slow}, "
+                f"funding lookback={self.directional_bias_engine.funding_lookback} "
+                f"pct [{self.directional_bias_engine.funding_low_pct}, "
+                f"{self.directional_bias_engine.funding_high_pct}]"
+            )
 
         # Regime-conditional minimum-confidence gate. Signals below
         # (MIN_SIGNAL_CONFIDENCE_FLOOR + per-regime adjustment) are dropped
@@ -355,7 +401,8 @@ class StrategyManager:
             f"VWAPScalping={self.enable_vwap_scalping}, FundingArb={self.enable_funding_arb}, "
             f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}, "
             f"SessionRangeBreakout={self.enable_session_range_breakout}, "
-            f"CalendarFlow={self.enable_calendar_flow}"
+            f"CalendarFlow={self.enable_calendar_flow}, "
+            f"VWAPPullback={self.enable_vwap_pullback}"
         )
 
         # Initialize trade cooldown and feedback tracking
@@ -468,7 +515,8 @@ class StrategyManager:
             vwap_min_confidence = float(os.getenv("VWAP_MIN_CONFIDENCE", "0.62"))
             vwap_cooldown = int(os.getenv("VWAP_COOLDOWN_MINUTES", "8"))
             vwap_sd_multipliers = [
-                float(x) for x in os.getenv("VWAP_SD_MULTIPLIERS", "1.0,2.0,3.0").split(",")
+                float(x)
+                for x in os.getenv("VWAP_SD_MULTIPLIERS", "1.0,2.0,3.0").split(",")
             ]
 
             self.strategies["VWAPScalping"] = VWAPScalpingStrategy(
@@ -492,11 +540,19 @@ class StrategyManager:
 
         if self.enable_funding_arb:
             # Load Funding Arb parameters from environment
-            funding_min_rate = float(os.getenv("FUNDING_ARB_MIN_RATE", "0.0001"))  # 0.01% min
-            funding_max_alloc = float(os.getenv("FUNDING_ARB_MAX_ALLOCATION", "0.20"))  # 20% max
-            funding_rebalance = float(os.getenv("FUNDING_ARB_REBALANCE_THRESHOLD", "0.02"))  # 2%
+            funding_min_rate = float(
+                os.getenv("FUNDING_ARB_MIN_RATE", "0.0001")
+            )  # 0.01% min
+            funding_max_alloc = float(
+                os.getenv("FUNDING_ARB_MAX_ALLOCATION", "0.20")
+            )  # 20% max
+            funding_rebalance = float(
+                os.getenv("FUNDING_ARB_REBALANCE_THRESHOLD", "0.02")
+            )  # 2%
             funding_lookback = int(os.getenv("FUNDING_ARB_LOOKBACK_HOURS", "8"))
-            funding_min_confidence = float(os.getenv("FUNDING_ARB_MIN_CONFIDENCE", "0.70"))
+            funding_min_confidence = float(
+                os.getenv("FUNDING_ARB_MIN_CONFIDENCE", "0.70")
+            )
 
             # Funding interval comes from the selected exchange's
             # capabilities (Pacifica: 1h, Blofin: 8h) so the strategy's
@@ -527,8 +583,12 @@ class StrategyManager:
             momentum_rsi_upper = float(os.getenv("MOMENTUM_RSI_OVERBOUGHT", "65"))
             momentum_atr_period = int(os.getenv("MOMENTUM_ATR_PERIOD", "14"))
             momentum_atr_stop = float(os.getenv("MOMENTUM_ATR_STOP_MULTIPLIER", "1.5"))
-            momentum_atr_target = float(os.getenv("MOMENTUM_ATR_TARGET_MULTIPLIER", "2.5"))
-            momentum_min_confidence = float(os.getenv("MOMENTUM_MIN_CONFIDENCE", "0.60"))
+            momentum_atr_target = float(
+                os.getenv("MOMENTUM_ATR_TARGET_MULTIPLIER", "2.5")
+            )
+            momentum_min_confidence = float(
+                os.getenv("MOMENTUM_MIN_CONFIDENCE", "0.60")
+            )
             momentum_cooldown = int(os.getenv("MOMENTUM_COOLDOWN_MINUTES", "5"))
             momentum_volume_mult = float(os.getenv("MOMENTUM_VOLUME_MULTIPLIER", "1.2"))
             momentum_macd_fast = int(os.getenv("MOMENTUM_MACD_FAST", "12"))
@@ -569,17 +629,25 @@ class StrategyManager:
                 f"ATR stop={_momentum.atr_stop_mult}x, target={_momentum.atr_target_mult}x "
                 f"(RRR {_momentum_rrr:.2f}, min_rrr={momentum_min_rrr}), "
                 f"min_confidence={momentum_min_confidence:.0%}"
-                + (f", min_atr={momentum_min_atr_pct:.3%}" if momentum_min_atr_pct > 0 else "")
+                + (
+                    f", min_atr={momentum_min_atr_pct:.3%}"
+                    if momentum_min_atr_pct > 0
+                    else ""
+                )
             )
 
         if self.enable_orderbook_imbalance:
             # Load Order Book Imbalance parameters from environment
             ob_levels = int(os.getenv("ORDERBOOK_LEVELS", "10"))
             ob_imb_long = float(os.getenv("ORDERBOOK_IMBALANCE_THRESHOLD_LONG", "0.62"))
-            ob_imb_short = float(os.getenv("ORDERBOOK_IMBALANCE_THRESHOLD_SHORT", "0.38"))
+            ob_imb_short = float(
+                os.getenv("ORDERBOOK_IMBALANCE_THRESHOLD_SHORT", "0.38")
+            )
             ob_strong_imb = float(os.getenv("ORDERBOOK_STRONG_IMBALANCE", "0.72"))
             ob_min_density = int(os.getenv("ORDERBOOK_MIN_ORDER_DENSITY", "5"))
-            ob_spoof_detect = os.getenv("ORDERBOOK_SPOOF_DETECTION", "true").lower() == "true"
+            ob_spoof_detect = (
+                os.getenv("ORDERBOOK_SPOOF_DETECTION", "true").lower() == "true"
+            )
             ob_spoof_size_ratio = float(os.getenv("ORDERBOOK_SPOOF_SIZE_RATIO", "5.0"))
             ob_atr_period = int(os.getenv("ORDERBOOK_ATR_PERIOD", "14"))
             ob_atr_stop = float(os.getenv("ORDERBOOK_ATR_STOP_MULTIPLIER", "0.75"))
@@ -662,9 +730,7 @@ class StrategyManager:
 
             calflow_long_entry = int(os.getenv("CALFLOW_LONG_ENTRY_DAY", "-2"))
             calflow_long_exit = int(os.getenv("CALFLOW_LONG_EXIT_DAY", "3"))
-            calflow_enable_short = _get_env_calflow_bool(
-                "CALFLOW_ENABLE_SHORT", False
-            )
+            calflow_enable_short = _get_env_calflow_bool("CALFLOW_ENABLE_SHORT", False)
             calflow_short_entry = int(os.getenv("CALFLOW_SHORT_ENTRY_DOM", "10"))
             calflow_short_exit = int(os.getenv("CALFLOW_SHORT_EXIT_DOM", "15"))
             calflow_atr_stop = float(os.getenv("CALFLOW_ATR_STOP_MULT", "3.0"))
@@ -684,6 +750,64 @@ class StrategyManager:
                 f"[{calflow_long_entry:+d}, {calflow_long_exit:+d}] days around "
                 f"month boundary, short={calflow_enable_short}, "
                 f"stop={calflow_atr_stop}x ATR(14) 4h"
+            )
+
+        if self.enable_vwap_pullback:
+            # Load VWAP Pullback (trend-side continuation) parameters
+            def _get_env_vpb_bool(var_name: str, default: bool) -> bool:
+                value = os.getenv(var_name, "").lower()
+                if value in ("true", "1", "yes", "on"):
+                    return True
+                elif value in ("false", "0", "no", "off"):
+                    return False
+                return default
+
+            vpb_ema_fast = int(os.getenv("VWAP_PB_EMA_FAST", "20"))
+            vpb_ema_slow = int(os.getenv("VWAP_PB_EMA_SLOW", "50"))
+            vpb_band_sd = float(os.getenv("VWAP_PB_BAND_SD", "0.25"))
+            vpb_extension = float(os.getenv("VWAP_PB_EXTENSION_MIN_SD", "1.0"))
+            vpb_min_session_bars = int(os.getenv("VWAP_PB_MIN_SESSION_BARS", "8"))
+            vpb_rvol_min = float(os.getenv("VWAP_PB_RVOL_MIN", "0.0"))
+            vpb_rvol_window = int(os.getenv("VWAP_PB_RVOL_WINDOW", "96"))
+            vpb_atr_buffer = float(os.getenv("VWAP_PB_ATR_STOP_BUFFER", "0.5"))
+            vpb_tp_rr = float(os.getenv("VWAP_PB_TP_RR", "2.0"))
+            vpb_time_exit = float(os.getenv("VWAP_PB_TIME_EXIT_HOURS", "24"))
+            vpb_cooldown = float(os.getenv("VWAP_PB_COOLDOWN_HOURS", "4"))
+            vpb_min_rrr = float(os.getenv("VWAP_PB_MIN_RRR", "1.5"))
+            vpb_enable_short = _get_env_vpb_bool("VWAP_PB_ENABLE_SHORT", True)
+            vpb_entry_mode = os.getenv("VWAP_PB_ENTRY_MODE", "market").strip().lower()
+            vpb_maker_offset = float(os.getenv("VWAP_PB_MAKER_OFFSET_BP", "15.0"))
+            vpb_entry_ttl = int(os.getenv("VWAP_PB_ENTRY_TTL_CANDLES", "12"))
+            vpb_exit_mode = os.getenv("VWAP_PB_EXIT_MODE", "fixed").strip().lower()
+            vpb_trail_activation = float(os.getenv("VWAP_PB_TRAIL_ACTIVATION_R", "1.0"))
+            vpb_trail_r = float(os.getenv("VWAP_PB_TRAIL_R", "1.0"))
+
+            self.strategies["VWAPPullback"] = VWAPPullbackStrategy(
+                ema_fast=vpb_ema_fast,
+                ema_slow=vpb_ema_slow,
+                band_sd=vpb_band_sd,
+                extension_min_sd=vpb_extension,
+                min_session_bars=vpb_min_session_bars,
+                rvol_min=vpb_rvol_min,
+                rvol_window=vpb_rvol_window,
+                atr_stop_buffer=vpb_atr_buffer,
+                tp_rr=vpb_tp_rr,
+                time_exit_hours=vpb_time_exit,
+                cooldown_hours=vpb_cooldown,
+                min_rrr=vpb_min_rrr,
+                enable_short=vpb_enable_short,
+                entry_mode=vpb_entry_mode,
+                maker_offset_bp=vpb_maker_offset,
+                entry_ttl_candles=vpb_entry_ttl,
+                exit_mode=vpb_exit_mode,
+                trail_activation_r=vpb_trail_activation,
+                trail_r=vpb_trail_r,
+            )
+            logger.info(
+                f"VWAP Pullback strategy enabled: 4h EMA {vpb_ema_fast}/"
+                f"{vpb_ema_slow}, band={vpb_band_sd} SD, "
+                f"extension>={vpb_extension} SD, tp={vpb_tp_rr}R, "
+                f"time_exit={vpb_time_exit}h"
             )
 
         # Simulated time (set by backtest engine for accurate cooldown tracking)
@@ -832,7 +956,6 @@ class StrategyManager:
             return False
 
         # Check for minimum required timeframes
-        required_timeframes = ["15m", "1h", "4h"]
         available_timeframes = list(multi_tf_data.keys())
 
         # Must have at least 15m and 1h data
@@ -998,9 +1121,7 @@ class StrategyManager:
                 and "VWAPScalping" not in active_strategy_names
                 and regime in _vwap_regimes
             ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "VWAPScalping"
-                ]
+                active_strategy_names = list(active_strategy_names) + ["VWAPScalping"]
                 logger.debug(
                     f"{symbol}: Added VWAPScalping (ranging/indecisive regime)"
                 )
@@ -1010,9 +1131,7 @@ class StrategyManager:
                 "FundingArb" in self.strategies
                 and "FundingArb" not in active_strategy_names
             ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "FundingArb"
-                ]
+                active_strategy_names = list(active_strategy_names) + ["FundingArb"]
                 logger.debug(
                     f"{symbol}: Added FundingArb (passive funding rate strategy, runs in all regimes)"
                 )
@@ -1021,7 +1140,8 @@ class StrategyManager:
             if (
                 "MomentumScalping" in self.strategies
                 and "MomentumScalping" not in active_strategy_names
-                and regime in [MarketRegime.TRENDING_STRONG, MarketRegime.TRENDING_MODERATE]
+                and regime
+                in [MarketRegime.TRENDING_STRONG, MarketRegime.TRENDING_MODERATE]
             ):
                 active_strategy_names = list(active_strategy_names) + [
                     "MomentumScalping"
@@ -1059,11 +1179,20 @@ class StrategyManager:
                 "CalendarFlow" in self.strategies
                 and "CalendarFlow" not in active_strategy_names
             ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "CalendarFlow"
-                ]
+                active_strategy_names = list(active_strategy_names) + ["CalendarFlow"]
                 logger.debug(
                     f"{symbol}: Added CalendarFlow (calendar-gated overlay, runs in all regimes)"
+                )
+
+            # Step 2.12: Always add VWAPPullback if enabled (self-gated by
+            # its own 4h EMA stack, so regime admission is redundant)
+            if (
+                "VWAPPullback" in self.strategies
+                and "VWAPPullback" not in active_strategy_names
+            ):
+                active_strategy_names = list(active_strategy_names) + ["VWAPPullback"]
+                logger.debug(
+                    f"{symbol}: Added VWAPPullback (trend-gated overlay, runs in all regimes)"
                 )
 
             if not active_strategy_names:
@@ -1082,9 +1211,7 @@ class StrategyManager:
 
             for strategy_name in active_strategy_names:
                 strategy = self.strategies.get(strategy_name)
-                funnel_key = DISPLAY_TO_STRATEGY_KEY.get(
-                    strategy_name, strategy_name
-                )
+                funnel_key = DISPLAY_TO_STRATEGY_KEY.get(strategy_name, strategy_name)
 
                 if not strategy:
                     funnel.reject(REASON_STRATEGY_MISSING, strategy=funnel_key)
@@ -1111,10 +1238,10 @@ class StrategyManager:
                                 execution_tf_data=execution_tf_data,
                             )
                         else:
-                            funnel.reject(
-                                REASON_NO_ORDERBOOK, strategy=funnel_key
+                            funnel.reject(REASON_NO_ORDERBOOK, strategy=funnel_key)
+                            logger.debug(
+                                f"{symbol}: No orderbook data for OrderBookImbalance"
                             )
-                            logger.debug(f"{symbol}: No orderbook data for OrderBookImbalance")
                             signals = []
 
                     # Special handling for GridTrading - pass through the regime detector's
@@ -1166,6 +1293,15 @@ class StrategyManager:
                     funnel.reject(REASON_STRATEGY_EXCEPTION, strategy=funnel_key)
                     logger.error(f"Error in {strategy_name} for {symbol}: {e}")
                     continue
+
+            # Step 3.4: Directional bias gate (HTF trend + funding extremes).
+            # In "log" mode this only stamps the bias into each signal's
+            # indicators; in "enforce" mode signals fighting the combined
+            # bias additionally fail multi_timeframe_alignment and are
+            # dropped (and attributed) by the existing 8-flag validation.
+            all_signals = self._apply_directional_gate(
+                all_signals, symbol, multi_tf_data
+            )
 
             # Step 3.5: Regime-conditional minimum-confidence gate
             all_signals = self._apply_regime_confidence_gate(all_signals, regime)
@@ -1371,7 +1507,9 @@ class StrategyManager:
             flag_desc = (
                 ", ".join(
                     f"{k}={v}"
-                    for k, v in sorted(flags.items(), key=lambda kv: kv[1], reverse=True)
+                    for k, v in sorted(
+                        flags.items(), key=lambda kv: kv[1], reverse=True
+                    )
                 )
                 or "none"
             )
@@ -1391,6 +1529,79 @@ class StrategyManager:
         self._signal_generated_counts.clear()
         self._signal_discarded_counts.clear()
         self._signal_discard_flags.clear()
+
+    def _apply_directional_gate(
+        self,
+        signals: List[Signal],
+        symbol: str,
+        multi_tf_data: Dict[str, Dict[str, List[float]]],
+    ) -> List[Signal]:
+        """
+        Apply the directional bias gate (DIRECTIONAL_GATE env).
+
+        "off": returns the signals untouched without computing anything.
+        "log": computes the bias once per call and stamps it into every
+        signal's indicators["directional_bias"] so the census can measure
+        how the gate WOULD have voted, without changing a single trade.
+        "enforce": as "log", plus non-exempt signals whose side fights the
+        combined bias get multi_timeframe_alignment=False - the existing
+        validation then drops them with per-flag discard attribution.
+
+        Args:
+            signals: Generated signals for a symbol.
+            symbol: Trading symbol.
+            multi_tf_data: Per-timeframe OHLCV bundles (trend leg input).
+
+        Returns:
+            The same signal list (enforce mode marks, never removes -
+            removal happens downstream in the 8-flag validation).
+        """
+        mode = self.directional_gate_mode
+        if mode == GATE_OFF or not signals:
+            return signals
+
+        try:
+            bias = self.directional_bias_engine.compute(
+                symbol, multi_tf_data, now=self._sim_time
+            )
+        except Exception as e:
+            logger.warning(f"{symbol}: directional bias computation failed: {e}")
+            return signals
+
+        stamp = bias.to_indicator()
+        for signal in signals:
+            if signal.indicators is None:
+                signal.indicators = {}
+            signal.indicators["directional_bias"] = dict(stamp)
+
+            if mode != GATE_ENFORCE:
+                continue
+            display_name = self._get_strategy_display_name(signal.strategy)
+            if display_name in self.directional_gate_exempt:
+                continue
+            if not bias.allows(signal.side):
+                signal.multi_timeframe_alignment = False
+                logger.info(
+                    f"Directional gate: {display_name} {signal.side.value} "
+                    f"{symbol} fights bias "
+                    f"(trend={bias.trend}, funding={bias.funding}, "
+                    f"combined={bias.combined}) - failing "
+                    f"multi_timeframe_alignment"
+                )
+            elif (
+                bias.combined == "neutral"
+                and display_name in self.directional_neutral_exclude
+            ):
+                # Neutral-state exclusion (DIRECTIONAL_NEUTRAL_EXCLUDE):
+                # this strategy measured as a net loser whenever no
+                # directional bias exists, so it stands aside in chop.
+                signal.multi_timeframe_alignment = False
+                logger.info(
+                    f"Directional gate: {display_name} {symbol} excluded "
+                    f"in neutral bias state (DIRECTIONAL_NEUTRAL_EXCLUDE)"
+                )
+
+        return signals
 
     def _apply_regime_confidence_gate(
         self, signals: List[Signal], regime: MarketRegime
@@ -1426,9 +1637,7 @@ class StrategyManager:
         kept: List[Signal] = []
         for signal in signals:
             if signal.confidence < threshold:
-                strategy_name = getattr(
-                    signal.strategy, "value", str(signal.strategy)
-                )
+                strategy_name = getattr(signal.strategy, "value", str(signal.strategy))
                 funnel.count_strategy(strategy_name, STAGE_CONFIDENCE_DROPPED)
                 funnel.reject(REASON_CONFIDENCE_GATE, strategy=strategy_name)
                 logger.info(
@@ -1560,11 +1769,13 @@ class StrategyManager:
         # Extract grid signals from all signals (may include non-grid signals)
         all_signals = buy_signals + sell_signals
         grid_buy = [
-            s for s in all_signals
+            s
+            for s in all_signals
             if s.strategy == StrategyType.GRID_TRADING and s.side == OrderSide.BUY
         ]
         grid_sell = [
-            s for s in all_signals
+            s
+            for s in all_signals
             if s.strategy == StrategyType.GRID_TRADING and s.side == OrderSide.SELL
         ]
 
@@ -1883,6 +2094,7 @@ class StrategyManager:
             StrategyType.ORDERBOOK_IMBALANCE: "OrderBookImbalance",
             StrategyType.SESSION_RANGE_BREAKOUT: "SessionRangeBreakout",
             StrategyType.CALENDAR_FLOW: "CalendarFlow",
+            StrategyType.VWAP_PULLBACK: "VWAPPullback",
         }
         fallback = strategy_type.value if strategy_type.value else str(strategy_type)
         return mapping.get(strategy_type, fallback)
@@ -1914,6 +2126,7 @@ class StrategyManager:
             "OrderBookImbalance": StrategyType.ORDERBOOK_IMBALANCE,
             "SessionRangeBreakout": StrategyType.SESSION_RANGE_BREAKOUT,
             "CalendarFlow": StrategyType.CALENDAR_FLOW,
+            "VWAPPullback": StrategyType.VWAP_PULLBACK,
         }
 
         result = {}

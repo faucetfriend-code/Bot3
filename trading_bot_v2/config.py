@@ -2,10 +2,24 @@ import os
 import logging
 from typing import Optional
 from enum import Enum
-from dotenv import load_dotenv
+from .env_precedence import load_env
 
-# Load environment variables from .env file (override=True ensures fresh values)
-load_dotenv(override=True)
+# Load environment variables from .env.
+#
+# Precedence is still .env-wins (override=True), unchanged - but it is no
+# longer silent. load_env reports every key set in BOTH .env and the
+# process environment with a different value, i.e. exactly the keys whose
+# resolution this choice decided, and warns with their NAMES (never their
+# values). That set is what has to be empty before the precedence can be
+# flipped to the conventional flag > env > file > default order; see
+# env_precedence.py, and run `python -m trading_bot_v2.env_precedence`.
+ENV_LOAD_REPORT = load_env()
+
+# Imported AFTER load_dotenv on purpose: database.py resolves DATABASE_PATH at
+# import time, so importing it before the .env is loaded would make it resolve
+# a different file than this module - the exact split this shared constant
+# exists to close.
+from .database import DEFAULT_DATABASE_PATH  # noqa: E402
 
 # Define all enums locally to avoid import issues with "Example files/core_logic"
 # These are duplicated from core_logic/config.py for proper module resolution
@@ -35,6 +49,7 @@ class StrategyType(str, Enum):
     ORDERBOOK_IMBALANCE = "orderbook_imbalance"
     SESSION_RANGE_BREAKOUT = "session_range_breakout"
     CALENDAR_FLOW = "calendar_flow"
+    VWAP_PULLBACK = "vwap_pullback"
 
 
 class AssetClass(str, Enum):
@@ -58,6 +73,28 @@ class TradeQuality(str, Enum):
     EXCEPTIONAL = "exceptional"
 
 
+def _env_int(name: str, default: int, minimum: Optional[int] = None) -> int:
+    """Read an int env var; unparseable values fall back to ``default``."""
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
+def _env_float(name: str, default: float, minimum: Optional[float] = None) -> float:
+    """Read a float env var; unparseable values fall back to ``default``."""
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    if minimum is not None:
+        value = max(minimum, value)
+    return value
+
+
 class Config:
     """Configuration class for the trading bot v2."""
 
@@ -66,7 +103,10 @@ class Config:
         # ---- Database backend selection ----
         # "sqlite" (default) or "postgres"
         self.database_backend: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
-        self.database_path: str = os.getenv("DATABASE_PATH", "trading_bot.db")
+        # Default imported from database.py so the two modules cannot
+        # disagree about which file DATABASE_PATH means (see
+        # database.DEFAULT_DATABASE_PATH).
+        self.database_path: str = os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH)
 
         # ---- PostgreSQL connection parameters ----
         self.pg_host: str = os.getenv("PG_HOST", "localhost")
@@ -216,22 +256,56 @@ class Config:
 
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+        # ---- API server binding and access control (live-readiness T1) ----
+        # The control interface can start real orders, so it binds to
+        # loopback unless API_HOST is set deliberately, and a non-loopback
+        # bind refuses to start without API_TOKEN (see config_validation).
+        self.api_host: str = os.getenv("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            self.api_port: int = int(os.getenv("API_PORT", "8000"))
+        except ValueError:
+            self.api_port = 8000
+        self.api_token: Optional[str] = os.getenv("API_TOKEN", "").strip() or None
+        self.enable_debug_routes: bool = os.getenv(
+            "ENABLE_DEBUG_ROUTES", "false"
+        ).lower() in ("true", "1", "yes")
+
         # Backtesting
         self.backtest_start_date: str = os.getenv("BACKTEST_START_DATE", "2024-01-01")
         self.backtest_end_date: str = os.getenv("BACKTEST_END_DATE", "2024-12-31")
         self.backtest_symbol: str = os.getenv("BACKTEST_SYMBOL", "SUI-USDC")
-        self.backtest_initial_capital: float = float(os.getenv("BACKTEST_INITIAL_CAPITAL", "10000.0"))
-        self.backtest_slippage_pct: float = float(os.getenv("BACKTEST_SLIPPAGE_PCT", "0.002"))
-        self.backtest_taker_fee_pct: float = float(os.getenv("BACKTEST_TAKER_FEE_PCT", "0.0006"))
-        self.backtest_maker_fee_pct: float = float(os.getenv("BACKTEST_MAKER_FEE_PCT", "0.0002"))
-        self.backtest_funding_hourly_pct: float = float(os.getenv("BACKTEST_FUNDING_HOURLY_PCT", "0.0001"))
-        self.backtest_data_dir: str = os.getenv("BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data")
-        self.backtest_walk_forward_train_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TRAIN_MONTHS", "6"))
-        self.backtest_walk_forward_test_months: int = int(os.getenv("BACKTEST_WALK_FORWARD_TEST_MONTHS", "1"))
+        self.backtest_initial_capital: float = float(
+            os.getenv("BACKTEST_INITIAL_CAPITAL", "10000.0")
+        )
+        self.backtest_slippage_pct: float = float(
+            os.getenv("BACKTEST_SLIPPAGE_PCT", "0.002")
+        )
+        self.backtest_taker_fee_pct: float = float(
+            os.getenv("BACKTEST_TAKER_FEE_PCT", "0.0006")
+        )
+        self.backtest_maker_fee_pct: float = float(
+            os.getenv("BACKTEST_MAKER_FEE_PCT", "0.0002")
+        )
+        self.backtest_funding_hourly_pct: float = float(
+            os.getenv("BACKTEST_FUNDING_HOURLY_PCT", "0.0001")
+        )
+        self.backtest_data_dir: str = os.getenv(
+            "BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data"
+        )
+        self.backtest_walk_forward_train_months: int = int(
+            os.getenv("BACKTEST_WALK_FORWARD_TRAIN_MONTHS", "6")
+        )
+        self.backtest_walk_forward_test_months: int = int(
+            os.getenv("BACKTEST_WALK_FORWARD_TEST_MONTHS", "1")
+        )
         # Hedge mode: False = Pacifica (no opposing positions, only SL/TP closes)
-        self.backtest_hedge_mode: bool = os.getenv("BACKTEST_HEDGE_MODE", "false").lower() in ("true", "1", "yes")
+        self.backtest_hedge_mode: bool = os.getenv(
+            "BACKTEST_HEDGE_MODE", "false"
+        ).lower() in ("true", "1", "yes")
         # Min candles a position must be held before an opposing signal can close it (hedge_mode=True only)
-        self.backtest_min_hold_candles: int = int(os.getenv("BACKTEST_MIN_HOLD_CANDLES", "6"))
+        self.backtest_min_hold_candles: int = int(
+            os.getenv("BACKTEST_MIN_HOLD_CANDLES", "6")
+        )
         # Single-strategy filter: empty = all strategies, "MomentumScalping" = only that one
         self.backtest_strategy: str = os.getenv("BACKTEST_STRATEGY", "")
         # Candles of rolling history handed to strategies per timeframe.
@@ -253,6 +327,34 @@ class Config:
             )
         except ValueError:
             self.reconciliation_interval_seconds = 3600
+
+        # ---- Venue-side stop protection (live-readiness audit T4) ----
+        # What to do when a just-filled entry cannot get a venue stop
+        # installed after the one retry: "close" (default; flatten it
+        # reduce-only - safe for unattended live) or "local" (keep it,
+        # mark venue_stop_state=missing, rely on the loop check).
+        policy = os.getenv("VENUE_STOP_FAILURE_POLICY", "close").strip().lower()
+        if policy not in ("close", "local"):
+            logging.getLogger(__name__).warning(
+                "VENUE_STOP_FAILURE_POLICY=%r is not close|local; using close",
+                policy,
+            )
+            policy = "close"
+        self.venue_stop_failure_policy: str = policy
+        self.venue_stop_min_move_pct: float = _env_float(
+            "VENUE_STOP_MIN_MOVE_PCT", 0.1, minimum=0.0
+        )
+        self.venue_stop_max_amend_failures: int = _env_int(
+            "VENUE_STOP_MAX_AMEND_FAILURES", 5, minimum=1
+        )
+        # Previously read in-module by migrated_position_manager.py and
+        # trading_bot.py; those modules keep their os.getenv fallback.
+        self.migrated_close_max_attempts: int = _env_int(
+            "MIGRATED_CLOSE_MAX_ATTEMPTS", 5, minimum=1
+        )
+        self.entry_fill_max_lookups: int = _env_int(
+            "ENTRY_FILL_MAX_LOOKUPS", 10, minimum=1
+        )
 
         # ---- Automated database backup (H5) ----
         self.backup_enabled: bool = os.getenv("BACKUP_ENABLED", "true").lower() in (
@@ -308,7 +410,9 @@ class Config:
             if not self.pg_host:
                 raise ValueError("PG_HOST is required when DATABASE_BACKEND=postgres")
             if not self.pg_database:
-                raise ValueError("PG_DATABASE is required when DATABASE_BACKEND=postgres")
+                raise ValueError(
+                    "PG_DATABASE is required when DATABASE_BACKEND=postgres"
+                )
             if not self.pg_user:
                 raise ValueError("PG_USER is required when DATABASE_BACKEND=postgres")
             if self.pg_pool_min < 0:

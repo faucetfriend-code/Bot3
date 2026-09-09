@@ -43,8 +43,8 @@ class BacktestResult:
     avg_drawdown_duration_days: float = 0.0
 
     # Execution
-    total_trades: int = 0       # total fills (opens + closes)
-    closed_trades: int = 0      # completed round-trips with realised PnL
+    total_trades: int = 0  # total fills (opens + closes)
+    closed_trades: int = 0  # completed round-trips with realised PnL
     avg_fee_per_trade: float = 0.0
     total_fees: float = 0.0
     total_funding_paid: float = 0.0
@@ -62,9 +62,9 @@ class BacktestResult:
     trade_log: List = field(default_factory=list)
 
     def print_summary(self) -> None:
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"BACKTEST RESULTS: {self.symbol} | {self.start} -> {self.end}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print(f"  Initial Capital : ${self.initial_capital:,.2f}")
         print(f"  Final Equity    : ${self.final_equity:,.2f}")
         print(f"  Total Return    : {self.total_return_pct:+.1f}%")
@@ -78,11 +78,12 @@ class BacktestResult:
         print(f"  Closed Trades   : {self.closed_trades}")
         print(f"  Total Fees      : ${self.total_fees:,.2f}")
         print(f"  Funding Paid    : ${self.total_funding_paid:,.2f}")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
 
     def save_html(self, path: str) -> None:
         """Generate a self-contained HTML report with equity curve chart."""
         from .reports.html_report import generate_html_report
+
         generate_html_report(self, path)
         logger.info(f"Report saved to {path}")
 
@@ -93,11 +94,13 @@ class PerformanceTracker:
         self._snapshots: List[Dict] = []
 
     def record_snapshot(self, timestamp: str, equity: float, positions: Dict) -> None:
-        self._snapshots.append({
-            "timestamp": timestamp,
-            "equity": equity,
-            "open_positions": len(positions),
-        })
+        self._snapshots.append(
+            {
+                "timestamp": timestamp,
+                "equity": equity,
+                "open_positions": len(positions),
+            }
+        )
 
     def finalise(
         self,
@@ -148,7 +151,9 @@ class PerformanceTracker:
             days = (dt_end - dt_start).days
             years = days / 365.25
             if years > 0 and final_equity > 0:
-                result.cagr_pct = ((final_equity / self.initial_capital) ** (1 / years) - 1) * 100
+                result.cagr_pct = (
+                    (final_equity / self.initial_capital) ** (1 / years) - 1
+                ) * 100
         except Exception:
             pass
 
@@ -160,13 +165,19 @@ class PerformanceTracker:
             ]
             mean_r = sum(returns) / len(returns)
             std_r = (sum((r - mean_r) ** 2 for r in returns) / len(returns)) ** 0.5
-            result.sharpe_ratio = (mean_r / std_r * math.sqrt(8760)) if std_r > 0 else 0.0
+            result.sharpe_ratio = (
+                (mean_r / std_r * math.sqrt(8760)) if std_r > 0 else 0.0
+            )
 
             # Sortino (downside deviation only)
             downside = [r for r in returns if r < 0]
             if downside:
-                downside_std = (sum(r ** 2 for r in downside) / len(downside)) ** 0.5
-                result.sortino_ratio = (mean_r / downside_std * math.sqrt(8760)) if downside_std > 0 else 0.0
+                downside_std = (sum(r**2 for r in downside) / len(downside)) ** 0.5
+                result.sortino_ratio = (
+                    (mean_r / downside_std * math.sqrt(8760))
+                    if downside_std > 0
+                    else 0.0
+                )
 
         # Max drawdown
         peak = self.initial_capital
@@ -178,8 +189,11 @@ class PerformanceTracker:
             if dd > max_dd:
                 max_dd = dd
         result.max_drawdown_pct = max_dd * 100
-        result.calmar_ratio = (result.cagr_pct / result.max_drawdown_pct
-                                if result.max_drawdown_pct > 0 else 0.0)
+        result.calmar_ratio = (
+            result.cagr_pct / result.max_drawdown_pct
+            if result.max_drawdown_pct > 0
+            else 0.0
+        )
 
         # Win/loss stats — only count closing fills (pnl != 0); opening fills have pnl=0
         closed_trades = [t for t in trade_log if t.get("pnl", 0) != 0]
@@ -189,7 +203,9 @@ class PerformanceTracker:
         gross_loss = abs(sum(t.get("pnl", 0) for t in losses))
         result.closed_trades = len(closed_trades)
         result.win_rate_pct = len(wins) / max(1, len(closed_trades)) * 100
-        result.profit_factor = gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        result.profit_factor = (
+            gross_profit / gross_loss if gross_loss > 0 else float("inf")
+        )
 
         # Per-regime breakdown (P4): closed trades carry the regime that
         # was confirmed at position entry (tagged by SimulatedExchange).

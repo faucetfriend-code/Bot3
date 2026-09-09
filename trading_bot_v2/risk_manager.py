@@ -204,7 +204,9 @@ class RiskManager:
             logger.warning(f"No stop loss for {signal.asset}, using minimum size")
             notional_size = adjusted_risk * 0.1  # Conservative minimum
         elif signal.entry_price <= 0:
-            logger.warning(f"Invalid entry price ({signal.entry_price}) for {signal.asset}, using minimum size")
+            logger.warning(
+                f"Invalid entry price ({signal.entry_price}) for {signal.asset}, using minimum size"
+            )
             notional_size = adjusted_risk * 0.1  # Conservative minimum
         else:
             # Position notional = Risk Amount / Stop Distance Percentage
@@ -213,7 +215,9 @@ class RiskManager:
             )
             # Avoid division by zero if stop == entry
             if stop_distance_pct <= 0:
-                logger.warning(f"Zero stop distance for {signal.asset}, using minimum size")
+                logger.warning(
+                    f"Zero stop distance for {signal.asset}, using minimum size"
+                )
                 notional_size = adjusted_risk * 0.1
             else:
                 notional_size = adjusted_risk / stop_distance_pct
@@ -827,7 +831,9 @@ class RiskManager:
 
         return result
 
-    def get_migrated_positions(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_migrated_positions(
+        self, symbol: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Get list of migrated positions.
 
@@ -922,11 +928,11 @@ class RiskManager:
                 ),
                 "cross_mmr": self._parse_float_safe(raw_data.get("cross_mmr", "0")),
                 "available_to_spend": self._parse_float_safe(
-                    raw_data.get("available_to_spend", raw_data.get("available_balance", "0"))
+                    raw_data.get(
+                        "available_to_spend", raw_data.get("available_balance", "0")
+                    )
                 ),
-                "balance": self._parse_float_safe(
-                    raw_data.get("balance", "0")
-                ),
+                "balance": self._parse_float_safe(raw_data.get("balance", "0")),
                 "timestamp": current_time,
             }
 
@@ -943,7 +949,7 @@ class RiskManager:
             logger.debug(
                 f"Margin data refreshed: equity=${margin_data['account_equity']:.2f}, "
                 f"margin_used=${margin_data['total_margin_used']:.2f}, "
-                f"utilization={margin_data['margin_utilization_pct']*100:.1f}%"
+                f"utilization={margin_data['margin_utilization_pct'] * 100:.1f}%"
             )
 
             return margin_data
@@ -987,7 +993,9 @@ class RiskManager:
         margin_data = self.get_margin_data()
 
         if not margin_data:
-            result["warnings"].append("Unable to retrieve margin data - proceeding with caution")
+            result["warnings"].append(
+                "Unable to retrieve margin data - proceeding with caution"
+            )
             logger.warning("Margin safety check skipped - no margin data available")
             return result
 
@@ -998,7 +1006,9 @@ class RiskManager:
         # Check 1: Current utilization
         if account_equity > 0:
             current_utilization = total_margin_used / account_equity
-            result["utilization_after"] = (total_margin_used + proposed_margin) / account_equity
+            result["utilization_after"] = (
+                total_margin_used + proposed_margin
+            ) / account_equity
         else:
             current_utilization = 0.0
             result["utilization_after"] = 0.0
@@ -1006,8 +1016,8 @@ class RiskManager:
         if current_utilization >= self.max_margin_utilization_pct:
             result["safe"] = False
             result["reason"] = (
-                f"Current margin utilization ({current_utilization*100:.1f}%) "
-                f"exceeds maximum ({self.max_margin_utilization_pct*100:.1f}%)"
+                f"Current margin utilization ({current_utilization * 100:.1f}%) "
+                f"exceeds maximum ({self.max_margin_utilization_pct * 100:.1f}%)"
             )
             logger.warning(result["reason"])
             return result
@@ -1017,7 +1027,7 @@ class RiskManager:
             result["safe"] = False
             result["reason"] = (
                 f"Position would exceed max margin utilization: "
-                f"{result['utilization_after']*100:.1f}% > {self.max_margin_utilization_pct*100:.1f}%"
+                f"{result['utilization_after'] * 100:.1f}% > {self.max_margin_utilization_pct * 100:.1f}%"
             )
             logger.warning(result["reason"])
             return result

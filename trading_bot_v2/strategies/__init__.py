@@ -10,6 +10,7 @@ from .momentum_scalping import MomentumScalpingStrategy
 from .orderbook_imbalance import OrderBookImbalanceStrategy
 from .session_range_breakout import SessionRangeBreakoutStrategy
 from .calendar_flow import CalendarFlowStrategy
+from .vwap_pullback import VWAPPullbackStrategy
 
 __all__ = [
     "MeanReversionStrategy",
@@ -22,4 +23,5 @@ __all__ = [
     "OrderBookImbalanceStrategy",
     "SessionRangeBreakoutStrategy",
     "CalendarFlowStrategy",
+    "VWAPPullbackStrategy",
 ]

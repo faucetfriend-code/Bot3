@@ -37,11 +37,10 @@ import sqlite3
 import statistics
 import sys
 import time
-from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -227,9 +226,15 @@ class DatabaseBenchmark:
             quantity = 0.1 + (i % 10) * 0.05
             entry_price = 50000 + (i % 1000) * 10
             exit_price = entry_price + (i % 100 - 50) * 5
-            pnl = (exit_price - entry_price) * quantity if side == "long" else (entry_price - exit_price) * quantity
+            pnl = (
+                (exit_price - entry_price) * quantity
+                if side == "long"
+                else (entry_price - exit_price) * quantity
+            )
             strategy = strategies[i % len(strategies)]
-            trades_data.append((symbol, side, quantity, entry_price, exit_price, pnl, strategy))
+            trades_data.append(
+                (symbol, side, quantity, entry_price, exit_price, pnl, strategy)
+            )
 
         self._conn.executemany(
             "INSERT INTO trades (symbol, side, quantity, entry_price, exit_price, pnl, strategy) VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -243,7 +248,18 @@ class DatabaseBenchmark:
             symbol = symbols[i % len(symbols)]
             tf = "1m"
             price = 50000 + (i % 1000) * 10
-            candle_data.append((symbol, tf, price, price * 1.01, price * 0.99, price, 1000 + i % 500, base_ts + i * 60))
+            candle_data.append(
+                (
+                    symbol,
+                    tf,
+                    price,
+                    price * 1.01,
+                    price * 0.99,
+                    price,
+                    1000 + i % 500,
+                    base_ts + i * 60,
+                )
+            )
 
         self._conn.executemany(
             "INSERT INTO candles (symbol, timeframe, open, high, low, close, volume, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -257,7 +273,18 @@ class DatabaseBenchmark:
             side = "long" if i % 2 == 0 else "short"
             quantity = 0.5 + (i % 10) * 0.1
             entry_price = 50000 + (i % 100) * 10
-            pos_data.append((f"pos_{i}", symbol, side, quantity, entry_price, entry_price * 1.01, 0, 1.0))
+            pos_data.append(
+                (
+                    f"pos_{i}",
+                    symbol,
+                    side,
+                    quantity,
+                    entry_price,
+                    entry_price * 1.01,
+                    0,
+                    1.0,
+                )
+            )
 
         self._conn.executemany(
             "INSERT INTO positions (position_id, symbol, side, quantity, entry_price, current_price, unrealized_pnl, leverage) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -284,12 +311,16 @@ class DatabaseBenchmark:
 
         # Warmup
         for _ in range(warmup):
-            self._conn.execute("SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)).fetchall()
+            self._conn.execute(
+                "SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)
+            ).fetchall()
 
         # Benchmark
         for _ in range(iterations):
             start = time.perf_counter()
-            self._conn.execute("SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)).fetchall()
+            self._conn.execute(
+                "SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)
+            ).fetchall()
             elapsed = (time.perf_counter() - start) * 1000
             result.times_ms.append(elapsed)
 
@@ -530,7 +561,11 @@ class SignalBenchmark:
             atr = sum(tr_list[:period]) / period
             plus_di = (sum(plus_dm[:period]) / period / atr * 100) if atr > 0 else 0
             minus_di = (sum(minus_dm[:period]) / period / atr * 100) if atr > 0 else 0
-            dx = abs(plus_di - minus_di) / (plus_di + minus_di) * 100 if (plus_di + minus_di) > 0 else 0
+            dx = (
+                abs(plus_di - minus_di) / (plus_di + minus_di) * 100
+                if (plus_di + minus_di) > 0
+                else 0
+            )
             return dx
 
         highs = [p * 1.01 for p in prices]
@@ -674,7 +709,7 @@ class PerformanceBenchmark:
         db_bench.setup()
         try:
             result = BenchmarkResult(
-                name=f"custom_query",
+                name="custom_query",
                 backend="sqlite",
                 iterations=iterations,
             )
@@ -695,7 +730,9 @@ class PerformanceBenchmark:
         finally:
             db_bench.teardown()
 
-    def compare_backends(self, iterations: int = 50) -> Dict[str, List[BenchmarkResult]]:
+    def compare_backends(
+        self, iterations: int = 50
+    ) -> Dict[str, List[BenchmarkResult]]:
         """
         Compare SQLite vs PostgreSQL performance.
 
@@ -752,9 +789,7 @@ class PerformanceBenchmark:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "summary": {
                 "total_benchmarks": len(self._results),
-                "backends_tested": list(
-                    set(r.backend for r in self._results)
-                ),
+                "backends_tested": list(set(r.backend for r in self._results)),
             },
             "results": [r.to_dict() for r in self._results],
         }
@@ -875,9 +910,7 @@ class PerformanceBenchmark:
             ValueError: If statistic is neither "median" nor "mean".
         """
         if statistic not in ("median", "mean"):
-            raise ValueError(
-                f"statistic must be 'median' or 'mean', got {statistic!r}"
-            )
+            raise ValueError(f"statistic must be 'median' or 'mean', got {statistic!r}")
         stat_key = f"{statistic}_ms"
 
         with open(baseline_path, "r", encoding="utf-8") as f:

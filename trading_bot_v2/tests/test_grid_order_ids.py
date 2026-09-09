@@ -27,7 +27,6 @@ from loguru import logger as loguru_logger
 
 from trading_bot_v2.grid_lifecycle_manager import (
     GridLifecycleManager,
-    GridState,
 )
 
 
@@ -120,9 +119,7 @@ class TestNonGridFillIgnored:
         manager, client, _ = _make_manager()
         _register_tracked_grid(manager)
 
-        new_fills = manager._process_trades(
-            "SUI", [_trade("t1", "overlay-order-77")]
-        )
+        new_fills = manager._process_trades("SUI", [_trade("t1", "overlay-order-77")])
 
         assert new_fills == 0
         client.place_order.assert_not_called()
@@ -222,19 +219,13 @@ class TestGridFillRotation:
 class TestLegacyFallback:
     def test_legacy_grid_attributes_everything_and_warns_once(self):
         manager, client, _ = _make_manager()
-        manager.register_new_grid(
-            "SUI", 1000.0, 0.90, spacing=0.01, center_price=1.0
-        )
+        manager.register_new_grid("SUI", 1000.0, 0.90, spacing=0.01, center_price=1.0)
         assert "order_ids" not in manager._grids["SUI"]
 
         messages = []
-        sink_id = loguru_logger.add(
-            lambda m: messages.append(str(m)), level="WARNING"
-        )
+        sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="WARNING")
         try:
-            new_fills = manager._process_trades(
-                "SUI", [_trade("t1", "any-order")]
-            )
+            new_fills = manager._process_trades("SUI", [_trade("t1", "any-order")])
             manager._process_trades("SUI", [_trade("t2", "other-order")])
         finally:
             loguru_logger.remove(sink_id)
@@ -282,9 +273,7 @@ class TestOrderIdPersistence:
 
     def test_legacy_row_loads_without_ids(self, temp_db):
         manager, _, _ = _make_manager(db=object())
-        manager.register_new_grid(
-            "SUI", 1000.0, 0.90, spacing=0.01, center_price=1.0
-        )
+        manager.register_new_grid("SUI", 1000.0, 0.90, spacing=0.01, center_price=1.0)
 
         fresh, _, _ = _make_manager(db=object())
         fresh.load_grid_states()

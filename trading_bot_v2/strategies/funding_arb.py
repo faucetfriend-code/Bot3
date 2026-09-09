@@ -28,9 +28,8 @@ position view that both follow SIMULATED time:
   backtest engine honours as an explicit exit.
 """
 
-import os
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from loguru import logger
 
 from ..models import Signal, OrderSide
@@ -47,13 +46,13 @@ class FundingArbStrategy:
 
     def __init__(
         self,
-        min_funding_rate: float = 0.0001,      # 0.01% minimum to act
-        max_allocation_pct: float = 0.20,       # Max 20% of account
-        rebalance_threshold: float = 0.02,      # Rebalance if delta > 2%
-        lookback_hours: int = 8,                # Hours of funding history to analyze
+        min_funding_rate: float = 0.0001,  # 0.01% minimum to act
+        max_allocation_pct: float = 0.20,  # Max 20% of account
+        rebalance_threshold: float = 0.02,  # Rebalance if delta > 2%
+        lookback_hours: int = 8,  # Hours of funding history to analyze
         min_confidence: float = 0.70,
-        client=None,                            # Exchange client for API calls
-        funding_interval_hours: int = 1,        # Funding cycle (Pacifica=1, Blofin=8)
+        client=None,  # Exchange client for API calls
+        funding_interval_hours: int = 1,  # Funding cycle (Pacifica=1, Blofin=8)
     ):
         self.strategy_type = StrategyType.FUNDING_ARB
         self.min_funding_rate = min_funding_rate
@@ -129,7 +128,9 @@ class FundingArbStrategy:
             try:
                 asset = pos.get("symbol") if isinstance(pos, dict) else None
                 side = str(pos.get("side", "")).lower() if isinstance(pos, dict) else ""
-                qty = float(pos.get("quantity", 0) or 0) if isinstance(pos, dict) else 0.0
+                qty = (
+                    float(pos.get("quantity", 0) or 0) if isinstance(pos, dict) else 0.0
+                )
             except (AttributeError, TypeError, ValueError):
                 continue
             if not asset or qty <= 0 or side not in ("long", "short"):
@@ -142,9 +143,7 @@ class FundingArbStrategy:
             if existing is None:
                 self.active_positions[asset] = {
                     "side": arb_side,
-                    "perp_side": (
-                        OrderSide.SELL if side == "short" else OrderSide.BUY
-                    ),
+                    "perp_side": (OrderSide.SELL if side == "short" else OrderSide.BUY),
                     "size": qty,
                     "entry_rate": self.funding_cache.get(asset, {}).get(
                         "current_rate", 0.0
@@ -195,7 +194,7 @@ class FundingArbStrategy:
                     self.funding_cache[symbol] = {
                         "current_rate": float(funding_rate) if funding_rate else 0,
                         "next_payment": next_funding,
-                        "updated_at": now
+                        "updated_at": now,
                     }
 
                     # Calculate 8h average from history if available
@@ -205,7 +204,9 @@ class FundingArbStrategy:
                         )
                         if history and len(history) > 0:
                             rates = [float(h.get("funding_rate", 0)) for h in history]
-                            avg_rate = sum(rates) / len(rates) if rates else funding_rate
+                            avg_rate = (
+                                sum(rates) / len(rates) if rates else funding_rate
+                            )
                             self.funding_cache[symbol]["avg_rate_8h"] = avg_rate
                     except Exception:
                         self.funding_cache[symbol]["avg_rate_8h"] = funding_rate
@@ -214,7 +215,9 @@ class FundingArbStrategy:
                 logger.debug(f"FundingArb: Error fetching {symbol} funding rate: {e}")
 
         self._last_cache_update = now
-        logger.debug(f"FundingArb: Updated funding rates for {len(self.funding_cache)} symbols")
+        logger.debug(
+            f"FundingArb: Updated funding rates for {len(self.funding_cache)} symbols"
+        )
 
     def analyze_funding_opportunity(self, symbol: str) -> Optional[Dict]:
         """
@@ -235,7 +238,9 @@ class FundingArbStrategy:
 
         # Check rate consistency (not about to flip)
         if current_rate * avg_rate < 0:  # Different signs = unstable
-            logger.debug(f"{symbol}: Funding rate unstable (current vs avg signs differ)")
+            logger.debug(
+                f"{symbol}: Funding rate unstable (current vs avg signs differ)"
+            )
             return None
 
         # Calculate expected per-period yield, scaled by the exchange's
@@ -281,7 +286,7 @@ class FundingArbStrategy:
         multi_tf_data: Dict[str, Any],
         current_price: float,
         account_balance: float = 0,
-        **kwargs
+        **kwargs,
     ) -> List[Signal]:
         """
         Generate funding arb signals.
@@ -313,7 +318,9 @@ class FundingArbStrategy:
             # Check if we need to close (rate flipped, dropped, or gone)
             if self._should_close_position(symbol, existing, opportunity):
                 # Generate close signal
-                close_signal = self._create_close_signal(symbol, existing, current_price)
+                close_signal = self._create_close_signal(
+                    symbol, existing, current_price
+                )
                 if close_signal:
                     signals.append(close_signal)
             return signals
@@ -329,16 +336,22 @@ class FundingArbStrategy:
         if account_balance <= 0 and self.client:
             try:
                 balance_data = self.client.get_balance()
-                account_balance = float(balance_data.get("equity", 0) or balance_data.get("balance", 0))
+                account_balance = float(
+                    balance_data.get("equity", 0) or balance_data.get("balance", 0)
+                )
             except Exception as e:
                 logger.debug(f"FundingArb: Could not fetch account balance: {e}")
                 account_balance = 0
 
         # Calculate position size based on allocation
-        max_position_value = account_balance * self.max_allocation_pct if account_balance > 0 else 1000
+        max_position_value = (
+            account_balance * self.max_allocation_pct if account_balance > 0 else 1000
+        )
 
         # Scale with funding rate magnitude (higher rate = worth more capital)
-        rate_multiplier = min(abs(opportunity["current_rate"]) / 0.0005, 1.0)  # Cap at 0.05%
+        rate_multiplier = min(
+            abs(opportunity["current_rate"]) / 0.0005, 1.0
+        )  # Cap at 0.05%
         position_value = max_position_value * rate_multiplier
 
         # Create entry signal
@@ -410,7 +423,9 @@ class FundingArbStrategy:
         """Create signal to close existing arb position."""
         # Reverse the existing side
         existing_side = existing.get("perp_side", OrderSide.BUY)
-        close_side = OrderSide.BUY if existing_side == OrderSide.SELL else OrderSide.SELL
+        close_side = (
+            OrderSide.BUY if existing_side == OrderSide.SELL else OrderSide.SELL
+        )
 
         return Signal(
             strategy=self.strategy_type,
@@ -442,7 +457,9 @@ class FundingArbStrategy:
             forbidden_conditions_clear=True,
         )
 
-    def register_position(self, symbol: str, side: str, size: float, rate: float) -> None:
+    def register_position(
+        self, symbol: str, side: str, size: float, rate: float
+    ) -> None:
         """Register an opened arb position."""
         self.active_positions[symbol] = {
             "side": side,
@@ -451,7 +468,9 @@ class FundingArbStrategy:
             "entry_rate": rate,
             "opened_at": self._now(),
         }
-        logger.info(f"FundingArb: Registered {symbol} position - {side}, size={size:.2f}")
+        logger.info(
+            f"FundingArb: Registered {symbol} position - {side}, size={size:.2f}"
+        )
 
     def close_position(self, symbol: str) -> None:
         """Mark a position as closed."""
@@ -469,12 +488,14 @@ class FundingArbStrategy:
         for symbol, cache in self.funding_cache.items():
             rate = cache.get("current_rate", 0)
             if abs(rate) >= self.min_funding_rate:
-                opportunities.append({
-                    "symbol": symbol,
-                    "rate": rate,
-                    "apy": abs(rate) * self.periods_per_day * 365,
-                    "direction": "short" if rate > 0 else "long"
-                })
+                opportunities.append(
+                    {
+                        "symbol": symbol,
+                        "rate": rate,
+                        "apy": abs(rate) * self.periods_per_day * 365,
+                        "direction": "short" if rate > 0 else "long",
+                    }
+                )
 
         # Sort by absolute rate
         opportunities.sort(key=lambda x: abs(x["rate"]), reverse=True)

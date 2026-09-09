@@ -321,7 +321,9 @@ class PacificaClient:
         # PACIFICA_DATA_REST_URL lets you point candle fetches at the live API while
         # keeping order/account endpoints on testnet (base_url stays unchanged).
         data_rest_override = os.getenv("PACIFICA_DATA_REST_URL", "").strip()
-        self.data_base_url: str = data_rest_override if data_rest_override else self.base_url
+        self.data_base_url: str = (
+            data_rest_override if data_rest_override else self.base_url
+        )
 
         # Connection pooling - reuse TCP connections for better performance
         self.session = requests.Session()
@@ -335,7 +337,9 @@ class PacificaClient:
         # Instrument specs do not change during a session, so we cache indefinitely.
         self._instrument_cache: Dict[str, Dict[str, Any]] = {}
 
-        logger.info("PacificaClient initialized with connection pooling, rate limiting, and smart caching")
+        logger.info(
+            "PacificaClient initialized with connection pooling, rate limiting, and smart caching"
+        )
 
     @retry(
         stop=stop_after_attempt(5),
@@ -415,10 +419,14 @@ class PacificaClient:
         if isinstance(parsed, str):
             text_lower = parsed.strip().lower().strip('"').strip("'")
             if text_lower == "success":
-                logger.info(f"API returned string 'success' for {endpoint} — treating as OK")
+                logger.info(
+                    f"API returned string 'success' for {endpoint} — treating as OK"
+                )
                 return {"success": True, "data": {}, "status": "success"}
             else:
-                logger.warning(f"API returned unexpected string for {endpoint}: {parsed!r}")
+                logger.warning(
+                    f"API returned unexpected string for {endpoint}: {parsed!r}"
+                )
                 return {"success": False, "error": parsed, "data": {}}
 
         return parsed
@@ -522,7 +530,6 @@ class PacificaClient:
             RateLimitError: For rate limit (429) - will be retried with backoff.
         """
         url = self.base_url + endpoint
-        headers = {"Content-Type": "application/json"}
 
         if signed and method == "GET":
             # For signed GET requests, add signature to params
@@ -866,6 +873,8 @@ class PacificaClient:
         quantity: float,
         order_type: str,
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        client_order_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Place a new order.
@@ -876,6 +885,10 @@ class PacificaClient:
             quantity: Order quantity.
             order_type: Order type (e.g., 'limit', 'market').
             price: Order price (required for limit orders).
+            reduce_only: True for exits - the order may only reduce an
+                existing position and can never open reverse exposure.
+            client_order_id: Caller-generated id persisted before the
+                request is sent; generated here when omitted.
 
         Returns:
             Order data as dict.
@@ -884,8 +897,8 @@ class PacificaClient:
             "symbol": symbol,
             "amount": str(quantity),
             "side": "bid" if side == "buy" else "ask",
-            "client_order_id": str(uuid.uuid4()),
-            "reduce_only": False,  # Required field - set to True to only reduce existing position
+            "client_order_id": str(client_order_id or uuid.uuid4()),
+            "reduce_only": bool(reduce_only),
         }
 
         if order_type == "limit":
@@ -940,7 +953,9 @@ class PacificaClient:
         if symbol:
             payload["symbol"] = symbol.upper()
             payload["all_symbols"] = False
-        return self._make_signed_request("/orders/cancel_all", payload, "cancel_all_orders")
+        return self._make_signed_request(
+            "/orders/cancel_all", payload, "cancel_all_orders"
+        )
 
     def get_market_data(self, symbol: str) -> Dict[str, Any]:
         """
@@ -1000,18 +1015,20 @@ class PacificaClient:
         try:
             markets = self.get_markets()
             if not markets:
-                logger.warning("get_instrument_info: /info returned empty list for %s", symbol)
+                logger.warning(
+                    "get_instrument_info: /info returned empty list for %s", symbol
+                )
                 return _empty
 
             # Try exact match first, then strip -PERP, then substring match
             candidates = [
-                m for m in markets
+                m
+                for m in markets
                 if m.get("symbol", "").upper() in (cache_key, symbol.upper())
             ]
             if not candidates:
                 candidates = [
-                    m for m in markets
-                    if cache_key in m.get("symbol", "").upper()
+                    m for m in markets if cache_key in m.get("symbol", "").upper()
                 ]
 
             if not candidates:
@@ -1027,7 +1044,9 @@ class PacificaClient:
             result = {
                 "tick_size": self._safe_float_convert(raw.get("tick_size"), 0.0),
                 "lot_size": self._safe_float_convert(raw.get("lot_size"), 0.0),
-                "min_order_size": self._safe_float_convert(raw.get("min_order_size"), 0.0),
+                "min_order_size": self._safe_float_convert(
+                    raw.get("min_order_size"), 0.0
+                ),
                 # Preserve the full raw dict so callers can access other fields
                 **{k: v for k, v in raw.items()},
             }
@@ -1126,7 +1145,9 @@ class PacificaClient:
             params["end_time"] = end_time
 
         try:
-            response = self._make_get_request("/kline", params, base_url=self.data_base_url)
+            response = self._make_get_request(
+                "/kline", params, base_url=self.data_base_url
+            )
         except ValueError as e:
             logger.error(f"Failed to fetch candles for {clean_symbol}: {e}")
             return []
@@ -1248,7 +1269,9 @@ class PacificaClient:
                     return funding_data
 
         except Exception as e:
-            logger.debug(f"Funding history endpoint not available for {clean_symbol}: {e}")
+            logger.debug(
+                f"Funding history endpoint not available for {clean_symbol}: {e}"
+            )
 
         # Fallback: Extract from market data / prices endpoint
         try:
@@ -1258,13 +1281,17 @@ class PacificaClient:
                 next_funding = market_data.get("next_funding_time")
 
                 # Return single entry with current rate
-                return [{
-                    "funding_rate": float(current_rate) if current_rate else 0,
-                    "timestamp": int(time.time() * 1000),
-                    "next_funding": next_funding,
-                }]
+                return [
+                    {
+                        "funding_rate": float(current_rate) if current_rate else 0,
+                        "timestamp": int(time.time() * 1000),
+                        "next_funding": next_funding,
+                    }
+                ]
         except Exception as e:
-            logger.debug(f"Failed to get funding from market data for {clean_symbol}: {e}")
+            logger.debug(
+                f"Failed to get funding from market data for {clean_symbol}: {e}"
+            )
 
         return []
 
@@ -1286,7 +1313,9 @@ class PacificaClient:
             market_data = self.get_market_data(clean_symbol)
             if market_data:
                 return {
-                    "funding_rate": float(market_data.get("funding_rate", 0)) if market_data.get("funding_rate") else 0,
+                    "funding_rate": float(market_data.get("funding_rate", 0))
+                    if market_data.get("funding_rate")
+                    else 0,
                     "next_funding_time": market_data.get("next_funding_time"),
                     "symbol": clean_symbol,
                 }

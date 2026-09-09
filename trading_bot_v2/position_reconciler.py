@@ -124,7 +124,9 @@ def _filter_real_positions(
                 "entry_price": _safe_float(pos.get("entry_price", 0)),
             }
         except Exception as e:
-            logger.warning(f"PositionReconciler: skipping malformed position {pos}: {e}")
+            logger.warning(
+                f"PositionReconciler: skipping malformed position {pos}: {e}"
+            )
     return result
 
 
@@ -292,7 +294,10 @@ class PositionReconciler:
 
         ex_qty = exchange_pos["quantity"]
         db_qty = db_pos["quantity"]
-        if ex_qty == 0 or abs(ex_qty - db_qty) / max(abs(ex_qty), 1e-9) > _QUANTITY_REL_TOL:
+        if (
+            ex_qty == 0
+            or abs(ex_qty - db_qty) / max(abs(ex_qty), 1e-9) > _QUANTITY_REL_TOL
+        ):
             mismatches.append(f"quantity mismatch (exchange={ex_qty}, db={db_qty})")
 
         ex_price = exchange_pos["entry_price"]
@@ -316,7 +321,10 @@ class PositionReconciler:
 
         ex_qty = exchange_pos["quantity"]
         db_qty = db_pos["quantity"]
-        if ex_qty == 0 or abs(ex_qty - db_qty) / max(abs(ex_qty), 1e-9) > _QUANTITY_REL_TOL:
+        if (
+            ex_qty == 0
+            or abs(ex_qty - db_qty) / max(abs(ex_qty), 1e-9) > _QUANTITY_REL_TOL
+        ):
             types.append("quantity_mismatch")
 
         ex_price = exchange_pos["entry_price"]

@@ -12,7 +12,7 @@ Supports:
 
 Environment variables:
   DATABASE_BACKEND  = "sqlite" | "postgres" (default: "sqlite")
-  DATABASE_PATH     = SQLite file path (default: "data/trading_bot.db")
+  DATABASE_PATH     = SQLite file path (default: "trading_bot.db")
   PG_HOST           = PostgreSQL host (default: "localhost")
   PG_PORT           = PostgreSQL port (default: 5432)
   PG_DATABASE       = PostgreSQL database name (default: "trading_bot")
@@ -32,12 +32,41 @@ import threading
 import time
 from contextlib import contextmanager
 from typing import Generator, List, Dict, Any, Optional, Tuple, Union
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 import logging
+
+try:
+    import aiosqlite
+
+    HAS_AIOSQLITE = True
+except ImportError:  # pragma: no cover - optional dependency
+    aiosqlite = None
+    HAS_AIOSQLITE = False
+
+# Break-even rules for stored parameter overlays. overlay_quality imports
+# nothing from this package, so this cannot create a cycle - and database.py
+# still does not depend on the optimization package. The names are re-exported
+# because callers and tests import them from trading_bot_v2.database.
+from .overlay_quality import (  # noqa: F401
+    OVERLAY_BREAK_EVEN_BY_OBJECTIVE,
+    LosingOverlayRefused,
+    overlay_break_even,
+    overlay_env_opt_in as _overlay_env_opt_in,
+    overlay_rejection_reason,
+)
 
 logger = logging.getLogger(__name__)
 
-DATABASE_PATH = os.path.abspath(os.getenv("DATABASE_PATH", "data/trading_bot.db"))
+#: Default SQLite file when DATABASE_PATH is unset, relative to the working
+#: directory. SINGLE SOURCE OF TRUTH: config.Config reads this same constant
+#: (config.py imports it) so the two cannot drift. They previously disagreed -
+#: database.py defaulted to "data/trading_bot.db" and config.py to
+#: "trading_bot.db" - which meant the file a process opened depended on which
+#: module happened to resolve the path first, and produced two live databases
+#: (see tests/test_database_path_default.py).
+DEFAULT_DATABASE_PATH = "trading_bot.db"
+
+DATABASE_PATH = os.path.abspath(os.getenv("DATABASE_PATH", DEFAULT_DATABASE_PATH))
 DATABASE_BACKEND: str = os.getenv("DATABASE_BACKEND", "sqlite").lower()
 
 # ============================================================================
@@ -91,7 +120,9 @@ def _translate_insert_or_replace(sql: str) -> str:
     #   - pacifica_positions (UNIQUE on position_id)
     #   - performance_metrics (UNIQUE on account_id, date)
     new_sql = sql[: match.start()]  # Preserve any leading comments/whitespace
-    new_sql += f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_match.group(1)}) "
+    new_sql += (
+        f"INSERT INTO {table_name} ({columns_str}) VALUES ({values_match.group(1)}) "
+    )
 
     # Determine conflict columns based on table
     if table_name == "pacifica_positions":
@@ -119,7 +150,9 @@ def _translate_insert_or_replace(sql: str) -> str:
             new_sql += ", ".join(update_parts)
         else:
             # No columns to update (just id), do nothing
-            new_sql = new_sql.replace("ON CONFLICT DO UPDATE SET", "ON CONFLICT DO NOTHING")
+            new_sql = new_sql.replace(
+                "ON CONFLICT DO UPDATE SET", "ON CONFLICT DO NOTHING"
+            )
 
     return new_sql
 
@@ -258,7 +291,9 @@ class _ConnectionWrapper:
         self._is_postgres = is_postgres
         self._closed = False
 
-    def execute(self, sql: str, params: Optional[Union[tuple, list]] = None) -> _CursorWrapper:
+    def execute(
+        self, sql: str, params: Optional[Union[tuple, list]] = None
+    ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor.
 
@@ -389,7 +424,9 @@ class _ConnectionWrapper:
         if not self._is_postgres:
             self._conn.row_factory = factory
 
-    def execute_returning(self, sql: str, params: Optional[tuple] = None) -> _CursorWrapper:
+    def execute_returning(
+        self, sql: str, params: Optional[tuple] = None
+    ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor with RETURNING support.
 
@@ -607,6 +644,10 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
             funding_pnl DOUBLE PRECISION DEFAULT 0,
             exit_price DOUBLE PRECISION,
             realized_pnl DOUBLE PRECISION DEFAULT 0,
+            entry_order_id TEXT,
+            venue_stop_id TEXT,
+            venue_stop_price DOUBLE PRECISION,
+            venue_stop_state TEXT,
             opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             closed_at TIMESTAMPTZ,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -841,6 +882,7 @@ def _create_minimal_pg_schema(conn: _ConnectionWrapper) -> None:
         );
     """
     conn.executescript(minimal_sql)
+
 
 # Check for psycopg2 availability
 try:
@@ -1077,7 +1119,79 @@ def _init_postgres_database():
     """Initialize PostgreSQL database from schema_timescaledb.sql."""
     with get_db_connection() as conn:
         _init_postgres_schema(conn)
+        _ensure_position_stop_columns(conn)
+        conn.commit()
     logger.info("PostgreSQL database initialized successfully")
+
+
+#: Venue-stop protection columns on ``positions`` (live-readiness T4).
+#: (name, sqlite type); Postgres maps REAL -> DOUBLE PRECISION.
+POSITION_STOP_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("entry_order_id", "TEXT"),
+    ("venue_stop_id", "TEXT"),
+    ("venue_stop_price", "REAL"),
+    ("venue_stop_state", "TEXT"),
+)
+POSITION_STOP_KEYS: Tuple[str, ...] = tuple(name for name, _ in POSITION_STOP_COLUMNS)
+
+
+def _row_field(row: Any, index: int, key: str) -> Any:
+    """Read a column from a row that may be a tuple, sqlite3.Row or dict."""
+    try:
+        return row[key]
+    except (KeyError, IndexError, TypeError):
+        return row[index]
+
+
+def _existing_columns(conn: Any, table: str) -> set:
+    """Return the column names currently present on ``table``."""
+    if _active_backend == "postgres":
+        cursor = conn.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name = ? AND table_schema = current_schema()",
+            (table,),
+        )
+        return {str(_row_field(row, 0, "column_name")) for row in cursor.fetchall()}
+    cursor = conn.execute(f"PRAGMA table_info({table})")
+    return {str(_row_field(row, 1, "name")) for row in cursor.fetchall()}
+
+
+def _ensure_position_stop_columns(conn: Any) -> List[str]:
+    """Add the venue-stop columns to ``positions`` when they are missing.
+
+    Migration-safe: the column list is checked first (PRAGMA table_info
+    on SQLite, information_schema on Postgres) and only absent columns
+    are added, so a database created before this change is upgraded in
+    place and one created after it is left untouched.
+
+    Args:
+        conn: Open connection wrapper.
+
+    Returns:
+        Names of the columns that were added.
+    """
+    try:
+        existing = _existing_columns(conn, "positions")
+    except Exception as exc:  # noqa: BLE001 - fall back to the ALTER guard
+        logger.warning(f"Could not read positions columns: {exc}")
+        existing = set()
+    added: List[str] = []
+    for name, sqlite_type in POSITION_STOP_COLUMNS:
+        if name in existing:
+            continue
+        col_type = sqlite_type
+        if _active_backend == "postgres" and sqlite_type == "REAL":
+            col_type = "DOUBLE PRECISION"
+        try:
+            conn.execute(f"ALTER TABLE positions ADD COLUMN {name} {col_type}")
+            added.append(name)
+        except Exception as exc:  # noqa: BLE001 - duplicate is benign
+            err = str(exc).lower()
+            if "duplicate column name" not in err and "already exists" not in err:
+                logger.warning(f"Failed to add positions.{name}: {exc}")
+    if added:
+        logger.info(f"positions table upgraded with stop columns: {added}")
+    return added
 
 
 def _init_sqlite_database():
@@ -1142,6 +1256,10 @@ def _init_sqlite_database():
                     status TEXT NOT NULL DEFAULT 'open',
                     exit_price REAL,
                     realized_pnl REAL DEFAULT 0,
+                    entry_order_id TEXT,
+                    venue_stop_id TEXT,
+                    venue_stop_price REAL,
+                    venue_stop_state TEXT,
                     opened_at TIMESTAMP NOT NULL,
                     closed_at TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -1397,6 +1515,9 @@ def _init_sqlite_database():
                 if "duplicate column name" not in err and "already exists" not in err:
                     logger.warning(f"Failed to add column: {e}")
 
+        # Venue-stop protection columns (guarded by a column check)
+        _ensure_position_stop_columns(conn)
+
         # Create indexes for account_id columns
         account_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol ON trades(account_id, symbol)",
@@ -1492,6 +1613,13 @@ def summarize_regime_shadow(
             regime: count for regime, count in sorted(ml_dist.items())
         },
     }
+
+
+# Overlay quality rules (LosingOverlayRefused, OVERLAY_BREAK_EVEN_BY_OBJECTIVE,
+# overlay_break_even, the ALLOW_LOSING_REGIME_OVERLAYS opt-in) are imported at
+# the top of this module from .overlay_quality and re-exported here, so the
+# WRITE guard in save_regime_param_overlay and the APPLY guard in
+# regime_param_overlay.py share exactly one copy of the rules.
 
 
 class DatabaseManager:
@@ -1884,9 +2012,7 @@ class DatabaseManager:
             for row in rows
         ]
 
-    def save_adaptive_weight_snapshot(
-        self, rows: List[Dict[str, Any]]
-    ) -> int:
+    def save_adaptive_weight_snapshot(self, rows: List[Dict[str, Any]]) -> int:
         """Persist an adaptive weight recompute snapshot.
 
         Args:
@@ -1968,6 +2094,7 @@ class DatabaseManager:
         objective_value: Optional[float] = None,
         trade_count: Optional[int] = None,
         study_name: Optional[str] = None,
+        allow_losing: bool = False,
     ) -> Optional[int]:
         """Persist a per-regime parameter overlay (P4).
 
@@ -1975,6 +2102,22 @@ class DatabaseManager:
         (strategy, regime) pair - history rows are kept - then inserts
         the new overlay as active and writes the JSON export
         (config/regime_param_overlays.json) through.
+
+        Refuses to store a *losing* overlay. Optuna always reports a
+        best trial, even for a study in which every candidate lost
+        money; that best trial is then merely the least-bad loser.
+        Storing it active means the day someone sets
+        ENABLE_REGIME_PARAM_OVERLAYS=true, the strategy silently adopts
+        a parameter set that was measured to lose. So an
+        ``objective_value`` at or below the objective's break-even
+        (:func:`overlay_break_even`) raises
+        :class:`LosingOverlayRefused` unless the caller passes
+        ``allow_losing=True`` or sets ALLOW_LOSING_REGIME_OVERLAYS.
+
+        The check lives here rather than in the callers because this is
+        the single chokepoint every write path goes through
+        (``optimization.run_optimize.save_overlay_from_study`` and any
+        direct API use), so it cannot be bypassed by adding a caller.
 
         Args:
             strategy: Snake_case strategy key (e.g. "mean_reversion").
@@ -1984,10 +2127,50 @@ class DatabaseManager:
             objective_value: Best objective value achieved.
             trade_count: Matching-regime trade count of the best trial.
             study_name: Optuna study name that produced the overlay.
+            allow_losing: Store the overlay even when its objective
+                value is at or below break-even. For deliberately
+                keeping a losing set for comparison only.
 
         Returns:
             Row id of the inserted overlay, or None on Postgres.
+
+        Raises:
+            LosingOverlayRefused: If the overlay is losing and neither
+                ``allow_losing`` nor ALLOW_LOSING_REGIME_OVERLAYS is set.
         """
+        if objective_value is not None:
+            break_even = overlay_break_even(objective)
+            if float(objective_value) <= break_even:
+                if not (allow_losing or _overlay_env_opt_in()):
+                    objective_label = objective or "unspecified objective"
+                    raise LosingOverlayRefused(
+                        f"Refusing to store a losing overlay for "
+                        f"({strategy}, {regime}): best {objective_label} = "
+                        f"{objective_value!r} is at or below break-even "
+                        f"{break_even}, so this parameter set was measured "
+                        f"to lose. The best trial of a study in which every "
+                        f"candidate lost is still a losing configuration, "
+                        f"and storing it active would install it the moment "
+                        f"ENABLE_REGIME_PARAM_OVERLAYS is turned on. "
+                        f"Study: {study_name or 'unknown'}. To keep it "
+                        f"anyway for comparison, pass allow_losing=True or "
+                        f"set ALLOW_LOSING_REGIME_OVERLAYS=true - note it "
+                        f"is stored ACTIVE either way.",
+                        strategy=strategy,
+                        regime=regime,
+                        objective=objective,
+                        objective_value=float(objective_value),
+                        break_even=break_even,
+                    )
+                logger.warning(
+                    f"Storing a LOSING overlay for ({strategy}, {regime}): "
+                    f"{objective or 'objective'}={objective_value!r} <= "
+                    f"break-even {break_even}. Opt-in was given "
+                    f"(allow_losing/ALLOW_LOSING_REGIME_OVERLAYS); this "
+                    f"overlay is ACTIVE and will apply when "
+                    f"ENABLE_REGIME_PARAM_OVERLAYS=true."
+                )
+
         params_json = json.dumps(params, sort_keys=True)
         created_at = datetime.now().isoformat()
 
@@ -2025,6 +2208,76 @@ class DatabaseManager:
             logger.warning(f"Regime overlay JSON export failed: {e}")
 
         return row_id  # type: ignore
+
+    def deactivate_regime_param_overlay(
+        self,
+        overlay_id: Optional[int] = None,
+        strategy: Optional[str] = None,
+        regime: Optional[str] = None,
+    ) -> int:
+        """Deactivate stored overlays without deleting them.
+
+        Sets ``active = 0`` on the matching rows, matching the
+        history-preserving convention of
+        :meth:`save_regime_param_overlay` (which deactivates the prior
+        row rather than removing it). The row, its params and its
+        objective value stay queryable as audit trail; it simply stops
+        being applied. Writes the JSON export through so
+        config/regime_param_overlays.json cannot drift from the table.
+
+        At least one selector must be given - a no-argument call would
+        silently deactivate every overlay in the table.
+
+        Args:
+            overlay_id: Deactivate this specific row id.
+            strategy: Deactivate active overlays for this strategy.
+            regime: Deactivate active overlays for this regime.
+
+        Returns:
+            Number of rows changed.
+
+        Raises:
+            ValueError: If no selector is supplied.
+        """
+        if overlay_id is None and not strategy and not regime:
+            raise ValueError(
+                "deactivate_regime_param_overlay requires at least one of "
+                "overlay_id, strategy or regime - refusing to deactivate "
+                "every overlay in the table."
+            )
+
+        clauses: List[str] = ["active = 1"]
+        params: List[Any] = []
+        if overlay_id is not None:
+            clauses.append("id = ?")
+            params.append(overlay_id)
+        if strategy:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if regime:
+            clauses.append("regime = ?")
+            params.append(regime)
+
+        query = "UPDATE regime_param_overlays SET active = 0 WHERE " + (
+            " AND ".join(clauses)
+        )
+
+        with get_db_connection() as conn:
+            cursor = conn.execute(query, tuple(params))
+            changed = cursor.rowcount
+            conn.commit()
+
+        logger.info(
+            f"Deactivated {changed} regime overlay row(s) "
+            f"(id={overlay_id}, strategy={strategy}, regime={regime})"
+        )
+
+        try:
+            self.export_regime_param_overlays()
+        except Exception as e:
+            logger.warning(f"Regime overlay JSON export failed: {e}")
+
+        return int(changed) if changed is not None else 0
 
     def get_regime_param_overlays(
         self,
@@ -2084,10 +2337,36 @@ class DatabaseManager:
             )
         return overlays
 
-    def export_regime_param_overlays(
-        self, path: Optional[str] = None
-    ) -> str:
+    def export_regime_param_overlays(self, path: Optional[str] = None) -> str:
         """Write the active overlays to a JSON file for inspection.
+
+        Rows measured at or below break-even go under
+        ``refused_overlays`` with their reason instead of
+        ``active_overlays``. They are not
+        dropped - the file is audit material and a silently shortened
+        list is worse than a labelled one - but they must not appear in
+        the list a reader or a future importer would treat as usable.
+
+        This exists because ``active=1`` in the table is not the same
+        claim as "may be applied". A restored backup, or any row written
+        before the write guard existed, can carry ``active=1`` on a
+        losing parameter set: overlay id=1 (mean_reversion /
+        ranging_calm, Sharpe -1.486) is active in all 11 snapshots under
+        ``backups/``, and a restore is a file copy that never passes
+        through ``save_regime_param_overlay``. The runtime is safe
+        because ``RegimeParamOverlayManager`` re-decides at load and
+        again at apply, but this export was the one remaining path by
+        which such a row could leave the guarded database and land in a
+        config file that looks authoritative.
+
+        ``ALLOW_LOSING_REGIME_OVERLAYS`` is honoured, so the file
+        describes what would actually be applied. One asymmetry with
+        the apply side is deliberate: an overlay carrying NO score stays
+        under ``active_overlays`` here, because a params-only save is a
+        supported workflow and this file mirrors the store, whereas
+        applying an unscored row is refused fail-closed. Unknown
+        provenance is a reason not to trade a row, not a reason to
+        relabel it in an inspection file.
 
         Args:
             path: Output path (default: env REGIME_OVERLAY_EXPORT_PATH,
@@ -2101,23 +2380,52 @@ class DatabaseManager:
             path = os.getenv("REGIME_OVERLAY_EXPORT_PATH") or None
         if path is None:
             project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            path = os.path.join(
-                project_root, "config", "regime_param_overlays.json"
-            )
+            path = os.path.join(project_root, "config", "regime_param_overlays.json")
 
-        overlays = self.get_regime_param_overlays(active_only=True)
+        rows = self.get_regime_param_overlays(active_only=True)
+        opt_in = _overlay_env_opt_in()
+        overlays: List[Dict[str, Any]] = []
+        refused: List[Dict[str, Any]] = []
+        for row in rows:
+            # require_score=False: only a MEASURED-losing row is
+            # diverted. An unscored row is the legitimate output of a
+            # params-only save, which the write guard deliberately
+            # permits, and this file is that store's mirror - diverting
+            # it would break that workflow for no safety gain, since an
+            # unscored row carries no parameters known to lose. The
+            # apply side still refuses it fail-closed, which is where
+            # the asymmetry belongs.
+            reason = overlay_rejection_reason(
+                row.get("objective"),
+                row.get("objective_value"),
+                require_score=False,
+            )
+            if reason is None or opt_in:
+                overlays.append(row)
+            else:
+                refused.append({**row, "refused_reason": reason})
+
         payload = {
             "exported_at": datetime.now().isoformat(),
             "active_overlays": overlays,
+            "refused_overlays": refused,
+            "allow_losing_opt_in": opt_in,
         }
 
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "w") as f:
             json.dump(payload, f, indent=2, sort_keys=True)
 
-        logger.info(
-            f"Exported {len(overlays)} active regime overlay(s) to {path}"
-        )
+        if refused:
+            logger.error(
+                f"Exported {len(overlays)} active regime overlay(s) to "
+                f"{path}; {len(refused)} row(s) marked active in the "
+                f"database were written under 'refused_overlays' because "
+                f"the apply-side guard would reject them: "
+                f"{[(r.get('strategy'), r.get('regime')) for r in refused]}"
+            )
+        else:
+            logger.info(f"Exported {len(overlays)} active regime overlay(s) to {path}")
         return path
 
     def save_trial_registry_entry(
@@ -2224,9 +2532,7 @@ class DatabaseManager:
             for row in rows
         ]
 
-    def get_total_trials(
-        self, strategy: str, regime: Optional[str] = None
-    ) -> int:
+    def get_total_trials(self, strategy: str, regime: Optional[str] = None) -> int:
         """Total configurations tried against a strategy (DSR's N).
 
         When a regime is given, regime-agnostic rows (regime NULL) are
@@ -2242,8 +2548,7 @@ class DatabaseManager:
             strategy has no recorded trials).
         """
         query = (
-            "SELECT COALESCE(SUM(n_trials), 0) FROM trial_registry "
-            "WHERE strategy = ?"
+            "SELECT COALESCE(SUM(n_trials), 0) FROM trial_registry WHERE strategy = ?"
         )
         params: List[Any] = [strategy]
         if regime:
@@ -2441,9 +2746,7 @@ class DatabaseManager:
 
         return TradeStore(db=self).get_closed_trades()
 
-    def get_open_trades(
-        self, symbol: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
+    def get_open_trades(self, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch open trades including their owning strategy and regime tag.
 
         Used by the regime-flip position review to map open positions back
@@ -2558,6 +2861,18 @@ class DatabaseManager:
                 f"🔍 save_position UPDATE: symbol={position_data['symbol']}, rowcount={cursor.rowcount}, funding sent to SQL={funding_value}"
             )
 
+            # Venue-stop columns are written only when the caller supplies
+            # them; the per-loop position upsert never touches them.
+            stop_fields = {
+                key: position_data[key]
+                for key in POSITION_STOP_KEYS
+                if key in position_data
+            }
+            if cursor.rowcount > 0 and stop_fields:
+                self._update_position_fields(
+                    conn, position_data["symbol"], position_data["side"], stop_fields
+                )
+
             if cursor.rowcount == 0:
                 # Insert new position
                 print(
@@ -2566,8 +2881,10 @@ class DatabaseManager:
                 cursor = conn.execute(
                     """
                     INSERT INTO positions (symbol, asset_class, side, quantity, entry_price,
-                                         current_price, unrealized_pnl, funding_pnl, opened_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                         current_price, unrealized_pnl, funding_pnl, opened_at,
+                                         entry_order_id, venue_stop_id, venue_stop_price,
+                                         venue_stop_state)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         position_data["symbol"],
@@ -2579,16 +2896,110 @@ class DatabaseManager:
                         position_data.get("unrealized_pnl", 0),
                         funding_value,
                         position_data["opened_at"],
+                        position_data.get("entry_order_id"),
+                        position_data.get("venue_stop_id"),
+                        position_data.get("venue_stop_price"),
+                        position_data.get("venue_stop_state"),
                     ),
                 )
 
             conn.commit()
-            print(f"DEBUG save_position: COMMITTED to database")
+            print("DEBUG save_position: COMMITTED to database")
 
             # Invalidate positions cache
             _data_cache.invalidate("positions_all")
 
             return cursor.lastrowid  # type: ignore
+
+    @staticmethod
+    def _update_position_fields(
+        conn: Any, symbol: str, side: str, fields: Dict[str, Any]
+    ) -> int:
+        """UPDATE the given ``positions`` columns for one symbol/side row."""
+        if not fields:
+            return 0
+        names = [name for name in fields if name in POSITION_STOP_KEYS]
+        if not names:
+            return 0
+        assignments = ", ".join(f"{name} = ?" for name in names)
+        params = tuple(fields[name] for name in names) + (symbol, side)
+        cursor = conn.execute(
+            f"UPDATE positions SET {assignments}, updated_at = CURRENT_TIMESTAMP "
+            "WHERE symbol = ? AND side = ?",
+            params,
+        )
+        return cursor.rowcount
+
+    def record_position_protection(
+        self,
+        symbol: str,
+        side: str,
+        fields: Dict[str, Any],
+        quantity: Optional[float] = None,
+        entry_price: Optional[float] = None,
+    ) -> bool:
+        """Persist the venue-stop columns for a position (upsert).
+
+        The per-loop ``save_position`` upsert creates the row only on the
+        NEXT cycle after a fill, so when no row exists yet and the caller
+        supplies ``quantity``/``entry_price`` a minimal row is inserted;
+        the loop upsert then keeps its price/PnL columns current without
+        touching the stop columns.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side as stored by the loop ("LONG"/"SHORT").
+            fields: Any of entry_order_id, venue_stop_id,
+                venue_stop_price, venue_stop_state (None clears).
+            quantity: Position size for the insert path.
+            entry_price: Entry price for the insert path.
+
+        Returns:
+            True when a row was updated or inserted.
+        """
+        stop_fields = {k: v for k, v in fields.items() if k in POSITION_STOP_KEYS}
+        with get_db_connection() as conn:
+            updated = self._update_position_fields(conn, symbol, side, stop_fields)
+            inserted = False
+            if updated == 0 and quantity is not None and entry_price is not None:
+                conn.execute(
+                    """
+                    INSERT INTO positions (symbol, asset_class, side, quantity, entry_price,
+                                         current_price, unrealized_pnl, funding_pnl, opened_at,
+                                         entry_order_id, venue_stop_id, venue_stop_price,
+                                         venue_stop_state)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        symbol,
+                        "perpetual",
+                        side,
+                        quantity,
+                        entry_price,
+                        entry_price,
+                        0,
+                        0,
+                        datetime.now(timezone.utc).isoformat(),
+                        stop_fields.get("entry_order_id"),
+                        stop_fields.get("venue_stop_id"),
+                        stop_fields.get("venue_stop_price"),
+                        stop_fields.get("venue_stop_state"),
+                    ),
+                )
+                inserted = True
+            conn.commit()
+        _data_cache.invalidate("positions_all")
+        return updated > 0 or inserted
+
+    def get_position(self, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        """Return one open position row (all columns) or None."""
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM positions WHERE symbol = ? AND side = ?",
+                (symbol, side),
+            )
+            row = cursor.fetchone()
+        return dict(row) if row else None
 
     def get_positions(self) -> List[Dict[str, Any]]:
         """Get all open positions with caching."""
@@ -2996,7 +3407,10 @@ class DatabaseManager:
                     )
                     min_ts, max_ts = cursor.fetchone()
                     if min_ts and max_ts:
-                        stats[f"{table}_date_range"] = {"start": str(min_ts), "end": str(max_ts)}
+                        stats[f"{table}_date_range"] = {
+                            "start": str(min_ts),
+                            "end": str(max_ts),
+                        }
                 except Exception:
                     pass  # Table might not have timestamp column
 
@@ -3109,7 +3523,9 @@ class DatabaseManager:
                 import shutil
 
                 shutil.copy2(DATABASE_PATH, backup_path)
-                logger.info(f"SQLite database backup created using file copy at {backup_path}")
+                logger.info(
+                    f"SQLite database backup created using file copy at {backup_path}"
+                )
                 return True
             except Exception as e2:
                 logger.error(f"File copy backup also failed: {e2}")
@@ -3128,11 +3544,16 @@ class DatabaseManager:
 
             cmd = [
                 "pg_dump",
-                "-h", pg_host,
-                "-p", pg_port,
-                "-U", pg_user,
-                "-d", pg_database,
-                "-f", backup_path,
+                "-h",
+                pg_host,
+                "-p",
+                pg_port,
+                "-U",
+                pg_user,
+                "-d",
+                pg_database,
+                "-f",
+                backup_path,
                 "--no-owner",
                 "--no-privileges",
             ]
@@ -3143,7 +3564,9 @@ class DatabaseManager:
             if pg_password:
                 env["PGPASSWORD"] = pg_password
 
-            result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, env=env, timeout=120
+            )
 
             if result.returncode == 0:
                 logger.info(f"PostgreSQL backup created via pg_dump at {backup_path}")
@@ -3234,11 +3657,16 @@ class DatabaseManager:
 
                 cmd = [
                     "psql",
-                    "-h", pg_host,
-                    "-p", pg_port,
-                    "-U", pg_user,
-                    "-d", pg_database,
-                    "-f", backup_path,
+                    "-h",
+                    pg_host,
+                    "-p",
+                    pg_port,
+                    "-U",
+                    pg_user,
+                    "-d",
+                    pg_database,
+                    "-f",
+                    backup_path,
                 ]
 
                 env = os.environ.copy()
@@ -3246,10 +3674,14 @@ class DatabaseManager:
                 if pg_password:
                     env["PGPASSWORD"] = pg_password
 
-                result = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=300)
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, env=env, timeout=300
+                )
 
                 if result.returncode == 0:
-                    logger.info(f"PostgreSQL database restored from pg_dump: {backup_path}")
+                    logger.info(
+                        f"PostgreSQL database restored from pg_dump: {backup_path}"
+                    )
                     return True
                 else:
                     logger.error(f"psql restore failed: {result.stderr}")
@@ -3645,7 +4077,9 @@ class DatabaseManager:
                 )
                 count = cursor.fetchone()[0]
                 if count < 3:
-                    logger.warning("PostgreSQL Pacifica tables missing, creating minimal schema")
+                    logger.warning(
+                        "PostgreSQL Pacifica tables missing, creating minimal schema"
+                    )
                     self._create_minimal_pacifica_pg(conn)
                 else:
                     logger.info("PostgreSQL Pacifica funding tracking tables verified")

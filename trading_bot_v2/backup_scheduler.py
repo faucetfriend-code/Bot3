@@ -18,7 +18,6 @@ Usage:
 import glob
 import os
 import threading
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -77,10 +76,14 @@ class BackupScheduler:
         self.db = db
         self.backup_dir = backup_dir if backup_dir is not None else config.backup_dir
         self.interval_hours = (
-            interval_hours if interval_hours is not None else config.backup_interval_hours
+            interval_hours
+            if interval_hours is not None
+            else config.backup_interval_hours
         )
         self.retention_days = (
-            retention_days if retention_days is not None else config.backup_retention_days
+            retention_days
+            if retention_days is not None
+            else config.backup_retention_days
         )
         self.enabled = enabled if enabled is not None else config.backup_enabled
 
@@ -101,7 +104,9 @@ class BackupScheduler:
         No-op if the scheduler is disabled or already running.
         """
         if not self.enabled:
-            logger.info("BackupScheduler disabled (BACKUP_ENABLED=false) - not starting")
+            logger.info(
+                "BackupScheduler disabled (BACKUP_ENABLED=false) - not starting"
+            )
             return
 
         if self._thread is not None and self._thread.is_alive():
@@ -163,8 +168,10 @@ class BackupScheduler:
                 return BackupResult(success=True, path=backup_path)
             else:
                 metrics.record_backup_failure()
-                logger.error(f"Database backup failed (backup_database returned False)")
-                return BackupResult(success=False, error="backup_database returned False")
+                logger.error("Database backup failed (backup_database returned False)")
+                return BackupResult(
+                    success=False, error="backup_database returned False"
+                )
 
         except Exception as e:
             metrics.record_backup_failure()
@@ -188,7 +195,9 @@ class BackupScheduler:
 
             for path in glob.glob(pattern):
                 try:
-                    mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+                    mtime = datetime.fromtimestamp(
+                        os.path.getmtime(path), tz=timezone.utc
+                    )
                     if mtime < cutoff:
                         os.remove(path)
                         deleted += 1
@@ -197,7 +206,9 @@ class BackupScheduler:
                     logger.warning(f"Could not prune backup file {path}: {e}")
 
             if deleted:
-                logger.info(f"Backup retention: pruned {deleted} file(s) older than {self.retention_days}d")
+                logger.info(
+                    f"Backup retention: pruned {deleted} file(s) older than {self.retention_days}d"
+                )
         except Exception as e:
             logger.error(f"Error pruning old backups: {e}")
 

@@ -109,7 +109,9 @@ class OrderBookImbalanceStrategy:
             f"ATR stop={atr_stop_mult}x, target={atr_target_mult}x"
         )
 
-    def _get_level_value(self, level: Dict, keys: List[str], default: float = 0) -> float:
+    def _get_level_value(
+        self, level: Dict, keys: List[str], default: float = 0
+    ) -> float:
         """Extract value from orderbook level using fallback keys."""
         for key in keys:
             if key in level:
@@ -121,7 +123,9 @@ class OrderBookImbalanceStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _check_cooldown(self, symbol: str) -> bool:
         """Check if cooldown period has passed."""
@@ -195,18 +199,22 @@ class OrderBookImbalanceStrategy:
 
         # Calculate volumes using fallback keys
         bid_volume = sum(
-            self._get_level_value(level, self._amount_keys, 0) for level in bids[: self.levels]
+            self._get_level_value(level, self._amount_keys, 0)
+            for level in bids[: self.levels]
         )
         ask_volume = sum(
-            self._get_level_value(level, self._amount_keys, 0) for level in asks[: self.levels]
+            self._get_level_value(level, self._amount_keys, 0)
+            for level in asks[: self.levels]
         )
 
         # Calculate order counts using fallback keys
         bid_orders = sum(
-            int(self._get_level_value(level, self._count_keys, 1)) for level in bids[: self.levels]
+            int(self._get_level_value(level, self._count_keys, 1))
+            for level in bids[: self.levels]
         )
         ask_orders = sum(
-            int(self._get_level_value(level, self._count_keys, 1)) for level in asks[: self.levels]
+            int(self._get_level_value(level, self._count_keys, 1))
+            for level in asks[: self.levels]
         )
 
         # Calculate spread using fallback keys
@@ -279,7 +287,7 @@ class OrderBookImbalanceStrategy:
         multi_tf_data: Dict[str, Any],
         current_price: float,
         orderbook: Optional[Dict[str, Any]] = None,
-        **kwargs
+        **kwargs,
     ) -> List[Signal]:
         """
         Generate order book imbalance signals.
@@ -398,9 +406,7 @@ class OrderBookImbalanceStrategy:
         confidence = self.min_confidence
 
         # Boost for strong imbalance
-        if imbalance > self.strong_imbalance or imbalance < (
-            1 - self.strong_imbalance
-        ):
+        if imbalance > self.strong_imbalance or imbalance < (1 - self.strong_imbalance):
             confidence += 0.15
 
         # Boost for high order density

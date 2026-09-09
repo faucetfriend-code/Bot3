@@ -228,9 +228,7 @@ class TestEnsure:
         source = RecordingSource("2023-01-01T00:00:00", "2027-01-01T00:00:00", 60)
         mgr = CandleDownloadManager(data_dir=str(tmp_path), sources=[source])
         # Store already covers 2024-01-02 .. 2024-01-03
-        mgr.save_store(
-            "BTC-USDC", "1h", make_candles("2024-01-02T00:00:00", 25, 60)
-        )
+        mgr.save_store("BTC-USDC", "1h", make_candles("2024-01-02T00:00:00", 25, 60))
         mgr.ensure("BTC-USDC", "1h", "2024-01-01", "2024-01-04T00:00:00")
         assert source.calls == [
             (datetime(2024, 1, 1, 0, 0), datetime(2024, 1, 1, 23, 0)),
@@ -259,9 +257,7 @@ class TestEnsure:
         )
         assert source.calls == []
         # Default fills the internal hole
-        mgr.ensure(
-            "BTC-USDC", "1h", "2024-01-01T00:00:00", "2024-01-01T14:00:00"
-        )
+        mgr.ensure("BTC-USDC", "1h", "2024-01-01T00:00:00", "2024-01-01T14:00:00")
         assert source.calls == [
             (datetime(2024, 1, 1, 5, 0), datetime(2024, 1, 1, 9, 0))
         ]
@@ -270,9 +266,7 @@ class TestEnsure:
     def test_no_download_when_fully_covered(self, tmp_path):
         source = RecordingSource("2020-01-01T00:00:00", "2027-01-01T00:00:00", 60)
         mgr = CandleDownloadManager(data_dir=str(tmp_path), sources=[source])
-        mgr.save_store(
-            "BTC-USDC", "1h", make_candles("2024-01-01T00:00:00", 25, 60)
-        )
+        mgr.save_store("BTC-USDC", "1h", make_candles("2024-01-01T00:00:00", 25, 60))
         summary = mgr.ensure(
             "BTC-USDC", "1h", "2024-01-01T00:00:00", "2024-01-02T00:00:00"
         )
@@ -389,9 +383,7 @@ class TestLoaderAutoDownload:
             symbol="BTC-USDC", data_dir=str(tmp_path), download_manager=fake
         )
         loader.get_candles("1h", "2024-01-01", "2024-01-02")
-        assert fake.calls == [
-            ("BTC-USDC", "1h", "2024-01-01", "2024-01-02", False)
-        ]
+        assert fake.calls == [("BTC-USDC", "1h", "2024-01-01", "2024-01-02", False)]
         # Second identical request: attempted once only
         loader.get_candles("1h", "2024-01-01", "2024-01-02")
         assert len(fake.calls) == 1
@@ -459,8 +451,22 @@ class TestBinancePaging:
             page = []
             for i in range(n):
                 t = start_ms + (produced + i) * tf_ms
-                page.append([t, "100.0", "102.0", "99.0", "101.0", "5.0", 0,
-                             "0", 0, "0", "0", "0"])
+                page.append(
+                    [
+                        t,
+                        "100.0",
+                        "102.0",
+                        "99.0",
+                        "101.0",
+                        "5.0",
+                        0,
+                        "0",
+                        0,
+                        "0",
+                        "0",
+                        "0",
+                    ]
+                )
             pages.append(page)
             produced += n
         return pages
@@ -468,9 +474,7 @@ class TestBinancePaging:
     def test_pages_until_partial_page(self, monkeypatch):
         source = BinanceSource(throttle_s=0)
         tf_ms = 3_600_000
-        start_ms = int(
-            datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000
-        )
+        start_ms = int(datetime(2024, 1, 1, tzinfo=timezone.utc).timestamp() * 1000)
         pages = self._make_pages(start_ms, 2500, tf_ms)
         all_rows = [r for page in pages for r in page]
         requested = []
@@ -478,9 +482,7 @@ class TestBinancePaging:
         def fake_get_page(params):
             requested.append(dict(params))
             rows = [
-                r
-                for r in all_rows
-                if params["startTime"] <= r[0] <= params["endTime"]
+                r for r in all_rows if params["startTime"] <= r[0] <= params["endTime"]
             ]
             return rows[: params["limit"]]
 
@@ -500,9 +502,7 @@ class TestBinancePaging:
     def test_empty_first_page_returns_empty_frame(self, monkeypatch):
         source = BinanceSource(throttle_s=0)
         monkeypatch.setattr(source, "_get_page", lambda params: [])
-        df = source.fetch(
-            "BTC-USDC", "1h", datetime(2015, 1, 1), datetime(2015, 2, 1)
-        )
+        df = source.fetch("BTC-USDC", "1h", datetime(2015, 1, 1), datetime(2015, 2, 1))
         assert df.empty
 
 
@@ -541,9 +541,7 @@ class TestBitstampPaging:
             return {"data": {"ohlc": rows}}
 
         monkeypatch.setattr(source, "_get_json", fake_get_json)
-        start_dt = datetime.fromtimestamp(t0, tz=timezone.utc).replace(
-            tzinfo=None
-        )
+        start_dt = datetime.fromtimestamp(t0, tz=timezone.utc).replace(tzinfo=None)
         end_dt = start_dt + timedelta(hours=1499)
         df = source.fetch("BTC-USDC", "1h", start_dt, end_dt)
         # Two pages (1000 + partial), everything past end_dt filtered out

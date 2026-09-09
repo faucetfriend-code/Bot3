@@ -94,9 +94,7 @@ class TestFactory:
     def test_name_case_insensitive(self):
         assert isinstance(get_exchange_client("PACIFICA"), PacificaExchange)
 
-    def test_blofin_without_credentials_raises_clear_auth_error(
-        self, monkeypatch
-    ):
+    def test_blofin_without_credentials_raises_clear_auth_error(self, monkeypatch):
         """Private Blofin calls without keys fail with setup guidance."""
         from trading_bot_v2.blofin_client import BlofinAuthError, BlofinClient
 
@@ -146,12 +144,8 @@ class TestVocabulary:
     def test_position_side_round_trip(self):
         assert PacificaExchange.to_native_position_side(PositionSide.LONG) == "long"
         assert PacificaExchange.to_native_position_side(PositionSide.SHORT) == "short"
-        assert (
-            PacificaExchange.from_native_position_side("long") == PositionSide.LONG
-        )
-        assert (
-            PacificaExchange.from_native_position_side("short") == PositionSide.SHORT
-        )
+        assert PacificaExchange.from_native_position_side("long") == PositionSide.LONG
+        assert PacificaExchange.from_native_position_side("short") == PositionSide.SHORT
         for side in (PositionSide.LONG, PositionSide.SHORT):
             native = PacificaExchange.to_native_position_side(side)
             assert PacificaExchange.from_native_position_side(native) == side
@@ -329,17 +323,13 @@ class TestFundingArbIntervalAwareness:
         strategy = self._strategy(1)
         opportunity = strategy.analyze_funding_opportunity("BTC")
         assert opportunity is not None
-        assert opportunity["annualized_yield"] == pytest.approx(
-            0.0003 * 24 * 365
-        )
+        assert opportunity["annualized_yield"] == pytest.approx(0.0003 * 24 * 365)
 
     def test_8h_interval_scales_daily_yield(self):
         strategy = self._strategy(8)
         opportunity = strategy.analyze_funding_opportunity("BTC")
         assert opportunity is not None
-        assert opportunity["annualized_yield"] == pytest.approx(
-            0.0003 * 3 * 365
-        )
+        assert opportunity["annualized_yield"] == pytest.approx(0.0003 * 3 * 365)
 
     def test_summary_apy_scales_with_interval(self):
         hourly = self._strategy(1).get_funding_summary()

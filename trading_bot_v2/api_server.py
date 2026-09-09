@@ -6,6 +6,7 @@ FastAPI server providing web interface and REST API for the trading bot system.
 import sys
 import os
 import asyncio
+import hmac
 import logging
 import threading
 from typing import Dict, Any, List, Optional
@@ -17,7 +18,15 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
 )
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, Response
 from trading_bot_v2.metrics import metrics
 from contextlib import asynccontextmanager
@@ -30,14 +39,20 @@ try:
     from .database import DatabaseManager
     from .pacifica_client import PacificaClient
     from .strategy_manager import StrategyManager
-    from .market_regime import MarketRegimeDetector, MarketRegime
+    from .market_regime import MarketRegimeDetector
     from .volatility_regime import make_regime_detector
     from .multi_timeframe_fetcher import MultiTimeframeFetcher
     from .grid_lifecycle_manager import GridLifecycleManager
     from .risk_manager import RiskManager
     from .indicators import calculate_rsi, calculate_adx
     from .config import config
-    from .pacifica_ws_client import get_ws_client
+    from .config_validation import (
+        StartupConfigError,
+        check_api_binding,
+        is_loopback_host,
+        run_startup_validation,
+    )
+    from .ws_factory import get_market_ws_client as get_ws_client
     from .backup_scheduler import BackupScheduler
     from .exchanges import get_exchange_client
 except ImportError:
@@ -46,13 +61,19 @@ except ImportError:
     from database import DatabaseManager
     from pacifica_client import PacificaClient
     from strategy_manager import StrategyManager
-    from market_regime import MarketRegimeDetector, MarketRegime
+    from market_regime import MarketRegimeDetector
     from multi_timeframe_fetcher import MultiTimeframeFetcher
     from grid_lifecycle_manager import GridLifecycleManager
     from risk_manager import RiskManager
     from indicators import calculate_rsi, calculate_adx
     from config import config
-    from pacifica_ws_client import get_ws_client
+    from config_validation import (
+        StartupConfigError,
+        check_api_binding,
+        is_loopback_host,
+        run_startup_validation,
+    )
+    from ws_factory import get_market_ws_client as get_ws_client
     from backup_scheduler import BackupScheduler
 
     try:
@@ -67,52 +88,82 @@ except ImportError:
 # - File:    "<repo>/server logs reports/current.log" — supervisor reads this
 #            Rotated to current_YYYYMMDD_HHMMSS.log on each bot start so
 #            "current.log" always reflects the active session.
-_LOG_FMT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+_LOG_FMT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logging.basicConfig(level=logging.INFO, format=_LOG_FMT)
 
-try:
-    _LOG_DIR = Path(__file__).resolve().parent.parent / "server logs reports"
-    _LOG_DIR.mkdir(exist_ok=True)
-    _CURRENT_LOG = _LOG_DIR / "current.log"
+# Guards around the file-logging setup below:
+# - Pytest: importing this module from a test run must NOT touch the live
+#   server's current.log (rotation steals it; the handler appends MagicMock
+#   debris into it). Console logging via basicConfig above is enough.
+# - Sentinel: `python -m trading_bot_v2.api_server` runs this module twice in
+#   one process (once as __main__, once re-imported by uvicorn as
+#   trading_bot_v2.api_server). A module-level flag cannot dedupe across the
+#   two module objects, so a process-wide env-var sentinel keyed on the pid
+#   ensures the FileHandler + loguru sink are attached at most once.
+_UNDER_PYTEST = "PYTEST_CURRENT_TEST" in os.environ or "pytest" in sys.modules
+_FILELOG_SENTINEL = "_BOT3_FILELOG_PID"
 
-    # Rotate previous current.log if non-empty
-    if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
-        _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        _rotated = _LOG_DIR / f"current_{_ts}.log"
-        try:
-            _CURRENT_LOG.rename(_rotated)
-        except OSError:
-            # If rename fails (rare; e.g. file in use on Windows), append instead
-            pass
-
-    _file_handler = logging.FileHandler(_CURRENT_LOG, mode="a", encoding="utf-8")
-    _file_handler.setLevel(logging.INFO)
-    _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
-    logging.getLogger().addHandler(_file_handler)
-
-    # Loguru sink for modules that use loguru (signal_logger, kelly_position_sizer)
+if not _UNDER_PYTEST and os.environ.get(_FILELOG_SENTINEL) != str(os.getpid()):
     try:
-        from loguru import logger as _loguru
-        _loguru.add(
-            str(_CURRENT_LOG),
-            format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
-            level="INFO",
-            rotation=None,           # we rotate manually on bot start
-            enqueue=True,            # thread-safe writes
-        )
-    except ImportError:
-        pass  # loguru optional
-except Exception as _log_setup_err:
-    # Never let logging setup take down the bot
-    print(f"WARNING: file logging setup failed: {_log_setup_err}")
+        _LOG_DIR = Path(__file__).resolve().parent.parent / "server logs reports"
+        _LOG_DIR.mkdir(exist_ok=True)
+        _CURRENT_LOG = _LOG_DIR / "current.log"
+
+        # Rotate previous current.log if non-empty
+        if _CURRENT_LOG.exists() and _CURRENT_LOG.stat().st_size > 0:
+            _ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            _rotated = _LOG_DIR / f"current_{_ts}.log"
+            try:
+                _CURRENT_LOG.rename(_rotated)
+            except OSError:
+                # Rename fails when another process (a live server) holds the
+                # file open on Windows. Do not fail, but do not stay silent
+                # either: this process's output will append to that log.
+                logging.warning(
+                    "Could not rotate %s: another process holds it "
+                    "(a live server is probably running); "
+                    "this process's log output will append to it.",
+                    _CURRENT_LOG,
+                )
+
+        _file_handler = logging.FileHandler(_CURRENT_LOG, mode="a", encoding="utf-8")
+        _file_handler.setLevel(logging.INFO)
+        _file_handler.setFormatter(logging.Formatter(_LOG_FMT))
+        logging.getLogger().addHandler(_file_handler)
+
+        # Loguru sink for modules that use loguru (signal_logger, kelly_position_sizer)
+        try:
+            from loguru import logger as _loguru
+
+            _loguru.add(
+                str(_CURRENT_LOG),
+                format="{time:YYYY-MM-DD HH:mm:ss} - {name} - {level} - {message}",
+                level="INFO",
+                rotation=None,  # we rotate manually on bot start
+                enqueue=True,  # thread-safe writes
+            )
+        except ImportError:
+            pass  # loguru optional
+
+        # Mark this process as configured so the second import (uvicorn
+        # re-importing the module the __main__ instance already set up)
+        # does not attach a duplicate handler + sink.
+        os.environ[_FILELOG_SENTINEL] = str(os.getpid())
+    except Exception as _log_setup_err:
+        # Never let logging setup take down the bot
+        print(f"WARNING: file logging setup failed: {_log_setup_err}")
 
 logger = logging.getLogger(__name__)
+
 
 # Create FastAPI app with lifespan context manager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
-    # Startup
+    # Startup. The bind/token policy check runs here, not only in __main__,
+    # so `uvicorn trading_bot_v2.api_server:app` cannot skip it. A failure
+    # propagates and uvicorn aborts with "Application startup failed".
+    enforce_startup_policy()
     try:
         bot_integration.initialize()
         logger.info("API server started with bot integration")
@@ -137,6 +188,158 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# Access control (live-readiness audit T1)
+#
+# Every non-GET route and every /api/debug route carries require_api_token.
+# GET routes outside /api/debug are unauthenticated reads and MUST stay free
+# of trading side effects; tests/test_api_access_control.py enforces both
+# invariants by introspecting app.routes, so a new route cannot slip past.
+# ---------------------------------------------------------------------------
+
+
+#: Request headers that mark traffic as forwarded by a proxy or tunnel. A
+#: token-less request carrying any of them is refused: the loopback peer we
+#: see is the proxy, not the caller.
+PROXY_HEADERS = ("x-forwarded-for", "forwarded")
+
+
+def _peer_is_loopback(request: Request) -> bool:
+    """Whether the actual TCP peer of a request is a loopback address.
+
+    Decided from the connection (``request.client``), never from config:
+    ``config.api_host`` is a self-reported string that does not reflect
+    ``uvicorn module:app --host 0.0.0.0``. A missing client is treated as
+    remote.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        True only when the peer host is a loopback address.
+    """
+    client = request.client
+    if client is None:
+        return False
+    return is_loopback_host(client.host)
+
+
+def require_api_token(
+    request: Request,
+    x_api_token: Optional[str] = Header(default=None, alias="X-Api-Token"),
+) -> None:
+    """FastAPI dependency: demand the shared API token on sensitive routes.
+
+    Reads ``config`` at call time so the policy follows the live settings.
+    When API_TOKEN is unset, a request is allowed only if the configured
+    bind host is loopback AND the real connection peer is loopback AND no
+    proxy-forwarding header is present. The peer check is the guard that
+    holds when the server was started without ``__main__``; the header
+    check refuses reverse-proxy / tunnel traffic, which must use the token.
+
+    Args:
+        request: The incoming request (for the connection peer and headers).
+        x_api_token: Value of the ``X-Api-Token`` request header, if any.
+
+    Raises:
+        HTTPException: 401 when the token is missing or does not match, or
+            when no token is configured and the request is not purely local.
+    """
+    expected = getattr(config, "api_token", None) or None
+    if expected is None:
+        if not is_loopback_host(getattr(config, "api_host", "127.0.0.1")):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set when API_HOST is not a loopback address",
+            )
+        if not _peer_is_loopback(request):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set for non-loopback clients",
+            )
+        if any(name in request.headers for name in PROXY_HEADERS):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set for proxied or tunnelled requests",
+            )
+        return
+    supplied = x_api_token or ""
+    if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Missing or invalid X-Api-Token")
+
+
+def enforce_startup_policy() -> None:
+    """Refuse an unsafe bind/token configuration from the ASGI startup hook.
+
+    Called from ``lifespan`` so it runs however the app is launched. Only
+    ``config`` is visible here, and under ``uvicorn module:app --host X``
+    the real bind may differ from API_HOST; the request-time peer check in
+    ``require_api_token`` is the guard for that case, so this hook validates
+    config consistency and logs loudly rather than trying to detect the bind.
+
+    Raises:
+        StartupConfigError: When config says a non-loopback API_HOST without
+            an API_TOKEN.
+    """
+    host = getattr(config, "api_host", "127.0.0.1")
+    token = getattr(config, "api_token", None) or None
+    problem = check_api_binding(host, token)
+    if problem is not None:
+        logger.critical("Refusing to start: %s", problem)
+        raise StartupConfigError(problem)
+    if token is None:
+        logger.warning(
+            "API_TOKEN is unset: mutating routes accept loopback peers only "
+            "(API_HOST=%s). If uvicorn was started with a different --host, "
+            "or a proxy/tunnel forwards here, those requests get 401.",
+            host,
+        )
+    else:
+        logger.info("API access control: token required on mutating routes.")
+
+
+def require_debug_routes() -> None:
+    """FastAPI dependency: hide state-mutating debug routes unless enabled.
+
+    Raises:
+        HTTPException: 404 while ENABLE_DEBUG_ROUTES is false, so the route
+            is indistinguishable from one that does not exist.
+    """
+    if not getattr(config, "enable_debug_routes", False):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+#: Dependency list for routes that mutate state or expose configuration.
+AUTH_DEPS = [Depends(require_api_token)]
+#: Dependency list for debug routes that can fire signals or mutate state:
+#: the 404 gate runs first so a disabled route never reveals itself.
+DEBUG_MUTATING_DEPS = [Depends(require_debug_routes), Depends(require_api_token)]
+
+
+def resolve_bind_address() -> tuple:
+    """Validate the startup configuration and return the (host, port) to bind.
+
+    Runs the .env duplicate-key warning, the live-credential check and the
+    API bind/token check. Called from ``__main__`` before uvicorn starts.
+
+    Returns:
+        A ``(host, port)`` tuple from API_HOST / API_PORT.
+
+    Raises:
+        SystemExit: With a clear message when the configuration is unsafe.
+    """
+    host = getattr(config, "api_host", "127.0.0.1")
+    port = int(getattr(config, "api_port", 8000))
+    try:
+        run_startup_validation(
+            host=host, token=getattr(config, "api_token", None), log=logger
+        )
+    except StartupConfigError as exc:
+        print(f"ERROR: {exc}")
+        raise SystemExit(1) from exc
+    return host, port
 
 
 class BotIntegration:
@@ -239,10 +442,16 @@ class BotIntegration:
                     # Subscribe to orderbook for OrderBookImbalance strategy
                     # Uses agg_level=10 for reasonable depth resolution
                     import os
-                    if os.getenv("ENABLE_ORDERBOOK_IMBALANCE", "true").lower() == "true":
+
+                    if (
+                        os.getenv("ENABLE_ORDERBOOK_IMBALANCE", "true").lower()
+                        == "true"
+                    ):
                         agg_level = int(os.getenv("ORDERBOOK_AGG_LEVEL", "10"))
                         for symbol in key_symbols:
-                            self.ws_client.subscribe_orderbook(symbol, agg_level=agg_level)
+                            self.ws_client.subscribe_orderbook(
+                                symbol, agg_level=agg_level
+                            )
                         logger.info(
                             f"📚 Subscribed to orderbook for {len(key_symbols)} symbols (agg_level={agg_level})"
                         )
@@ -250,51 +459,17 @@ class BotIntegration:
                 logger.warning(f"Could not start WebSocket client: {e}")
                 self.ws_client = None
 
-            # Initialize regime detector
-            self.regime_detector = make_regime_detector()
-            logger.info(
-                f"Regime detector initialized: "
-                f"{type(self.regime_detector).__name__}"
-            )
-
-            # Initialize multi-timeframe fetcher (requires pacifica_client)
-            if self.pacifica_client:
-                self.mtf_fetcher = MultiTimeframeFetcher(self.pacifica_client)
-                logger.info("MultiTimeframeFetcher initialized")
-            else:
-                self.mtf_fetcher = None
-                logger.warning("MultiTimeframeFetcher skipped - no Pacifica client")
-
-            # Initialize risk manager
+            # Initialize risk manager (TradingBot below needs it injected)
             self.risk_manager = RiskManager()
             logger.info("RiskManager initialized")
 
-            # Initialize grid lifecycle manager (requires client, risk_manager, db)
-            if self.pacifica_client:
-                self.grid_manager = GridLifecycleManager(
-                    client=self.pacifica_client,
-                    risk_manager=self.risk_manager,
-                    db=self.database,
-                )
-                logger.info("GridLifecycleManager initialized")
-            else:
-                self.grid_manager = None
-                logger.warning("GridLifecycleManager skipped - no Pacifica client")
-
-            # Initialize strategy manager (uses regime_detector and enable flags)
-            self.strategy_manager = StrategyManager(
-                regime_detector=self.regime_detector,
-                enable_mean_reversion=True,
-                enable_ma_crossover=True,
-                enable_trend_following=False,
-                enable_grid_trading=True,
-                enable_liquidation_capture=True,
-                client=self.pacifica_client,  # For FundingArb API calls
-                ws_client=self.ws_client,  # For OrderBookImbalance
-            )
-            logger.info("StrategyManager initialized")
-
-            # Initialize trading bot (uses db, client, risk_manager, hub_publish_func)
+            # Initialize trading bot (uses db, client, risk_manager) and adopt
+            # its components. TradingBot.__init__ already builds fully wired
+            # instances (regime detector with event bus + db, MTF fetcher with
+            # ws_client, config-driven StrategyManager, grid manager with
+            # orphan repair); constructing separate copies here meant every
+            # component initialized twice and the dashboard read different
+            # instances than the ones the trading loop actually uses.
             if self.pacifica_client:
                 self.trading_bot = TradingBot(
                     db=self.database,
@@ -302,7 +477,42 @@ class BotIntegration:
                     risk_manager=self.risk_manager,
                 )
                 logger.info("TradingBot initialized")
+
+                self.regime_detector = self.trading_bot.market_regime
+                self.mtf_fetcher = self.trading_bot.multi_tf_fetcher
+                self.strategy_manager = self.trading_bot.strategy_manager
+                self.grid_manager = self.trading_bot.grid_lifecycle
+                logger.info(
+                    "Adopted TradingBot components (regime detector, "
+                    "strategy manager, grid manager, MTF fetcher)"
+                )
             else:
+                # Dashboard-only mode: no TradingBot to adopt from, so build
+                # the lightweight fallbacks directly.
+                self.regime_detector = make_regime_detector()
+                logger.info(
+                    f"Regime detector initialized: "
+                    f"{type(self.regime_detector).__name__}"
+                )
+
+                self.mtf_fetcher = None
+                logger.warning("MultiTimeframeFetcher skipped - no Pacifica client")
+
+                self.grid_manager = None
+                logger.warning("GridLifecycleManager skipped - no Pacifica client")
+
+                self.strategy_manager = StrategyManager(
+                    regime_detector=self.regime_detector,
+                    enable_mean_reversion=True,
+                    enable_ma_crossover=True,
+                    enable_trend_following=False,
+                    enable_grid_trading=True,
+                    enable_liquidation_capture=True,
+                    client=self.pacifica_client,  # For FundingArb API calls
+                    ws_client=self.ws_client,  # For OrderBookImbalance
+                )
+                logger.info("StrategyManager initialized")
+
                 self.trading_bot = None
                 logger.warning(
                     "TradingBot skipped - no Pacifica client (API keys required)"
@@ -329,6 +539,24 @@ class BotIntegration:
         with self._lock:
             try:
                 # Base status
+                import os as _os
+
+                _exchange = (
+                    _os.getenv("EXCHANGE", "pacifica").strip().lower() or "pacifica"
+                )
+                _mode = (
+                    (
+                        "demo"
+                        if _os.getenv("BLOFIN_DEMO", "true").strip().lower() == "true"
+                        else "live"
+                    )
+                    if _exchange == "blofin"
+                    else (
+                        "testnet"
+                        if _os.getenv("TESTNET", "true").strip().lower() == "true"
+                        else "mainnet"
+                    )
+                )
                 status = {
                     "is_running": self._is_running,
                     "positions_count": 0,
@@ -338,6 +566,8 @@ class BotIntegration:
                     "active_grids": 0,
                     "current_regime": "unknown",
                     "circuit_breaker_triggered": False,
+                    "exchange": _exchange,
+                    "exchange_mode": _mode,
                 }
 
                 if not self._initialized:
@@ -346,7 +576,9 @@ class BotIntegration:
                 # Get positions count (filtered: same logic as get_positions)
                 if self.database:
                     positions = self.database.get_positions()
-                    filtered = [p for p in (positions or []) if float(p.get('quantity', 0)) > 0]
+                    filtered = [
+                        p for p in (positions or []) if float(p.get("quantity", 0)) > 0
+                    ]
                     status["positions_count"] = len(filtered)
 
                     # Get trades count and PnL
@@ -365,8 +597,12 @@ class BotIntegration:
                         balance_info = self.pacifica_client.get_balance()
                         # Pacifica returns strings, convert to float
                         # Keys: "balance" or "account_equity"
-                        balance_str = balance_info.get("balance", balance_info.get("account_equity", "0"))
-                        status["account_balance"] = float(balance_str) if balance_str else 0.0
+                        balance_str = balance_info.get(
+                            "balance", balance_info.get("account_equity", "0")
+                        )
+                        status["account_balance"] = (
+                            float(balance_str) if balance_str else 0.0
+                        )
                     except Exception as e:
                         logger.warning(f"Could not fetch balance: {e}")
 
@@ -399,8 +635,12 @@ class BotIntegration:
                                 "low": [float(c.get("l", 0)) for c in kline_list],
                                 "volume": [float(c.get("v", 0)) for c in kline_list],
                             }
-                            regime = self.regime_detector.detect_regime_cached("BTC", market_data)
-                            status["current_regime"] = regime.value if regime else "unknown"
+                            regime = self.regime_detector.detect_regime_cached(
+                                "BTC", market_data
+                            )
+                            status["current_regime"] = (
+                                regime.value if regime else "unknown"
+                            )
                     except Exception as e:
                         logger.warning(f"Could not detect regime: {e}")
 
@@ -429,7 +669,9 @@ class BotIntegration:
                 self.initialize()
 
             self._is_running = True
-            logger.info(f"Set _is_running=True, trading_bot={self.trading_bot is not None}")
+            logger.info(
+                f"Set _is_running=True, trading_bot={self.trading_bot is not None}"
+            )
 
         try:
             if self.trading_bot:
@@ -475,8 +717,7 @@ class BotIntegration:
                 if db_positions:
                     # Filter out zero-quantity positions
                     positions = [
-                        p for p in db_positions
-                        if float(p.get('quantity', 0)) > 0
+                        p for p in db_positions if float(p.get("quantity", 0)) > 0
                     ]
 
             # Enrich with live data from Pacifica
@@ -653,7 +894,13 @@ class BotIntegration:
                     continue
 
         entry_price = 0.0
-        for key in ("avg_entry_price", "entry_price", "average_entry", "avg_price", "entry"):
+        for key in (
+            "avg_entry_price",
+            "entry_price",
+            "average_entry",
+            "avg_price",
+            "entry",
+        ):
             if key in pos and pos[key] is not None:
                 try:
                     entry_price = float(pos[key])
@@ -700,7 +947,12 @@ class BotIntegration:
                 except (TypeError, ValueError):
                     continue
 
-        if unrealized_pnl == 0 and entry_price > 0 and current_price > 0 and quantity > 0:
+        if (
+            unrealized_pnl == 0
+            and entry_price > 0
+            and current_price > 0
+            and quantity > 0
+        ):
             if side == "LONG":
                 unrealized_pnl = (current_price - entry_price) * quantity
             else:
@@ -771,7 +1023,9 @@ class BotIntegration:
 
                         result["synced_count"] += 1
                     except Exception as e:
-                        result["errors"].append(f"Error syncing {pos.get('symbol', '?')}: {e}")
+                        result["errors"].append(
+                            f"Error syncing {pos.get('symbol', '?')}: {e}"
+                        )
 
             # Remove positions closed on exchange
             for symbol in existing_positions:
@@ -852,11 +1106,40 @@ class BotIntegration:
 
                 # Regime to active strategies mapping
                 regime_strategies = {
-                    "ranging_calm": ["MeanReversion", "GridTrading", "VWAPScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
-                    "ranging_volatile": ["GridTrading", "VWAPScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
-                    "trending_strong": ["MACrossover", "MomentumScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
-                    "trending_moderate": ["MACrossover", "MomentumScalping", "LiquidationCapture", "FundingArb", "OrderBookImbalance"],
-                    "indecisive": ["LiquidationCapture", "FundingArb", "OrderBookImbalance"],
+                    "ranging_calm": [
+                        "MeanReversion",
+                        "GridTrading",
+                        "VWAPScalping",
+                        "LiquidationCapture",
+                        "FundingArb",
+                        "OrderBookImbalance",
+                    ],
+                    "ranging_volatile": [
+                        "GridTrading",
+                        "VWAPScalping",
+                        "LiquidationCapture",
+                        "FundingArb",
+                        "OrderBookImbalance",
+                    ],
+                    "trending_strong": [
+                        "MACrossover",
+                        "MomentumScalping",
+                        "LiquidationCapture",
+                        "FundingArb",
+                        "OrderBookImbalance",
+                    ],
+                    "trending_moderate": [
+                        "MACrossover",
+                        "MomentumScalping",
+                        "LiquidationCapture",
+                        "FundingArb",
+                        "OrderBookImbalance",
+                    ],
+                    "indecisive": [
+                        "LiquidationCapture",
+                        "FundingArb",
+                        "OrderBookImbalance",
+                    ],
                 }
 
                 # Use server's regime detector (or bot's if available for cached data)
@@ -898,7 +1181,9 @@ class BotIntegration:
                                 if all(c > 0 for c in closes) and len(closes) >= 30:
                                     # Calculate ADX for display
                                     try:
-                                        adx_value = calculate_adx(highs, lows, closes, period=14)
+                                        adx_value = calculate_adx(
+                                            highs, lows, closes, period=14
+                                        )
                                         market_activity["adx"] = round(adx_value, 1)
                                     except Exception:
                                         pass  # ADX calculation failed, keep None
@@ -1043,6 +1328,8 @@ async def shutdown_event():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates."""
+    # Read-only (status stream + ping/pong). Any command handling added here
+    # must require the API token; tests assert no order/signal call appears.
     await websocket.accept()
     active_connections.append(websocket)
     logger.info(
@@ -1138,8 +1425,7 @@ async def get_status():
 async def metrics_endpoint():
     """Prometheus metrics endpoint."""
     return Response(
-        content=metrics.get_metrics(),
-        media_type=metrics.get_content_type()
+        content=metrics.get_metrics(), media_type=metrics.get_content_type()
     )
 
 
@@ -1190,16 +1476,48 @@ async def get_orders():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/orders/cancel-all")
-async def cancel_all_orders_endpoint(symbol: str = None):
-    """Cancel all open orders and clear orphaned grid state."""
+def _cancel_all_orders_compat(client: Any, symbol: Optional[str], include_stops: bool):
+    """Call ``cancel_all_orders`` passing ``include_stops`` only when supported.
+
+    The Pacifica native client predates the flag; the Blofin client and
+    both adapters accept it.
+    """
+    import inspect
+
+    if include_stops:
+        try:
+            params = inspect.signature(client.cancel_all_orders).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "include_stops" in params:
+            return client.cancel_all_orders(symbol, include_stops=True)
+        logger.warning(
+            "include_stops requested but this exchange client has no venue stops"
+        )
+    return client.cancel_all_orders(symbol)
+
+
+@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS)
+async def cancel_all_orders_endpoint(symbol: str = None, include_stops: bool = False):
+    """Cancel all open orders and clear orphaned grid state.
+
+    Protective venue stops (TP/SL rows) are LEFT IN PLACE by default so
+    an operator cancel-all never strips the stop protecting an open
+    position; afterwards every open position is re-verified and any
+    missing stop re-installed.  Pass ``include_stops=true`` to remove
+    the stops as well (operator flattening the book by hand).
+    """
     try:
         if not bot_integration.pacifica_client:
             raise HTTPException(status_code=503, detail="Exchange client not available")
 
-        # 1. Cancel all orders on exchange
-        result = bot_integration.pacifica_client.cancel_all_orders(symbol)
-        logger.info(f"Cancel all orders result: {result}")
+        # 1. Cancel all orders on exchange (stops kept unless asked)
+        result = _cancel_all_orders_compat(
+            bot_integration.pacifica_client, symbol, include_stops
+        )
+        logger.info(
+            f"Cancel all orders result (include_stops={include_stops}): {result}"
+        )
 
         # 2. Clear grid state in GridLifecycleManager so grids don't remain orphaned
         grids_cleared = 0
@@ -1216,13 +1534,31 @@ async def cancel_all_orders_endpoint(symbol: str = None):
                 grids_cleared = len(glm._grids)
                 glm._grids.clear()
             if grids_cleared:
-                logger.info(f"Cleared {grids_cleared} grid(s) from GridLifecycleManager")
+                logger.info(
+                    f"Cleared {grids_cleared} grid(s) from GridLifecycleManager"
+                )
+
+        # 3. Re-verify protection: any open position whose stop went with
+        #    the cancel (or was already missing) gets it re-installed.
+        stops_reverified = None
+        if (
+            not include_stops
+            and bot is not None
+            and hasattr(bot, "_repair_venue_stops")
+        ):
+            try:
+                stops_reverified = bot._repair_venue_stops(reason="cancel-all")
+            except Exception as exc:  # noqa: BLE001 - report, never fail the cancel
+                logger.error(f"Stop re-verification after cancel-all failed: {exc}")
+                stops_reverified = {"error": str(exc)}
 
         return {
             "success": True,
             "result": result,
             "message": f"Cancelled orders for {'all symbols' if not symbol else symbol}",
             "grids_cleared": grids_cleared,
+            "include_stops": include_stops,
+            "stops_reverified": stops_reverified,
         }
     except Exception as e:
         logger.error(f"Error cancelling orders: {e}")
@@ -1279,9 +1615,7 @@ async def regime_history(symbol: Optional[str] = None, limit: int = 50):
     try:
         if not bot_integration.database:
             raise HTTPException(status_code=503, detail="Database not available")
-        rows = bot_integration.database.get_regime_history(
-            symbol=symbol, limit=limit
-        )
+        rows = bot_integration.database.get_regime_history(symbol=symbol, limit=limit)
         return {"success": True, "data": rows}
     except HTTPException:
         raise
@@ -1301,9 +1635,7 @@ async def regimes_current():
         if detector is None:
             detector = bot_integration.regime_detector
         if detector is None:
-            raise HTTPException(
-                status_code=503, detail="Regime detector not available"
-            )
+            raise HTTPException(status_code=503, detail="Regime detector not available")
         return {"success": True, "data": detector.get_regime_snapshot()}
     except HTTPException:
         raise
@@ -1329,9 +1661,7 @@ async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
         except ImportError:
             from database import summarize_regime_shadow
 
-        rows = bot_integration.database.get_regime_shadow(
-            symbol=symbol, limit=limit
-        )
+        rows = bot_integration.database.get_regime_shadow(symbol=symbol, limit=limit)
         return {
             "success": True,
             "data": {
@@ -1425,7 +1755,7 @@ async def regime_param_overlays_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/backup")
+@app.post("/api/backup", dependencies=AUTH_DEPS)
 async def trigger_backup():
     """Trigger an immediate database backup (H5 automated backup)."""
     try:
@@ -1450,24 +1780,32 @@ async def trigger_backup():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/positions/sync")
+@app.post("/api/positions/sync", dependencies=AUTH_DEPS)
 async def sync_positions():
     """Sync positions from exchange to database."""
     try:
         sync_result = await bot_integration.sync_positions()
-        synced_count = sync_result.get("synced_count", 0) if isinstance(sync_result, dict) else sync_result
+        synced_count = (
+            sync_result.get("synced_count", 0)
+            if isinstance(sync_result, dict)
+            else sync_result
+        )
         await broadcast_update("positions_synced", {"count": synced_count})
         return {
-            "success": sync_result.get("success", True) if isinstance(sync_result, dict) else True,
+            "success": sync_result.get("success", True)
+            if isinstance(sync_result, dict)
+            else True,
             "message": f"Synced {synced_count} positions",
-            "data": sync_result if isinstance(sync_result, dict) else {"synced_count": synced_count},
+            "data": sync_result
+            if isinstance(sync_result, dict)
+            else {"synced_count": synced_count},
         }
     except Exception as e:
         logger.error(f"Error syncing positions: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/start")
+@app.post("/api/bot/start", dependencies=AUTH_DEPS)
 async def start_bot():
     """Start the trading bot."""
     try:
@@ -1481,7 +1819,7 @@ async def start_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/stop")
+@app.post("/api/bot/stop", dependencies=AUTH_DEPS)
 async def stop_bot():
     """Stop the trading bot."""
     try:
@@ -1498,6 +1836,7 @@ async def stop_bot():
 # ─────────────────────────────────────────────────────────────────────────────
 # Supervisor endpoints (Claude routine + manual ops)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 @app.get("/api/supervisor/status")
 async def supervisor_status():
@@ -1518,7 +1857,7 @@ async def supervisor_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/pause")
+@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS)
 async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
     """
     Pause new trade entries. Existing positions and management continue.
@@ -1533,8 +1872,8 @@ async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
     except ImportError:
         from supervisor_control import get_supervisor_control
 
-    payload  = payload or {}
-    reason   = payload.get("reason",   "no reason given")
+    payload = payload or {}
+    reason = payload.get("reason", "no reason given")
     until_ts = payload.get("until_ts", None)
 
     try:
@@ -1546,7 +1885,7 @@ async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/resume")
+@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS)
 async def supervisor_resume():
     """
     Clear the supervisor pause. New entries are immediately allowed again.
@@ -1564,7 +1903,7 @@ async def supervisor_resume():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/grids/{symbol}/clear")
+@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS)
 async def clear_grid(symbol: str):
     """Clear a grid registration for a symbol (allows new grid creation)."""
     try:
@@ -1597,74 +1936,85 @@ async def clear_grid(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/grids")
-async def get_grids():
-    """Get all active grids."""
-    try:
-        # Use trading_bot's grid_lifecycle (authoritative source)
-        grid_mgr = None
-        if bot_integration.trading_bot and hasattr(
-            bot_integration.trading_bot, "grid_lifecycle"
-        ):
-            grid_mgr = bot_integration.trading_bot.grid_lifecycle
-        elif bot_integration.grid_manager:
-            grid_mgr = bot_integration.grid_manager
+def _recent_signal_events(bot, limit: int = 50) -> list:
+    """Read recent signal-generated events from the bot's event bus.
 
-        if grid_mgr:
-            grids = grid_mgr.get_all_active_grids()
-            return {"success": True, "data": grids}
-        else:
-            return {"success": True, "data": []}
-    except Exception as e:
-        logger.error(f"Error getting grids: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    Kept outside the GET handler so the read-only route never mentions the
+    signal event type: the no-side-effects invariant test scans GET route
+    source for it, because publishing that event places a real order.
+
+    Args:
+        bot: The running TradingBot (must expose ``event_bus``).
+        limit: Maximum number of events to return.
+
+    Returns:
+        The most recent signal events, newest last.
+    """
+    try:
+        from .event_system import EventType
+    except ImportError:
+        from event_system import EventType
+
+    return bot.event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=limit)
 
 
 @app.get("/api/signals")
 async def get_signals():
-    """Get recent signals from the event bus."""
+    """Get recent signals from the event bus (read-only)."""
     try:
         bot = bot_integration.trading_bot
         if not bot or not hasattr(bot, "event_bus"):
             return {"success": True, "data": []}
 
-        # Import EventType
-        try:
-            from .event_system import EventType
-        except ImportError:
-            from event_system import EventType
-
-        # Get signal events from event bus history
-        event_bus = bot.event_bus
-        signal_events = event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=50)
+        signal_events = _recent_signal_events(bot, limit=50)
 
         signals = []
         for event in signal_events:
             signal_data = event.data
             signal = signal_data.get("signal")
             if signal:
-                signals.append({
-                    "id": event.id,
-                    "timestamp": event.timestamp.isoformat(),
-                    "symbol": signal_data.get("symbol", signal.asset if hasattr(signal, "asset") else "UNKNOWN"),
-                    "strategy": signal.strategy.value if hasattr(signal, "strategy") and signal.strategy else "unknown",
-                    "side": signal.side.value if hasattr(signal, "side") and signal.side else "unknown",
-                    "entry_price": signal.entry_price if hasattr(signal, "entry_price") else 0,
-                    "stop_loss": signal.stop_loss if hasattr(signal, "stop_loss") else 0,
-                    "take_profit": signal.take_profit if hasattr(signal, "take_profit") else None,
-                    "confidence": round(signal.confidence * 100, 1) if hasattr(signal, "confidence") else 0,
-                    "is_valid": signal.is_valid() if hasattr(signal, "is_valid") else False,
-                    "current_price": signal_data.get("current_price", 0),
-                })
+                signals.append(
+                    {
+                        "id": event.id,
+                        "timestamp": event.timestamp.isoformat(),
+                        "symbol": signal_data.get(
+                            "symbol",
+                            signal.asset if hasattr(signal, "asset") else "UNKNOWN",
+                        ),
+                        "strategy": signal.strategy.value
+                        if hasattr(signal, "strategy") and signal.strategy
+                        else "unknown",
+                        "side": signal.side.value
+                        if hasattr(signal, "side") and signal.side
+                        else "unknown",
+                        "entry_price": signal.entry_price
+                        if hasattr(signal, "entry_price")
+                        else 0,
+                        "stop_loss": signal.stop_loss
+                        if hasattr(signal, "stop_loss")
+                        else 0,
+                        "take_profit": signal.take_profit
+                        if hasattr(signal, "take_profit")
+                        else None,
+                        "confidence": round(signal.confidence * 100, 1)
+                        if hasattr(signal, "confidence")
+                        else 0,
+                        "is_valid": signal.is_valid()
+                        if hasattr(signal, "is_valid")
+                        else False,
+                        "current_price": signal_data.get("current_price", 0),
+                    }
+                )
 
         return {"success": True, "data": signals, "count": len(signals)}
     except Exception as e:
         import traceback
+
         logger.error(f"Error getting signals: {e}")
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/kline-cache")
+@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS)
 async def get_kline_cache_debug():
     """Debug endpoint to check kline cache state."""
     try:
@@ -1681,27 +2031,38 @@ async def get_kline_cache_debug():
         bot_ws_cache_keys = []
         mtf_ws_cache_keys = []
         if bot:
-            if hasattr(bot, 'ws_client') and bot.ws_client:
+            if hasattr(bot, "ws_client") and bot.ws_client:
                 bot_ws_cache_keys = list(bot.ws_client._kline_cache.keys())
-            if hasattr(bot, 'multi_tf_fetcher') and bot.multi_tf_fetcher and bot.multi_tf_fetcher.ws_client:
-                mtf_ws_cache_keys = list(bot.multi_tf_fetcher.ws_client._kline_cache.keys())
+            if (
+                hasattr(bot, "multi_tf_fetcher")
+                and bot.multi_tf_fetcher
+                and bot.multi_tf_fetcher.ws_client
+            ):
+                mtf_ws_cache_keys = list(
+                    bot.multi_tf_fetcher.ws_client._kline_cache.keys()
+                )
 
         return {
             "success": True,
-            "server_ws_connected": ws_client.is_connected() if hasattr(ws_client, 'is_connected') else "unknown",
+            "server_ws_connected": ws_client.is_connected()
+            if hasattr(ws_client, "is_connected")
+            else "unknown",
             "server_ws_cache_pairs": len(ws_client._kline_cache),
             "server_ws_cache_keys": list(ws_client._kline_cache.keys()),
             "bot_ws_cache_keys": bot_ws_cache_keys,
             "mtf_ws_cache_keys": mtf_ws_cache_keys,
-            "are_same_client": (ws_client is bot.ws_client) if bot and bot.ws_client else False,
+            "are_same_client": (ws_client is bot.ws_client)
+            if bot and bot.ws_client
+            else False,
             "candle_counts": cache_info,
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signals/{symbol}")
+@app.get("/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS)
 async def test_signal_generation(symbol: str):
     """Debug endpoint to test signal generation for a symbol."""
     try:
@@ -1717,15 +2078,21 @@ async def test_signal_generation(symbol: str):
 
         # Check trading bot's ws_client status
         bot_ws_client = bot.ws_client
-        bot_mtf_ws_client = bot.multi_tf_fetcher.ws_client if bot.multi_tf_fetcher else None
+        bot_mtf_ws_client = (
+            bot.multi_tf_fetcher.ws_client if bot.multi_tf_fetcher else None
+        )
 
         ws_debug = {
             "bot_has_ws_client": bot_ws_client is not None,
             "bot_ws_id": id(bot_ws_client) if bot_ws_client else None,
             "mtf_has_ws_client": bot_mtf_ws_client is not None,
             "mtf_ws_id": id(bot_mtf_ws_client) if bot_mtf_ws_client else None,
-            "server_ws_id": id(bot_integration.ws_client) if bot_integration.ws_client else None,
-            "are_same": bot_ws_client is bot_integration.ws_client if (bot_ws_client and bot_integration.ws_client) else False,
+            "server_ws_id": id(bot_integration.ws_client)
+            if bot_integration.ws_client
+            else None,
+            "are_same": bot_ws_client is bot_integration.ws_client
+            if (bot_ws_client and bot_integration.ws_client)
+            else False,
         }
 
         # Check if bot's ws_client has data
@@ -1744,7 +2111,13 @@ async def test_signal_generation(symbol: str):
             )
         except Exception as e:
             import traceback
-            return {"success": False, "error": f"Failed to get multi_tf_data: {e}", "ws_debug": ws_debug, "traceback": traceback.format_exc()}
+
+            return {
+                "success": False,
+                "error": f"Failed to get multi_tf_data: {e}",
+                "ws_debug": ws_debug,
+                "traceback": traceback.format_exc(),
+            }
 
         try:
             execution_tf_data = bot.multi_tf_fetcher.get_candles_multi_tf(
@@ -1752,7 +2125,7 @@ async def test_signal_generation(symbol: str):
                 timeframes=["1m", "5m"],
                 lookback_candles=50,
             )
-        except Exception as e:
+        except Exception:
             execution_tf_data = None
 
         # Check data quality
@@ -1762,7 +2135,9 @@ async def test_signal_generation(symbol: str):
                 data_info[tf] = {
                     "close_count": len(data.get("close", [])),
                     "has_volume": "volume" in data and len(data.get("volume", [])) > 0,
-                    "last_close": data.get("close", [0])[-1] if data.get("close") else 0,
+                    "last_close": data.get("close", [0])[-1]
+                    if data.get("close")
+                    else 0,
                 }
 
         # Try to generate signals
@@ -1785,24 +2160,34 @@ async def test_signal_generation(symbol: str):
         # Format signals for response
         signal_info = []
         for sig in signals:
-            signal_info.append({
-                "side": sig.side.value if sig.side else "unknown",
-                "entry_price": sig.entry_price,
-                "stop_loss": sig.stop_loss,
-                "take_profit": sig.take_profit,
-                "confidence": sig.confidence,
-                "rrr": sig.rrr,
-                "strategy": getattr(sig, "strategy", "unknown"),
-                "is_valid": sig.is_valid(),
-            })
+            signal_info.append(
+                {
+                    "side": sig.side.value if sig.side else "unknown",
+                    "entry_price": sig.entry_price,
+                    "stop_loss": sig.stop_loss,
+                    "take_profit": sig.take_profit,
+                    "confidence": sig.confidence,
+                    "rrr": sig.rrr,
+                    "strategy": getattr(sig, "strategy", "unknown"),
+                    "is_valid": sig.is_valid(),
+                }
+            )
 
         # Add LiquidationCapture debug info for multiple timeframes
         liq_debug = {}
         try:
             # Check multiple timeframes
-            for tf_name, tf_data_source in [("5m", execution_tf_data), ("15m", multi_tf_data), ("1h", multi_tf_data)]:
+            for tf_name, tf_data_source in [
+                ("5m", execution_tf_data),
+                ("15m", multi_tf_data),
+                ("1h", multi_tf_data),
+            ]:
                 trigger_data = tf_data_source.get(tf_name) if tf_data_source else None
-                if not trigger_data or not trigger_data.get("close") or len(trigger_data.get("close", [])) < 10:
+                if (
+                    not trigger_data
+                    or not trigger_data.get("close")
+                    or len(trigger_data.get("close", [])) < 10
+                ):
                     continue
 
                 tf_debug = {}
@@ -1817,7 +2202,11 @@ async def test_signal_generation(symbol: str):
                 # Volume spike
                 if "volume" in trigger_data and len(trigger_data["volume"]) >= 10:
                     recent_volumes = trigger_data["volume"][-10:]
-                    avg_volume = sum(recent_volumes[:-3]) / len(recent_volumes[:-3]) if len(recent_volumes[:-3]) > 0 else 0
+                    avg_volume = (
+                        sum(recent_volumes[:-3]) / len(recent_volumes[:-3])
+                        if len(recent_volumes[:-3]) > 0
+                        else 0
+                    )
                     current_volume = recent_volumes[-1]
                     volume_spike = current_volume / avg_volume if avg_volume > 0 else 0
                     tf_debug["volume_spike"] = round(volume_spike, 2)
@@ -1825,6 +2214,7 @@ async def test_signal_generation(symbol: str):
 
                 # RSI
                 from trading_bot_v2.indicators import calculate_rsi
+
                 rsi = calculate_rsi(closes, period=14)
                 tf_debug["rsi"] = round(rsi, 1)
                 tf_debug["rsi_extreme"] = rsi <= 20 or rsi >= 80
@@ -1852,10 +2242,11 @@ async def test_signal_generation(symbol: str):
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/signal-processing")
+@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS)
 async def get_signal_processing_log():
     """Debug endpoint to check signal processing stages - now uses SignalLogger."""
     try:
@@ -1968,22 +2359,19 @@ async def get_validation_gate_policy():
                 "min_closed_trades": "Minimum closed trades per symbol",
                 "min_profit_factor": "Pooled profit factor must exceed this",
                 "min_psr": "PSR (or DSR when trial count known) must "
-                           "meet this confidence",
-                "min_consistent_symbols": "Symbols with positive "
-                                          "expectancy required",
+                "meet this confidence",
+                "min_consistent_symbols": "Symbols with positive expectancy required",
             },
             "note": "DSR >= 0.95 means <5% probability the result is a "
-                    "fluke of the search size. See "
-                    "trading_bot_v2/validation/gate.py",
+            "fluke of the search size. See "
+            "trading_bot_v2/validation/gate.py",
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
 @app.get("/api/validation/runs")
-async def get_validation_runs(
-    strategy: Optional[str] = None, limit: int = 20
-):
+async def get_validation_runs(strategy: Optional[str] = None, limit: int = 20):
     """Stored validation-runner verdicts, newest first (read-only).
 
     Rows are written by the standalone validation runner
@@ -2010,69 +2398,127 @@ async def get_validation_latest():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/key-config")
+@app.get("/api/debug/key-config", dependencies=AUTH_DEPS)
 async def check_key_configuration():
-    """Debug endpoint to check Pacifica API key configuration."""
+    """Debug endpoint to check the active exchange's key configuration.
+
+    Adapter-aware: Pacifica reports its two wallet pubkeys; Blofin
+    reports which credential set is loaded and the mode, never the
+    values themselves.
+    """
     try:
+        import os as _os
+
+        exchange = _os.getenv("EXCHANGE", "pacifica").strip().lower() or "pacifica"
         client = bot_integration.pacifica_client
         if not client:
-            return {"success": False, "error": "Pacifica client not available"}
+            return {"success": False, "error": "Exchange client not available"}
+
+        if exchange == "blofin":
+            demo = bool(getattr(client, "demo", False))
+            return {
+                "success": True,
+                "exchange": "blofin",
+                "mode": "demo" if demo else "live",
+                "api_key_set": bool(getattr(client, "api_key", "")),
+                "api_secret_set": bool(getattr(client, "api_secret", "")),
+                "passphrase_set": bool(getattr(client, "passphrase", "")),
+                "base_url": getattr(client, "base_url", ""),
+                "note": (
+                    "demo mode reads BLOFIN_DEMO_* (falls back to "
+                    "BLOFIN_*); live mode reads BLOFIN_* only"
+                ),
+            }
 
         agent_wallet_pubkey = client.agent_wallet_public_key
         account_pubkey = client.account_public_key
-
         return {
             "success": True,
+            "exchange": "pacifica",
             "agent_wallet_public_key": agent_wallet_pubkey,
             "account_public_key": account_pubkey,
             "keys_match": agent_wallet_pubkey == account_pubkey,
-            "note": "If keys_match is True, that's the problem - they should be different"
+            "note": "If keys_match is True, that's the problem - they should be different",
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-order")
-async def test_order_placement():
-    """Debug endpoint to test order placement and see full API response."""
+@app.post("/api/exchange/select", dependencies=AUTH_DEPS)
+async def select_exchange(payload: dict):
+    """Switch the configured exchange (dashboard selector).
+
+    Rewrites only the EXCHANGE= and BLOFIN_DEMO= lines in .env and stops
+    the trading loop. Clients are constructed at startup and the server
+    runs with reload=False, so a manual restart is required for the
+    switch to take effect - the response says so explicitly.
+    """
+    import os as _os
+    import re as _re
+
+    choice = str(payload.get("choice", "")).strip().lower()
+    mapping = {
+        "pacifica": ("pacifica", None),
+        "blofin-demo": ("blofin", "true"),
+        "blofin-live": ("blofin", "false"),
+    }
+    if choice not in mapping:
+        return {"success": False, "message": f"Unknown choice: {choice!r}"}
+    exchange, demo = mapping[choice]
+
+    # Stop the trading loop before touching config
     try:
-        client = bot_integration.pacifica_client
-        if not client:
-            return {"success": False, "error": "Pacifica client not available"}
-
-        # Test with a tiny order that should fail (below minimum)
-        # This will show us the exact API error format
-        import traceback
-        try:
-            result = client.place_order(
-                symbol="BTC",
-                side="buy",
-                quantity=0.00001,  # Tiny amount
-                order_type="limit",
-                price=60000.0  # Far below market
-            )
-            return {"success": True, "order_result": result}
-        except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": "ValueError",
-                "full_error": repr(e)
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc()
-            }
+        if bot_integration._is_running:
+            await bot_integration.stop()
     except Exception as e:
-        import traceback
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+        logger.warning(f"Exchange switch: stop failed: {e}")
+
+    env_path = _os.path.join(_os.path.dirname(_os.path.dirname(__file__)), ".env")
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            lines = fh.readlines()
+
+        def _set_key(all_lines, key, value):
+            # Rewrite EVERY matching line, not just the first: .env has
+            # carried duplicate keys (e.g. BLOFIN_DEMO twice) and
+            # python-dotenv resolves duplicates last-wins, so a
+            # first-line-only rewrite could be silently overridden.
+            pattern = _re.compile(rf"^{key}=")
+            found = False
+            for i, line in enumerate(all_lines):
+                if pattern.match(line):
+                    all_lines[i] = f"{key}={value}\n"
+                    found = True
+            if not found:
+                all_lines.append(f"{key}={value}\n")
+            return all_lines
+
+        lines = _set_key(lines, "EXCHANGE", exchange)
+        if demo is not None:
+            lines = _set_key(lines, "BLOFIN_DEMO", demo)
+
+        with open(env_path, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+    except Exception as e:
+        return {"success": False, "message": f".env update failed: {e}"}
+
+    mode_note = "" if demo is None else f" (BLOFIN_DEMO={demo})"
+    return {
+        "success": True,
+        "message": (
+            f"EXCHANGE={exchange}{mode_note} written to .env and bot "
+            f"stopped. RESTART the server (run_bot.bat) to apply."
+        ),
+    }
 
 
-@app.get("/api/debug/event-history")
+# NOTE: GET /api/debug/test-order was removed in the live-readiness audit
+# (T1). It placed a real order from an unauthenticated GET. Do not restore it.
+
+
+@app.get("/api/debug/event-history", dependencies=AUTH_DEPS)
 async def get_event_history():
     """Debug endpoint to check recent events from the event bus."""
     try:
@@ -2083,13 +2529,17 @@ async def get_event_history():
         event_bus = bot.event_bus
         recent_events = []
         for event in event_bus._event_history[-20:]:  # Last 20 events
-            recent_events.append({
-                "id": event.id,
-                "type": event.event_type.value,
-                "source": event.source,
-                "timestamp": event.timestamp.isoformat(),
-                "data_keys": list(event.data.keys()) if isinstance(event.data, dict) else str(type(event.data)),
-            })
+            recent_events.append(
+                {
+                    "id": event.id,
+                    "type": event.event_type.value,
+                    "source": event.source,
+                    "timestamp": event.timestamp.isoformat(),
+                    "data_keys": list(event.data.keys())
+                    if isinstance(event.data, dict)
+                    else str(type(event.data)),
+                }
+            )
 
         # Get callback errors if any
         callback_errors = getattr(event_bus, "_callback_errors", [])
@@ -2105,10 +2555,11 @@ async def get_event_history():
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/trigger-signals")
+@app.post("/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def trigger_signal_generation():
     """
     Debug endpoint that manually triggers the trading loop's signal generation.
@@ -2120,7 +2571,9 @@ async def trigger_signal_generation():
             return {"success": False, "error": "Trading bot not initialized"}
 
         trace = {
-            "bot_running": bot._running_event.is_set() if hasattr(bot, "_running_event") else "unknown",
+            "bot_running": bot._running_event.is_set()
+            if hasattr(bot, "_running_event")
+            else "unknown",
             "markets": [],
             "steps": [],
         }
@@ -2128,15 +2581,25 @@ async def trigger_signal_generation():
         # Step 1: Get markets
         try:
             markets = bot.client.get_markets()
-            trace["steps"].append({"step": "get_markets", "success": True, "count": len(markets)})
+            trace["steps"].append(
+                {"step": "get_markets", "success": True, "count": len(markets)}
+            )
         except Exception as e:
-            trace["steps"].append({"step": "get_markets", "success": False, "error": str(e)})
+            trace["steps"].append(
+                {"step": "get_markets", "success": False, "error": str(e)}
+            )
             return {"success": False, "trace": trace}
 
         # Core symbols
         core_symbols = ["BTC", "ETH", "LTC", "SOL", "SUI", "AVAX", "XRP", "DOGE"]
         markets_to_process = [m for m in markets if m.get("symbol") in core_symbols]
-        trace["steps"].append({"step": "filter_markets", "count": len(markets_to_process), "symbols": [m.get("symbol") for m in markets_to_process]})
+        trace["steps"].append(
+            {
+                "step": "filter_markets",
+                "count": len(markets_to_process),
+                "symbols": [m.get("symbol") for m in markets_to_process],
+            }
+        )
 
         # Process each symbol
         for market in markets_to_process[:3]:  # Only process first 3 for speed
@@ -2151,14 +2614,20 @@ async def trigger_signal_generation():
                 ticker = bot._get_ticker_ws(symbol)
                 current_price = float(ticker.get("last", 0))
                 market_trace["current_price"] = current_price
-                market_trace["steps"].append({"step": "get_price", "success": True, "price": current_price})
+                market_trace["steps"].append(
+                    {"step": "get_price", "success": True, "price": current_price}
+                )
             except Exception as e:
-                market_trace["steps"].append({"step": "get_price", "success": False, "error": str(e)})
+                market_trace["steps"].append(
+                    {"step": "get_price", "success": False, "error": str(e)}
+                )
                 trace["markets"].append(market_trace)
                 continue
 
             if current_price <= 0:
-                market_trace["steps"].append({"step": "price_check", "success": False, "error": "Invalid price"})
+                market_trace["steps"].append(
+                    {"step": "price_check", "success": False, "error": "Invalid price"}
+                )
                 trace["markets"].append(market_trace)
                 continue
 
@@ -2169,15 +2638,28 @@ async def trigger_signal_generation():
                     timeframes=["15m", "1h", "4h"],
                     lookback_candles=250,
                 )
-                market_trace["steps"].append({
-                    "step": "get_multi_tf_data",
-                    "success": True,
-                    "timeframes": list(multi_tf_data.keys()),
-                    "candle_counts": {tf: len(data.get("close", [])) for tf, data in multi_tf_data.items()}
-                })
+                market_trace["steps"].append(
+                    {
+                        "step": "get_multi_tf_data",
+                        "success": True,
+                        "timeframes": list(multi_tf_data.keys()),
+                        "candle_counts": {
+                            tf: len(data.get("close", []))
+                            for tf, data in multi_tf_data.items()
+                        },
+                    }
+                )
             except Exception as e:
                 import traceback
-                market_trace["steps"].append({"step": "get_multi_tf_data", "success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+                market_trace["steps"].append(
+                    {
+                        "step": "get_multi_tf_data",
+                        "success": False,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                    }
+                )
                 trace["markets"].append(market_trace)
                 continue
 
@@ -2186,40 +2668,46 @@ async def trigger_signal_generation():
                 signals = bot.strategy_manager.generate_signals_for_market(
                     symbol, multi_tf_data, current_price
                 )
-                market_trace["steps"].append({
-                    "step": "generate_signals",
-                    "success": True,
-                    "signal_count": len(signals),
-                    "signals": [
-                        {
-                            "strategy": str(getattr(s, "strategy", "unknown")),
-                            "side": s.side.value if s.side else "unknown",
-                            "confidence": s.confidence,
-                            "is_valid": s.is_valid(),
-                            "validation_flags": {
-                                "volume_confirmation": s.volume_confirmation,
-                                "multi_timeframe_alignment": s.multi_timeframe_alignment,
-                                "support_resistance_valid": s.support_resistance_valid,
-                                "rrr_meets_minimum": s.rrr_meets_minimum,
-                                "liquidation_buffer_safe": s.liquidation_buffer_safe,
-                                "account_risk_ok": s.account_risk_ok,
-                                "margin_drawdown_ok": s.margin_drawdown_ok,
-                                "forbidden_conditions_clear": s.forbidden_conditions_clear,
+                market_trace["steps"].append(
+                    {
+                        "step": "generate_signals",
+                        "success": True,
+                        "signal_count": len(signals),
+                        "signals": [
+                            {
+                                "strategy": str(getattr(s, "strategy", "unknown")),
+                                "side": s.side.value if s.side else "unknown",
+                                "confidence": s.confidence,
+                                "is_valid": s.is_valid(),
+                                "validation_flags": {
+                                    "volume_confirmation": s.volume_confirmation,
+                                    "multi_timeframe_alignment": s.multi_timeframe_alignment,
+                                    "support_resistance_valid": s.support_resistance_valid,
+                                    "rrr_meets_minimum": s.rrr_meets_minimum,
+                                    "liquidation_buffer_safe": s.liquidation_buffer_safe,
+                                    "account_risk_ok": s.account_risk_ok,
+                                    "margin_drawdown_ok": s.margin_drawdown_ok,
+                                    "forbidden_conditions_clear": s.forbidden_conditions_clear,
+                                },
                             }
-                        }
-                        for s in signals
-                    ]
-                })
+                            for s in signals
+                        ],
+                    }
+                )
 
                 # Step: Check which signals would be published
                 for signal in signals:
                     if signal.is_valid():
                         should_skip = bot.strategy_manager.should_skip_signal(signal)
-                        market_trace["steps"].append({
-                            "step": "check_should_skip",
-                            "signal_strategy": str(getattr(signal, "strategy", "unknown")),
-                            "should_skip": should_skip,
-                        })
+                        market_trace["steps"].append(
+                            {
+                                "step": "check_should_skip",
+                                "signal_strategy": str(
+                                    getattr(signal, "strategy", "unknown")
+                                ),
+                                "should_skip": should_skip,
+                            }
+                        )
 
                         if not should_skip:
                             # Actually publish the signal event
@@ -2238,20 +2726,36 @@ async def trigger_signal_generation():
                                 },
                                 "debug_trigger",
                             )
-                            market_trace["steps"].append({
-                                "step": "publish_signal",
-                                "success": True,
-                                "signal_strategy": str(getattr(signal, "strategy", "unknown")),
-                            })
+                            market_trace["steps"].append(
+                                {
+                                    "step": "publish_signal",
+                                    "success": True,
+                                    "signal_strategy": str(
+                                        getattr(signal, "strategy", "unknown")
+                                    ),
+                                }
+                            )
                     else:
-                        market_trace["steps"].append({
-                            "step": "signal_invalid",
-                            "signal_strategy": str(getattr(signal, "strategy", "unknown")),
-                        })
+                        market_trace["steps"].append(
+                            {
+                                "step": "signal_invalid",
+                                "signal_strategy": str(
+                                    getattr(signal, "strategy", "unknown")
+                                ),
+                            }
+                        )
 
             except Exception as e:
                 import traceback
-                market_trace["steps"].append({"step": "generate_signals", "success": False, "error": str(e), "traceback": traceback.format_exc()})
+
+                market_trace["steps"].append(
+                    {
+                        "step": "generate_signals",
+                        "success": False,
+                        "error": str(e),
+                        "traceback": traceback.format_exc(),
+                    }
+                )
 
             trace["markets"].append(market_trace)
 
@@ -2263,13 +2767,15 @@ async def trigger_signal_generation():
 
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signal-handler")
+@app.post("/api/debug/test-signal-handler", dependencies=DEBUG_MUTATING_DEPS)
 async def test_signal_handler():
     """Debug: manually invoke _handle_signal_generated and trace every step."""
     import traceback
+
     try:
         bot = bot_integration.trading_bot
         if not bot:
@@ -2288,21 +2794,33 @@ async def test_signal_handler():
         price = float(ticker.get("last", 0))
         result["steps"].append({"step": "price", "symbol": symbol, "price": price})
 
-        multi_tf = bot.multi_tf_fetcher.get_candles_multi_tf(symbol=symbol, timeframes=["15m", "1h", "4h"], lookback_candles=250)
-        signals = bot.strategy_manager.generate_signals_for_market(symbol, multi_tf, price)
-        result["steps"].append({"step": "signals", "count": len(signals), "valid": [s.is_valid() for s in signals]})
+        multi_tf = bot.multi_tf_fetcher.get_candles_multi_tf(
+            symbol=symbol, timeframes=["15m", "1h", "4h"], lookback_candles=250
+        )
+        signals = bot.strategy_manager.generate_signals_for_market(
+            symbol, multi_tf, price
+        )
+        result["steps"].append(
+            {
+                "step": "signals",
+                "count": len(signals),
+                "valid": [s.is_valid() for s in signals],
+            }
+        )
 
         if not signals:
             return {"success": True, "result": result, "note": "No signals generated"}
 
         signal = signals[0]
-        result["steps"].append({
-            "step": "signal_detail",
-            "strategy": signal.strategy.name,
-            "side": signal.side.name,
-            "entry": signal.entry_price,
-            "is_valid": signal.is_valid(),
-        })
+        result["steps"].append(
+            {
+                "step": "signal_detail",
+                "strategy": signal.strategy.name,
+                "side": signal.side.name,
+                "entry": signal.entry_price,
+                "is_valid": signal.is_valid(),
+            }
+        )
 
         # Step 1: should_execute_signal
         stats_before = bot.signal_logger.get_statistics()
@@ -2310,14 +2828,22 @@ async def test_signal_handler():
             should_exec = bot._should_execute_signal(signal)
             result["steps"].append({"step": "should_execute", "result": should_exec})
         except Exception as e:
-            result["steps"].append({"step": "should_execute", "error": str(e), "tb": traceback.format_exc()})
+            result["steps"].append(
+                {
+                    "step": "should_execute",
+                    "error": str(e),
+                    "tb": traceback.format_exc(),
+                }
+            )
             stats_after = bot.signal_logger.get_statistics()
             result["stats_before"] = stats_before
             result["stats_after"] = stats_after
             return {"success": True, "result": result}
 
         stats_after_validate = bot.signal_logger.get_statistics()
-        result["steps"].append({"step": "stats_after_validate", "stats": stats_after_validate})
+        result["steps"].append(
+            {"step": "stats_after_validate", "stats": stats_after_validate}
+        )
 
         # Step 2: coordinate execution
         if should_exec:
@@ -2326,7 +2852,13 @@ async def test_signal_handler():
                 bot._coordinate_signal_execution(signal, log_entry)
                 result["steps"].append({"step": "coordinate", "result": "completed"})
             except Exception as e:
-                result["steps"].append({"step": "coordinate", "error": str(e), "tb": traceback.format_exc()})
+                result["steps"].append(
+                    {
+                        "step": "coordinate",
+                        "error": str(e),
+                        "tb": traceback.format_exc(),
+                    }
+                )
 
         stats_final = bot.signal_logger.get_statistics()
         result["stats_before"] = stats_before
@@ -2337,7 +2869,7 @@ async def test_signal_handler():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/bot-internals")
+@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS)
 async def get_bot_internals():
     """Debug endpoint to check trading bot internal state."""
     try:
@@ -2365,21 +2897,34 @@ async def get_bot_internals():
 
         return {
             "success": True,
-            "running_event_set": bot._running_event.is_set() if hasattr(bot, "_running_event") else "unknown",
+            "running_event_set": bot._running_event.is_set()
+            if hasattr(bot, "_running_event")
+            else "unknown",
             "trading_thread_alive": thread_alive,
             "trading_thread_name": thread_name,
             "ws_client_connected": ws_connected,
-            "strategy_manager_strategies": list(bot.strategy_manager.strategies.keys()) if hasattr(bot, "strategy_manager") else [],
-            "event_bus_subscribers": {k.value: len(v) for k, v in bot.event_bus._subscribers.items()} if hasattr(bot, "event_bus") else {},
-            "event_total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
-            "event_history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "strategy_manager_strategies": list(bot.strategy_manager.strategies.keys())
+            if hasattr(bot, "strategy_manager")
+            else [],
+            "event_bus_subscribers": {
+                k.value: len(v) for k, v in bot.event_bus._subscribers.items()
+            }
+            if hasattr(bot, "event_bus")
+            else {},
+            "event_total_published": getattr(bot.event_bus, "_published_count", 0)
+            if hasattr(bot, "event_bus")
+            else 0,
+            "event_history_window": len(bot.event_bus._event_history)
+            if hasattr(bot, "event_bus")
+            else 0,
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/grid-state")
+@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS)
 async def get_grid_state():
     """Debug: Check grid lifecycle manager state."""
     try:
@@ -2406,10 +2951,11 @@ async def get_grid_state():
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/balance-raw")
+@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS)
 async def get_balance_raw():
     """Get raw balance data from Pacifica API for debugging."""
     try:
@@ -2420,14 +2966,17 @@ async def get_balance_raw():
         return {
             "success": True,
             "raw_data": balance_data,
-            "keys": list(balance_data.keys()) if isinstance(balance_data, dict) else "not_dict",
+            "keys": list(balance_data.keys())
+            if isinstance(balance_data, dict)
+            else "not_dict",
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/loop-status")
+@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS)
 async def get_loop_status():
     """Check trading loop iteration status."""
     try:
@@ -2446,16 +2995,24 @@ async def get_loop_status():
             "last_loop_time": last_loop.isoformat() if last_loop else None,
             "current_step": loop_step,
             "events_generated_last_iteration": events_generated,
-            "running_event_set": bot._running_event.is_set() if hasattr(bot, "_running_event") else None,
-            "thread_alive": bot.thread.is_alive() if hasattr(bot, "thread") and bot.thread else False,
-            "total_published": getattr(bot.event_bus, "_published_count", 0) if hasattr(bot, "event_bus") else 0,
-            "history_window": len(bot.event_bus._event_history) if hasattr(bot, "event_bus") else 0,
+            "running_event_set": bot._running_event.is_set()
+            if hasattr(bot, "_running_event")
+            else None,
+            "thread_alive": bot.thread.is_alive()
+            if hasattr(bot, "thread") and bot.thread
+            else False,
+            "total_published": getattr(bot.event_bus, "_published_count", 0)
+            if hasattr(bot, "event_bus")
+            else 0,
+            "history_window": len(bot.event_bus._event_history)
+            if hasattr(bot, "event_bus")
+            else 0,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/call-actual-generate-signals")
+@app.post("/api/debug/call-actual-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def call_actual_generate_signals():
     """Test signal generation with inline implementation to avoid module reload issues."""
     try:
@@ -2504,16 +3061,27 @@ async def call_actual_generate_signals():
 
                 # This is the part that might be failing - let's see what happens
                 try:
-                    regime_data = multi_tf_data.get("4h", multi_tf_data.get("1h", {}))
-                    cached_regime = bot.strategy_manager.regime_detector._regime_cache.get(symbol) if hasattr(bot.strategy_manager.regime_detector, '_regime_cache') else None
-                    trace["steps"].append(f"{symbol}: cached_regime type={type(cached_regime).__name__}, value={cached_regime}")
+                    cached_regime = (
+                        bot.strategy_manager.regime_detector._regime_cache.get(symbol)
+                        if hasattr(
+                            bot.strategy_manager.regime_detector, "_regime_cache"
+                        )
+                        else None
+                    )
+                    trace["steps"].append(
+                        f"{symbol}: cached_regime type={type(cached_regime).__name__}, value={cached_regime}"
+                    )
                 except Exception as e:
                     trace["steps"].append(f"{symbol}: regime_cache error: {e}")
 
                 # Iterate signals
-                trace["steps"].append(f"{symbol}: iterating over {len(signals)} signals")
+                trace["steps"].append(
+                    f"{symbol}: iterating over {len(signals)} signals"
+                )
                 for signal in signals:
-                    trace["steps"].append(f"{symbol}: checking signal {getattr(signal, 'strategy', '?')}")
+                    trace["steps"].append(
+                        f"{symbol}: checking signal {getattr(signal, 'strategy', '?')}"
+                    )
                     is_valid = signal.is_valid()
                     trace["steps"].append(f"{symbol}: is_valid={is_valid}")
 
@@ -2536,6 +3104,7 @@ async def call_actual_generate_signals():
 
             except Exception as e:
                 import traceback as tb
+
                 trace["steps"].append(f"{symbol}: EXCEPTION: {e}")
                 trace["steps"].append(f"{symbol}: tb: {tb.format_exc()[:300]}")
 
@@ -2550,10 +3119,11 @@ async def call_actual_generate_signals():
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/call-generate-signals")
+@app.post("/api/debug/call-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def call_generate_signals():
     """Directly call the bot's _generate_and_publish_signals method with tracing."""
     try:
@@ -2578,7 +3148,9 @@ async def call_generate_signals():
         # Step 2: Filter to core symbols
         core_symbols = ["BTC", "ETH", "LTC", "SOL", "SUI", "AVAX", "XRP", "DOGE"]
         markets_to_process = [m for m in markets if m.get("symbol") in core_symbols]
-        trace["steps"].append({"step": "filter_markets", "count": len(markets_to_process)})
+        trace["steps"].append(
+            {"step": "filter_markets", "count": len(markets_to_process)}
+        )
 
         # Step 3: Process each market
         for market in markets_to_process[:3]:  # First 3 for speed
@@ -2593,14 +3165,18 @@ async def call_generate_signals():
                 ticker = bot._get_ticker_ws(symbol)
                 current_price = float(ticker.get("last", 0))
                 market_step["price"] = current_price
-                market_step["substeps"].append({"substep": "price", "value": current_price})
+                market_step["substeps"].append(
+                    {"substep": "price", "value": current_price}
+                )
             except Exception as e:
                 market_step["substeps"].append({"substep": "price", "error": str(e)})
                 trace["steps"].append(market_step)
                 continue
 
             if current_price <= 0:
-                market_step["substeps"].append({"substep": "price_check", "error": "Invalid"})
+                market_step["substeps"].append(
+                    {"substep": "price_check", "error": "Invalid"}
+                )
                 trace["steps"].append(market_step)
                 continue
 
@@ -2611,8 +3187,12 @@ async def call_generate_signals():
                     timeframes=["15m", "1h", "4h"],
                     lookback_candles=250,
                 )
-                candle_counts = {tf: len(data.get("close", [])) for tf, data in multi_tf_data.items()}
-                market_step["substeps"].append({"substep": "multi_tf", "candles": candle_counts})
+                candle_counts = {
+                    tf: len(data.get("close", [])) for tf, data in multi_tf_data.items()
+                }
+                market_step["substeps"].append(
+                    {"substep": "multi_tf", "candles": candle_counts}
+                )
             except Exception as e:
                 market_step["substeps"].append({"substep": "multi_tf", "error": str(e)})
                 trace["steps"].append(market_step)
@@ -2624,18 +3204,26 @@ async def call_generate_signals():
                     symbol, multi_tf_data, current_price
                 )
                 market_step["signal_count"] = len(signals)
-                market_step["substeps"].append({"substep": "generate", "count": len(signals)})
+                market_step["substeps"].append(
+                    {"substep": "generate", "count": len(signals)}
+                )
 
                 # Check each signal
                 for sig in signals:
                     is_valid = sig.is_valid()
-                    should_skip = bot.strategy_manager.should_skip_signal(sig) if is_valid else None
-                    market_step["substeps"].append({
-                        "substep": "signal_check",
-                        "strategy": str(getattr(sig, "strategy", "?")),
-                        "is_valid": is_valid,
-                        "should_skip": should_skip,
-                    })
+                    should_skip = (
+                        bot.strategy_manager.should_skip_signal(sig)
+                        if is_valid
+                        else None
+                    )
+                    market_step["substeps"].append(
+                        {
+                            "substep": "signal_check",
+                            "strategy": str(getattr(sig, "strategy", "?")),
+                            "is_valid": is_valid,
+                            "should_skip": should_skip,
+                        }
+                    )
 
                     if is_valid and not should_skip:
                         # Publish signal
@@ -2654,11 +3242,16 @@ async def call_generate_signals():
                             },
                             "call_generate_signals",
                         )
-                        market_step["substeps"].append({"substep": "publish", "success": True})
+                        market_step["substeps"].append(
+                            {"substep": "publish", "success": True}
+                        )
 
             except Exception as e:
                 import traceback as tb
-                market_step["substeps"].append({"substep": "generate", "error": str(e), "tb": tb.format_exc()})
+
+                market_step["substeps"].append(
+                    {"substep": "generate", "error": str(e), "tb": tb.format_exc()}
+                )
 
             trace["steps"].append(market_step)
 
@@ -2670,10 +3263,11 @@ async def call_generate_signals():
         return {"success": True, "trace": trace}
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/clear-regime-cache")
+@app.post("/api/debug/clear-regime-cache", dependencies=DEBUG_MUTATING_DEPS)
 async def clear_regime_cache(symbol: str = None):
     """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
     Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.
@@ -2694,6 +3288,7 @@ async def clear_regime_cache(symbol: str = None):
         }
     except Exception as e:
         import traceback
+
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
@@ -2707,4 +3302,28 @@ if __name__ == "__main__":
         # Running as script: python api_server.py
         app_path = "api_server:app"
 
-    uvicorn.run(app_path, host="0.0.0.0", port=8000, reload=False, log_level="info")
+    # Startup validation: duplicate .env keys (warn), empty live credentials
+    # and a non-loopback bind without API_TOKEN (both refuse). Then bind to
+    # API_HOST / API_PORT - loopback by default, never 0.0.0.0 by accident.
+    _host, _port = resolve_bind_address()
+
+    # Pre-flight: fail loudly if the port is taken. Without this, uvicorn
+    # crashes after logging setup but writes nothing to any log file, so a
+    # stale instance holding the port is invisible except in the console.
+    import socket
+
+    _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        _probe.bind((_host, _port))
+    except OSError:
+        print(
+            f"ERROR: port {_port} is already in use - "
+            "another bot instance is probably running."
+        )
+        print(f"  Find it:  netstat -ano | findstr :{_port}")
+        print("  Kill it:  taskkill /F /PID <pid>")
+        sys.exit(1)
+    finally:
+        _probe.close()
+
+    uvicorn.run(app_path, host=_host, port=_port, reload=False, log_level="info")

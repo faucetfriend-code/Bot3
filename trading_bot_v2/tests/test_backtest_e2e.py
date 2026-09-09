@@ -49,9 +49,7 @@ def warning_log():
     from loguru import logger as loguru_logger
 
     messages = []
-    sink_id = loguru_logger.add(
-        lambda m: messages.append(str(m)), level="WARNING"
-    )
+    sink_id = loguru_logger.add(lambda m: messages.append(str(m)), level="WARNING")
     yield messages
     loguru_logger.remove(sink_id)
 

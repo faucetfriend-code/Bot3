@@ -46,8 +46,10 @@ class TestRegimeSizeMultipliers:
 
     def _base_size(self, rm, **kwargs):
         return rm.get_position_size(
-            _make_sizing_signal(), account_balance=100_000.0,
-            current_exposure=0.0, **kwargs,
+            _make_sizing_signal(),
+            account_balance=100_000.0,
+            current_exposure=0.0,
+            **kwargs,
         )
 
     def test_none_regime_is_neutral(self):
@@ -99,7 +101,9 @@ class TestRegimeSizeMultipliers:
         # Tiny balance keeps quantities below the 1.0 floor
         sig = _make_sizing_signal(entry_price=100.0, stop_loss=95.0)
         qty = rm.get_position_size(
-            sig, account_balance=10.0, current_exposure=0.0,
+            sig,
+            account_balance=10.0,
+            current_exposure=0.0,
             regime=MarketRegime.INDECISIVE,
         )
         assert qty >= 1.0
@@ -143,9 +147,7 @@ class TestRegimeConfidenceGate:
         sig = _make_gate_signal(confidence=0.32)
 
         # INDECISIVE threshold = 0.30 + 0.05 = 0.35 -> dropped
-        assert sm._apply_regime_confidence_gate(
-            [sig], MarketRegime.INDECISIVE
-        ) == []
+        assert sm._apply_regime_confidence_gate([sig], MarketRegime.INDECISIVE) == []
         # TRENDING_STRONG threshold = 0.30 + 0.0 -> kept
         assert sm._apply_regime_confidence_gate(
             [sig], MarketRegime.TRENDING_STRONG
@@ -155,20 +157,18 @@ class TestRegimeConfidenceGate:
         monkeypatch.setenv("MIN_SIGNAL_CONFIDENCE_FLOOR", "0.30")
         sm = _make_sm()
         sig = _make_gate_signal(confidence=0.33)
-        assert sm._apply_regime_confidence_gate(
-            [sig], MarketRegime.RANGING_VOLATILE
-        ) == []
-        assert sm._apply_regime_confidence_gate(
-            [sig], MarketRegime.RANGING_CALM
-        ) == [sig]
+        assert (
+            sm._apply_regime_confidence_gate([sig], MarketRegime.RANGING_VOLATILE) == []
+        )
+        assert sm._apply_regime_confidence_gate([sig], MarketRegime.RANGING_CALM) == [
+            sig
+        ]
 
     def test_default_floor_is_transparent_for_normal_signals(self):
         sm = _make_sm()
         # Default floor 0.0 + adj 0.05: normal confidences all pass
         sig = _make_gate_signal(confidence=0.45)
-        assert sm._apply_regime_confidence_gate(
-            [sig], MarketRegime.INDECISIVE
-        ) == [sig]
+        assert sm._apply_regime_confidence_gate([sig], MarketRegime.INDECISIVE) == [sig]
 
     def test_zero_threshold_short_circuits(self):
         sm = _make_sm()
@@ -183,18 +183,14 @@ class TestRegimeConfidenceGate:
         monkeypatch.setenv("REGIME_CONF_ADJ_INDECISIVE", "0.40")
         sm = _make_sm()
         sig = _make_gate_signal(confidence=0.35)
-        assert sm._apply_regime_confidence_gate(
-            [sig], MarketRegime.INDECISIVE
-        ) == []
+        assert sm._apply_regime_confidence_gate([sig], MarketRegime.INDECISIVE) == []
 
     def test_mixed_signals_partial_drop(self, monkeypatch):
         monkeypatch.setenv("MIN_SIGNAL_CONFIDENCE_FLOOR", "0.30")
         sm = _make_sm()
         low = _make_gate_signal(confidence=0.31)
         high = _make_gate_signal(confidence=0.80)
-        kept = sm._apply_regime_confidence_gate(
-            [low, high], MarketRegime.INDECISIVE
-        )
+        kept = sm._apply_regime_confidence_gate([low, high], MarketRegime.INDECISIVE)
         assert kept == [high]
 
 
@@ -342,9 +338,7 @@ class TestRegimePositionReview:
         # not propagate and must still process the second position.
         first = _open_trade(side="BUY", entry=1.0)
         second = dict(_open_trade(side="SELL", entry=1.0), id=2)
-        reviewer, db, mpm = _make_reviewer(
-            [first, second], trend="up", price=1.5
-        )
+        reviewer, db, mpm = _make_reviewer([first, second], trend="up", price=1.5)
         # First reviewed position is profitable long -> arm raises
         mpm.arm_trailing_stop.side_effect = [RuntimeError("boom"), True]
 

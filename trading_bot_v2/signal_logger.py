@@ -8,7 +8,6 @@ Features:
 """
 
 import csv
-import os
 import threading
 import time
 from datetime import datetime, timezone
@@ -68,12 +67,14 @@ class SignalLogger:
         # Initialize CSV with headers if it doesn't exist
         self._init_csv()
 
-        logger.info(f"SignalLogger initialized - CSV path: {self.csv_path}, dedup window: {self._dedup_window_seconds}s")
+        logger.info(
+            f"SignalLogger initialized - CSV path: {self.csv_path}, dedup window: {self._dedup_window_seconds}s"
+        )
 
     def _init_csv(self):
         """Initialize CSV file with headers if it doesn't exist."""
         if not self.csv_path.exists():
-            with open(self.csv_path, 'w', newline='', encoding='utf-8') as f:
+            with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(self._get_csv_headers())
             logger.info(f"Created new signals log CSV: {self.csv_path}")
@@ -104,9 +105,17 @@ class SignalLogger:
     def _generate_signal_id(self, signal) -> str:
         """Generate unique signal ID from key fields (excludes price for dedup)."""
         try:
-            symbol = getattr(signal, 'asset', str(signal))
-            strategy = getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else ""
-            side = getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else ""
+            symbol = getattr(signal, "asset", str(signal))
+            strategy = (
+                getattr(signal.strategy, "name", str(signal.strategy))
+                if hasattr(signal, "strategy")
+                else ""
+            )
+            side = (
+                getattr(signal.side, "name", str(signal.side))
+                if hasattr(signal, "side")
+                else ""
+            )
             return f"{symbol}:{strategy}:{side}"
         except Exception as e:
             logger.warning(f"Failed to generate signal ID: {e}")
@@ -129,7 +138,8 @@ class SignalLogger:
         """Remove signals outside the deduplication window."""
         cutoff_time = current_time - self._dedup_window_seconds
         old_signal_ids = [
-            signal_id for signal_id, timestamp in self._signal_timestamps.items()
+            signal_id
+            for signal_id, timestamp in self._signal_timestamps.items()
             if timestamp < cutoff_time
         ]
         for signal_id in old_signal_ids:
@@ -161,14 +171,20 @@ class SignalLogger:
 
         entry = {
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "symbol": getattr(signal, 'asset', str(signal)),
-            "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
-            "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
-            "entry_price": getattr(signal, 'entry_price', 0),
-            "stop_loss": getattr(signal, 'stop_loss', 0),
-            "take_profit": getattr(signal, 'take_profit', 0),
-            "confidence": getattr(signal, 'confidence', 0),
-            "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
+            "symbol": getattr(signal, "asset", str(signal)),
+            "strategy": getattr(signal.strategy, "name", str(signal.strategy))
+            if hasattr(signal, "strategy")
+            else "",
+            "side": getattr(signal.side, "name", str(signal.side))
+            if hasattr(signal, "side")
+            else "",
+            "entry_price": getattr(signal, "entry_price", 0),
+            "stop_loss": getattr(signal, "stop_loss", 0),
+            "take_profit": getattr(signal, "take_profit", 0),
+            "confidence": getattr(signal, "confidence", 0),
+            "quality": getattr(signal.quality, "name", str(signal.quality))
+            if hasattr(signal, "quality")
+            else "",
             "regime": regime,
             "status": "generated",
             "rejection_reason": "",
@@ -184,12 +200,14 @@ class SignalLogger:
         with self._lock:
             self._signal_log.append(entry)
             if len(self._signal_log) > self.max_memory_entries:
-                self._signal_log = self._signal_log[-self.max_memory_entries:]
+                self._signal_log = self._signal_log[-self.max_memory_entries :]
             self._pending[signal_id] = entry
 
         return entry
 
-    def _finalize_signal(self, signal, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    def _finalize_signal(
+        self, signal, updates: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
         """
         Update a pending 'generated' entry in-place with outcome data.
         Returns the entry if a pending match was found, None otherwise.
@@ -239,14 +257,20 @@ class SignalLogger:
         # No pending entry — pre-validation rejection, append as new row.
         entry = {
             "timestamp": updates["timestamp"],
-            "symbol": getattr(signal, 'asset', str(signal)),
-            "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
-            "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
-            "entry_price": getattr(signal, 'entry_price', 0),
-            "stop_loss": getattr(signal, 'stop_loss', 0),
-            "take_profit": getattr(signal, 'take_profit', 0),
-            "confidence": getattr(signal, 'confidence', 0),
-            "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
+            "symbol": getattr(signal, "asset", str(signal)),
+            "strategy": getattr(signal.strategy, "name", str(signal.strategy))
+            if hasattr(signal, "strategy")
+            else "",
+            "side": getattr(signal.side, "name", str(signal.side))
+            if hasattr(signal, "side")
+            else "",
+            "entry_price": getattr(signal, "entry_price", 0),
+            "stop_loss": getattr(signal, "stop_loss", 0),
+            "take_profit": getattr(signal, "take_profit", 0),
+            "confidence": getattr(signal, "confidence", 0),
+            "quality": getattr(signal.quality, "name", str(signal.quality))
+            if hasattr(signal, "quality")
+            else "",
             "regime": regime,
             "status": "rejected",
             "rejection_reason": reason,
@@ -259,6 +283,81 @@ class SignalLogger:
         }
         self._add_entry(entry)
         return entry
+
+    def log_signal_pending(
+        self,
+        signal,
+        client_order_id: str = "",
+        quantity: float = 0,
+        order_id: str = "",
+        regime: str = "",
+        notes: str = "",
+    ) -> Dict[str, Any]:
+        """
+        Persist a signal as PENDING while its order is in flight.
+
+        Unlike ``generated`` (memory only until the outcome) this writes a
+        CSV/DB row IMMEDIATELY so the client order id is durable BEFORE the
+        request is transmitted.  The entry stays pending in memory, so a
+        later ``log_signal_executed`` / ``log_signal_failed`` finalizes it.
+
+        Args:
+            signal: Signal object
+            client_order_id: Client order id sent with the order
+            quantity: Requested quantity
+            order_id: Exchange order id once known
+            regime: Current market regime
+            notes: Additional notes
+
+        Returns:
+            Snapshot of the pending entry
+        """
+        note = f"client_order_id={client_order_id}; requested_quantity={quantity}"
+        if notes:
+            note = f"{note}; {notes}"
+        updates = {
+            "status": "pending",
+            "execution_result": "submitted",
+            "order_id": str(order_id or ""),
+            "filled_price": "",
+            "filled_quantity": "",
+            "notes": note,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        if regime:
+            updates["regime"] = regime
+        signal_id = self._generate_signal_id(signal)
+        with self._lock:
+            entry = self._pending.get(signal_id)
+            if entry is None:
+                entry = {
+                    "symbol": getattr(signal, "asset", str(signal)),
+                    "strategy": getattr(signal.strategy, "name", str(signal.strategy))
+                    if hasattr(signal, "strategy")
+                    else "",
+                    "side": getattr(signal.side, "name", str(signal.side))
+                    if hasattr(signal, "side")
+                    else "",
+                    "entry_price": getattr(signal, "entry_price", 0),
+                    "stop_loss": getattr(signal, "stop_loss", 0),
+                    "take_profit": getattr(signal, "take_profit", 0),
+                    "confidence": getattr(signal, "confidence", 0),
+                    "quality": getattr(signal.quality, "name", str(signal.quality))
+                    if hasattr(signal, "quality")
+                    else "",
+                    "regime": regime,
+                    "rejection_reason": "",
+                    "pnl": "",
+                }
+                self._signal_log.append(entry)
+                if len(self._signal_log) > self.max_memory_entries:
+                    self._signal_log = self._signal_log[-self.max_memory_entries :]
+                self._pending[signal_id] = entry
+            entry.update(updates)
+            snapshot = dict(entry)
+        self._append_to_csv(snapshot)
+        self._save_to_database(snapshot)
+        return snapshot
 
     def log_signal_executed(
         self,
@@ -309,14 +408,20 @@ class SignalLogger:
 
         entry = {
             "timestamp": updates["timestamp"],
-            "symbol": getattr(signal, 'asset', str(signal)),
-            "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
-            "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
-            "entry_price": getattr(signal, 'entry_price', 0),
-            "stop_loss": getattr(signal, 'stop_loss', 0),
-            "take_profit": getattr(signal, 'take_profit', 0),
-            "confidence": getattr(signal, 'confidence', 0),
-            "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
+            "symbol": getattr(signal, "asset", str(signal)),
+            "strategy": getattr(signal.strategy, "name", str(signal.strategy))
+            if hasattr(signal, "strategy")
+            else "",
+            "side": getattr(signal.side, "name", str(signal.side))
+            if hasattr(signal, "side")
+            else "",
+            "entry_price": getattr(signal, "entry_price", 0),
+            "stop_loss": getattr(signal, "stop_loss", 0),
+            "take_profit": getattr(signal, "take_profit", 0),
+            "confidence": getattr(signal, "confidence", 0),
+            "quality": getattr(signal.quality, "name", str(signal.quality))
+            if hasattr(signal, "quality")
+            else "",
             "regime": regime,
             "status": status,
             "rejection_reason": "",
@@ -365,14 +470,20 @@ class SignalLogger:
 
         entry = {
             "timestamp": updates["timestamp"],
-            "symbol": getattr(signal, 'asset', str(signal)),
-            "strategy": getattr(signal.strategy, 'name', str(signal.strategy)) if hasattr(signal, 'strategy') else "",
-            "side": getattr(signal.side, 'name', str(signal.side)) if hasattr(signal, 'side') else "",
-            "entry_price": getattr(signal, 'entry_price', 0),
-            "stop_loss": getattr(signal, 'stop_loss', 0),
-            "take_profit": getattr(signal, 'take_profit', 0),
-            "confidence": getattr(signal, 'confidence', 0),
-            "quality": getattr(signal.quality, 'name', str(signal.quality)) if hasattr(signal, 'quality') else "",
+            "symbol": getattr(signal, "asset", str(signal)),
+            "strategy": getattr(signal.strategy, "name", str(signal.strategy))
+            if hasattr(signal, "strategy")
+            else "",
+            "side": getattr(signal.side, "name", str(signal.side))
+            if hasattr(signal, "side")
+            else "",
+            "entry_price": getattr(signal, "entry_price", 0),
+            "stop_loss": getattr(signal, "stop_loss", 0),
+            "take_profit": getattr(signal, "take_profit", 0),
+            "confidence": getattr(signal, "confidence", 0),
+            "quality": getattr(signal.quality, "name", str(signal.quality))
+            if hasattr(signal, "quality")
+            else "",
             "regime": regime,
             "status": "failed",
             "rejection_reason": "",
@@ -395,7 +506,7 @@ class SignalLogger:
 
             # Trim memory if needed
             if len(self._signal_log) > self.max_memory_entries:
-                self._signal_log = self._signal_log[-self.max_memory_entries:]
+                self._signal_log = self._signal_log[-self.max_memory_entries :]
 
             # Save to CSV
             self._append_to_csv(entry)
@@ -406,7 +517,7 @@ class SignalLogger:
     def _append_to_csv(self, entry: Dict[str, Any]):
         """Append entry to CSV file."""
         try:
-            with open(self.csv_path, 'a', newline='', encoding='utf-8') as f:
+            with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 row = [entry.get(h, "") for h in self._get_csv_headers()]
                 writer.writerow(row)
@@ -421,15 +532,48 @@ class SignalLogger:
         try:
             # Defensive: Ensure all keys exist to prevent KeyError
             safe_entry = entry.copy()
-            for key in ["symbol", "asset_class", "strategy", "signal_type", "confidence",
-                       "side", "entry_price", "stop_loss", "take_profit", "quality",
-                       "regime", "status", "rejection_reason", "notes", "timestamp"]:
-                safe_entry.setdefault(key, "" if key in ["symbol", "asset_class", "strategy", "signal_type", "side", "quality", "regime", "status", "rejection_reason", "notes"] else 0)
+            for key in [
+                "symbol",
+                "asset_class",
+                "strategy",
+                "signal_type",
+                "confidence",
+                "side",
+                "entry_price",
+                "stop_loss",
+                "take_profit",
+                "quality",
+                "regime",
+                "status",
+                "rejection_reason",
+                "notes",
+                "timestamp",
+            ]:
+                safe_entry.setdefault(
+                    key,
+                    ""
+                    if key
+                    in [
+                        "symbol",
+                        "asset_class",
+                        "strategy",
+                        "signal_type",
+                        "side",
+                        "quality",
+                        "regime",
+                        "status",
+                        "rejection_reason",
+                        "notes",
+                    ]
+                    else 0,
+                )
 
             signal_data = {
                 "symbol": safe_entry.get("symbol", ""),
                 "asset_class": safe_entry.get("asset_class", "perpetual"),
-                "signal_type": safe_entry.get("strategy", safe_entry.get("signal_type", "unknown")),
+                "signal_type": safe_entry.get(
+                    "strategy", safe_entry.get("signal_type", "unknown")
+                ),
                 "strength": safe_entry.get("confidence", 0),
                 "indicators": {
                     "side": safe_entry.get("side", ""),

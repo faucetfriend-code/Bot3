@@ -3,9 +3,8 @@ Technical indicators module for trading bot.
 Provides calculations for various technical analysis indicators.
 """
 
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 import math
-from loguru import logger
 
 
 def calculate_sma(prices: List[float], period: int) -> float:
@@ -284,6 +283,172 @@ def calculate_volume_ma(volumes: List[float], period: int = 20) -> float:
         raise ValueError("Period must be positive")
 
     return sum(volumes[-period:]) / period
+
+
+def calculate_obv(closes: List[float], volumes: List[float]) -> List[float]:
+    """
+    Calculate On-Balance Volume series.
+
+    OBV adds the bar's volume when the close rises and subtracts it when
+    the close falls. The absolute level is arbitrary (it depends on where
+    the window starts), so the full series is returned rather than a
+    scalar - only its slope/divergence against price carries information.
+
+    Args:
+        closes: List of close prices
+        volumes: List of volume values (same length as closes)
+
+    Returns:
+        OBV series, same length as the inputs. First value is 0.0.
+
+    Raises:
+        ValueError: If lengths differ or fewer than 2 bars supplied
+    """
+    if len(closes) != len(volumes):
+        raise ValueError("Close and volume arrays must have the same length")
+
+    if len(closes) < 2:
+        raise ValueError(
+            f"Insufficient data for OBV calculation. Need 2+ bars, got {len(closes)}"
+        )
+
+    obv = [0.0]
+    for i in range(1, len(closes)):
+        if closes[i] > closes[i - 1]:
+            obv.append(obv[-1] + volumes[i])
+        elif closes[i] < closes[i - 1]:
+            obv.append(obv[-1] - volumes[i])
+        else:
+            obv.append(obv[-1])
+    return obv
+
+
+def calculate_supertrend(
+    highs: List[float],
+    lows: List[float],
+    closes: List[float],
+    period: int = 10,
+    multiplier: float = 3.0,
+) -> Tuple[float, str]:
+    """
+    Calculate SuperTrend value and direction for the latest bar.
+
+    SuperTrend places an ATR-scaled band on the side of price opposite
+    the prevailing trend and flips when price closes through it. Uses
+    the standard band-ratchet: in an uptrend the lower band may only
+    rise, in a downtrend the upper band may only fall.
+
+    Args:
+        highs: List of high prices
+        lows: List of low prices
+        closes: List of close prices
+        period: ATR period (default: 10)
+        multiplier: ATR multiplier for band width (default: 3.0)
+
+    Returns:
+        Tuple of (supertrend_value, direction) where direction is
+        "up" (price above the line) or "down" (price below the line)
+
+    Raises:
+        ValueError: If data arrays have different lengths or insufficient data
+    """
+    if len(highs) != len(lows) or len(highs) != len(closes):
+        raise ValueError("High, low, and close arrays must have the same length")
+
+    if len(highs) < period + 2:
+        raise ValueError(
+            f"Insufficient data for SuperTrend. Need {period + 2} bars, got {len(highs)}"
+        )
+
+    if period <= 0 or multiplier <= 0:
+        raise ValueError("Period and multiplier must be positive")
+
+    # Per-bar true range, then SMA-smoothed ATR (matches calculate_atr's
+    # smoothing choice for consistency within this module)
+    true_ranges = []
+    for i in range(1, len(highs)):
+        tr = max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        )
+        true_ranges.append(tr)
+
+    supertrend = 0.0
+    direction = "up"
+    final_upper = 0.0
+    final_lower = 0.0
+
+    # Walk forward from the first bar with a full ATR window
+    for i in range(period, len(highs)):
+        atr = sum(true_ranges[i - period : i]) / period
+        mid = (highs[i] + lows[i]) / 2.0
+        basic_upper = mid + multiplier * atr
+        basic_lower = mid - multiplier * atr
+
+        if i == period:
+            final_upper, final_lower = basic_upper, basic_lower
+            direction = "up" if closes[i] >= mid else "down"
+        else:
+            # Band ratchet: bands only tighten with the trend, and reset
+            # when the prior close already crossed them
+            if basic_upper < final_upper or closes[i - 1] > final_upper:
+                final_upper = basic_upper
+            if basic_lower > final_lower or closes[i - 1] < final_lower:
+                final_lower = basic_lower
+
+            if direction == "up" and closes[i] < final_lower:
+                direction = "down"
+            elif direction == "down" and closes[i] > final_upper:
+                direction = "up"
+
+        supertrend = final_lower if direction == "up" else final_upper
+
+    return supertrend, direction
+
+
+def calculate_relative_volume(volumes: List[float], window: int = 96) -> float:
+    """
+    Calculate relative volume: current bar volume vs trailing median.
+
+    Measured on BTC 15m (docs/VWAP-SIGNAL-STUDY.md): VWAP deviations on
+    rvol < 1.5 revert (+10-12 bp at 4h) while deviations on rvol >= 1.5
+    continue (~0 bp). The trailing MEDIAN is used, not the mean, so
+    single volume spikes inside the window do not suppress the ratio for
+    the next `window` bars.
+
+    Args:
+        volumes: List of volume values, most recent last
+        window: Trailing bars for the median, excluding the current bar
+            (default: 96 = one day of 15m bars)
+
+    Returns:
+        current_volume / trailing_median_volume, or 0.0 when the
+        trailing median is zero (dead market - carries no information)
+
+    Raises:
+        ValueError: If insufficient data or invalid window
+    """
+    if window <= 0:
+        raise ValueError("Window must be positive")
+
+    if len(volumes) < window + 1:
+        raise ValueError(
+            f"Insufficient data for relative volume. Need {window + 1} bars, "
+            f"got {len(volumes)}"
+        )
+
+    trailing = sorted(volumes[-(window + 1) : -1])
+    mid = window // 2
+    if window % 2 == 1:
+        median = trailing[mid]
+    else:
+        median = (trailing[mid - 1] + trailing[mid]) / 2.0
+
+    if median <= 0:
+        return 0.0
+
+    return volumes[-1] / median
 
 
 def calculate_adx(

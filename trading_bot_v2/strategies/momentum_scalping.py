@@ -67,7 +67,7 @@ def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
     if len(prices) < period + 1:
         return []
 
-    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    deltas = [prices[i] - prices[i - 1] for i in range(1, len(prices))]
 
     gains = [d if d > 0 else 0 for d in deltas]
     losses = [-d if d < 0 else 0 for d in deltas]
@@ -102,7 +102,7 @@ def calculate_macd(
     prices: List[float],
     fast_period: int = 12,
     slow_period: int = 26,
-    signal_period: int = 9
+    signal_period: int = 9,
 ) -> tuple:
     """Calculate MACD line, signal line, and histogram."""
     if len(prices) < slow_period + signal_period:
@@ -132,10 +132,7 @@ def calculate_macd(
 
 
 def calculate_atr(
-    highs: List[float],
-    lows: List[float],
-    closes: List[float],
-    period: int = 14
+    highs: List[float], lows: List[float], closes: List[float], period: int = 14
 ) -> List[float]:
     """Calculate Average True Range."""
     if len(highs) < period + 1:
@@ -144,8 +141,8 @@ def calculate_atr(
     true_ranges = []
     for i in range(1, len(highs)):
         high_low = highs[i] - lows[i]
-        high_close = abs(highs[i] - closes[i-1])
-        low_close = abs(lows[i] - closes[i-1])
+        high_close = abs(highs[i] - closes[i - 1])
+        low_close = abs(lows[i] - closes[i - 1])
         true_ranges.append(max(high_low, high_close, low_close))
 
     atr = []
@@ -180,19 +177,19 @@ class MomentumScalpingStrategy:
         ema_fast: int = 9,
         ema_slow: int = 21,
         rsi_period: int = 14,
-        rsi_upper: float = 65.0,          # RSI ceiling (avoid overbought entries)
-        rsi_lower: float = 35.0,          # RSI floor (avoid oversold entries)
+        rsi_upper: float = 65.0,  # RSI ceiling (avoid overbought entries)
+        rsi_lower: float = 35.0,  # RSI floor (avoid oversold entries)
         macd_fast: int = 12,
         macd_slow: int = 26,
         macd_signal: int = 9,
         atr_period: int = 14,
-        atr_stop_mult: float = 1.5,       # SL = 1.5x ATR
-        atr_target_mult: float = 2.5,     # TP = 2.5x ATR
-        volume_threshold: float = 1.2,    # Min 1.2x average volume
+        atr_stop_mult: float = 1.5,  # SL = 1.5x ATR
+        atr_target_mult: float = 2.5,  # TP = 2.5x ATR
+        volume_threshold: float = 1.2,  # Min 1.2x average volume
         min_confidence: float = 0.55,
         cooldown_minutes: int = 5,  # Match strategy_manager default
-        min_atr_pct: float = 0.0,   # Min ATR as % of price (0 = disabled); filters low-vol candles
-        min_rrr: float = 1.5,       # Minimum reward/risk for rrr_meets_minimum
+        min_atr_pct: float = 0.0,  # Min ATR as % of price (0 = disabled); filters low-vol candles
+        min_rrr: float = 1.5,  # Minimum reward/risk for rrr_meets_minimum
     ):
         """
         Initialize MomentumScalpingStrategy.
@@ -227,9 +224,7 @@ class MomentumScalpingStrategy:
         if self.atr_stop_mult > 0:
             implied_rrr = self.atr_target_mult / self.atr_stop_mult
             if implied_rrr < self.min_rrr:
-                repaired_target = (
-                    self.atr_stop_mult * self.min_rrr * _RRR_REPAIR_MARGIN
-                )
+                repaired_target = self.atr_stop_mult * self.min_rrr * _RRR_REPAIR_MARGIN
                 logger.warning(
                     f"MomentumScalping: atr_stop={self.atr_stop_mult}x / "
                     f"atr_target={self.atr_target_mult}x implies RRR "
@@ -259,7 +254,9 @@ class MomentumScalpingStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _check_cooldown(self, symbol: str) -> bool:
         """Check if cooldown period has passed since last trade."""
@@ -268,13 +265,13 @@ class MomentumScalpingStrategy:
         elapsed = self._now() - self.last_trade_time[symbol]
         if elapsed <= timedelta(minutes=self.cooldown_minutes):
             remaining = self.cooldown_minutes - (elapsed.total_seconds() / 60)
-            logger.debug(f"{symbol}: Momentum scalping cooldown {remaining:.1f}min remaining")
+            logger.debug(
+                f"{symbol}: Momentum scalping cooldown {remaining:.1f}min remaining"
+            )
             return False
         return True
 
-    def _detect_ema_crossover(
-        self, closes: List[float], symbol: str
-    ) -> Optional[str]:
+    def _detect_ema_crossover(self, closes: List[float], symbol: str) -> Optional[str]:
         """
         Detect EMA crossover and return direction.
 
@@ -355,9 +352,7 @@ class MomentumScalpingStrategy:
             result["rsi_ok"] = self.rsi_lower < rsi_now < 50
 
         # MACD check
-        macd_line, signal_line, histogram = calculate_macd(
-            closes, *self.macd_params
-        )
+        macd_line, signal_line, histogram = calculate_macd(closes, *self.macd_params)
         if len(histogram) < 3:
             return result
 
@@ -387,9 +382,7 @@ class MomentumScalpingStrategy:
 
         return result
 
-    def _check_4h_trend_alignment(
-        self, closes_4h: List[float], direction: str
-    ) -> bool:
+    def _check_4h_trend_alignment(self, closes_4h: List[float], direction: str) -> bool:
         """
         4h HTF trend filter — highest-priority trend gate.
 
@@ -411,11 +404,7 @@ class MomentumScalpingStrategy:
         return bullish_4h if direction == "bullish" else not bullish_4h
 
     def generate_signals(
-        self,
-        symbol: str,
-        multi_tf_data: Dict[str, Any],
-        current_price: float,
-        **kwargs
+        self, symbol: str, multi_tf_data: Dict[str, Any], current_price: float, **kwargs
     ) -> List[Signal]:
         """
         Generate momentum scalping signals.
@@ -443,14 +432,16 @@ class MomentumScalpingStrategy:
         lows_1h = df_1h.get("low", [])
 
         if len(closes_1h) < self.ema_slow + 10:
-            logger.debug(f"{symbol}: Insufficient 1h data for momentum scalping ({len(closes_1h)} candles)")
+            logger.debug(
+                f"{symbol}: Insufficient 1h data for momentum scalping ({len(closes_1h)} candles)"
+            )
             return signals
 
         # Convert to lists if needed
-        closes_1h = list(closes_1h) if hasattr(closes_1h, '__iter__') else closes_1h
-        volumes_1h = list(volumes_1h) if hasattr(volumes_1h, '__iter__') else volumes_1h
-        highs_1h = list(highs_1h) if hasattr(highs_1h, '__iter__') else highs_1h
-        lows_1h = list(lows_1h) if hasattr(lows_1h, '__iter__') else lows_1h
+        closes_1h = list(closes_1h) if hasattr(closes_1h, "__iter__") else closes_1h
+        volumes_1h = list(volumes_1h) if hasattr(volumes_1h, "__iter__") else volumes_1h
+        highs_1h = list(highs_1h) if hasattr(highs_1h, "__iter__") else highs_1h
+        lows_1h = list(lows_1h) if hasattr(lows_1h, "__iter__") else lows_1h
 
         # Detect crossover on 1h bars
         crossover = self._detect_ema_crossover(closes_1h, symbol)
@@ -462,7 +453,9 @@ class MomentumScalpingStrategy:
                 "time": self._now(),
                 "price": current_price,
             }
-            logger.debug(f"{symbol}: EMA {self.ema_fast}/{self.ema_slow} (1h) crossover detected - {crossover}")
+            logger.debug(
+                f"{symbol}: EMA {self.ema_fast}/{self.ema_slow} (1h) crossover detected - {crossover}"
+            )
 
         # Check if we have a recent crossover to act on
         if symbol not in self.last_crossover:
@@ -494,9 +487,11 @@ class MomentumScalpingStrategy:
         df_4h = multi_tf_data.get("4h", {})
         if df_4h:
             closes_4h = df_4h.get("close", [])
-            closes_4h = list(closes_4h) if hasattr(closes_4h, '__iter__') else closes_4h
+            closes_4h = list(closes_4h) if hasattr(closes_4h, "__iter__") else closes_4h
             if closes_4h and not self._check_4h_trend_alignment(closes_4h, direction):
-                logger.debug(f"{symbol}: 4h trend not aligned with {direction} signal — blocked")
+                logger.debug(
+                    f"{symbol}: 4h trend not aligned with {direction} signal — blocked"
+                )
                 return signals
 
         # Calculate ATR for stops/targets on 1h bars
@@ -561,7 +556,9 @@ class MomentumScalpingStrategy:
             stop_loss=stop_loss,
             take_profit=take_profit,
             confidence=confidence,
-            quality=TradeQuality.HIGH_CONVICTION if confidence > 0.75 else TradeQuality.STANDARD,
+            quality=TradeQuality.HIGH_CONVICTION
+            if confidence > 0.75
+            else TradeQuality.STANDARD,
             timeframe="1h",
             market_state=MarketState.TREND,
             notes=(

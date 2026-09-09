@@ -28,9 +28,8 @@ SCOPE - THIS MODULE IS LIVE-ONLY:
     engine. ``test_execution_layer_no_hard_block`` pins this.
 """
 
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
-from datetime import datetime
 from loguru import logger
 
 from .models import Signal, OrderSide

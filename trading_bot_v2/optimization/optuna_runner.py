@@ -21,12 +21,13 @@ import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Tuple
+from typing import Dict, Any, Optional, List, Sequence, Tuple
 from datetime import datetime
 from loguru import logger
 
 try:
     import optuna
+
     OPTUNA_AVAILABLE = True
 except ImportError:
     OPTUNA_AVAILABLE = False
@@ -55,12 +56,24 @@ from ..diagnostics.outcomes import (
     score_for_outcome,
     suggest_fix,
 )
+from .seeding import derive_seed
 from ..regime_param_overlay import normalize_regime_value
 from ..validation.statistics import closed_trade_returns
 
 
 # Default database path
 DEFAULT_DB_PATH = "optimization_studies.db"
+
+#: Version tag mixed into every per-study sampler seed (see
+#: ``study_seed``). It exists so a future change to the derivation is an
+#: explicit, greppable version bump rather than a silent shift in every
+#: study's opening draw.
+STUDY_SEED_NAMESPACE = "optuna-study-seed/v1"
+
+#: Default run-level seed for OptunaRunner. Every study's sampler seed
+#: is derived from this plus the study's identity; moving it moves every
+#: study together, which is the deliberate-reproduction knob.
+DEFAULT_BASE_SEED = 0
 
 # Version of the trial-scoring scheme. Stored on every study as the
 # "scoring_schema" user attr; resuming a study written under a different
@@ -112,6 +125,92 @@ def regime_opt_min_trades() -> int:
     except Exception as e:  # noqa: BLE001 - never block a run on this
         logger.debug(f"Derived regime min-trades unavailable: {e}")
     return DEFAULT_REGIME_OPT_MIN_TRADES
+
+
+def canonical_windows(
+    windows: Optional[Sequence[Sequence[str]]],
+) -> List[str]:
+    """Canonicalise a window series for seed derivation.
+
+    Sorted, so the same set of windows supplied in a different order
+    cannot change the seed - a window series is a set of periods, not an
+    ordered experiment.
+
+    Args:
+        windows: (start, end) ISO pairs, or None when the search has no
+            window (nothing is contributed then).
+
+    Returns:
+        Sorted ``"start..end"`` strings.
+    """
+    if not windows:
+        return []
+    return sorted(f"{w[0]}..{w[1]}" for w in windows)
+
+
+def study_seed(
+    base_seed: int,
+    strategy: str,
+    symbols: Sequence[str],
+    regime: Optional[str],
+    objective: str,
+    windows: Optional[Sequence[Sequence[str]]] = None,
+) -> int:
+    """Derive a study's Optuna sampler seed from the study's IDENTITY.
+
+    Until 2026-08-02 ``_build_sampler`` hard-coded ``seed=42`` for every
+    study it ever built, for every strategy, symbol, regime, objective
+    and window. Measured consequence across the 13 studies stored in
+    ``optimization_studies.db``: every one opens on the identical trial
+    0. ``n_startup_trials`` is a FLOOR, not a cap - study 2 pruned every
+    trial, so TPE acquired no observations and kept drawing from the
+    seeded path, leaving 11 of its 25 trials identical to study 1's
+    despite being a DIFFERENT REGIME. Heavy pruning is the normal
+    failure mode of a regime study (the min-matching-trades gate), so
+    the shared draw dominated exactly where it hurt most - and
+    ``run_regime_optimization`` loops regimes in one process and prints
+    them side by side as per-regime findings.
+
+    The identity is the set of things that make two studies DIFFERENT
+    EXPERIMENTS. It is exactly what already distinguishes a study name
+    (strategy, regime, objective) plus the two things the name omits but
+    that unambiguously change what is being searched: the symbols and
+    the window series. Deliberately excluded: the sampler kind (tpe vs
+    random over one identity is a paired methodological comparison, and
+    sharing the opening draw removes nuisance variance from it), the
+    trial budget (a 50-trial study must be the 100-trial study's prefix,
+    which is what makes a short pilot informative about a long run), and
+    the walk-forward scoring flags (a scoring variant over the same
+    window, again paired).
+
+    Args:
+        base_seed: Run-level seed (``OptunaRunner(seed=...)``). Changing
+            it moves every study together, so deliberate reproduction
+            and deliberate re-draws both stay possible.
+        strategy: Snake_case strategy key.
+        symbols: Symbols scored inside the objective. Sorted before
+            hashing, so the caller's ordering cannot change the seed -
+            ``optimize_chunked`` scores several symbols per trial and
+            the same sweep must reproduce whatever order they arrive in.
+        regime: Normalized regime value, or None for a pooled study.
+        objective: Canonical objective name.
+        windows: (start, end) ISO pairs the study trains on.
+
+    Returns:
+        A 32-bit non-negative seed, identical for the same identity in
+        any process, on any platform.
+    """
+    return derive_seed(
+        STUDY_SEED_NAMESPACE,
+        base_seed,
+        [
+            strategy,
+            ",".join(sorted(str(s) for s in symbols)),
+            (regime or "").upper(),
+            objective,
+            ";".join(canonical_windows(windows)),
+        ],
+    )
 
 
 # Objective aliases (CLI short forms -> canonical metric names)
@@ -232,9 +331,7 @@ def classify_and_score(
     else:
         outcome = TrialOutcome.from_diagnosis(funnel.diagnose())
     if outcome is TrialOutcome.TRADED:
-        return outcome, score_for_outcome(
-            outcome, objective_value=objective_value
-        )
+        return outcome, score_for_outcome(outcome, objective_value=objective_value)
     return outcome, score_for_outcome(outcome, progress=funnel.progress())
 
 
@@ -427,6 +524,7 @@ class OptunaRunner:
         self,
         db_path: Optional[str] = None,
         config: Optional[Any] = None,
+        seed: int = DEFAULT_BASE_SEED,
     ):
         """
         Initialize the Optuna runner.
@@ -435,11 +533,15 @@ class OptunaRunner:
             db_path: Path to SQLite database for study persistence.
                      Defaults to "optimization_studies.db" in the module directory.
             config: Optional config override for backtesting.
+            seed: Run-level BASE seed. Every study's sampler seed is
+                derived from this plus the study's own identity (see
+                ``study_seed``), so distinct studies stay independent
+                while a pinned base still reproduces a whole run
+                exactly - the same contract ``--seed`` has in the
+                composite tuner.
         """
         if not OPTUNA_AVAILABLE:
-            raise ImportError(
-                "Optuna is required. Install with: pip install optuna"
-            )
+            raise ImportError("Optuna is required. Install with: pip install optuna")
 
         # Set up database path
         if db_path is None:
@@ -449,6 +551,9 @@ class OptunaRunner:
 
         # Storage URL for Optuna
         self.storage_url = f"sqlite:///{db_path}"
+
+        # Run-level base seed (see study_seed)
+        self.seed = int(seed)
 
         # Config and adapter
         self.config = config
@@ -506,9 +611,7 @@ class OptunaRunner:
         # Validate strategy
         available = list_strategies()
         if strategy not in available:
-            raise ValueError(
-                f"Unknown strategy: '{strategy}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {available}")
 
         # Get search space
         get_search_space(strategy)
@@ -522,6 +625,7 @@ class OptunaRunner:
 
         # Set up dates from config if not provided
         from ..config import config as default_config
+
         cfg = self.config or default_config
 
         if start is None:
@@ -531,8 +635,19 @@ class OptunaRunner:
         if symbol is None:
             symbol = cfg.backtest_symbol
 
-        # Create sampler
-        optuna_sampler = self._build_sampler(sampler, n_trials)
+        # Create sampler. The seed comes from the study's IDENTITY, not
+        # a constant: a per-regime study must not open on the same draw
+        # as its neighbour, or "the regimes agree" is partly an artifact
+        # of the shared startup trials. See study_seed.
+        seed = study_seed(
+            base_seed=self.seed,
+            strategy=strategy,
+            symbols=[symbol],
+            regime=regime,
+            objective=objective,
+            windows=[(start, end)],
+        )
+        optuna_sampler = self._build_sampler(sampler, n_trials, seed)
 
         # Create study name. Regime-conditional studies embed the regime
         # and objective so per-regime studies never collide, e.g.
@@ -555,10 +670,12 @@ class OptunaRunner:
             sampler=optuna_sampler,
         )
         _assert_scoring_schema(study)
+        self._record_sampler_seed(study, seed)
 
         logger.info(
             f"Starting optimization: strategy={strategy}, trials={n_trials}, "
-            f"sampler={sampler}, objective={objective}, walk_forward={walk_forward}"
+            f"sampler={sampler}, objective={objective}, "
+            f"walk_forward={walk_forward}, seed={seed}"
             + (
                 f", regime={regime}, min_regime_trades={min_regime_trades}"
                 if regime is not None
@@ -620,8 +737,7 @@ class OptunaRunner:
             )
         else:
             logger.warning(
-                "Optimization completed with no valid trials "
-                "(all pruned or failed)"
+                "Optimization completed with no valid trials (all pruned or failed)"
             )
 
         # P5: record how many configurations this study tried so the
@@ -719,9 +835,7 @@ class OptunaRunner:
         """
         available = list_strategies()
         if strategy not in available:
-            raise ValueError(
-                f"Unknown strategy: '{strategy}'. Available: {available}"
-            )
+            raise ValueError(f"Unknown strategy: '{strategy}'. Available: {available}")
         get_search_space(strategy)
         objective = normalize_objective(objective)
         if regime is not None:
@@ -754,14 +868,27 @@ class OptunaRunner:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         regime_tag = f"_{regime.upper()}" if regime else ""
         study_name = f"{strategy}_chunked{regime_tag}_{timestamp}{study_suffix}"
+        # Identity-derived seed. Note this is also what makes the
+        # chunked WALK-FORWARD sound: each fold trains on a different
+        # window series, so each fold's study now draws differently
+        # instead of every fold repeating the same opening trials.
+        seed = study_seed(
+            base_seed=self.seed,
+            strategy=strategy,
+            symbols=sweep_symbols,
+            regime=regime,
+            objective=objective,
+            windows=sweep_windows,
+        )
         study = optuna.create_study(
             study_name=study_name,
             storage=self.storage_url,
             load_if_exists=True,
             direction="maximize",
-            sampler=self._build_sampler(sampler, n_trials),
+            sampler=self._build_sampler(sampler, n_trials, seed),
         )
         _assert_scoring_schema(study)
+        self._record_sampler_seed(study, seed)
         study.set_user_attr("sweep_symbols", sweep_symbols)
         study.set_user_attr("sweep_windows", sweep_windows)
         study.set_user_attr("sweep_objective", objective)
@@ -773,10 +900,9 @@ class OptunaRunner:
             f"symbols={','.join(sweep_symbols)}, "
             f"windows={len(sweep_windows)}x{window_months}mo "
             f"({sweep_windows[0][0]} .. {sweep_windows[-1][1]}), "
-            f"objective={objective}"
+            f"objective={objective}, seed={seed}"
             + (
-                f", regime={regime} (min {min_regime_trades} matching "
-                f"trades/trial)"
+                f", regime={regime} (min {min_regime_trades} matching trades/trial)"
                 if regime
                 else ""
             )
@@ -818,12 +944,34 @@ class OptunaRunner:
 
         return study
 
-    def _build_sampler(self, sampler: str, n_trials: int) -> Any:
-        """Construct the Optuna sampler for a run.
+    def _record_sampler_seed(self, study: "optuna.Study", seed: int) -> None:
+        """Persist the resolved sampler seed on the study.
+
+        Written into the study's own metadata so a stored study is
+        self-describing: a reader can see which seed produced its trial
+        sequence, and which base seed and derivation version to pass to
+        reproduce it, without re-deriving anything by hand.
+
+        Args:
+            study: The freshly created (or resumed) study.
+            seed: The resolved sampler seed.
+        """
+        study.set_user_attr("sampler_seed", int(seed))
+        study.set_user_attr("sampler_seed_base", int(self.seed))
+        study.set_user_attr("sampler_seed_namespace", STUDY_SEED_NAMESPACE)
+
+    def _build_sampler(self, sampler: str, n_trials: int, seed: int) -> Any:
+        """Construct the Optuna sampler for a study.
+
+        The seed is REQUIRED and comes from ``study_seed``; it is not
+        defaulted here on purpose, because the defect this replaced was
+        precisely a default (``seed=42``) that every caller silently
+        inherited.
 
         Args:
             sampler: "tpe" or "random".
             n_trials: Trial budget (sets TPE's startup trials).
+            seed: Identity-derived sampler seed.
 
         Returns:
             An Optuna sampler.
@@ -833,16 +981,14 @@ class OptunaRunner:
         """
         if sampler.lower() == "tpe":
             return optuna.samplers.TPESampler(
-                seed=42,
+                seed=seed,
                 n_startup_trials=min(20, n_trials // 5),
             )
         if sampler.lower() == "random":
-            return optuna.samplers.RandomSampler(seed=42)
+            return optuna.samplers.RandomSampler(seed=seed)
         raise ValueError(f"Unknown sampler: '{sampler}'. Use 'tpe' or 'random'.")
 
-    def _suggest_or_prune(
-        self, trial: "optuna.Trial", strategy: str
-    ) -> Dict[str, Any]:
+    def _suggest_or_prune(self, trial: "optuna.Trial", strategy: str) -> Dict[str, Any]:
         """Sample parameters, pruning structurally infeasible regions.
 
         Combinations that could never produce a tradeable signal are
@@ -913,9 +1059,7 @@ class OptunaRunner:
         Raises:
             RuntimeError: When the grid produced no backtests at all.
         """
-        target_regime = (
-            normalize_regime_value(regime) if regime is not None else None
-        )
+        target_regime = normalize_regime_value(regime) if regime is not None else None
         funnel = SignalFunnel(label=label or f"{strategy}/chunks")
         chunk_values: List[float] = []
         per_symbol: Dict[str, Dict[str, Any]] = {}
@@ -946,9 +1090,7 @@ class OptunaRunner:
                 raw_signals += chunk_funnel.get(STAGE_RAW_SIGNALS)
 
                 if target_regime is not None:
-                    matched = self.adapter.get_regime_trades(
-                        result, target_regime
-                    )
+                    matched = self.adapter.get_regime_trades(result, target_regime)
                     closed = len(matched)
                     pnls = [float(t.get("pnl", 0)) for t in matched]
                     return_pct += (
@@ -971,9 +1113,7 @@ class OptunaRunner:
                     )
                 else:
                     closed = int(getattr(result, "closed_trades", 0) or 0)
-                    return_pct += float(
-                        getattr(result, "total_return_pct", 0.0) or 0.0
-                    )
+                    return_pct += float(getattr(result, "total_return_pct", 0.0) or 0.0)
                     pooled.extend(
                         closed_trade_returns(
                             getattr(result, "trade_log", None) or [],
@@ -1004,9 +1144,7 @@ class OptunaRunner:
                 "trades": trades,
                 "invoked": invoked,
                 "raw_signals": raw_signals,
-                "objective": (
-                    round(sum(values) / len(values), 6) if values else 0.0
-                ),
+                "objective": (round(sum(values) / len(values), 6) if values else 0.0),
                 "return_pct": round(return_pct, 4),
             }
             symbol_returns[symbol] = pooled
@@ -1020,19 +1158,17 @@ class OptunaRunner:
         # In regime mode a parameter set can run every chunk and still
         # match no trade in the target regime. That is a zero-trade
         # outcome to be banded by the funnel, not a setup failure.
-        mean_value = (
-            sum(chunk_values) / len(chunk_values) if chunk_values else 0.0
-        )
+        mean_value = sum(chunk_values) / len(chunk_values) if chunk_values else 0.0
         std_dev = 0.0
         value = mean_value
         # Penalize dispersion across chunks, mirroring the walk-forward
         # branch: a parameter set that only works in one window/symbol
         # should not outrank a steadier one at the same mean.
         if len(chunk_values) > 1:
-            variance = sum(
-                (v - mean_value) ** 2 for v in chunk_values
-            ) / len(chunk_values)
-            std_dev = variance ** 0.5
+            variance = sum((v - mean_value) ** 2 for v in chunk_values) / len(
+                chunk_values
+            )
+            std_dev = variance**0.5
             if std_dev > 1.0:
                 value -= (std_dev - 1.0) * 0.2
 
@@ -1059,9 +1195,7 @@ class OptunaRunner:
             symbol_returns=symbol_returns,
             chunks=chunk_log,
             total_trades=sum(s["trades"] for s in per_symbol.values()),
-            traded_symbols=sum(
-                1 for s in per_symbol.values() if s["trades"] > 0
-            ),
+            traded_symbols=sum(1 for s in per_symbol.values() if s["trades"] > 0),
             profitable_symbols=sum(
                 1 for s in per_symbol.values() if s["objective"] > 0
             ),
@@ -1121,9 +1255,7 @@ class OptunaRunner:
         trial.set_user_attr("chunks", evaluation.chunks)
         trial.set_user_attr("total_trades", evaluation.total_trades)
         trial.set_user_attr("traded_symbols", evaluation.traded_symbols)
-        trial.set_user_attr(
-            "profitable_symbols", evaluation.profitable_symbols
-        )
+        trial.set_user_attr("profitable_symbols", evaluation.profitable_symbols)
 
         if regime is not None:
             trial.set_user_attr("regime_trade_count", evaluation.total_trades)
@@ -1134,8 +1266,7 @@ class OptunaRunner:
             )
             if evaluation.total_trades < threshold:
                 raise optuna.TrialPruned(
-                    f"Only {evaluation.total_trades} {regime} trades "
-                    f"(< {threshold})"
+                    f"Only {evaluation.total_trades} {regime} trades (< {threshold})"
                 )
 
         return self._score_trial(
@@ -1223,9 +1354,7 @@ class OptunaRunner:
             f"Trial registry: recorded {n_trials} trials "
             f"(completed={len(completed)}, pruned={len(pruned)}, "
             f"infeasible_excluded={infeasible}) "
-            f"for {strategy}"
-            + (f"/{regime}" if regime else "")
-            + f" as row {row_id}"
+            f"for {strategy}" + (f"/{regime}" if regime else "") + f" as row {row_id}"
         )
 
     def _objective(
@@ -1310,8 +1439,7 @@ class OptunaRunner:
                 if regime is not None:
                     # Per-window objective on the regime-filtered subset
                     window_trades = [
-                        (r, self.adapter.get_regime_trades(r, regime))
-                        for r in results
+                        (r, self.adapter.get_regime_trades(r, regime)) for r in results
                     ]
                     total_matching = sum(len(t) for _, t in window_trades)
                     trial.set_user_attr("regime_trade_count", total_matching)
@@ -1335,8 +1463,7 @@ class OptunaRunner:
                     ]
                 else:
                     values = [
-                        self.adapter.calculate_objective(r, objective)
-                        for r in results
+                        self.adapter.calculate_objective(r, objective) for r in results
                     ]
 
                 avg_value = sum(values) / len(values)
@@ -1344,7 +1471,7 @@ class OptunaRunner:
                 # Penalize high variance across windows
                 if len(values) > 1:
                     variance = sum((v - avg_value) ** 2 for v in values) / len(values)
-                    std_dev = variance ** 0.5
+                    std_dev = variance**0.5
                     # Penalize if std > 1.0
                     if std_dev > 1.0:
                         avg_value -= (std_dev - 1.0) * 0.2
@@ -1605,12 +1732,14 @@ class OptunaRunner:
                         best_value = best_row[0]
                         break
 
-                studies.append({
-                    "study_id": study_id,
-                    "study_name": study_name,
-                    "best_value": best_value,
-                    "trial_count": trial_count,
-                })
+                studies.append(
+                    {
+                        "study_id": study_id,
+                        "study_name": study_name,
+                        "best_value": best_value,
+                        "trial_count": trial_count,
+                    }
+                )
 
             conn.close()
 
@@ -1627,8 +1756,7 @@ class OptunaRunner:
             all_studies = storage.get_all_studies()
 
             matching_names = [
-                s.study_name for s in all_studies
-                if s.study_name.startswith(strategy)
+                s.study_name for s in all_studies if s.study_name.startswith(strategy)
             ]
 
             if matching_names:

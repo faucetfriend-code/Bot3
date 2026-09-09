@@ -31,12 +31,12 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from .database import get_db_connection, is_postgres, get_backend
-from .event_system import get_event_bus, EventType, Event
+from .event_system import get_event_bus, EventType
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +48,9 @@ logger = logging.getLogger(__name__)
 class DataTier(str, Enum):
     """Data lifecycle tier classification."""
 
-    HOT = "hot"       # Recently ingested, full fidelity, no compression
-    WARM = "warm"     # Older data, compressed, still queryable
-    COLD = "cold"     # Archive-ready, minimal access patterns
+    HOT = "hot"  # Recently ingested, full fidelity, no compression
+    WARM = "warm"  # Older data, compressed, still queryable
+    COLD = "cold"  # Archive-ready, minimal access patterns
     DELETED = "deleted"  # Past retention, marked for removal
 
 
@@ -281,9 +281,11 @@ class ArchivalManager:
             dry_run: If True, only report what would be done
         """
         self.policies = policies or DEFAULT_POLICIES.copy()
-        self.dry_run = dry_run or os.getenv(
-            "ARCHIVAL_DRY_RUN", "false"
-        ).lower() in ("true", "1", "yes")
+        self.dry_run = dry_run or os.getenv("ARCHIVAL_DRY_RUN", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         self.batch_size = int(os.getenv("ARCHIVAL_BATCH_SIZE", "10000"))
         self.event_bus = get_event_bus()
 
@@ -293,9 +295,7 @@ class ArchivalManager:
             f"tables={len(self.policies)})"
         )
 
-    def get_tier_for_age(
-        self, table_name: str, age_hours: float
-    ) -> DataTier:
+    def get_tier_for_age(self, table_name: str, age_hours: float) -> DataTier:
         """
         Determine the data tier based on age.
 
@@ -323,9 +323,7 @@ class ArchivalManager:
     # PostgreSQL (TimescaleDB) Operations
     # ========================================================================
 
-    def _compress_timescaledb_table(
-        self, table_name: str
-    ) -> ArchivalResult:
+    def _compress_timescaledb_table(self, table_name: str) -> ArchivalResult:
         """
         Trigger compression on a TimescaleDB hypertable.
 
@@ -354,9 +352,7 @@ class ArchivalManager:
                 if not has_policy:
                     # Add compression policy based on retention config
                     policy = self.policies.get(table_name)
-                    compress_days = (
-                        policy.compress_after_days if policy else 7
-                    )
+                    compress_days = policy.compress_after_days if policy else 7
 
                     if not self.dry_run:
                         conn.execute(
@@ -391,7 +387,9 @@ class ArchivalManager:
                           AND c.range_start < NOW() - INTERVAL '7 days'
                         """
                     )
-                    compressed_count = compress_result.rowcount if compress_result else 0
+                    compressed_count = (
+                        compress_result.rowcount if compress_result else 0
+                    )
                     result.rows_affected += compressed_count
                     if compressed_count > 0:
                         logger.info(
@@ -406,9 +404,7 @@ class ArchivalManager:
         result.duration_seconds = time.monotonic() - start
         return result
 
-    def _enforce_retention_timescaledb(
-        self, table_name: str
-    ) -> ArchivalResult:
+    def _enforce_retention_timescaledb(self, table_name: str) -> ArchivalResult:
         """
         Enforce retention policy on a TimescaleDB hypertable.
 
@@ -470,9 +466,7 @@ class ArchivalManager:
                         """
                     )
                     count_row = count_result.fetchone()
-                    result.rows_affected = (
-                        count_row[0] if count_row else 0
-                    )
+                    result.rows_affected = count_row[0] if count_row else 0
 
         except Exception as e:
             result.success = False
@@ -486,9 +480,7 @@ class ArchivalManager:
     # SQLite Operations
     # ========================================================================
 
-    def _archive_sqlite_table(
-        self, table_name: str
-    ) -> ArchivalResult:
+    def _archive_sqlite_table(self, table_name: str) -> ArchivalResult:
         """
         Archive old data in SQLite by moving to an archive table.
 
@@ -582,9 +574,7 @@ class ArchivalManager:
         result.duration_seconds = time.monotonic() - start
         return result
 
-    def _enforce_retention_sqlite(
-        self, table_name: str
-    ) -> ArchivalResult:
+    def _enforce_retention_sqlite(self, table_name: str) -> ArchivalResult:
         """
         Delete data past retention period in SQLite.
 
@@ -750,9 +740,7 @@ class ArchivalManager:
         """
         report = ArchivalReport(dry_run=self.dry_run)
 
-        logger.info(
-            f"Starting archival cycle (dry_run={self.dry_run})"
-        )
+        logger.info(f"Starting archival cycle (dry_run={self.dry_run})")
 
         # Phase 1: Compress old data
         logger.info("Phase 1: Compressing old data...")
@@ -773,7 +761,9 @@ class ArchivalManager:
                 {
                     "source": "archival_manager",
                     "report": report.to_dict(),
-                    "status": "completed" if report.all_successful else "partial_failure",
+                    "status": "completed"
+                    if report.all_successful
+                    else "partial_failure",
                 },
                 "ArchivalManager",
             )
@@ -889,12 +879,16 @@ class ArchivalManager:
                                         """
                                     ).fetchone()
                                 else:
-                                    row = conn.execute(
-                                        f"""
+                                    row = (
+                                        conn.execute(
+                                            f"""
                                         SELECT count(*) FROM {table_name}
                                         WHERE {time_col} < NOW() - INTERVAL '{max_hours} hours'
                                     """
-                                    ).fetchone() if max_hours is not None else None
+                                        ).fetchone()
+                                        if max_hours is not None
+                                        else None
+                                    )
                             else:
                                 if max_hours is not None:
                                     row = conn.execute(
@@ -937,8 +931,7 @@ class ArchivalManager:
             "dry_run": self.dry_run,
             "managed_tables": len(self.policies),
             "policies": {
-                name: policy.to_dict()
-                for name, policy in self.policies.items()
+                name: policy.to_dict() for name, policy in self.policies.items()
             },
         }
 
@@ -1002,9 +995,7 @@ class ArchivalManager:
             logger.info(f"Updated policy for {table_name}: {kwargs}")
         else:
             # Create new policy
-            valid_fields = {
-                k for k in RetentionPolicy.__dataclass_fields__
-            }
+            valid_fields = {k for k in RetentionPolicy.__dataclass_fields__}
             filtered = {k: v for k, v in kwargs.items() if k in valid_fields}
             self.policies[table_name] = RetentionPolicy(
                 table_name=table_name, **filtered
@@ -1022,9 +1013,7 @@ def main() -> None:
     import argparse
     import json
 
-    parser = argparse.ArgumentParser(
-        description="Trading Bot Data Archival Manager"
-    )
+    parser = argparse.ArgumentParser(description="Trading Bot Data Archival Manager")
     subparsers = parser.add_subparsers(dest="command", help="Command to run")
 
     # run command
@@ -1034,17 +1023,13 @@ def main() -> None:
     )
 
     # compress command
-    compress_parser = subparsers.add_parser(
-        "compress", help="Compress old data"
-    )
+    compress_parser = subparsers.add_parser("compress", help="Compress old data")
     compress_parser.add_argument(
         "--dry-run", action="store_true", help="Preview without changes"
     )
 
     # retain command
-    retain_parser = subparsers.add_parser(
-        "retain", help="Enforce retention policies"
-    )
+    retain_parser = subparsers.add_parser("retain", help="Enforce retention policies")
     retain_parser.add_argument(
         "--dry-run", action="store_true", help="Preview without changes"
     )
@@ -1071,16 +1056,20 @@ def main() -> None:
     elif args.command == "compress":
         results = manager.compress_old_data()
         for r in results:
-            print(f"  {r.table_name}: {r.operation} - "
-                  f"{'OK' if r.success else 'FAIL'} "
-                  f"({r.rows_affected} rows, {r.duration_seconds:.2f}s)")
+            print(
+                f"  {r.table_name}: {r.operation} - "
+                f"{'OK' if r.success else 'FAIL'} "
+                f"({r.rows_affected} rows, {r.duration_seconds:.2f}s)"
+            )
 
     elif args.command == "retain":
         results = manager.enforce_retention()
         for r in results:
-            print(f"  {r.table_name}: {r.operation} - "
-                  f"{'OK' if r.success else 'FAIL'} "
-                  f"({r.rows_affected} rows, {r.duration_seconds:.2f}s)")
+            print(
+                f"  {r.table_name}: {r.operation} - "
+                f"{'OK' if r.success else 'FAIL'} "
+                f"({r.rows_affected} rows, {r.duration_seconds:.2f}s)"
+            )
 
     elif args.command == "status":
         sizes = manager.get_table_sizes()

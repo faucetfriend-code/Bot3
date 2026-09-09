@@ -97,9 +97,7 @@ class RegimePositionReviewer:
             else _env_bool("ENABLE_REGIME_POSITION_REVIEW", True)
         )
 
-        logger.info(
-            f"RegimePositionReviewer initialized (enabled={self.enabled})"
-        )
+        logger.info(f"RegimePositionReviewer initialized (enabled={self.enabled})")
 
     # ------------------------------------------------------------------
     # Event handler
@@ -263,9 +261,7 @@ class RegimePositionReviewer:
                 f"Regime review: {symbol} {side} ({strategy_key}) misaligned "
                 f"and against {trend} trend - closing (regime_exit)"
             )
-            self.migrated_position_manager.close_position(
-                symbol, mp_pos, "regime_exit"
-            )
+            self.migrated_position_manager.close_position(symbol, mp_pos, "regime_exit")
         else:
             logger.info(
                 f"Regime review: {symbol} {side} ({strategy_key}) misaligned "
@@ -327,9 +323,7 @@ class RegimePositionReviewer:
             )
             return data.get("4h")
         except Exception as e:
-            logger.warning(
-                f"Regime review: could not fetch 4h data for {symbol}: {e}"
-            )
+            logger.warning(f"Regime review: could not fetch 4h data for {symbol}: {e}")
             return None
 
     def _get_current_price(self, symbol: str) -> Optional[float]:
@@ -344,9 +338,7 @@ class RegimePositionReviewer:
                 )
                 return price if price > 0 else None
         except Exception as e:
-            logger.warning(
-                f"Regime review: could not get price for {symbol}: {e}"
-            )
+            logger.warning(f"Regime review: could not get price for {symbol}: {e}")
         return None
 
     @staticmethod

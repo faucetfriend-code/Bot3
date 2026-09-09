@@ -12,11 +12,32 @@ Strategy Logic:
   over the supplied 15m window (no daily session anchor - see CONFIG NOTES)
 - Standard deviation bands at 1SD, 2SD, 3SD levels
 - BUY Signal: Price deviates below VWAP by at least sd_entry_threshold SD
-  + MACD histogram < 0 (sellers exhausted, enter at extreme)
+  + an entry confirmation (see entry_confirmation)
 - SELL Signal: Price deviates above VWAP by at least sd_entry_threshold SD
-  + MACD histogram > 0 (buyers exhausted, enter at extreme)
-- Stop Loss: Beyond nearest SD band or 1.5x ATR
+  + an entry confirmation (see entry_confirmation)
+- Stop Loss: see stop_source - ATR-based or beyond the next SD band
 - Take Profit: Return to VWAP (mean reversion target)
+
+TWO MEASURED DEFECTS, NOW SWITCHABLE (2026-07-29)
+-------------------------------------------------
+Both defaults below reproduce the behaviour measured in docs/VWAP-LEVERS.md
+(18.1% win rate, 82% of exits via the stop, PF 0.74 over 4851 BTC trades).
+They are kept as defaults only so the A/B that replaces them is honest.
+
+1. ``stop_source`` - the shipped stop is 1.5x the **1m** ATR even though the
+   setup is 15m structure. Measured on BTC 2022-07..2024-07 at the 6538 bars
+   that clear a 2.0 SD gate: median stop 0.138% of price against a median
+   take-profit distance of 1.133%, and the stop is smaller than the *current
+   15m bar's own high-low range* on 99.3% of signals. ATR(15m) is 5.08x
+   ATR(1m). The docstring above always claimed a band-based stop; that branch
+   was never written. ``atr_structure`` and ``sd_band`` supply it.
+
+2. ``entry_confirmation`` - the shipped MACD gate requires the histogram to
+   still be moving AGAINST the trade (negative for a BUY) and explicitly
+   rejects a histogram that has already turned as a "late entry". Combined
+   with (1) that is maximal adverse selection into a stop inside the noise.
+   ``turning`` requires the histogram to be inflecting toward the trade
+   instead; ``none`` removes the gate entirely as a control.
 
 Best For: ALL regimes (overlay strategy, strongest in RANGING_*)
 Expected Performance: 55-68% win rate, 1.4-2.1 profit factor
@@ -50,7 +71,7 @@ RISK NOTES:
 """
 
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -82,6 +103,38 @@ SD_ENTRY_THRESHOLD_MAX = 3.0
 # far tighter (mean ~1.0 SD, max ~4.0 SD over six months of 5m data), so
 # 4.037 was unreachable and the entry gate never fired.
 DEFAULT_SD_ENTRY_THRESHOLD = 2.0
+
+# ---------------------------------------------------------------------------
+# Stop-loss placement (VWAP_STOP_SOURCE)
+# ---------------------------------------------------------------------------
+# "atr_execution" is the shipped behaviour and is kept as the default so that
+# enabling the alternatives is an explicit, measurable act. See the module
+# docstring for why it is almost certainly wrong.
+STOP_SOURCE_ATR_EXECUTION = "atr_execution"  # 1.5x ATR(1m) when 1m is supplied
+STOP_SOURCE_ATR_STRUCTURE = "atr_structure"  # 1.5x ATR of the 15m setup TF
+STOP_SOURCE_SD_BAND = "sd_band"  # beyond the next whole SD band out
+VALID_STOP_SOURCES = (
+    STOP_SOURCE_ATR_EXECUTION,
+    STOP_SOURCE_ATR_STRUCTURE,
+    STOP_SOURCE_SD_BAND,
+)
+DEFAULT_STOP_SOURCE = STOP_SOURCE_ATR_EXECUTION
+
+# ---------------------------------------------------------------------------
+# Entry confirmation (VWAP_ENTRY_CONFIRMATION)
+# ---------------------------------------------------------------------------
+# "adverse" is the shipped behaviour: enter while MACD momentum still runs
+# against the trade. "turning" waits for the histogram to inflect toward it.
+# "none" drops the gate so the deviation signal can be measured on its own.
+ENTRY_CONFIRMATION_ADVERSE = "adverse"
+ENTRY_CONFIRMATION_TURNING = "turning"
+ENTRY_CONFIRMATION_NONE = "none"
+VALID_ENTRY_CONFIRMATIONS = (
+    ENTRY_CONFIRMATION_ADVERSE,
+    ENTRY_CONFIRMATION_TURNING,
+    ENTRY_CONFIRMATION_NONE,
+)
+DEFAULT_ENTRY_CONFIRMATION = ENTRY_CONFIRMATION_ADVERSE
 
 # VWAP_* environment variables this strategy does not read. They are leftovers
 # from the BTV2 tuning harness (a different entry model) and have no effect
@@ -135,6 +188,50 @@ def validate_sd_entry_threshold(value: float) -> float:
         f"{DEFAULT_SD_ENTRY_THRESHOLD}. Fix VWAP_SD_ENTRY_THRESHOLD in .env."
     )
     return DEFAULT_SD_ENTRY_THRESHOLD
+
+
+def validate_stop_source(value: str) -> str:
+    """
+    Validate a stop-loss placement mode.
+
+    Args:
+        value: Requested mode, case-insensitive.
+
+    Returns:
+        The mode if recognised, else DEFAULT_STOP_SOURCE.
+    """
+    normalised = (value or "").strip().lower()
+    if normalised in VALID_STOP_SOURCES:
+        return normalised
+
+    logger.warning(
+        f"VWAP_STOP_SOURCE={value!r} is not one of "
+        f"{', '.join(VALID_STOP_SOURCES)}. Falling back to "
+        f"{DEFAULT_STOP_SOURCE}."
+    )
+    return DEFAULT_STOP_SOURCE
+
+
+def validate_entry_confirmation(value: str) -> str:
+    """
+    Validate an entry-confirmation mode.
+
+    Args:
+        value: Requested mode, case-insensitive.
+
+    Returns:
+        The mode if recognised, else DEFAULT_ENTRY_CONFIRMATION.
+    """
+    normalised = (value or "").strip().lower()
+    if normalised in VALID_ENTRY_CONFIRMATIONS:
+        return normalised
+
+    logger.warning(
+        f"VWAP_ENTRY_CONFIRMATION={value!r} is not one of "
+        f"{', '.join(VALID_ENTRY_CONFIRMATIONS)}. Falling back to "
+        f"{DEFAULT_ENTRY_CONFIRMATION}."
+    )
+    return DEFAULT_ENTRY_CONFIRMATION
 
 
 def warn_unsupported_env_vars() -> List[str]:
@@ -191,6 +288,8 @@ class VWAPScalpingStrategy:
         min_confidence: Optional[float] = None,
         cooldown_minutes: Optional[int] = None,
         sd_multipliers: Optional[List[float]] = None,
+        stop_source: Optional[str] = None,
+        entry_confirmation: Optional[str] = None,
     ):
         """
         Initialize VWAP Scalping Strategy.
@@ -213,6 +312,13 @@ class VWAPScalpingStrategy:
             min_confidence: Minimum confidence threshold (default: 0.62)
             cooldown_minutes: Cooldown between trades per symbol (default: 8)
             sd_multipliers: SD band multipliers to compute (default: [1.0, 2.0, 3.0])
+            stop_source: Where the stop comes from - "atr_execution" (default,
+                shipped: 1.5x ATR of the 1m series when supplied),
+                "atr_structure" (1.5x ATR of the 15m setup timeframe) or
+                "sd_band" (beyond the next whole SD band out from VWAP).
+            entry_confirmation: MACD gate - "adverse" (default, shipped: the
+                histogram must still run against the trade), "turning" (the
+                histogram must be inflecting toward it) or "none".
         """
         self.strategy_type = StrategyType.VWAP_SCALPING
 
@@ -228,9 +334,7 @@ class VWAPScalpingStrategy:
             sd_entry_threshold
             if sd_entry_threshold is not None
             else float(
-                os.getenv(
-                    "VWAP_SD_ENTRY_THRESHOLD", str(DEFAULT_SD_ENTRY_THRESHOLD)
-                )
+                os.getenv("VWAP_SD_ENTRY_THRESHOLD", str(DEFAULT_SD_ENTRY_THRESHOLD))
             )
         )
         self.atr_stop_multiplier = (
@@ -286,6 +390,19 @@ class VWAPScalpingStrategy:
         # SD band multipliers: [1.0, 2.0, 3.0] for 1SD, 2SD, 3SD
         self.sd_multipliers = sd_multipliers or [1.0, 2.0, 3.0]
 
+        # Both default to the shipped behaviour; see the module docstring for
+        # the measurements that say both defaults are probably wrong.
+        self.stop_source = validate_stop_source(
+            stop_source
+            if stop_source is not None
+            else os.getenv("VWAP_STOP_SOURCE", DEFAULT_STOP_SOURCE)
+        )
+        self.entry_confirmation = validate_entry_confirmation(
+            entry_confirmation
+            if entry_confirmation is not None
+            else os.getenv("VWAP_ENTRY_CONFIRMATION", DEFAULT_ENTRY_CONFIRMATION)
+        )
+
         # Track cooldowns per symbol
         self._last_trade_time: Dict[str, datetime] = {}
 
@@ -298,14 +415,20 @@ class VWAPScalpingStrategy:
             f"ATR stop={self.atr_stop_multiplier}x, "
             f"MACD({self.macd_fast},{self.macd_slow},{self.macd_signal}), "
             f"min_confidence={self.min_confidence}, "
-            f"cooldown={self.cooldown_minutes}min"
+            f"cooldown={self.cooldown_minutes}min, "
+            f"stop_source={self.stop_source}, "
+            f"entry_confirmation={self.entry_confirmation}"
         )
 
         # Surface stale .env knobs that this strategy never reads.
         warn_unsupported_env_vars()
 
     def _calculate_vwap_and_bands(
-        self, highs: List[float], lows: List[float], closes: List[float], volumes: List[float]
+        self,
+        highs: List[float],
+        lows: List[float],
+        closes: List[float],
+        volumes: List[float],
     ) -> Optional[Dict[str, float]]:
         """
         Calculate VWAP and standard deviation bands.
@@ -363,10 +486,10 @@ class VWAPScalpingStrategy:
         # Calculate volume-weighted variance
         # variance = [cumulative(vol * price^2) / cumulative(vol)] - vwap^2
         if cum_vol > 0:
-            variance = (cum_price_sq_vol / cum_vol) - (current_vwap ** 2)
+            variance = (cum_price_sq_vol / cum_vol) - (current_vwap**2)
             # Clip negative variance (floating-point errors)
             variance = max(0.0, variance)
-            stddev = variance ** 0.5
+            stddev = variance**0.5
         else:
             stddev = 0.0
 
@@ -389,7 +512,9 @@ class VWAPScalpingStrategy:
 
     def _now(self) -> datetime:
         """Return current time — simulated candle time in backtesting, wall-clock in live."""
-        return self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        return (
+            self._sim_time if self._sim_time is not None else datetime.now(timezone.utc)
+        )
 
     def _check_cooldown(self, symbol: str) -> bool:
         """
@@ -409,7 +534,9 @@ class VWAPScalpingStrategy:
 
         if elapsed < cooldown_delta:
             remaining = (cooldown_delta - elapsed).total_seconds() / 60
-            logger.debug(f"{symbol}: VWAP scalping cooldown {remaining:.1f}min remaining")
+            logger.debug(
+                f"{symbol}: VWAP scalping cooldown {remaining:.1f}min remaining"
+            )
             return True
 
         return False
@@ -417,6 +544,93 @@ class VWAPScalpingStrategy:
     def _set_cooldown(self, symbol: str):
         """Set cooldown for symbol after trade signal."""
         self._last_trade_time[symbol] = self._now()
+
+    def _entry_confirmed(
+        self,
+        side: OrderSide,
+        histogram: float,
+        prev_histogram: Optional[float],
+    ) -> bool:
+        """
+        Apply the configured MACD entry confirmation.
+
+        The three modes encode genuinely different theories of the setup:
+
+        - ``adverse`` (shipped): momentum must still be running against the
+          trade. The original comment called this "sellers exhausted", but a
+          negative histogram is the opposite of exhaustion - it is the down
+          move still accelerating. Kept because it is what every measurement
+          in docs/VWAP-LEVERS.md was taken against.
+        - ``turning``: the histogram must be inflecting toward the trade,
+          which is the confirmation a mean-reversion entry normally waits
+          for. This is the case ``adverse`` explicitly rejects.
+        - ``none``: no momentum gate; isolates the deviation signal.
+
+        Args:
+            side: Proposed trade direction.
+            histogram: Current MACD histogram.
+            prev_histogram: Previous bar's histogram; required by ``turning``
+                and ignored otherwise.
+
+        Returns:
+            True when the entry may proceed.
+        """
+        if self.entry_confirmation == ENTRY_CONFIRMATION_NONE:
+            return True
+
+        if self.entry_confirmation == ENTRY_CONFIRMATION_TURNING:
+            if prev_histogram is None:
+                return False
+            if side == OrderSide.BUY:
+                return histogram > prev_histogram
+            return histogram < prev_histogram
+
+        # ENTRY_CONFIRMATION_ADVERSE
+        if side == OrderSide.BUY:
+            return histogram < 0
+        return histogram > 0
+
+    def _resolve_stop_loss(
+        self,
+        side: OrderSide,
+        current_price: float,
+        atr: float,
+        vwap: float,
+        stddev: float,
+        deviation_sd: float,
+    ) -> float:
+        """
+        Place the stop according to ``stop_source``.
+
+        ``sd_band`` implements the placement this module's docstring always
+        described but never had: the stop sits beyond the next whole SD band
+        outward from VWAP, so it scales with the same dispersion measure the
+        entry is gated on rather than with an unrelated ATR.
+
+        Args:
+            side: Trade direction.
+            current_price: Entry price.
+            atr: ATR already computed from the series ``stop_source`` selects.
+            vwap: Current VWAP.
+            stddev: Volume-weighted standard deviation.
+            deviation_sd: Current deviation in SD units.
+
+        Returns:
+            The stop price.
+        """
+        if self.stop_source == STOP_SOURCE_SD_BAND:
+            # Next whole band outward from the one price is sitting past.
+            next_band = float(int(deviation_sd) + 1)
+            if side == OrderSide.BUY:
+                return vwap - next_band * stddev
+            return vwap + next_band * stddev
+
+        # Both ATR modes share this formula; they differ only in which series
+        # the caller computed `atr` from.
+        offset = atr * self.atr_stop_multiplier
+        if side == OrderSide.BUY:
+            return current_price - offset
+        return current_price + offset
 
     def generate_signals(
         self,
@@ -494,7 +708,10 @@ class VWAPScalpingStrategy:
                     macd_data = data_5m
                     macd_tf = "5m"
 
-            # Calculate MACD
+            # Calculate MACD. Under entry_confirmation="none" the histogram is
+            # reported but gates nothing, so a MACD failure must not veto the
+            # signal - that would silently reintroduce a confirmation gate.
+            macd_required = self.entry_confirmation != ENTRY_CONFIRMATION_NONE
             try:
                 macd_line, signal_line, histogram = calculate_macd(
                     macd_data["close"],
@@ -503,8 +720,28 @@ class VWAPScalpingStrategy:
                     self.macd_signal,
                 )
             except ValueError as e:
-                logger.debug(f"{symbol}: MACD calculation failed: {e}")
-                return []
+                if macd_required:
+                    logger.debug(f"{symbol}: MACD calculation failed: {e}")
+                    return []
+                macd_line = signal_line = histogram = 0.0
+
+            # The "turning" gate needs the previous bar's histogram to know
+            # which way momentum is inflecting.
+            prev_histogram = None
+            if self.entry_confirmation == ENTRY_CONFIRMATION_TURNING:
+                try:
+                    _, _, prev_histogram = calculate_macd(
+                        macd_data["close"][:-1],
+                        self.macd_fast,
+                        self.macd_slow,
+                        self.macd_signal,
+                    )
+                except ValueError as e:
+                    logger.debug(
+                        f"{symbol}: previous-bar MACD unavailable, cannot "
+                        f"evaluate a turning histogram: {e}"
+                    )
+                    return []
 
             # Calculate RSI for second confirmation gate
             try:
@@ -518,46 +755,58 @@ class VWAPScalpingStrategy:
 
             # Below VWAP -> potential LONG (price expected to revert up)
             if deviation < 0 and deviation_sd >= self.sd_entry_threshold:
-                # Require exhausted sellers: histogram < 0 means downward momentum
-                # still present but price at extreme — enter before reversal, not after
-                if histogram < 0:
+                if self._entry_confirmed(OrderSide.BUY, histogram, prev_histogram):
                     side = OrderSide.BUY
                     notes.append(f"Below VWAP by {deviation_sd:.2f} SD")
-                    notes.append(f"MACD hist={histogram:.4f} (neg), RSI={rsi:.1f}")
+                    notes.append(
+                        f"MACD hist={histogram:.4f} "
+                        f"[{self.entry_confirmation}], RSI={rsi:.1f}"
+                    )
                 else:
                     logger.debug(
                         f"{symbol}: Below VWAP SD{deviation_sd:.2f} - "
-                        f"MACD hist={histogram:.4f} already positive — late entry, skip"
+                        f"MACD hist={histogram:.4f} fails the "
+                        f"'{self.entry_confirmation}' confirmation, skip"
                     )
 
             # Above VWAP -> potential SHORT (price expected to revert down)
             elif deviation > 0 and deviation_sd >= self.sd_entry_threshold:
-                # Require exhausted buyers: histogram > 0 means upward momentum
-                # still present but price at extreme — enter before reversal, not after
-                if histogram > 0:
+                if self._entry_confirmed(OrderSide.SELL, histogram, prev_histogram):
                     side = OrderSide.SELL
                     notes.append(f"Above VWAP by {deviation_sd:.2f} SD")
-                    notes.append(f"MACD hist={histogram:.4f} (pos), RSI={rsi:.1f}")
+                    notes.append(
+                        f"MACD hist={histogram:.4f} "
+                        f"[{self.entry_confirmation}], RSI={rsi:.1f}"
+                    )
                 else:
                     logger.debug(
                         f"{symbol}: Above VWAP SD{deviation_sd:.2f} - "
-                        f"MACD hist={histogram:.4f} already negative — late entry, skip"
+                        f"MACD hist={histogram:.4f} fails the "
+                        f"'{self.entry_confirmation}' confirmation, skip"
                     )
 
             if not side:
                 return []
 
             # Calculate ATR for stop loss.
-            # Use 1m data when available (better precision for SL/TP placement),
-            # fall back to 15m when 1m is not provided.
+            # atr_execution prefers the 1m series "for precision"; measured, it
+            # yields a stop ~5x tighter than the 15m setup implies and smaller
+            # than the entry bar's own range on 99.3% of signals.
+            # atr_structure pins the ATR to the timeframe the setup lives on.
             atr_src = data_15m
-            if execution_tf_data and "1m" in execution_tf_data:
+            atr_tf = "15m"
+            if (
+                self.stop_source == STOP_SOURCE_ATR_EXECUTION
+                and execution_tf_data
+                and "1m" in execution_tf_data
+            ):
                 d1m = execution_tf_data["1m"]
                 if (
                     all(k in d1m for k in ["high", "low", "close"])
                     and len(d1m["close"]) >= self.atr_period + 1
                 ):
                     atr_src = d1m
+                    atr_tf = "1m"
                     logger.debug(f"{symbol}: VWAP using 1m ATR for SL/TP placement")
             try:
                 atr = calculate_atr(
@@ -569,19 +818,14 @@ class VWAPScalpingStrategy:
             except ValueError:
                 atr = abs(deviation)  # Fallback to deviation as proxy
 
-            # Stop loss calculation for scalping
-            # Use tighter stops for better RRR - just beyond entry zone
-            # ATR-based stop is primary for scalping
-            if side == OrderSide.BUY:
-                # Stop below entry - tighter stop for scalping
-                atr_stop = current_price - atr * self.atr_stop_multiplier
-                # Use the tighter stop (ATR-based) for better RRR
-                stop_loss = atr_stop
-            else:
-                # Stop above entry - tighter stop for scalping
-                atr_stop = current_price + atr * self.atr_stop_multiplier
-                # Use the tighter stop (ATR-based) for better RRR
-                stop_loss = atr_stop
+            stop_loss = self._resolve_stop_loss(
+                side=side,
+                current_price=current_price,
+                atr=atr,
+                vwap=vwap,
+                stddev=stddev,
+                deviation_sd=deviation_sd,
+            )
 
             # Take profit: VWAP (mean reversion target)
             take_profit = vwap
@@ -636,7 +880,8 @@ class VWAPScalpingStrategy:
                 volume_confirmation=True,  # VWAP inherently uses volume
                 multi_timeframe_alignment=True,
                 support_resistance_valid=True,  # VWAP acts as dynamic S/R
-                rrr_meets_minimum=rrr >= 0.8,  # Scalping: lower RRR OK with high win rate
+                rrr_meets_minimum=rrr
+                >= 0.8,  # Scalping: lower RRR OK with high win rate
                 liquidation_buffer_safe=True,
                 account_risk_ok=True,
                 margin_drawdown_ok=True,
@@ -649,6 +894,9 @@ class VWAPScalpingStrategy:
                     "macd_line": macd_line,
                     "macd_signal": signal_line,
                     "atr": atr,
+                    "atr_timeframe": atr_tf,
+                    "stop_source": self.stop_source,
+                    "entry_confirmation": self.entry_confirmation,
                     "sd1_upper": bands.get("sd1.0_upper"),
                     "sd1_lower": bands.get("sd1.0_lower"),
                     "sd2_upper": bands.get("sd2.0_upper"),
@@ -675,7 +923,9 @@ class VWAPScalpingStrategy:
             logger.error(f"Error generating VWAP scalping signal for {symbol}: {e}")
             return []
 
-    def get_vwap_status(self, symbol: str, data: Dict[str, List[float]]) -> Optional[Dict]:
+    def get_vwap_status(
+        self, symbol: str, data: Dict[str, List[float]]
+    ) -> Optional[Dict]:
         """
         Get current VWAP status for monitoring/display purposes.
 

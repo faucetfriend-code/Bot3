@@ -1,8 +1,8 @@
 import time
 import logging
 import threading
-import sys
 import os
+import uuid
 import warnings
 from typing import Dict, List, Any, Optional
 from datetime import datetime, timezone
@@ -27,7 +27,21 @@ from .config import config
 
 # Import core modules
 from .models import Signal, OrderSide, OrderType
-from .indicators import calculate_adx, calculate_atr, calculate_bollinger_bands
+from .order_result import OrderResult, OrderResultStatus
+from .exit_sizing import plan_close_quantity
+from .venue_stops import (
+    LOCAL_ONLY_STATES,
+    PROTECTED_STATES,
+    STOP_FAILURE_POLICY_CLOSE,
+    STOP_STATE_ATTACHED,
+    STOP_STATE_MISSING,
+    STOP_STATE_STANDALONE,
+    STOP_STATE_UNSUPPORTED,
+    find_stop_row,
+    position_side_lower,
+    stop_hit,
+    venue_stops_supported,
+)
 
 # Exchange abstraction: adapter factory selected via EXCHANGE env var
 from .exchanges import get_exchange_client
@@ -35,18 +49,17 @@ from .exchanges import get_exchange_client
 # Import other modules
 from .database import DatabaseManager
 from .history import TradeStore
-from .pacifica_client import PacificaClient, PacificaEnvironment
+from .pacifica_client import PacificaClient
 from .strategy_manager import StrategyManager
 from .multi_timeframe_fetcher import MultiTimeframeFetcher
-from .market_regime import MarketRegimeDetector
 from .volatility_regime import make_regime_detector
-from .risk_manager import RiskManager, RiskProfile
+from .risk_manager import RiskManager
 
 # Import StrategyType from local config (re-exported from core_logic)
 from .config import StrategyType
 
 # Import WebSocket client for real-time price data
-from .pacifica_ws_client import get_ws_client
+from .ws_factory import get_market_ws_client as get_ws_client
 
 # Import GridLifecycleManager for authoritative grid state management
 from .grid_lifecycle_manager import GridLifecycleManager, GridState
@@ -68,20 +81,32 @@ from .execution_layer import ExecutionLayer
 from .signal_logger import SignalLogger
 
 # Import Phase 2 component system
-from .component_interfaces import (
-    ExecutionInterface,
-    RiskInterface,
-    GridInterface,
-    RegimeInterface,
-    StrategyInterface,
-    DatabaseInterface,
-)
 from .event_system import get_event_bus, EventType
 from .component_registry import get_component_registry
 from .telegram_alerts import telegram_alerts
 
 # Import PositionReconciler for H4 position reconciliation
 from .position_reconciler import PositionReconciler
+
+
+def _signal_stop_price(signal: Any) -> Optional[float]:
+    """The signal's protective stop, or None when it carries none."""
+    try:
+        stop = float(getattr(signal, "stop_loss", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return stop if stop > 0 else None
+
+
+def _entry_fill_max_lookups() -> int:
+    """ENTRY_FILL_MAX_LOOKUPS: env var first (legacy), else config (default 10)."""
+    raw = os.getenv("ENTRY_FILL_MAX_LOOKUPS")
+    if raw is not None:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return max(1, int(getattr(config, "entry_fill_max_lookups", 10)))
 
 
 def _resolve_exchange(bot):
@@ -156,11 +181,16 @@ class TradingBot:
         self.signal_logger = SignalLogger(db_manager=self.db)
         logger.info("Signal logger initialized - logging to signals_log.csv")
 
-        # Initialize client
+        # Initialize client.
+        # NOTE: the Config attributes are named pacifica_*; the AGENT_WALLET_*
+        # / ACCOUNT_* spellings are the .env variable names, not attributes.
+        # Using the env spellings here raised AttributeError and made this
+        # whole branch dead - api_server always injects a client, so it went
+        # unnoticed.
         if client is None:
             self.client = PacificaClient(
-                agent_wallet_private_key=config.agent_wallet_private_key,
-                account_public_key=config.account_public_key,
+                agent_wallet_private_key=config.pacifica_private_key,
+                account_public_key=config.pacifica_public_key,
                 testnet=config.testnet,
             )
         else:
@@ -218,9 +248,7 @@ class TradingBot:
         # transitions publish REGIME_CHANGED and persist to regime_history.
         # REGIME_MODE selects the taxonomy: 'adx' (default, shipped) or
         # 'volatility' (docs/REGIME-VOLATILITY.md).
-        self.market_regime = make_regime_detector(
-            event_bus=get_event_bus(), db=self.db
-        )
+        self.market_regime = make_regime_detector(event_bus=get_event_bus(), db=self.db)
 
         # Initialize strategy manager with regime detector
         self.strategy_manager = StrategyManager(
@@ -242,12 +270,31 @@ class TradingBot:
         # Initialize grid system: load from DB, repair orphans, validate integrity
         self.grid_lifecycle.initialize_grid_system()
 
+        # Entries the exchange accepted but whose fills were not yet
+        # confirmed at submit time: {client_order_id: {...}}.  Completed
+        # (or given up on) by _complete_pending_entries each loop.
+        self._pending_entries: Dict[str, Dict[str, Any]] = {}
+        self._entry_fill_max_lookups = _entry_fill_max_lookups()
+
+        # Venue-side stop protection (live-readiness audit T4).  What to
+        # do when a filled entry cannot be protected, plus an in-memory
+        # mirror of the persisted protection records keyed (symbol, SIDE)
+        # so stand-ins without a DB still enforce local stops.
+        self._venue_stop_policy: str = getattr(
+            config, "venue_stop_failure_policy", STOP_FAILURE_POLICY_CLOSE
+        )
+        self._protection_records: Dict[tuple, Dict[str, Any]] = {}
+        self._startup_stop_repair_done = False
+
         # Initialize migrated position manager
         self.migrated_position_manager = MigratedPositionManager(
             client=self.client,
             risk_manager=self.risk_manager,
             regime_detector=self.market_regime,
             multi_tf_fetcher=self.multi_tf_fetcher,
+            reconcile_callback=self._reconcile_after_ambiguous_close,
+            venue_exchange_resolver=lambda: self.exchange,
+            db=self.db,
         )
 
         # Initialize regime param overlay manager (P4). Loads active
@@ -493,7 +540,11 @@ class TradingBot:
             RuntimeError: If both WebSocket and REST API price unavailable
         """
         # Check if WebSocket client is available and connected
-        if not self.ws_client or not hasattr(self.ws_client, "_running") or not self.ws_client._running:
+        if (
+            not self.ws_client
+            or not hasattr(self.ws_client, "_running")
+            or not self.ws_client._running
+        ):
             logger.warning(
                 f"WebSocket unavailable for {symbol}, falling back to REST API"
             )
@@ -512,11 +563,11 @@ class TradingBot:
                 # as if it were real, which would break stop-distance logic if
                 # any caller ever read ticker["high"] or ticker["low"].
                 return {
-                    "symbol":    symbol,
-                    "last":      float(price),
-                    "volume":    0,  # Not available via ticker WS
+                    "symbol": symbol,
+                    "last": float(price),
+                    "volume": 0,  # Not available via ticker WS
                     "timestamp": int(time.time() * 1000),
-                    "_source":   "ws_last_only",  # marker so callers can detect
+                    "_source": "ws_last_only",  # marker so callers can detect
                 }
             else:
                 # No WebSocket price - fall back to REST
@@ -561,11 +612,29 @@ class TradingBot:
             self._last_loop_time = datetime.now(timezone.utc)
             self._loop_step = "starting"
             try:
-                logger.info(f"🔄 Trading loop iteration {self._loop_iteration} starting...")
+                logger.info(
+                    f"🔄 Trading loop iteration {self._loop_iteration} starting..."
+                )
 
                 # Update positions from client
                 self._loop_step = "update_positions"
                 self._update_positions()
+
+                # Once, after the first position sync: re-install any venue
+                # stop lost across the restart (closes the restart hole).
+                if not self._startup_stop_repair_done:
+                    self._startup_stop_repair_done = True
+                    self._loop_step = "repair_venue_stops_startup"
+                    self._repair_venue_stops(reason="startup")
+
+                # Complete entries whose fills were not confirmed at submit
+                self._loop_step = "complete_pending_entries"
+                self._complete_pending_entries()
+
+                # Local stop enforcement for positions the venue is not
+                # protecting (state missing / unsupported)
+                self._loop_step = "enforce_local_stops"
+                self._enforce_local_stops()
 
                 # GRID MONITORING: Monitor active grids for fills, P&L, emergency stops
                 self._loop_step = "monitor_grids"
@@ -581,11 +650,15 @@ class TradingBot:
                 # len() saturates at max_history (1000) and then always returns 1000,
                 # making "after - before" permanently 0 — a misleading metric.
                 count_before = self.event_bus._published_count
-                logger.info(f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})...")
+                logger.info(
+                    f"📊 Calling _generate_and_publish_signals (total_published_so_far={count_before})..."
+                )
                 self._generate_and_publish_signals()
                 count_after = self.event_bus._published_count
                 self._loop_events_generated = count_after - count_before
-                logger.info(f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})")
+                logger.info(
+                    f"📊 Signal generation complete (published_this_loop={self._loop_events_generated}, total_published={count_after})"
+                )
 
                 # Monitor risk (delegated to RiskManager)
                 self._loop_step = "monitor_risk"
@@ -615,12 +688,13 @@ class TradingBot:
 
             except Exception as e:
                 logger.error(
-                    f"Error in trading loop (step={self._loop_step}): {e}", exc_info=True
+                    f"Error in trading loop (step={self._loop_step}): {e}",
+                    exc_info=True,
                 )
 
             # Sleep for configured interval (30 seconds)
             self._loop_step = "sleeping"
-            time.sleep(getattr(config, 'trading_loop_interval', 30))
+            time.sleep(getattr(config, "trading_loop_interval", 30))
 
     def _monitor_risk(self) -> None:
         """Monitor risk and trigger circuit breaker if needed."""
@@ -718,18 +792,20 @@ class TradingBot:
                     unrealized_pnl = (entry_price - current_price) * quantity
 
                 # Update position in database (save_position does upsert)
-                self.db.save_position({
-                    "symbol": symbol,
-                    "side": side,
-                    "quantity": quantity,
-                    "entry_price": entry_price,
-                    "current_price": current_price,
-                    "unrealized_pnl": unrealized_pnl,
-                    "leverage": float(pos.get("leverage", 1)),
-                    "asset_class": "perpetual",
-                    "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
-                    "funding_pnl": float(pos.get("funding_pnl", 0)),
-                })
+                self.db.save_position(
+                    {
+                        "symbol": symbol,
+                        "side": side,
+                        "quantity": quantity,
+                        "entry_price": entry_price,
+                        "current_price": current_price,
+                        "unrealized_pnl": unrealized_pnl,
+                        "leverage": float(pos.get("leverage", 1)),
+                        "asset_class": "perpetual",
+                        "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
+                        "funding_pnl": float(pos.get("funding_pnl", 0)),
+                    }
+                )
 
                 logging.debug(
                     f"Updated position: {symbol} {side} {quantity} @ ${entry_price:.2f} "
@@ -813,6 +889,10 @@ class TradingBot:
         except Exception as e:
             logger.error(f"Error running full position reconciliation: {e}")
 
+        # Same cadence: make sure every open position still has its venue
+        # stop (an operator cancel-all or a venue-side purge can remove it).
+        self._repair_venue_stops(reason="reconciliation")
+
     def _sync_existing_grids(self) -> None:
         """
         GRID MONITORING: Sync existing grids from exchange on startup.
@@ -863,8 +943,12 @@ class TradingBot:
                     continue
 
                 # Pacifica API uses "bid"/"ask" for sides (not "BUY"/"SELL")
-                buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
-                sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                buy_orders = [
+                    o for o in orders if o.get("side") in ("bid", "BUY", "buy")
+                ]
+                sell_orders = [
+                    o for o in orders if o.get("side") in ("ask", "SELL", "sell")
+                ]
 
                 if not buy_orders or not sell_orders:
                     logger.debug(
@@ -891,13 +975,18 @@ class TradingBot:
             if self.grid_lifecycle and self.grid_lifecycle._grids:
                 confirmed_grid_symbols = set()
                 for symbol, orders in orders_by_symbol.items():
-                    buy_orders = [o for o in orders if o.get("side") in ("bid", "BUY", "buy")]
-                    sell_orders = [o for o in orders if o.get("side") in ("ask", "SELL", "sell")]
+                    buy_orders = [
+                        o for o in orders if o.get("side") in ("bid", "BUY", "buy")
+                    ]
+                    sell_orders = [
+                        o for o in orders if o.get("side") in ("ask", "SELL", "sell")
+                    ]
                     if len(orders) >= 5 and buy_orders and sell_orders:
                         confirmed_grid_symbols.add(symbol)
 
                 stale_symbols = [
-                    s for s in self.grid_lifecycle._grids
+                    s
+                    for s in self.grid_lifecycle._grids
                     if s not in confirmed_grid_symbols
                 ]
                 for symbol in stale_symbols:
@@ -923,8 +1012,12 @@ class TradingBot:
         try:
             all_orders = buy_orders + sell_orders
             # Calculate center price from order spread
-            buy_prices = [float(o.get("price", 0)) for o in buy_orders if o.get("price")]
-            sell_prices = [float(o.get("price", 0)) for o in sell_orders if o.get("price")]
+            buy_prices = [
+                float(o.get("price", 0)) for o in buy_orders if o.get("price")
+            ]
+            sell_prices = [
+                float(o.get("price", 0)) for o in sell_orders if o.get("price")
+            ]
 
             if not buy_prices or not sell_prices:
                 logger.error(f"Cannot re-adopt {symbol}: no valid prices in orders")
@@ -949,9 +1042,7 @@ class TradingBot:
             # Convention (matches grid_lifecycle_manager._sync_grids_from_exchange):
             #   emergency_stop = lowest_buy_price × (1 - GRID_EMERGENCY_STOP_PCT)
             # Falls back to center × (1 - pct) if no buy orders are visible.
-            emergency_stop_pct = float(
-                os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
-            )
+            emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
             if buy_prices:
                 emergency_stop = min(buy_prices) * (1.0 - emergency_stop_pct)
             else:
@@ -983,19 +1074,19 @@ class TradingBot:
                     if oid:
                         readopted_ids.add(str(oid))
                 if readopted_ids:
-                    self.grid_lifecycle._grids[symbol]["order_ids"] = (
-                        readopted_ids
-                    )
+                    self.grid_lifecycle._grids[symbol]["order_ids"] = readopted_ids
 
                 logger.info(
                     f"✅ Re-adopted grid for {symbol}: center=${center_price:.4f}, "
                     f"emergency_stop=${emergency_stop:.4f} "
-                    f"({emergency_stop_pct*100:.0f}% below lowest bid), "
+                    f"({emergency_stop_pct * 100:.0f}% below lowest bid), "
                     f"{len(buy_orders)} bids + {len(sell_orders)} asks, "
                     f"capital≈${total_capital:.2f}"
                 )
             else:
-                logger.warning(f"Cannot re-adopt {symbol}: GridLifecycleManager unavailable or grid already exists")
+                logger.warning(
+                    f"Cannot re-adopt {symbol}: GridLifecycleManager unavailable or grid already exists"
+                )
 
         except Exception as e:
             logger.error(f"Error re-adopting grid for {symbol}: {e}", exc_info=True)
@@ -1054,8 +1145,14 @@ class TradingBot:
                 except Exception:
                     pass  # Skip price update if unavailable
 
-            if not current_prices:
-                return  # No active grids or no prices available
+            # A force exit that could not confirm every position flat is
+            # retried inside monitor_grids; keep calling it while such a
+            # marker exists even if no ACTIVE grid (or no price) is left.
+            pending = getattr(self.grid_lifecycle, "get_pending_flattens", None)
+            flattens = pending() if callable(pending) else None
+            has_pending = isinstance(flattens, dict) and bool(flattens)
+            if not current_prices and not has_pending:
+                return  # No active grids, no prices and nothing to retry
 
             # Monitor all grids at once using GridLifecycleManager
             try:
@@ -1074,9 +1171,7 @@ class TradingBot:
                     logger.warning(f"Grid alert: {alert}")
 
             except Exception as e:
-                logger.error(
-                    f"Error monitoring grids: {e}", exc_info=True
-                )
+                logger.error(f"Error monitoring grids: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Error in grid monitoring: {e}", exc_info=True)
@@ -1124,9 +1219,7 @@ class TradingBot:
                 )
 
         except Exception as e:
-            logger.error(
-                f"Error managing migrated positions: {e}", exc_info=True
-            )
+            logger.error(f"Error managing migrated positions: {e}", exc_info=True)
 
     def start_trading(self) -> None:
         """
@@ -1167,7 +1260,9 @@ class TradingBot:
             logger.info(f"📊 Checking {len(markets)} markets for signals...")
 
             signals_generated = 0
-            for market in markets[:10]:  # Limit to first 10 markets to avoid rate limits
+            for market in markets[
+                :10
+            ]:  # Limit to first 10 markets to avoid rate limits
                 try:
                     symbol = market.get("symbol")
                     if not symbol:
@@ -1182,12 +1277,16 @@ class TradingBot:
                         continue
 
                     if current_price <= 0:
-                        logger.debug(f"Skipping {symbol}: invalid price {current_price}")
+                        logger.debug(
+                            f"Skipping {symbol}: invalid price {current_price}"
+                        )
                         continue
 
                     # Get multi-timeframe data (5m for MomentumScalping, others for main strategies)
                     multi_tf_data = self.multi_tf_fetcher.get_candles_multi_tf(
-                        symbol=symbol, timeframes=["5m", "15m", "1h", "4h"], lookback_candles=250
+                        symbol=symbol,
+                        timeframes=["5m", "15m", "1h", "4h"],
+                        lookback_candles=250,
                     )
 
                     if not multi_tf_data:
@@ -1213,25 +1312,41 @@ class TradingBot:
                         # Validate signal before publishing
                         if not signal.is_valid():
                             flags = {
-                                'volume_confirmation': signal.volume_confirmation,
-                                'multi_timeframe_alignment': signal.multi_timeframe_alignment,
-                                'support_resistance_valid': signal.support_resistance_valid,
-                                'rrr_meets_minimum': signal.rrr_meets_minimum,
-                                'liquidation_buffer_safe': signal.liquidation_buffer_safe,
-                                'account_risk_ok': signal.account_risk_ok,
-                                'margin_drawdown_ok': signal.margin_drawdown_ok,
-                                'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                                "volume_confirmation": signal.volume_confirmation,
+                                "multi_timeframe_alignment": signal.multi_timeframe_alignment,
+                                "support_resistance_valid": signal.support_resistance_valid,
+                                "rrr_meets_minimum": signal.rrr_meets_minimum,
+                                "liquidation_buffer_safe": signal.liquidation_buffer_safe,
+                                "account_risk_ok": signal.account_risk_ok,
+                                "margin_drawdown_ok": signal.margin_drawdown_ok,
+                                "forbidden_conditions_clear": signal.forbidden_conditions_clear,
                             }
                             failed = [k for k, v in flags.items() if not v]
                             reason = f"Pre-publish validation failed: {failed}"
-                            logger.debug(f"Skipping invalid signal for {symbol}: {failed}")
-                            regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
-                            self.signal_logger.log_signal_rejected(signal=signal, reason=reason, regime=regime_str)
+                            logger.debug(
+                                f"Skipping invalid signal for {symbol}: {failed}"
+                            )
+                            regime_str = (
+                                regime.name
+                                if regime and hasattr(regime, "name")
+                                else str(regime)
+                                if regime
+                                else "unknown"
+                            )
+                            self.signal_logger.log_signal_rejected(
+                                signal=signal, reason=reason, regime=regime_str
+                            )
                             continue
 
                         # Log signal BEFORE publishing event (event bus is synchronous)
                         signals_generated += 1
-                        regime_str = regime.name if regime and hasattr(regime, 'name') else str(regime) if regime else "unknown"
+                        regime_str = (
+                            regime.name
+                            if regime and hasattr(regime, "name")
+                            else str(regime)
+                            if regime
+                            else "unknown"
+                        )
                         log_result = self.signal_logger.log_signal_generated(
                             signal=signal,
                             regime=regime_str,
@@ -1329,7 +1444,9 @@ class TradingBot:
         - RISK_LIMIT_EXCEEDED: Trigger circuit breaker
         - GRID_EMERGENCY: Handle grid emergency stops
         """
-        self.event_bus.subscribe(EventType.SIGNAL_GENERATED, self._handle_signal_generated)
+        self.event_bus.subscribe(
+            EventType.SIGNAL_GENERATED, self._handle_signal_generated
+        )
         self.event_bus.subscribe(EventType.ORDER_PLACED, self._handle_order_placed)
         self.event_bus.subscribe(EventType.ORDER_FILLED, self._handle_order_filled)
         self.event_bus.subscribe(
@@ -1405,11 +1522,19 @@ class TradingBot:
         """
         try:
             # Event object has .data attribute (not a dict with .get())
-            signal_data = event.data if hasattr(event, 'data') else event.get("data", {})
-            signal = signal_data.get("signal") if isinstance(signal_data, dict) else None
+            signal_data = (
+                event.data if hasattr(event, "data") else event.get("data", {})
+            )
+            signal = (
+                signal_data.get("signal") if isinstance(signal_data, dict) else None
+            )
 
             if not signal:
-                logger.warning("Received signal event with no signal data - event.data type=%s, signal_data type=%s", type(event.data).__name__, type(signal_data).__name__)
+                logger.warning(
+                    "Received signal event with no signal data - event.data type=%s, signal_data type=%s",
+                    type(event.data).__name__,
+                    type(signal_data).__name__,
+                )
                 return
 
             logger.info(
@@ -1506,24 +1631,28 @@ class TradingBot:
             # Check signal validity
             if not signal.is_valid():
                 flags = {
-                    'volume_confirmation': signal.volume_confirmation,
-                    'multi_timeframe_alignment': signal.multi_timeframe_alignment,
-                    'support_resistance_valid': signal.support_resistance_valid,
-                    'rrr_meets_minimum': signal.rrr_meets_minimum,
-                    'liquidation_buffer_safe': signal.liquidation_buffer_safe,
-                    'account_risk_ok': signal.account_risk_ok,
-                    'margin_drawdown_ok': signal.margin_drawdown_ok,
-                    'forbidden_conditions_clear': signal.forbidden_conditions_clear,
+                    "volume_confirmation": signal.volume_confirmation,
+                    "multi_timeframe_alignment": signal.multi_timeframe_alignment,
+                    "support_resistance_valid": signal.support_resistance_valid,
+                    "rrr_meets_minimum": signal.rrr_meets_minimum,
+                    "liquidation_buffer_safe": signal.liquidation_buffer_safe,
+                    "account_risk_ok": signal.account_risk_ok,
+                    "margin_drawdown_ok": signal.margin_drawdown_ok,
+                    "forbidden_conditions_clear": signal.forbidden_conditions_clear,
                 }
                 failed = [k for k, v in flags.items() if not v]
                 reason = f"Signal invalid - failed flags: {failed}"
-                logger.info(f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}")
+                logger.info(
+                    f"🚫 Signal invalid for {signal.asset} {signal.strategy.name}: failed={failed}"
+                )
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
             # CRITICAL: Validate stop loss is present
             if not signal.stop_loss or signal.stop_loss <= 0:
-                reason = "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                reason = (
+                    "CRITICAL: Signal missing valid stop loss - rejecting for safety"
+                )
                 logger.error(f"{reason} for {signal.asset}")
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
@@ -1542,7 +1671,9 @@ class TradingBot:
 
             if exposure_pct >= 80:  # 80% utilization limit
                 reason = f"Risk limit reached ({exposure_pct:.1f}% >= 80%)"
-                logger.warning(f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal")
+                logger.warning(
+                    f"Risk limit reached ({exposure_pct:.1f}%) - cannot execute signal"
+                )
                 self.signal_logger.log_signal_rejected(signal=signal, reason=reason)
                 return False
 
@@ -1596,7 +1727,9 @@ class TradingBot:
             allocation_result = self.risk_manager.request_capital_allocation(
                 symbol=signal.asset,
                 requested_amount=requested_amount,
-                strategy=signal.strategy.name if hasattr(signal.strategy, 'name') else str(signal.strategy),
+                strategy=signal.strategy.name
+                if hasattr(signal.strategy, "name")
+                else str(signal.strategy),
                 account_balance=account_balance,
                 current_exposure=current_exposure,
             )
@@ -1616,7 +1749,9 @@ class TradingBot:
 
             # Execute signal based on type
             if signal.strategy == StrategyType.GRID_TRADING:
-                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+                self._execute_grid_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
             else:
                 self._execute_standard_signal_coordinated(
                     signal, allocation_result, log_entry
@@ -1641,7 +1776,9 @@ class TradingBot:
         """
         try:
             if signal.strategy == StrategyType.GRID_TRADING:
-                self._execute_grid_signal_coordinated(signal, allocation_result, log_entry)
+                self._execute_grid_signal_coordinated(
+                    signal, allocation_result, log_entry
+                )
             else:
                 self._execute_standard_signal_coordinated(
                     signal, allocation_result, log_entry
@@ -1689,8 +1826,8 @@ class TradingBot:
             )
 
             if result.get("success"):
-                buy_orders = result.get('buy_orders', 0)
-                sell_orders = result.get('sell_orders', 0)
+                buy_orders = result.get("buy_orders", 0)
+                sell_orders = result.get("sell_orders", 0)
                 logger.info(
                     f"✅ Grid orders placed for {symbol}: "
                     f"{buy_orders} BUY, {sell_orders} SELL"
@@ -1711,21 +1848,13 @@ class TradingBot:
                 # value (signal.stop_loss = entry - 2*ATR) landed INSIDE the
                 # grid and force-exited healthy grids on normal oscillation.
                 # Convention matches re-adoption: lowest_buy * (1 - stop_pct).
-                emergency_stop_pct = float(
-                    os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05")
-                )
-                center_price = (
-                    result.get("center_price") or signal.entry_price
-                )
+                emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+                center_price = result.get("center_price") or signal.entry_price
                 lowest_buy_price = result.get("lowest_buy_price") or 0
                 if lowest_buy_price > 0:
-                    emergency_stop_price = lowest_buy_price * (
-                        1.0 - emergency_stop_pct
-                    )
+                    emergency_stop_price = lowest_buy_price * (1.0 - emergency_stop_pct)
                 else:
-                    emergency_stop_price = center_price * (
-                        1.0 - emergency_stop_pct
-                    )
+                    emergency_stop_price = center_price * (1.0 - emergency_stop_pct)
 
                 # Record the actual market regime (not signal.market_state,
                 # which is always "RANGE" for grid signals).
@@ -1733,9 +1862,7 @@ class TradingBot:
                 regime_detector = getattr(self, "market_regime", None)
                 if regime_detector is not None:
                     try:
-                        current_regime = regime_detector.get_current_regime(
-                            symbol
-                        )
+                        current_regime = regime_detector.get_current_regime(symbol)
                         if current_regime is not None:
                             regime_str = current_regime.value
                     except Exception as e:
@@ -1762,17 +1889,19 @@ class TradingBot:
                     regime=regime_str,
                     atr=(signal.indicators or {}).get("atr", 0),
                     spacing=result.get("grid_spacing") or signal.spacing or 0,
-                    num_levels=result.get("num_levels")
-                    or signal.grid_levels
-                    or 10,
+                    num_levels=result.get("num_levels") or signal.grid_levels or 10,
                     center_price=center_price,
                     order_ids=placed_order_ids,
                 )
-                logger.info(f"✅ Grid registered with GridLifecycleManager for {symbol}")
+                logger.info(
+                    f"✅ Grid registered with GridLifecycleManager for {symbol}"
+                )
 
             else:
-                error_msg = result.get('error', 'Unknown error')
-                logger.error(f"❌ Grid order placement failed for {symbol}: {error_msg}")
+                error_msg = result.get("error", "Unknown error")
+                logger.error(
+                    f"❌ Grid order placement failed for {symbol}: {error_msg}"
+                )
 
                 # Log failed grid execution
                 self.signal_logger.log_signal_failed(
@@ -1852,7 +1981,9 @@ class TradingBot:
                     )
 
                     # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_data = (
+                        response.get("data", {}) if isinstance(response, dict) else {}
+                    )
                     order_id = order_data.get("order_id") or order_data.get("id")
 
                     if order_id:
@@ -1864,7 +1995,9 @@ class TradingBot:
                         error_msg = response.get("error", "Unknown API error")
                         logger.error(f"  ❌ BUY order rejected: {error_msg}")
                 except Exception as e:
-                    logger.error(f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}")
+                    logger.error(
+                        f"  ❌ Failed to place BUY order @ ${level['price']:.4f}: {e}"
+                    )
 
             # Place SELL orders (normalized vocabulary via exchange adapter)
             for level in grid_levels["sell_levels"]:
@@ -1878,7 +2011,9 @@ class TradingBot:
                     )
 
                     # Extract order data from response wrapper {"success": bool, "data": {...}}
-                    order_data = response.get("data", {}) if isinstance(response, dict) else {}
+                    order_data = (
+                        response.get("data", {}) if isinstance(response, dict) else {}
+                    )
                     order_id = order_data.get("order_id") or order_data.get("id")
 
                     if order_id:
@@ -1890,7 +2025,9 @@ class TradingBot:
                         error_msg = response.get("error", "Unknown API error")
                         logger.error(f"  ❌ SELL order rejected: {error_msg}")
                 except Exception as e:
-                    logger.error(f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}")
+                    logger.error(
+                        f"  ❌ Failed to place SELL order @ ${level['price']:.4f}: {e}"
+                    )
 
             # Return results, including the grid geometry actually used so the
             # caller can register the grid with real values (spacing drives
@@ -1955,25 +2092,50 @@ class TradingBot:
             # Refine signal through ExecutionLayer before execution
             refined_signal = self.execution_layer.refine_entry(signal, symbol)
             if refined_signal is None:
-                logger.info(f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable")
+                logger.info(
+                    f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable"
+                )
                 self.signal_logger.log_signal_rejected(
                     signal=signal,
                     reason="ExecutionLayer timing skip",
                     notes="1m/5m timing conditions not met",
                 )
                 return
-            
+
             # Use refined signal for execution
             signal = refined_signal
+
+            # Generate + persist the client order id BEFORE transmission so
+            # an ambiguous response (timeout, bare ack) can be looked up.
+            client_order_id = uuid.uuid4().hex[:32]
+            logger.info(
+                f"Submitting {symbol} {signal.side.name} {quantity:.6f} "
+                f"client_order_id={client_order_id}"
+            )
+            self.signal_logger.log_signal_pending(
+                signal=signal,
+                client_order_id=client_order_id,
+                quantity=quantity,
+                notes=f"Capital allocated: ${capital_allocated:.2f}",
+            )
 
             # Use market order for immediate execution.  Routed through the
             # exchange adapter: normalized OrderSide/OrderType go in, the
             # adapter owns the exchange-native side/amount conversion.
-            order_response = _resolve_exchange(self).place_order(
+            exchange = _resolve_exchange(self)
+            # Attach the signal's stop to the entry itself on venues that
+            # hold stops server-side (T4); the fill path verifies it landed.
+            order_kwargs: Dict[str, Any] = {}
+            entry_stop = _signal_stop_price(signal)
+            if entry_stop is not None and venue_stops_supported(exchange):
+                order_kwargs["stop_loss"] = entry_stop
+            order_response = exchange.place_order(
                 symbol=symbol,
                 side=signal.side,
                 quantity=quantity,
                 order_type=OrderType.MARKET,
+                client_order_id=client_order_id,
+                **order_kwargs,
             )
 
             # Debug: log raw API response to diagnose parsing issues
@@ -1982,75 +2144,28 @@ class TradingBot:
                 f"value={str(order_response)[:200]}"
             )
 
-            # Extract order data from response wrapper {"success": bool, "data": {...}}
-            if not isinstance(order_response, dict):
-                logger.error(f"Unexpected order response type: {type(order_response).__name__} = {order_response}")
-                execution_result = {
-                    "success": False,
-                    "order_id": None,
-                    "executed_price": signal.entry_price,
-                    "error": f"Unexpected response type: {type(order_response).__name__}",
-                }
-            else:
-                order_data = order_response.get("data", {})
-                if not isinstance(order_data, dict):
-                    order_data = {}
-                order_id = order_data.get("order_id") or order_data.get("id")
+            result = OrderResult.from_ack(order_response)
+            if result.client_order_id is None:
+                result.client_order_id = client_order_id
 
-                # Pacifica intermittently returns bare string "success" for market orders
-                # (normalised by pacifica_client to {"success": True, "data": {}, "status": "success"}).
-                # That is a valid accepted-order response even though no order_id comes back.
-                is_success_ack = order_response.get("status") == "success"
-
-                # Convert to execution result format
-                execution_result = {
-                    "success": order_response.get("success", False) and (order_id is not None or is_success_ack),
-                    "order_id": order_id,
-                    "executed_price": order_data.get("price", signal.entry_price),
-                    "error": order_response.get("error") if not order_response.get("success") else None,
-                }
-
-            if execution_result.get("success"):
-                logger.info(
-                    f"✅ Order executed for {symbol}: "
-                    f"ID={execution_result.get('order_id')}, "
-                    f"Price=${execution_result.get('executed_price'):.4f}"
-                )
-
-                # Log successful execution to CSV/database
-                self.signal_logger.log_signal_executed(
-                    signal=signal,
-                    order_id=str(execution_result.get("order_id", "")),
-                    filled_price=execution_result.get("executed_price", 0),
-                    filled_quantity=quantity,
-                    execution_result="success",
-                    notes=f"Capital allocated: ${capital_allocated:.2f}",
-                )
-
-                # Publish ORDER_PLACED event
-                self.event_bus.publish_event(
-                    event_type=EventType.ORDER_PLACED,
-                    data={
-                        "symbol": symbol,
-                        "order_id": execution_result.get("order_id"),
-                        "side": signal.side.name,
-                        "quantity": quantity,
-                        "price": execution_result.get("executed_price"),
-                        "timestamp": time.time(),
-                    },
-                    source="trading_bot",
-                )
-
-            else:
-                error_msg = execution_result.get('error', 'Unknown error')
+            if not result.accepted:
+                error_msg = result.error or "Unknown error"
                 logger.error(f"❌ Order execution failed for {symbol}: {error_msg}")
-
-                # Log failed execution
                 self.signal_logger.log_signal_failed(
                     signal=signal,
                     error=error_msg,
-                    notes=f"Attempted quantity: {quantity}",
+                    notes=(
+                        f"Attempted quantity: {quantity}; "
+                        f"client_order_id={client_order_id}"
+                    ),
                 )
+                return
+
+            # The ack only says ACCEPTED.  Record the entry from actual
+            # fills (or park it as pending) - never from the request.
+            self._record_entry_outcome(
+                signal, symbol, quantity, capital_allocated, result, exchange
+            )
 
         except Exception as e:
             logger.opt(exception=True).error(
@@ -2061,6 +2176,656 @@ class TradingBot:
                 error=f"{type(e).__name__}: {e}",
                 notes="Exception during execution",
             )
+
+    def _lookup_entry_fill(
+        self, exchange, symbol: str, result: OrderResult, quantity: float
+    ) -> OrderResult:
+        """Query the exchange for an accepted order's fills (UNKNOWN on error)."""
+        if result.has_fills:
+            return result
+        try:
+            fill = exchange.get_order_fill(
+                symbol,
+                order_id=result.order_id,
+                client_order_id=result.client_order_id,
+                requested_quantity=quantity,
+            )
+        except Exception as exc:  # noqa: BLE001 - lookup failure is "unknown"
+            logger.warning(f"Fill lookup failed for {symbol} {result.order_id}: {exc}")
+            fill = None
+        if not isinstance(fill, OrderResult):
+            return OrderResult(
+                order_id=result.order_id,
+                client_order_id=result.client_order_id,
+                status=OrderResultStatus.UNKNOWN.value,
+                error="fill lookup unavailable",
+            )
+        if fill.order_id is None:
+            fill.order_id = result.order_id
+        if fill.client_order_id is None:
+            fill.client_order_id = result.client_order_id
+        return fill
+
+    def _record_entry_outcome(
+        self,
+        signal: Signal,
+        symbol: str,
+        quantity: float,
+        capital_allocated: float,
+        result: OrderResult,
+        exchange,
+    ) -> None:
+        """Record an ACCEPTED entry from actual fills, or park it as pending."""
+        fill = self._lookup_entry_fill(exchange, symbol, result, quantity)
+        if fill.has_fills:
+            self._record_entry_fill(
+                signal, symbol, quantity, capital_allocated, fill, False
+            )
+            return
+        if fill.rejected:
+            self._record_entry_rejected(signal, symbol, quantity, fill)
+            return
+        key = result.client_order_id or result.order_id or uuid.uuid4().hex
+        self._pending_entries[key] = {
+            "signal": signal,
+            "symbol": symbol,
+            "quantity": quantity,
+            "capital": capital_allocated,
+            "order_id": result.order_id,
+            "client_order_id": result.client_order_id,
+            "submitted_at": time.time(),
+            "lookups": 1,
+        }
+        logger.warning(
+            f"{symbol} order {result.order_id} accepted but not yet filled "
+            f"(status={fill.status}) - recorded as PENDING, not executed"
+        )
+        self.signal_logger.log_signal_pending(
+            signal=signal,
+            client_order_id=result.client_order_id or "",
+            quantity=quantity,
+            order_id=result.order_id or "",
+            notes=f"accepted, awaiting fill (status={fill.status})",
+        )
+
+    def _record_entry_fill(
+        self,
+        signal: Signal,
+        symbol: str,
+        quantity: float,
+        capital_allocated: float,
+        fill: OrderResult,
+        delayed: bool,
+    ) -> None:
+        """Record executed price/quantity from confirmed fills."""
+        executed_qty = fill.filled_quantity
+        executed_price = fill.avg_fill_price or signal.entry_price
+        partial = executed_qty + 1e-9 < quantity
+        execution_result = "partial_fill" if partial else "success"
+        if delayed:
+            execution_result = "delayed_partial_fill" if partial else "delayed_fill"
+        logger.info(
+            f"[FILLED] {symbol}: ID={fill.order_id}, "
+            f"qty={executed_qty:.6f}/{quantity:.6f}, VWAP=${executed_price:.4f} "
+            f"({execution_result})"
+        )
+        self.signal_logger.log_signal_executed(
+            signal=signal,
+            order_id=str(fill.order_id or ""),
+            filled_price=executed_price,
+            filled_quantity=executed_qty,
+            execution_result=execution_result,
+            notes=(
+                f"Capital allocated: ${capital_allocated:.2f}; "
+                f"requested {quantity:.6f}; client_order_id={fill.client_order_id}"
+            ),
+        )
+        # The position now exists on the venue: make sure a stop does too.
+        # (getattr: duck-typed stand-ins may bind only the fill methods.)
+        protect = getattr(self, "_ensure_entry_protection", None)
+        try:
+            if callable(protect):
+                protect(signal, symbol, fill, executed_price)
+        except Exception as exc:  # noqa: BLE001 - never raise into the loop
+            logger.error(
+                f"UNPROTECTED {symbol}: stop verification raised "
+                f"{type(exc).__name__}: {exc}"
+            )
+        self.event_bus.publish_event(
+            event_type=EventType.ORDER_PLACED,
+            data={
+                "symbol": symbol,
+                "order_id": fill.order_id,
+                "client_order_id": fill.client_order_id,
+                "side": signal.side.name,
+                "quantity": executed_qty,
+                "requested_quantity": quantity,
+                "price": executed_price,
+                "fill_status": fill.status,
+                "timestamp": time.time(),
+            },
+            source="trading_bot",
+        )
+
+    def _record_entry_rejected(
+        self, signal: Signal, symbol: str, quantity: float, fill: OrderResult
+    ) -> None:
+        """Record an order the exchange accepted and later rejected/cancelled."""
+        logger.error(
+            f"[REJECTED] {symbol} order {fill.order_id} rejected after accept: {fill.error}"
+        )
+        self.signal_logger.log_signal_failed(
+            signal=signal,
+            error=f"rejected_after_accept: {fill.error}",
+            notes=(
+                f"order_id={fill.order_id}; client_order_id={fill.client_order_id}; "
+                f"requested {quantity:.6f}"
+            ),
+        )
+
+    def _complete_pending_entries(self) -> None:
+        """Resolve entries parked as pending on earlier cycles.
+
+        Each pending entry is looked up again; a fill records it as a
+        delayed (or delayed partial) fill, a cancel as rejected-after-
+        accept, and after ENTRY_FILL_MAX_LOOKUPS unresolved lookups it
+        is recorded as unconfirmed and left to the reconciler.
+        """
+        if not self._pending_entries:
+            return
+        exchange = _resolve_exchange(self)
+        for key in list(self._pending_entries):
+            entry = self._pending_entries[key]
+            probe = OrderResult(
+                success=True,
+                accepted=True,
+                order_id=entry["order_id"],
+                client_order_id=entry["client_order_id"],
+                status=OrderResultStatus.ACCEPTED.value,
+            )
+            fill = self._lookup_entry_fill(
+                exchange, entry["symbol"], probe, entry["quantity"]
+            )
+            entry["lookups"] += 1
+            if fill.has_fills:
+                self._pending_entries.pop(key, None)
+                self._record_entry_fill(
+                    entry["signal"],
+                    entry["symbol"],
+                    entry["quantity"],
+                    entry["capital"],
+                    fill,
+                    True,
+                )
+            elif fill.rejected:
+                self._pending_entries.pop(key, None)
+                self._record_entry_rejected(
+                    entry["signal"], entry["symbol"], entry["quantity"], fill
+                )
+            elif entry["lookups"] >= self._entry_fill_max_lookups:
+                self._pending_entries.pop(key, None)
+                logger.error(
+                    f"{entry['symbol']} order {entry['order_id']} still unconfirmed "
+                    f"after {entry['lookups']} lookups - recording as unconfirmed; "
+                    f"position reconciler owns it now"
+                )
+                self.signal_logger.log_signal_failed(
+                    signal=entry["signal"],
+                    error=f"fill_unconfirmed after {entry['lookups']} lookups",
+                    notes=(
+                        f"order_id={entry['order_id']}; "
+                        f"client_order_id={entry['client_order_id']}"
+                    ),
+                )
+
+    # ------------------------------------------------------------------
+    # Venue-side stop protection (live-readiness audit T4)
+    # ------------------------------------------------------------------
+
+    def _ensure_entry_protection(
+        self, signal: Signal, symbol: str, fill: OrderResult, entry_price: float
+    ) -> Dict[str, Any]:
+        """Verify a venue stop exists for a filled entry; install or act.
+
+        Order of operations: on venues with server-side stops, look for
+        the TP/SL row the attached stop should have produced; if absent,
+        attempt ONE standalone install; if that is rejected too, apply
+        ``VENUE_STOP_FAILURE_POLICY``.  The outcome is persisted on the
+        position record as entry_order_id / venue_stop_id /
+        venue_stop_price / venue_stop_state.
+
+        Args:
+            signal: The executed signal (carries stop_loss and side).
+            symbol: Trading symbol.
+            fill: Confirmed fill (order id + executed quantity).
+            entry_price: Executed price (for the insert path).
+
+        Returns:
+            The persisted protection record.
+        """
+        exchange = _resolve_exchange(self)
+        side = position_side_lower(signal.side).upper()
+        stop_price = _signal_stop_price(signal)
+        quantity = float(fill.filled_quantity or 0.0)
+        record: Dict[str, Any] = {
+            "entry_order_id": fill.order_id,
+            "venue_stop_id": None,
+            "venue_stop_price": stop_price,
+            "venue_stop_state": STOP_STATE_UNSUPPORTED,
+        }
+        if venue_stops_supported(exchange):
+            row = self._verify_venue_stop(exchange, symbol, side)
+            if row is not None:
+                record["venue_stop_id"] = row.get("tpsl_id") or None
+                record["venue_stop_price"] = row.get("sl_trigger_price") or stop_price
+                record["venue_stop_state"] = STOP_STATE_ATTACHED
+                logger.info(
+                    f"{symbol} {side} protected by attached venue stop "
+                    f"{record['venue_stop_id']} @ {record['venue_stop_price']}"
+                )
+            elif stop_price is not None and quantity > 0:
+                result = exchange.install_stop(symbol, side, quantity, stop_price)
+                if result.accepted:
+                    record["venue_stop_id"] = result.order_id
+                    record["venue_stop_state"] = STOP_STATE_STANDALONE
+                    logger.warning(
+                        f"{symbol} {side}: attached stop absent, installed standalone "
+                        f"venue stop {result.order_id} @ {stop_price}"
+                    )
+                else:
+                    self._apply_stop_failure_policy(
+                        symbol,
+                        side,
+                        quantity,
+                        stop_price,
+                        record,
+                        f"install rejected: {result.error}",
+                    )
+            else:
+                self._apply_stop_failure_policy(
+                    symbol,
+                    side,
+                    quantity,
+                    stop_price,
+                    record,
+                    "signal carries no stop price"
+                    if stop_price is None
+                    else "no fill quantity",
+                )
+        elif stop_price is None:
+            logger.error(
+                f"UNPROTECTED {symbol} {side}: signal carries no stop price and the "
+                f"venue holds no stops - nothing to enforce locally"
+            )
+        else:
+            logger.warning(
+                f"{symbol} {side}: venue has no server-side stops; local "
+                f"enforcement only (stop {stop_price})"
+            )
+        self._persist_protection(symbol, side, record, quantity, entry_price)
+        return record
+
+    def _list_venue_stops(
+        self, exchange, symbol: str
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Pending venue stop rows for ``symbol``; None when the venue is unreachable."""
+        try:
+            return list(exchange.list_stops(symbol) or [])
+        except Exception as exc:  # noqa: BLE001 - unknown, not "no stops"
+            logger.warning(f"Could not list venue stops for {symbol}: {exc}")
+            return None
+
+    def _verify_venue_stop(
+        self, exchange, symbol: str, side: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the pending venue stop row protecting ``side``, if any.
+
+        A transport failure is treated as "not verified" (None) so the
+        entry path installs a standalone stop rather than assuming
+        protection; the repair sweep uses ``_list_venue_stops`` directly
+        so it can tell "unreachable" from "absent".
+        """
+        rows = self._list_venue_stops(exchange, symbol)
+        if rows is None:
+            return None
+        return find_stop_row(rows, side)
+
+    def _apply_stop_failure_policy(
+        self,
+        symbol: str,
+        side: str,
+        quantity: float,
+        stop_price: Optional[float],
+        record: Dict[str, Any],
+        why: str,
+    ) -> None:
+        """Act on a position that could not be protected on the venue.
+
+        ``close``: flatten it reduce-only right now (default; an
+        unattended live bot must not carry an unprotected position).
+        ``local``: keep it, mark ``missing``; the loop check enforces the
+        stored stop and logs ERROR every cycle while unprotected.
+        """
+        policy = getattr(self, "_venue_stop_policy", STOP_FAILURE_POLICY_CLOSE)
+        record["venue_stop_state"] = STOP_STATE_MISSING
+        logger.error(
+            f"UNPROTECTED {symbol} {side} qty={quantity:.6f}: venue stop could not "
+            f"be installed ({why}); VENUE_STOP_FAILURE_POLICY={policy}"
+        )
+        if policy != STOP_FAILURE_POLICY_CLOSE:
+            return
+        closed = False
+        if quantity > 0:
+            closed = bool(self._emergency_close_position(symbol, side, quantity))
+        record["closed_by_policy"] = closed
+        if closed:
+            logger.error(
+                f"{symbol} {side}: closed reduce-only under failure policy 'close'"
+            )
+        else:
+            logger.error(
+                f"{symbol} {side}: policy close could NOT flatten the position - "
+                f"it remains open and UNPROTECTED; local enforcement continues"
+            )
+
+    def _persist_protection(
+        self,
+        symbol: str,
+        side: str,
+        record: Dict[str, Any],
+        quantity: Optional[float] = None,
+        entry_price: Optional[float] = None,
+    ) -> None:
+        """Store the protection record in memory and (when available) the DB."""
+        records = getattr(self, "_protection_records", None)
+        if records is None:
+            records = {}
+            self._protection_records = records
+        records[(symbol, side)] = dict(record)
+        db = getattr(self, "db", None)
+        writer = getattr(db, "record_position_protection", None)
+        if not callable(writer):
+            return
+        try:
+            writer(symbol, side, record, quantity=quantity, entry_price=entry_price)
+        except Exception as exc:  # noqa: BLE001 - persistence must not break trading
+            logger.error(f"Could not persist stop record for {symbol} {side}: {exc}")
+
+    def _protection_rows(self) -> List[Dict[str, Any]]:
+        """Open positions with their stop columns (DB rows + memory mirror)."""
+        rows: List[Dict[str, Any]] = []
+        seen = set()
+        db = getattr(self, "db", None)
+        if db is not None and hasattr(db, "get_positions"):
+            try:
+                for row in db.get_positions() or []:
+                    if not isinstance(row, dict) or not row.get("symbol"):
+                        continue
+                    key = (str(row["symbol"]), str(row.get("side", "")).upper())
+                    seen.add(key)
+                    rows.append(dict(row))
+            except Exception as exc:  # noqa: BLE001 - fall back to memory
+                logger.warning(f"Could not read positions for stop enforcement: {exc}")
+        for key, record in (getattr(self, "_protection_records", None) or {}).items():
+            if key in seen:
+                continue
+            rows.append({"symbol": key[0], "side": key[1], **record})
+        return rows
+
+    def _is_migrated_symbol(self, symbol: str, side: str) -> bool:
+        """True when MigratedPositionManager owns this position's stop."""
+        risk = getattr(self, "risk_manager", None)
+        checker = getattr(risk, "get_migrated_positions", None)
+        if not callable(checker):
+            return False
+        try:
+            for pos in checker(symbol) or []:
+                if position_side_lower(pos.get("side")) == side.lower():
+                    return True
+        except Exception:  # noqa: BLE001 - stand-ins may not support it
+            return False
+        return False
+
+    def _current_price_for(self, symbol: str) -> Optional[float]:
+        """Latest price via the WS cache, or None when unavailable."""
+        try:
+            ticker = self._get_ticker_ws(symbol)
+            price = float(ticker.get("last", ticker.get("price", 0)) or 0)
+        except Exception:  # noqa: BLE001 - unknown price -> no action
+            return None
+        return price if price > 0 else None
+
+    def _enforce_local_stops(self) -> int:
+        """Close any position the venue is not protecting once its stop is hit.
+
+        Covers ``venue_stop_state`` in (missing, unsupported) with a
+        stored ``venue_stop_price``.  Positions owned by the migrated
+        position manager are skipped (it runs its own trailing check).
+        A ``missing`` position is logged at ERROR every loop.
+
+        Returns:
+            Number of positions closed this cycle.
+        """
+        closed = 0
+        for row in self._protection_rows():
+            state = row.get("venue_stop_state")
+            if state not in LOCAL_ONLY_STATES:
+                continue
+            stop_price = row.get("venue_stop_price")
+            try:
+                quantity = float(row.get("quantity") or 0.0)
+            except (TypeError, ValueError):
+                quantity = 0.0
+            symbol = str(row["symbol"])
+            side = str(row.get("side", "")).upper()
+            if not stop_price or self._is_migrated_symbol(symbol, side):
+                continue
+            if state == STOP_STATE_MISSING:
+                logger.error(
+                    f"UNPROTECTED {symbol} {side}: no venue stop; enforcing "
+                    f"local stop {stop_price} only"
+                )
+            price = self._current_price_for(symbol)
+            if price is None or not stop_hit(side, stop_price, price):
+                continue
+            logger.error(
+                f"LOCAL STOP HIT {symbol} {side}: price {price} crossed stop "
+                f"{stop_price} - closing reduce-only"
+            )
+            if quantity <= 0:
+                quantity = self._exchange_quantity_for(symbol, side)
+            if self._emergency_close_position(symbol, side, quantity):
+                closed += 1
+                self._mark_position_closed(symbol, side, price)
+        return closed
+
+    def _exchange_quantity_for(self, symbol: str, side: str) -> float:
+        """Current exchange quantity for a position (0 when unknown)."""
+        from .exit_sizing import remaining_exchange_quantity
+
+        try:
+            return float(
+                remaining_exchange_quantity(self.client, symbol, side.lower()) or 0.0
+            )
+        except Exception:  # noqa: BLE001 - reduce-only close clamps anyway
+            return 0.0
+
+    def _mark_position_closed(self, symbol: str, side: str, price: float) -> None:
+        """Drop the local record after a local-stop close."""
+        records = getattr(self, "_protection_records", None) or {}
+        records.pop((symbol, side), None)
+        db = getattr(self, "db", None)
+        closer = getattr(db, "close_position", None)
+        if callable(closer):
+            try:
+                closer(symbol, side, exit_price=price)
+            except Exception as exc:  # noqa: BLE001 - the loop sync catches up
+                logger.warning(f"Could not close DB position {symbol} {side}: {exc}")
+
+    def _stored_stop_price(
+        self, symbol: str, side: str, db_row: Optional[Dict[str, Any]]
+    ) -> Optional[float]:
+        """Best known stop for a position: DB columns, memory, trailing state."""
+        candidates: List[Any] = []
+        if db_row:
+            candidates.extend(
+                db_row.get(key)
+                for key in ("venue_stop_price", "stop_loss", "stop_price")
+            )
+        record = (getattr(self, "_protection_records", None) or {}).get((symbol, side))
+        if record:
+            candidates.append(record.get("venue_stop_price"))
+        manager = getattr(self, "migrated_position_manager", None)
+        trailing = getattr(manager, "_trailing_stops", None) or {}
+        candidates.append(trailing.get(symbol, {}).get(side.lower()))
+        for value in candidates:
+            try:
+                if value and float(value) > 0:
+                    return float(value)
+            except (TypeError, ValueError):
+                continue
+        return None
+
+    def _repair_venue_stops(self, reason: str = "sweep") -> Dict[str, Any]:
+        """Re-install a venue stop for every open position lacking one.
+
+        Runs once at startup after the first position sync and on the
+        hourly reconciliation cadence.  For each exchange position: a
+        pending TP/SL row means protected (the DB record is refreshed);
+        otherwise the stored stop (venue_stop_price, else the position's
+        stored stop, else the trailing level) is installed as a
+        standalone stop; with no stored stop the position is skipped
+        with an ERROR.  Never raises.
+
+        Args:
+            reason: Free-text tag for the log lines.
+
+        Returns:
+            Summary counts {"protected", "installed", "failed", "skipped"}.
+        """
+        summary: Dict[str, Any] = {
+            "protected": 0,
+            "installed": 0,
+            "failed": 0,
+            "skipped": 0,
+        }
+        exchange = _resolve_exchange(self)
+        if not venue_stops_supported(exchange):
+            summary["unsupported"] = True
+            return summary
+        try:
+            positions = self.client.get_positions() or []
+        except Exception as exc:  # noqa: BLE001 - cannot see the exchange
+            logger.error(f"Stop repair ({reason}): positions unavailable: {exc}")
+            summary["error"] = str(exc)
+            return summary
+        db_rows = {
+            (str(r["symbol"]), str(r.get("side", "")).upper()): r
+            for r in self._protection_rows()
+        }
+        for pos in positions:
+            try:
+                self._repair_one_position(exchange, pos, db_rows, summary, reason)
+            except Exception as exc:  # noqa: BLE001 - one position must not stop the sweep
+                summary["failed"] += 1
+                logger.error(
+                    f"Stop repair ({reason}) failed for {pos.get('symbol')}: {exc}"
+                )
+        logger.info(f"Venue stop repair ({reason}): {summary}")
+        return summary
+
+    def _repair_one_position(
+        self,
+        exchange,
+        pos: Dict[str, Any],
+        db_rows: Dict[tuple, Dict[str, Any]],
+        summary: Dict[str, Any],
+        reason: str,
+    ) -> None:
+        """Repair-sweep body for a single exchange position."""
+        quantity = float(pos.get("quantity") or pos.get("amount") or 0.0)
+        symbol = str(pos.get("symbol") or "")
+        if quantity <= 0 or not symbol:
+            return
+        side = position_side_lower(pos.get("side", "long")).upper()
+        db_row = db_rows.get((symbol, side))
+        rows = self._list_venue_stops(exchange, symbol)
+        if rows is None:
+            # Unreachable venue: do not stack a second stop on a guess.
+            summary["failed"] += 1
+            logger.error(
+                f"Stop repair ({reason}): could not list venue stops for {symbol} "
+                f"{side}; leaving it for the next sweep"
+            )
+            return
+        row = find_stop_row(rows, side)
+        record: Dict[str, Any] = {
+            "entry_order_id": (db_row or {}).get("entry_order_id"),
+        }
+        if row is not None:
+            summary["protected"] += 1
+            current_state = (db_row or {}).get("venue_stop_state")
+            record.update(
+                venue_stop_id=row.get("tpsl_id") or (db_row or {}).get("venue_stop_id"),
+                venue_stop_price=row.get("sl_trigger_price")
+                or (db_row or {}).get("venue_stop_price"),
+                venue_stop_state=current_state
+                if current_state in PROTECTED_STATES
+                else STOP_STATE_STANDALONE,
+            )
+            self._persist_protection(
+                symbol, side, record, quantity, pos.get("entry_price")
+            )
+            return
+        stop_price = self._stored_stop_price(symbol, side, db_row)
+        if stop_price is None:
+            summary["skipped"] += 1
+            logger.error(
+                f"Stop repair ({reason}): {symbol} {side} has NO venue stop and no "
+                f"stored stop price - cannot protect it; operator action required"
+            )
+            return
+        result = exchange.install_stop(symbol, side, quantity, stop_price)
+        if result.accepted:
+            summary["installed"] += 1
+            record.update(
+                venue_stop_id=result.order_id,
+                venue_stop_price=stop_price,
+                venue_stop_state=STOP_STATE_STANDALONE,
+            )
+            logger.warning(
+                f"Stop repair ({reason}): re-installed venue stop for {symbol} {side} "
+                f"@ {stop_price} (id {result.order_id})"
+            )
+        else:
+            summary["failed"] += 1
+            record.update(
+                venue_stop_id=None,
+                venue_stop_price=stop_price,
+                venue_stop_state=STOP_STATE_MISSING,
+            )
+            logger.error(
+                f"Stop repair ({reason}): could not install venue stop for {symbol} "
+                f"{side} @ {stop_price}: {result.error}; local enforcement only"
+            )
+        self._persist_protection(symbol, side, record, quantity, pos.get("entry_price"))
+
+    def _reconcile_after_ambiguous_close(self) -> None:
+        """Force a full position reconciliation right now.
+
+        Called by MigratedPositionManager after a close whose outcome is
+        ambiguous (timeout / exception) so the reconciler runs before
+        any accounting is applied.
+        """
+        try:
+            positions = self.client.get_positions()
+        except Exception as exc:  # noqa: BLE001 - cannot see the exchange
+            logger.error(
+                f"Reconcile after ambiguous close: positions unavailable: {exc}"
+            )
+            return
+        self._last_reconciliation_time = 0.0
+        self._maybe_run_full_reconciliation(exchange_positions=positions)
 
     def _handle_order_placed(self, event):
         """Handle ORDER_PLACED event."""
@@ -2121,9 +2886,7 @@ class TradingBot:
                     f"to {new_regime}"
                 )
         except Exception as e:
-            logger.error(
-                f"Error handling REGIME_CHANGED for grids: {e}", exc_info=True
-            )
+            logger.error(f"Error handling REGIME_CHANGED for grids: {e}", exc_info=True)
 
     def _handle_grid_emergency(self, event):
         """Handle GRID_EMERGENCY event."""
@@ -2190,10 +2953,12 @@ class TradingBot:
 
             equity = balance.equity
             logging.info(f"🔍 Final account balance: ${equity:.2f}")
-            
+
             if equity <= 0:
-                logging.warning(f"⚠️ Account balance is ${equity:.2f} - this will block all executions!")
-            
+                logging.warning(
+                    f"⚠️ Account balance is ${equity:.2f} - this will block all executions!"
+                )
+
             return equity
         except Exception as e:
             logging.error(f"❌ Error getting account balance: {e}")
@@ -2282,16 +3047,23 @@ class TradingBot:
         # For now using fixed 7.5%
         return signal.entry_price * 0.925  # 7.5% below entry
 
-    def _emergency_close_position(self, symbol: str, side: str, quantity: float):
+    def _emergency_close_position(
+        self, symbol: str, side: str, quantity: float
+    ) -> bool:
         """
         Emergency close a position immediately at market price.
 
-        Used when emergency stop is triggered for grid trading.
+        Used when emergency stop is triggered for grid trading, by the
+        venue-stop failure policy and by local stop enforcement.
 
         Args:
             symbol: Symbol to close
             side: Position side (LONG/SHORT)
             quantity: Position size
+
+        Returns:
+            True when the close order was accepted (or the exchange was
+            already flat), False when it was rejected or raised.
         """
         try:
             # Determine order side (opposite of position side).  Uses the
@@ -2299,26 +3071,51 @@ class TradingBot:
             # direct call passed "SELL"/"BUY" + "MARKET", which the native
             # Pacifica client rejected (order_type mismatch) and would have
             # side-mangled ("BUY" mapped to "ask").
-            close_side = (
-                OrderSide.SELL if str(side).upper() == "LONG" else OrderSide.BUY
-            )
+            position_side = "long" if str(side).upper() == "LONG" else "short"
+            close_side = OrderSide.SELL if position_side == "long" else OrderSide.BUY
+
+            # Size from the exchange's CURRENT position: an exchange stop or
+            # a manual action may already have reduced or closed it.
+            plan = plan_close_quantity(self.client, symbol, position_side, quantity)
+            if plan.already_flat:
+                logging.warning(
+                    f"EMERGENCY CLOSE {symbol} {position_side}: exchange already "
+                    f"flat - no order sent"
+                )
+                return True
+            if plan.clamped:
+                logging.warning(
+                    f"EMERGENCY CLOSE {symbol}: clamping {quantity} to exchange "
+                    f"quantity {plan.quantity}"
+                )
 
             logging.critical(
-                f"🚨 EMERGENCY CLOSE: {close_side.name} {quantity} {symbol} @ MARKET"
+                f"EMERGENCY CLOSE: {close_side.name} {plan.quantity} {symbol} "
+                f"@ MARKET (reduce-only)"
             )
 
-            # Place market order through the exchange adapter
+            # Reduce-only through the exchange adapter: can never flip the book
             order = _resolve_exchange(self).place_order(
                 symbol=symbol,
                 side=close_side,
-                quantity=quantity,
+                quantity=plan.quantity,
                 order_type=OrderType.MARKET,
+                reduce_only=True,
             )
+            result = OrderResult.from_ack(order)
+            if not result.accepted:
+                logging.error(
+                    f"EMERGENCY CLOSE REJECTED for {symbol}: {result.error} - "
+                    f"position remains open"
+                )
+                return False
 
-            logging.info(f"Emergency close order placed: {order}")
+            logging.info(f"Emergency close order accepted: {order}")
+            return True
 
         except Exception as e:
             logging.error(f"Error placing emergency close order: {e}")
+            return False
 
     def _execute_grid_signal(self, signal: Signal):
         """
@@ -2461,13 +3258,13 @@ class TradingBot:
             # Using conservative tick sizes to match Pacifica API requirements
             if current_price >= 100:
                 tick_decimals = 2  # BTC: 0.01
-                lot_decimals = 4   # 0.0001
+                lot_decimals = 4  # 0.0001
             elif current_price >= 1:
                 tick_decimals = 3  # AVAX, XRP: 0.001
-                lot_decimals = 2   # 0.01
+                lot_decimals = 2  # 0.01
             else:
                 tick_decimals = 5  # SUI: 0.00001
-                lot_decimals = 1   # 0.1 for small coins
+                lot_decimals = 1  # 0.1 for small coins
 
             # Round quantity to lot size
             quantity_per_level = round(quantity_per_level, lot_decimals)
@@ -2490,7 +3287,9 @@ class TradingBot:
                 price = round(price, tick_decimals)
                 sell_levels.append({"price": price, "quantity": quantity_per_level})
 
-            spacing_pct = (grid_spacing / current_price * 100) if current_price > 0 else 0
+            spacing_pct = (
+                (grid_spacing / current_price * 100) if current_price > 0 else 0
+            )
             logging.info(
                 f"Grid levels calculated: {len(buy_levels)} BUY, {len(sell_levels)} SELL, "
                 f"spacing: ${grid_spacing:.4f} ({spacing_pct:.2f}%), qty/level: {quantity_per_level:.4f}"
@@ -2533,21 +3332,13 @@ class TradingBot:
             grid_levels: Calculated grid levels
         """
         try:
-            # Calculate total capital allocated
-            total_capital = sum(
-                level["quantity"] * level["price"]
-                for level in grid_levels["buy_levels"]
-            )
-
             # Grid metadata
             metadata = {
                 "grid_type": "ranging_volatile",
                 "num_levels": len(buy_orders) + len(sell_orders),
                 "grid_spacing": grid_levels["grid_spacing"],
                 "quantity_per_level": grid_levels["quantity_per_level"],
-                "buy_order_ids": [
-                    o.get("order_id") or o.get("id") for o in buy_orders
-                ],
+                "buy_order_ids": [o.get("order_id") or o.get("id") for o in buy_orders],
                 "sell_order_ids": [
                     o.get("order_id") or o.get("id") for o in sell_orders
                 ],
@@ -2677,8 +3468,7 @@ class TradingBot:
             #    need order cancellation.
             open_trades = self.db.get_trades(status="open")
             strategy_trades = [
-                t for t in open_trades
-                if t.get("strategy") == db_strategy
+                t for t in open_trades if t.get("strategy") == db_strategy
             ]
 
             if not strategy_trades:
@@ -2688,7 +3478,9 @@ class TradingBot:
                 )
                 return
 
-            symbols_affected = {t.get("symbol") for t in strategy_trades if t.get("symbol")}
+            symbols_affected = {
+                t.get("symbol") for t in strategy_trades if t.get("symbol")
+            }
             logging.info(
                 f"  {strategy_name}: closing {len(strategy_trades)} open trade(s) "
                 f"across symbols: {symbols_affected}"
@@ -2711,11 +3503,11 @@ class TradingBot:
             #    state so GridLifecycleManager doesn't try to manage stale grids.
             if strategy_name == "GridTrading":
                 try:
-                    grid_mgr = self.component_registry.get(
+                    self.component_registry.get(
                         type(None)  # use duck-typing below
                     )
                 except Exception:
-                    grid_mgr = None
+                    pass
 
                 # Try direct attribute access (GridLifecycleManager stored on bot)
                 grid_lifecycle = getattr(self, "grid_lifecycle_manager", None)
@@ -2773,9 +3565,7 @@ class TradingBot:
                 inactive_strategies = set(old_strategies) - set(new_strategies)
 
                 if inactive_strategies:
-                    logging.info(
-                        f"  Strategies going inactive: {inactive_strategies}"
-                    )
+                    logging.info(f"  Strategies going inactive: {inactive_strategies}")
 
                 # Close positions from inactive strategies
                 for strategy_name in inactive_strategies:
@@ -2808,14 +3598,15 @@ class TradingBot:
             # strategy='GRID_TRADING' and side='GRID' and status='open'.
             open_trades = self.db.get_trades(status="open")
             grid_trades = [
-                t for t in open_trades
-                if t.get("strategy") == "GRID_TRADING"
+                t for t in open_trades if t.get("strategy") == "GRID_TRADING"
             ]
 
             if not grid_trades:
                 return  # Nothing to monitor
 
-            logging.debug(f"Emergency stop monitor: {len(grid_trades)} active grid trade(s)")
+            logging.debug(
+                f"Emergency stop monitor: {len(grid_trades)} active grid trade(s)"
+            )
 
             for trade in grid_trades:
                 symbol = trade.get("symbol")
@@ -2826,12 +3617,16 @@ class TradingBot:
                     # 1. Check current price vs emergency stop level
                     ticker = self._get_ticker_ws(symbol)
                     if isinstance(ticker, dict):
-                        current_price = float(ticker.get("last", ticker.get("price", 0)))
+                        current_price = float(
+                            ticker.get("last", ticker.get("price", 0))
+                        )
                     else:
                         current_price = float(ticker) if ticker else 0
 
                     if current_price <= 0:
-                        logging.debug(f"  {symbol}: price unavailable, skipping emergency check")
+                        logging.debug(
+                            f"  {symbol}: price unavailable, skipping emergency check"
+                        )
                         continue
 
                     # Emergency stop is stored in trade metadata (stop_loss field)
@@ -2853,7 +3648,9 @@ class TradingBot:
                             f"ADX {last_adx:.1f} > threshold {adx_threshold:.1f} — "
                             f"trend forming, grid is unsuitable"
                         )
-                        self._close_orphaned_grid(symbol, reason="ADX_THRESHOLD_EXCEEDED")
+                        self._close_orphaned_grid(
+                            symbol, reason="ADX_THRESHOLD_EXCEEDED"
+                        )
                         continue
 
                     # 3. Check unrealized P&L vs max drawdown (if available)
@@ -2863,14 +3660,18 @@ class TradingBot:
                     if entry_price > 0 and quantity > 0:
                         position_value = entry_price * quantity
                         max_drawdown_pct = 0.15  # 15% drawdown triggers emergency stop
-                        if position_value > 0 and unrealized_pnl < -(position_value * max_drawdown_pct):
+                        if position_value > 0 and unrealized_pnl < -(
+                            position_value * max_drawdown_pct
+                        ):
                             logging.warning(
                                 f"🚨 GRID P&L STOP for {symbol}: "
                                 f"unrealized P&L {unrealized_pnl:.2f} exceeds "
-                                f"{max_drawdown_pct*100:.0f}% drawdown on "
+                                f"{max_drawdown_pct * 100:.0f}% drawdown on "
                                 f"position value {position_value:.2f}"
                             )
-                            self._close_orphaned_grid(symbol, reason="MAX_DRAWDOWN_EXCEEDED")
+                            self._close_orphaned_grid(
+                                symbol, reason="MAX_DRAWDOWN_EXCEEDED"
+                            )
                             continue
 
                 except Exception as per_trade_err:
@@ -2910,14 +3711,10 @@ class TradingBot:
             AssertionError: If any pre-trade condition fails
         """
         # Validate grid spacing
-        assert (
-            grid_spacing > 0
-        ), f"Grid spacing must be positive, got {grid_spacing}"
+        assert grid_spacing > 0, f"Grid spacing must be positive, got {grid_spacing}"
 
         # Validate number of levels
-        assert (
-            5 <= num_levels <= 20
-        ), f"Number of levels must be 5-20, got {num_levels}"
+        assert 5 <= num_levels <= 20, f"Number of levels must be 5-20, got {num_levels}"
 
         # Validate quantity per level against exchange minimum
         # Fetch live instrument info so we respect per-token minimums.
@@ -2965,9 +3762,7 @@ class TradingBot:
             positions = self.client.get_positions()
 
             # Calculate total unrealized P&L
-            total_pnl = sum(
-                float(pos.get("unrealized_pnl", 0)) for pos in positions
-            )
+            total_pnl = sum(float(pos.get("unrealized_pnl", 0)) for pos in positions)
 
             # Get current exposure
             exposure = self._get_current_exposure()

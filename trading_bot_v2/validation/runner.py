@@ -62,7 +62,7 @@ import os
 import signal
 import sys
 import time
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
@@ -84,6 +84,7 @@ STRATEGY_ENV_FLAGS: Dict[str, Tuple[str, bool]] = {
     "orderbook_imbalance": ("ENABLE_ORDERBOOK_IMBALANCE", True),
     "session_range_breakout": ("ENABLE_SESSION_RANGE_BREAKOUT", False),
     "calendar_flow": ("ENABLE_CALENDAR_FLOW", False),
+    "vwap_pullback": ("ENABLE_VWAP_PULLBACK", False),
 }
 
 DEFAULT_SYMBOLS = "SUI-USDC,BTC-USDC"
@@ -328,9 +329,7 @@ def cut_windows(
     )
 
 
-def _data_coverage(
-    symbol: str, data_dir: str
-) -> Optional[Tuple[date, date]]:
+def _data_coverage(symbol: str, data_dir: str) -> Optional[Tuple[date, date]]:
     """First and last candle dates available for a symbol.
 
     Uses the offline BacktestDataLoader (5m timeframe, the backtest
@@ -403,9 +402,7 @@ def _day_ceiling(timestamp: str) -> date:
     """
     day = date.fromisoformat(str(timestamp)[:10])
     time_part = str(timestamp)[11:].strip()
-    if time_part and time_part.replace(":", "").replace(".", "").strip(
-        "0"
-    ):
+    if time_part and time_part.replace(":", "").replace(".", "").strip("0"):
         return day + timedelta(days=1)
     return day
 
@@ -438,9 +435,7 @@ def _coverage_1m_start(symbol: str, data_dir: str) -> Optional[date]:
     return _day_ceiling(str(bounds[0]))
 
 
-def refresh_market_data(
-    symbols: List[str], data_dir: Optional[str] = None
-) -> None:
+def refresh_market_data(symbols: List[str], data_dir: Optional[str] = None) -> None:
     """Top up the 1m candle store for each symbol before validating.
 
     Opt-in only (--refresh-data / VALIDATION_REFRESH_DATA): runs
@@ -469,9 +464,7 @@ def refresh_market_data(
                     f"--timeframes 1m)"
                 )
                 continue
-            summary = manager.ensure(
-                symbol, "1m", cov.end, include_internal_gaps=False
-            )
+            summary = manager.ensure(symbol, "1m", cov.end, include_internal_gaps=False)
             logger.info(
                 f"refresh-data: {symbol} 1m +{summary.get('added', 0)} "
                 f"candles (updated from {cov.end})"
@@ -775,9 +768,7 @@ def _run_chunk_backtest(
     if data_dir:
         from ..config import config as base_config
 
-        if str(data_dir) != str(
-            getattr(base_config, "backtest_data_dir", "")
-        ):
+        if str(data_dir) != str(getattr(base_config, "backtest_data_dir", "")):
             override = _DataDirConfig(base_config, str(data_dir))
 
     engine = BacktestEngine(override_config=override)
@@ -941,9 +932,7 @@ def validate_strategy(
     for symbol in resolved["symbols"]:
         pooled: List[float] = []
         for start, end in by_symbol.get(symbol) or windows:
-            logger.info(
-                f"[{strategy_key}] chunk backtest {symbol} {start} -> {end}"
-            )
+            logger.info(f"[{strategy_key}] chunk backtest {symbol} {start} -> {end}")
             chunk = _normalize_chunk_result(
                 _run_chunk_backtest(
                     strategy_key,
@@ -957,13 +946,11 @@ def validate_strategy(
             returns = chunk["returns"]
             pooled.extend(returns)
             for regime, bars in chunk["regimes"].items():
-                pooled_regimes[regime] = (
-                    pooled_regimes.get(regime, 0) + int(bars)
-                )
+                pooled_regimes[regime] = pooled_regimes.get(regime, 0) + int(bars)
             for regime, n in chunk["regime_trades"].items():
-                pooled_regime_trades[regime] = (
-                    pooled_regime_trades.get(regime, 0) + int(n)
-                )
+                pooled_regime_trades[regime] = pooled_regime_trades.get(
+                    regime, 0
+                ) + int(n)
             result["chunks"].append(
                 {
                     "symbol": symbol,
@@ -991,9 +978,7 @@ def validate_strategy(
             n_trials = total
             sr_variance = db.get_trial_sr_variance(strategy_key)
     except Exception as e:
-        logger.warning(
-            f"[{strategy_key}] trial registry lookup failed: {e}"
-        )
+        logger.warning(f"[{strategy_key}] trial registry lookup failed: {e}")
 
     verdict = evaluate_strategy_gate(
         strategy=strategy_key,
@@ -1098,16 +1083,14 @@ def format_regime_trades(regime_trades: Dict[str, int]) -> str:
     total = sum(int(v) for v in regime_trades.values())
     if total <= 0:
         return "-"
-    ordered = sorted(
-        regime_trades.items(), key=lambda kv: (-int(kv[1]), str(kv[0]))
-    )
+    ordered = sorted(regime_trades.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))
     return ", ".join(
         f"{name} {int(n)} ({int(n) / total * 100:.0f}%)" for name, n in ordered
     )
 
 
 def collect_regime_coverage(
-    results: List[Dict[str, Any]]
+    results: List[Dict[str, Any]],
 ) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
     """Merge the per-window regime histograms recorded by every run.
 
@@ -1166,9 +1149,7 @@ def print_regime_coverage(results: List[Dict[str, Any]]) -> None:
     print(f"\n{'=' * 96}")
     print("REGIME COVERAGE BY WINDOW")
     print(f"{'=' * 96}")
-    print(
-        f"  {'Symbol':<11}{'Window':<26}{'Bars':>9}  Regimes (share of bars)"
-    )
+    print(f"  {'Symbol':<11}{'Window':<26}{'Bars':>9}  Regimes (share of bars)")
     print(f"  {'-' * 92}")
     for row in rows:
         window = f"{row['start']} -> {row['end']}"
@@ -1240,10 +1221,7 @@ def print_data_spans(results: List[Dict[str, Any]]) -> None:
         else:
             windows = "shared series"
         note = "SHORTER HISTORY" if entry.get("listing_limited") else ""
-        print(
-            f"  {symbol:<11}{span:<26}{months:>7}  "
-            f"{windows:<38}{note}".rstrip()
-        )
+        print(f"  {symbol:<11}{span:<26}{months:>7}  {windows:<38}{note}".rstrip())
     print(f"  {'-' * 92}")
     months = [e.get("months", 0) for e in coverage.values()]
     if months and max(months) - min(months) >= 12:
@@ -1285,10 +1263,7 @@ def print_run_summary(results: List[Dict[str, Any]]) -> None:
             f"{pf:<8} {psr:<30} {consistent}"
         )
         if r.get("regimes"):
-            print(
-                f"  {'':<24} regimes: "
-                f"{format_regime_shares(r['regimes'], top=5)}"
-            )
+            print(f"  {'':<24} regimes: {format_regime_shares(r['regimes'], top=5)}")
         if r.get("regime_trades"):
             print(
                 f"  {'':<24} trades by entry regime: "
@@ -1375,8 +1350,7 @@ def run_once(
         strategy_key = resolve_strategy_key(strategy) or strategy
         if strategy_key in NON_BACKTESTABLE_STRATEGIES:
             logger.warning(
-                f"[{strategy_key}] not backtestable (live-only data "
-                f"surfaces), skipping"
+                f"[{strategy_key}] not backtestable (live-only data surfaces), skipping"
             )
             continue
         try:
@@ -1393,9 +1367,7 @@ def run_once(
                 anchor_end=anchor_end,
             )
         except Exception as e:
-            logger.warning(
-                f"SKIPPING strategy '{strategy}': backtest raised: {e}"
-            )
+            logger.warning(f"SKIPPING strategy '{strategy}': backtest raised: {e}")
             result = {
                 "strategy": strategy,
                 "symbols": list(symbols),
@@ -1410,9 +1382,7 @@ def run_once(
         try:
             result["row_id"] = persist_result(db, result)
         except Exception as e:
-            logger.error(
-                f"Failed to persist verdict for '{result['strategy']}': {e}"
-            )
+            logger.error(f"Failed to persist verdict for '{result['strategy']}': {e}")
             result["row_id"] = None
         results.append(result)
     print_run_summary(results)
@@ -1499,10 +1469,7 @@ def print_plan(
         len(backtestable), len(resolved["symbols"]), n_windows, window_months
     )
     total_months = (
-        len(backtestable)
-        * len(resolved["symbols"])
-        * n_windows
-        * window_months
+        len(backtestable) * len(resolved["symbols"]) * n_windows * window_months
     )
     print(f"  {'-' * 92}")
     print(
@@ -1532,6 +1499,22 @@ def _sleep_interruptible(seconds: float) -> None:
 
 def main(argv: Optional[List[str]] = None) -> int:
     """CLI entry point for the standalone validation runner."""
+    # Cap loguru at LOG_LEVEL for this service. loguru ships a default
+    # stderr sink at DEBUG and no module in this repo ever configures
+    # one, so LOG_LEVEL only ever governed stdlib logging - a full
+    # campaign at DEBUG once wrote ~275 MB per validation cell and
+    # filled the volume (2026-07-29). Scoped to the CLI entry so
+    # importing this module never touches global logging state.
+    try:
+        from loguru import logger as _loguru_logger
+
+        _loguru_logger.remove()
+        _loguru_logger.add(
+            sys.stderr, level=os.getenv("LOG_LEVEL", "INFO").upper() or "INFO"
+        )
+    except Exception:
+        pass
+
     parser = argparse.ArgumentParser(
         description=(
             "Standalone strategy validation service (chunked windows, "
@@ -1662,9 +1645,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     if args.strategies.strip().lower() == "all":
         strategies = discover_enabled_strategies()
     else:
-        strategies = [
-            s.strip() for s in args.strategies.split(",") if s.strip()
-        ]
+        strategies = [s.strip() for s in args.strategies.split(",") if s.strip()]
     symbols = [s.strip() for s in args.symbols.split(",") if s.strip()]
     if not strategies:
         logger.error("No strategies to validate (all ENABLE_* flags off?)")

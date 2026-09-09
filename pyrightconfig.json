@@ -1,6 +1,6 @@
 {
   "include": ["."],
-  "extraPaths": ["core_logic", "trading_bot_v2"],
+  "extraPaths": ["trading_bot_v2"],
   "pythonVersion": "3.8",
   "typeCheckingMode": "basic"
 }

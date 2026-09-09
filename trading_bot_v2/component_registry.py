@@ -7,7 +7,6 @@ Components can be registered and retrieved by interface or name.
 
 import logging
 from typing import Dict, Any, Type, Optional, List, TypeVar
-from .component_interfaces import ComponentInterface
 
 logger = logging.getLogger(__name__)
 

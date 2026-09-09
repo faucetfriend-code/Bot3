@@ -15,7 +15,7 @@ Usage:
 
 import logging
 import os
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from ..diagnostics.gate_metrics import (
     SEVERITY_UNREACHABLE,
@@ -43,8 +43,8 @@ SearchSpace = Dict[str, Any]
 #
 # Maps strategy name -> the minimum reward/risk its signals must clear.
 MIN_RRR_CONSTRAINTS: Dict[str, float] = {
-    "momentum_scalping": 1.5,      # momentum_scalping.py min_rrr default
-    "orderbook_imbalance": 1.5,    # orderbook_imbalance.py hardcoded gate
+    "momentum_scalping": 1.5,  # momentum_scalping.py min_rrr default
+    "orderbook_imbalance": 1.5,  # orderbook_imbalance.py hardcoded gate
 }
 
 # Headroom applied to the coupled lower bound in suggest_params. The realised
@@ -326,38 +326,16 @@ def get_search_space(strategy_name: str) -> SearchSpace:
     Raises:
         ValueError: If strategy_name is not recognized.
     """
-    strategy_map = {
-        "mean_reversion": _mean_reversion_space,
-        "ma_crossover": _ma_crossover_space,
-        "grid_trading": _grid_trading_space,
-        "liquidation_capture": _liquidation_capture_space,
-        "vwap_scalping": _vwap_scalping_space,
-        "funding_arb": _funding_arb_space,
-        "momentum_scalping": _momentum_scalping_space,
-        "orderbook_imbalance": _orderbook_imbalance_space,
-    }
+    if strategy_name not in SEARCH_SPACE_BUILDERS:
+        available = ", ".join(SEARCH_SPACE_BUILDERS.keys())
+        raise ValueError(f"Unknown strategy: '{strategy_name}'. Available: {available}")
 
-    if strategy_name not in strategy_map:
-        available = ", ".join(strategy_map.keys())
-        raise ValueError(
-            f"Unknown strategy: '{strategy_name}'. Available: {available}"
-        )
-
-    return strategy_map[strategy_name]()
+    return SEARCH_SPACE_BUILDERS[strategy_name]()
 
 
 def list_strategies() -> List[str]:
     """Return list of all available strategy names for optimization."""
-    return [
-        "mean_reversion",
-        "ma_crossover",
-        "grid_trading",
-        "liquidation_capture",
-        "vwap_scalping",
-        "funding_arb",
-        "momentum_scalping",
-        "orderbook_imbalance",
-    ]
+    return list(SEARCH_SPACE_BUILDERS)
 
 
 # ---------------------------------------------------------------------------
@@ -371,17 +349,29 @@ def _mean_reversion_space() -> SearchSpace:
 
     Focuses on RSI thresholds, Bollinger Bands, and ATR-based stops.
     Optimized for RANGING_CALM regime.
+
+    NOTE: ``min_confidence`` is deliberately ABSENT (removed 2026-08-02).
+    It is inert for this strategy - MeanReversion assigns it in __init__
+    and then references it only inside debug log f-strings; nothing ever
+    compares against it. The one gate that could act on confidence,
+    StrategyManager._apply_regime_confidence_gate, uses the global
+    MIN_SIGNAL_CONFIDENCE_FLOOR (0.0) plus a per-regime adjustment that
+    is zero for RANGING_CALM - the only regime MeanReversion is admitted
+    to - so it returns early every time. Tuning it therefore sampled
+    pure noise and consumed trial budget that the other four dimensions
+    could have used. Confidence still matters LIVE, where ConfidenceSizer
+    scales position size by it, but that is a continuous effect with no
+    threshold to tune. Do not re-add without first making it gate
+    something; see docs/MEANREVERSION-MTF-CONFIDENCE-2026-08-02.md.
     """
     return {
         # RSI parameters
-        "rsi_oversold": (25.0, 45.0),          # Lower = more aggressive oversold
-        "rsi_overbought": (55.0, 75.0),        # Higher = more aggressive overbought
+        "rsi_oversold": (25.0, 45.0),  # Lower = more aggressive oversold
+        "rsi_overbought": (55.0, 75.0),  # Higher = more aggressive overbought
         # Bollinger Bands
-        "bb_std_dev": (1.5, 3.0),              # Wider = fewer but stronger signals
+        "bb_std_dev": (1.5, 3.0),  # Wider = fewer but stronger signals
         # Stop loss
-        "atr_stop_multiplier": (1.5, 3.0),     # Tighter = more stops, wider = more room
-        # Confidence threshold
-        "min_confidence": (0.35, 0.65),        # Lower = more signals, higher = fewer
+        "atr_stop_multiplier": (1.5, 3.0),  # Tighter = more stops, wider = more room
     }
 
 
@@ -437,11 +427,35 @@ def _ma_crossover_space() -> SearchSpace:
         "fast_ma_period": (5, 25),
         "slow_ma_period": (20, 55),
         # --- Risk ---
-        "atr_stop_multiplier": (1.5, 3.5),      # ATR multiplier for stop
+        "atr_stop_multiplier": (1.5, 3.5),  # ATR multiplier for stop
         # --- Confidence gate ---
         # Strategy default is 0.50; the score is
         # 0.3*volume + 0.4*macd + 0.3*pullback, which rarely clears 0.6.
         "min_confidence": (0.20, 0.60),
+    }
+
+
+def _vwap_pullback_space() -> SearchSpace:
+    """
+    VWAP Pullback (trend-side continuation) search space.
+
+    Shipped defaults passed the gate untuned (PF 1.61, 2026-07-30
+    campaign), so ranges bracket the defaults rather than exploring far
+    from them - the tuner must beat a known-good baseline out-of-sample.
+    Params are applied by setattr; every key matches an instance
+    attribute of VWAPPullbackStrategy.
+    """
+    return {
+        # Entry geometry
+        "band_sd": (0.1, 0.5),  # Pullback band half-width (sigma)
+        "extension_min_sd": (0.5, 2.0),  # Required prior extension (sigma)
+        # Exit geometry
+        "atr_stop_buffer": (0.25, 1.25),  # Stop beyond pullback extreme (ATR)
+        "tp_rr": (1.0, 3.0),  # Target as multiple of risk
+        "time_exit_hours": (8, 48),  # Max hold (int hours)
+        # Filters
+        "rvol_min": (0.0, 2.0),  # Resumption-bar rvol floor (0 = off)
+        "cooldown_hours": (2.0, 8.0),  # Per-symbol entry spacing
     }
 
 
@@ -454,11 +468,11 @@ def _grid_trading_space() -> SearchSpace:
     """
     return {
         # Grid structure
-        "grid_levels": (4, 12),                 # Number of grid levels (int)
+        "grid_levels": (4, 12),  # Number of grid levels (int)
         "grid_spacing_atr_multiplier": (0.3, 0.8),  # ATR multiplier for spacing
         # Risk management
-        "emergency_stop_loss_pct": (0.03, 0.08),    # Emergency stop threshold
-        "adx_regime_threshold": (15.0, 25.0),       # ADX threshold for regime change
+        "emergency_stop_loss_pct": (0.03, 0.08),  # Emergency stop threshold
+        "adx_regime_threshold": (15.0, 25.0),  # ADX threshold for regime change
         # Confidence
         "min_confidence": (0.35, 0.60),
     }
@@ -473,16 +487,16 @@ def _liquidation_capture_space() -> SearchSpace:
     """
     return {
         # Cascade detection
-        "price_move_threshold": (0.02, 0.04),    # Min price move % (2-4%)
-        "volume_spike_multiplier": (2.0, 4.0),   # Volume spike threshold
+        "price_move_threshold": (0.02, 0.04),  # Min price move % (2-4%)
+        "volume_spike_multiplier": (2.0, 4.0),  # Volume spike threshold
         # RSI thresholds (extreme values)
         "rsi_oversold_threshold": (15.0, 25.0),  # Long liquidation trigger
-        "rsi_overbought_threshold": (75.0, 85.0), # Short squeeze trigger
+        "rsi_overbought_threshold": (75.0, 85.0),  # Short squeeze trigger
         # Pattern recognition
-        "min_consecutive_moves": (3, 6),          # Min candles in same direction
-        "min_wick_ratio": (1.2, 2.5),             # Min wick-to-body ratio
+        "min_consecutive_moves": (3, 6),  # Min candles in same direction
+        "min_wick_ratio": (1.2, 2.5),  # Min wick-to-body ratio
         # Risk/reward
-        "rrr_target": (2.0, 4.0),                # Minimum RRR target
+        "rrr_target": (2.0, 4.0),  # Minimum RRR target
     }
 
 
@@ -495,13 +509,13 @@ def _vwap_scalping_space() -> SearchSpace:
     """
     return {
         # VWAP deviation
-        "sd_entry_threshold": (1.0, 3.0),        # Min SD for entry
+        "sd_entry_threshold": (1.0, 3.0),  # Min SD for entry
         # NOTE: "sd_exit_threshold" was removed on 2026-07-28. VWAPScalping
         # has no exit-at-SD mechanism at all - it exits on the ATR stop or
         # target - so the parameter never reached the strategy and every
         # sampled value scored identically. It was a pure noise dimension.
         # ATR stop loss
-        "atr_stop_multiplier": (1.0, 2.5),       # ATR multiplier for stop
+        "atr_stop_multiplier": (1.0, 2.5),  # ATR multiplier for stop
         # NOTE: "rsi_oversold" and "rsi_overbought" were removed on
         # 2026-07-29, for the same reason "sd_exit_threshold" was. The
         # constructor accepts and stores them (vwap_scalping.py:265-274)
@@ -514,7 +528,7 @@ def _vwap_scalping_space() -> SearchSpace:
         # Confidence
         "min_confidence": (0.55, 0.75),
         # Cooldown
-        "cooldown_minutes": (5, 15),             # Minutes between trades
+        "cooldown_minutes": (5, 15),  # Minutes between trades
     }
 
 
@@ -527,13 +541,13 @@ def _funding_arb_space() -> SearchSpace:
     """
     return {
         # Funding rate thresholds
-        "min_funding_rate": (0.0001, 0.001),     # 0.01% - 0.1% minimum
+        "min_funding_rate": (0.0001, 0.001),  # 0.01% - 0.1% minimum
         # Position sizing
-        "max_allocation_pct": (0.10, 0.30),      # 10-30% of account
+        "max_allocation_pct": (0.10, 0.30),  # 10-30% of account
         # Rebalance
-        "rebalance_threshold": (0.01, 0.05),     # 1-5% delta threshold
+        "rebalance_threshold": (0.01, 0.05),  # 1-5% delta threshold
         # Analysis window
-        "lookback_hours": (4, 16),               # Hours of history
+        "lookback_hours": (4, 16),  # Hours of history
         # Confidence
         "min_confidence": (0.60, 0.85),
     }
@@ -555,16 +569,16 @@ def _momentum_scalping_space() -> SearchSpace:
     """
     return {
         # EMA periods
-        "ema_fast": (5, 15),                     # Fast EMA length
-        "ema_slow": (15, 30),                    # Slow EMA length
+        "ema_fast": (5, 15),  # Fast EMA length
+        "ema_slow": (15, 30),  # Slow EMA length
         # RSI filters
-        "rsi_lower": (25.0, 40.0),               # RSI floor
-        "rsi_upper": (60.0, 75.0),               # RSI ceiling
+        "rsi_lower": (25.0, 40.0),  # RSI floor
+        "rsi_upper": (60.0, 75.0),  # RSI ceiling
         # ATR risk management (RRR = target/stop is constant, see note above)
-        "atr_stop_mult": (1.0, 2.5),             # Stop loss multiplier
-        "atr_target_mult": (2.0, 4.5),           # Take profit multiplier
+        "atr_stop_mult": (1.0, 2.5),  # Stop loss multiplier
+        "atr_target_mult": (2.0, 4.5),  # Take profit multiplier
         # Volume
-        "volume_threshold": (1.0, 1.8),          # Min volume multiplier
+        "volume_threshold": (1.0, 1.8),  # Min volume multiplier
         # Confidence
         "min_confidence": (0.45, 0.65),
     }
@@ -579,19 +593,36 @@ def _orderbook_imbalance_space() -> SearchSpace:
     """
     return {
         # Imbalance thresholds
-        "imbalance_long_threshold": (0.55, 0.70),   # Long trigger
-        "imbalance_short_threshold": (0.30, 0.45),   # Short trigger
+        "imbalance_long_threshold": (0.55, 0.70),  # Long trigger
+        "imbalance_short_threshold": (0.30, 0.45),  # Short trigger
         "strong_imbalance_threshold": (0.68, 0.80),  # High conviction
         # Detection
-        "levels": (5, 20),                           # Price levels to analyze
-        "min_order_density": (3, 10),                # Min orders on winning side
+        "levels": (5, 20),  # Price levels to analyze
+        "min_order_density": (3, 10),  # Min orders on winning side
         # ATR risk management (RRR = target/stop is constant; coupled by
         # MIN_RRR_CONSTRAINTS["orderbook_imbalance"] in suggest_params)
-        "atr_stop_mult": (0.5, 1.0),                 # Tight stop for fast trades
-        "atr_target_mult": (1.0, 2.5),               # Quick target
+        "atr_stop_mult": (0.5, 1.0),  # Tight stop for fast trades
+        "atr_target_mult": (1.0, 2.5),  # Quick target
         # Confidence
         "min_confidence": (0.50, 0.70),
     }
+
+
+# Single source of truth for which strategies are tunable.  Both
+# get_search_space() and list_strategies() derive from this map, so a new
+# strategy becomes visible to the tuner by adding exactly one entry.
+# Declared after the builders so the references resolve at import time.
+SEARCH_SPACE_BUILDERS: Dict[str, Callable[[], SearchSpace]] = {
+    "mean_reversion": _mean_reversion_space,
+    "ma_crossover": _ma_crossover_space,
+    "grid_trading": _grid_trading_space,
+    "liquidation_capture": _liquidation_capture_space,
+    "vwap_scalping": _vwap_scalping_space,
+    "vwap_pullback": _vwap_pullback_space,
+    "funding_arb": _funding_arb_space,
+    "momentum_scalping": _momentum_scalping_space,
+    "orderbook_imbalance": _orderbook_imbalance_space,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -601,11 +632,12 @@ def _orderbook_imbalance_space() -> SearchSpace:
 # Maps strategy -> param_name -> ("int" | "float")
 PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
     "mean_reversion": {
+        # No min_confidence: inert for this strategy, see
+        # _mean_reversion_space() for why it was removed.
         "rsi_oversold": "float",
         "rsi_overbought": "float",
         "bb_std_dev": "float",
         "atr_stop_multiplier": "float",
-        "min_confidence": "float",
     },
     "ma_crossover": {
         "fast_ma_period": "int",
@@ -640,6 +672,15 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
         "rsi_overbought": "float",
         "min_confidence": "float",
         "cooldown_minutes": "int",
+    },
+    "vwap_pullback": {
+        "band_sd": "float",
+        "extension_min_sd": "float",
+        "atr_stop_buffer": "float",
+        "tp_rr": "float",
+        "time_exit_hours": "int",
+        "rvol_min": "float",
+        "cooldown_hours": "float",
     },
     "funding_arb": {
         "min_funding_rate": "float",
@@ -696,9 +737,7 @@ def _ordered_pair_floor(
         The coupled lower bound, or None when the parameter is not the
         upper half of a constraint (or its partner is not in the space).
     """
-    for lower_name, upper_name, _ in ORDERED_PAIR_CONSTRAINTS.get(
-        strategy_name, ()
-    ):
+    for lower_name, upper_name, _ in ORDERED_PAIR_CONSTRAINTS.get(strategy_name, ()):
         if upper_name != param_name:
             continue
         lower_value = sampled.get(lower_name)
@@ -781,9 +820,7 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
             and param_name == "atr_target_mult"
             and params.get("atr_stop_mult", 0) > 0
         ):
-            feasible_low = (
-                params["atr_stop_mult"] * min_rrr * RRR_FEASIBILITY_MARGIN
-            )
+            feasible_low = params["atr_stop_mult"] * min_rrr * RRR_FEASIBILITY_MARGIN
             if feasible_low > high:
                 raise InfeasibleParamsError(
                     f"Infeasible parameters for {strategy_name}: "
@@ -795,9 +832,7 @@ def suggest_params(trial: Any, strategy_name: str) -> Dict[str, Any]:
 
         # Keep the upper half of an ordered pair strictly above its
         # partner (fast/slow MA, pullback band edges, entry window).
-        pair_low = _ordered_pair_floor(
-            strategy_name, param_name, param_type, params
-        )
+        pair_low = _ordered_pair_floor(strategy_name, param_name, param_type, params)
         if pair_low is not None:
             if pair_low > high:
                 raise InfeasibleParamsError(

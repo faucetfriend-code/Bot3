@@ -30,6 +30,18 @@ Safety:
       the stored JSON is ignored with a warning.
     - Baseline (pre-overlay) values are captured on first application
       and restored whenever the new regime has no stored overlay.
+    - A stored overlay whose recorded objective value is at or below its
+      objective's break-even (or which carries no score at all) is
+      REFUSED at load and again at apply time, logged at ERROR, and the
+      strategy keeps its normal parameters. This is deliberately a
+      second, independent guard: ``database.save_regime_param_overlay``
+      only sees rows written through the save API, so it cannot see a
+      database restored from ``backups/*.db`` (a plain file copy), a
+      hand-edited database, or a row written before that guard existed.
+      All eleven snapshots under ``backups/`` still contain the
+      -1.486 Sharpe mean_reversion/ranging_calm overlay with
+      ``active=1``; restoring any of them reinstates it, and only this
+      guard stands between that row and a live strategy.
 """
 
 import os
@@ -39,6 +51,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from loguru import logger
 
 from .market_regime import MarketRegime
+from .overlay_quality import (
+    OVERLAY_OPT_IN_ENV,
+    overlay_env_opt_in,
+    overlay_rejection_reason,
+)
 
 # Canonical mapping between optimization strategy keys (snake_case, used
 # by search spaces / CLI / overlay storage) and StrategyManager display
@@ -54,6 +71,7 @@ STRATEGY_KEY_TO_DISPLAY: Dict[str, str] = {
     "orderbook_imbalance": "OrderBookImbalance",
     "session_range_breakout": "SessionRangeBreakout",
     "calendar_flow": "CalendarFlow",
+    "vwap_pullback": "VWAPPullback",
 }
 
 DISPLAY_TO_STRATEGY_KEY: Dict[str, str] = {
@@ -121,27 +139,49 @@ def _env_bool(name: str, default: bool) -> bool:
     return default
 
 
+#: Direction buckets a composite regime key may carry after the colon.
+#: "bull"/"bear"/"neutral" match the trade log's direction tag exactly;
+#: "trend" matches bull OR bear (mean-reversion-style strategies fade
+#: symmetrically, so splitting their sample by trend side would halve
+#: it for no modelled reason).
+COMPOSITE_DIRECTIONS = ("bull", "bear", "neutral", "trend")
+
+
 def normalize_regime_value(regime: Any) -> str:
-    """Normalize a regime identifier to its lowercase enum value.
+    """Normalize a regime identifier to its lowercase value.
+
+    Accepts a plain regime (MarketRegime, "ranging_calm", or
+    "RANGING_CALM") or a composite "REGIME:DIRECTION" key
+    (e.g. "VOL_LOW:TREND") whose direction part is one of
+    COMPOSITE_DIRECTIONS. Composite keys are what the vol-tercile x
+    direction variant tuner passes; every pre-existing caller sends
+    plain regimes and is unaffected.
 
     Args:
-        regime: MarketRegime, enum value string ("ranging_calm"), or
-            enum name string ("RANGING_CALM").
+        regime: Regime identifier, optionally "REGIME:DIRECTION".
 
     Returns:
-        Lowercase regime value (e.g. "ranging_calm").
+        Lowercase value ("ranging_calm", "vol_low:trend").
 
     Raises:
-        ValueError: If the input does not map to a known MarketRegime.
+        ValueError: If either part does not map to a known value.
     """
     raw = getattr(regime, "value", regime)
     value = str(raw).strip().lower()
+
+    direction = None
+    if ":" in value:
+        value, direction = value.split(":", 1)
+        if direction not in COMPOSITE_DIRECTIONS:
+            raise ValueError(
+                f"Unknown direction in composite regime: {direction!r}. "
+                f"Valid: {sorted(COMPOSITE_DIRECTIONS)}"
+            )
+
     valid = {r.value for r in MarketRegime}
     if value not in valid:
-        raise ValueError(
-            f"Unknown regime: {regime!r}. Valid values: {sorted(valid)}"
-        )
-    return value
+        raise ValueError(f"Unknown regime: {regime!r}. Valid values: {sorted(valid)}")
+    return value if direction is None else f"{value}:{direction}"
 
 
 def resolve_strategy_display_name(name: str) -> Optional[str]:
@@ -242,6 +282,13 @@ def apply_params_to_strategy(
     is rolled back rather than silently disabling the strategy - an
     out-of-range value here produces zero signals, not worse ones.
 
+    This helper does NOT judge whether the parameters are any good: it
+    is shared with the optimizer and the backtest engine, which apply
+    unscored trial parameters by design. The was-it-measured-to-lose
+    check therefore lives one level up, in
+    :func:`refuse_overlay_reason` / RegimeParamOverlayManager, which is
+    the only path that puts STORED overlays onto live strategies.
+
     Args:
         strategy: Strategy instance to modify.
         strategy_key: Snake_case strategy key used for whitelist lookup.
@@ -319,6 +366,73 @@ def _infeasible_reasons(strategy: Any, strategy_key: str) -> list:
         return []
 
 
+def refuse_overlay_reason(
+    strategy_key: str,
+    regime_value: str,
+    objective: Optional[str],
+    objective_value: Optional[float],
+) -> Optional[str]:
+    """Decide whether a stored overlay may touch a running strategy.
+
+    This is the APPLY-side half of the losing-overlay guard. The
+    WRITE-side half (``DatabaseManager.save_regime_param_overlay``) only
+    sees rows written through the save API and is blind to a restored
+    backup, a hand-edited database, or any row written before it
+    existed - so the decision is taken again here, against the value
+    recorded on the row itself.
+
+    Policy, matching the write guard where they overlap:
+
+    - Score at or below the objective's break-even -> refuse (0.0 for
+      the Sharpe-like objectives, 1.0 for profit_factor).
+    - Unknown or unnamed objective -> break-even 0.0, exactly as the
+      write guard treats it.
+    - No recorded score, or a non-numeric one -> refuse. The write guard
+      is permissive here because it cannot judge a row it was handed
+      without a score, and storing such a row is harmless (it is audit
+      material). Applying one is not: an unscored overlay is precisely
+      the shape of a row that never went through a measured write path,
+      which is the hazard this guard exists for. Unknown is not the same
+      as good, and the cost of refusing is only that the study has to be
+      re-run.
+    - ``ALLOW_LOSING_REGIME_OVERLAYS`` overrides the refusal, the same
+      operator opt-in the write guard honours, logged at WARNING.
+
+    Args:
+        strategy_key: Snake_case strategy key, for the log line.
+        regime_value: Regime the overlay is stored under, for the log.
+        objective: Objective name recorded with the overlay.
+        objective_value: Objective value recorded with the overlay.
+
+    Returns:
+        None when the overlay may be applied, otherwise the reason it
+        was refused (already logged at ERROR).
+    """
+    reason = overlay_rejection_reason(objective, objective_value)
+    if reason is None:
+        return None
+
+    if overlay_env_opt_in():
+        logger.warning(
+            f"Regime param overlay for {strategy_key} "
+            f"regime={regime_value} would be refused ({reason}), but "
+            f"{OVERLAY_OPT_IN_ENV} is set - applying it anyway."
+        )
+        return None
+
+    logger.error(
+        f"Regime param overlay REFUSED for strategy={strategy_key} "
+        f"regime={regime_value} objective={objective or 'none'} "
+        f"objective_value={objective_value!r}: {reason}. The overlay is "
+        f"NOT applied and {strategy_key} keeps its normal parameters. "
+        f"Deactivate the row (DatabaseManager."
+        f"deactivate_regime_param_overlay) or re-run the study; set "
+        f"{OVERLAY_OPT_IN_ENV}=true only if you intend to trade a "
+        f"configuration that was measured to lose."
+    )
+    return reason
+
+
 class RegimeParamOverlayManager:
     """Applies per-regime parameter overlays to shared strategy instances.
 
@@ -369,6 +483,13 @@ class RegimeParamOverlayManager:
         self._lock = threading.Lock()
         # (strategy_key, regime_value) -> params dict
         self._overlays: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # (strategy_key, regime_value) -> (objective, objective_value) as
+        # recorded on the row, re-checked at apply time. A key present in
+        # _overlays but missing here is treated as unscored, so an overlay
+        # injected past reload() is refused too.
+        self._overlay_scores: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
+        # (strategy_key, regime_value) -> refusal reason, for get_status
+        self._refused: Dict[Tuple[str, str], str] = {}
         # strategy_key -> {param: baseline_value} captured before first swap
         self._baselines: Dict[str, Dict[str, Any]] = {}
         # strategy_key -> {"regime":, "source":, "params":} of last change
@@ -391,10 +512,15 @@ class RegimeParamOverlayManager:
     def reload(self) -> int:
         """Load active overlays from the database.
 
+        Rows that fail :func:`refuse_overlay_reason` (measured at or
+        below break-even, or carrying no score at all) are dropped here
+        with an ERROR and never reach a strategy - whatever put them in
+        the table, including a restored backup.
+
         No-op (returns 0) when the manager is disabled or no db is wired.
 
         Returns:
-            Number of active overlays loaded.
+            Number of active overlays loaded (refused rows excluded).
         """
         if not self.enabled or self.db is None:
             return 0
@@ -406,6 +532,8 @@ class RegimeParamOverlayManager:
             return 0
 
         loaded: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        scores: Dict[Tuple[str, str], Tuple[Any, Any]] = {}
+        refused: Dict[Tuple[str, str], str] = {}
         for row in rows:
             strategy_key = resolve_strategy_key(str(row.get("strategy", "")))
             if strategy_key is None:
@@ -426,11 +554,31 @@ class RegimeParamOverlayManager:
                     f"({strategy_key}, {regime_value}) - skipping"
                 )
                 continue
-            loaded[(strategy_key, regime_value)] = params
+
+            key = (strategy_key, regime_value)
+            objective = row.get("objective")
+            objective_value = row.get("objective_value")
+            reason = refuse_overlay_reason(
+                strategy_key, regime_value, objective, objective_value
+            )
+            if reason is not None:
+                refused[key] = reason
+                continue
+
+            loaded[key] = params
+            scores[key] = (objective, objective_value)
 
         with self._lock:
             self._overlays = loaded
+            self._overlay_scores = scores
+            self._refused = refused
 
+        if refused:
+            logger.error(
+                f"Regime param overlays: {len(refused)} stored overlay(s) "
+                f"refused as losing/unscored and will not be applied: "
+                f"{sorted(refused.keys())}"
+            )
         logger.info(f"Regime param overlays: loaded {len(loaded)} active overlay(s)")
         return len(loaded)
 
@@ -456,8 +604,7 @@ class RegimeParamOverlayManager:
             new_regime_value = data.get("new_regime")
             if not symbol or not new_regime_value:
                 logger.warning(
-                    "Regime param overlays: event missing symbol/new_regime "
-                    "- skipping"
+                    "Regime param overlays: event missing symbol/new_regime - skipping"
                 )
                 return
             if symbol != self.reference_symbol:
@@ -487,6 +634,12 @@ class RegimeParamOverlayManager:
         params; strategies previously overlaid but without an overlay for
         this regime are restored to their captured baseline.
 
+        An overlay whose recorded objective value is losing or missing is
+        refused here as well as at load (:meth:`_refuse_at_apply`) and is
+        treated exactly like "no overlay for this regime": the strategy
+        keeps (or is restored to) its normal parameters. Nothing is
+        raised - a bad stored row must not take the trading loop down.
+
         Args:
             regime: Regime identifier (enum, value, or name).
 
@@ -508,12 +661,13 @@ class RegimeParamOverlayManager:
                 if strategy_key is None:
                     continue
 
-                overlay = self._overlays.get((strategy_key, regime_value))
+                key = (strategy_key, regime_value)
+                overlay = self._overlays.get(key)
+                if overlay and self._refuse_at_apply(key):
+                    overlay = None
                 if overlay:
                     self._capture_baseline(strategy_key, strategy)
-                    applied = apply_params_to_strategy(
-                        strategy, strategy_key, overlay
-                    )
+                    applied = apply_params_to_strategy(strategy, strategy_key, overlay)
                     if applied:
                         logger.info(
                             f"Regime param overlay applied: {strategy_key} "
@@ -545,6 +699,30 @@ class RegimeParamOverlayManager:
 
         return changes
 
+    def _refuse_at_apply(self, key: Tuple[str, str]) -> bool:
+        """Re-check a loaded overlay's score at the moment of use.
+
+        reload() already drops losing rows, so this normally passes. It
+        exists because ``_overlays`` can be populated by something other
+        than reload() (a test, a future loader, a caller poking the
+        dict), and the guarantee has to be "nothing losing ever reaches
+        a strategy", not "nothing losing survives reload". An overlay
+        with no recorded score in ``_overlay_scores`` is treated as
+        unscored and refused, which is the fail-closed default.
+
+        Args:
+            key: (strategy_key, regime_value) of the overlay.
+
+        Returns:
+            True when the overlay must not be applied.
+        """
+        objective, objective_value = self._overlay_scores.get(key, (None, None))
+        reason = refuse_overlay_reason(key[0], key[1], objective, objective_value)
+        if reason is None:
+            return False
+        self._refused[key] = reason
+        return True
+
     def _capture_baseline(self, strategy_key: str, strategy: Any) -> None:
         """Capture pre-overlay values for all whitelisted params (once)."""
         if strategy_key in self._baselines:
@@ -552,8 +730,7 @@ class RegimeParamOverlayManager:
         baseline = effective_params(strategy, strategy_key)
         self._baselines[strategy_key] = baseline
         logger.debug(
-            f"Regime param overlays: captured baseline for {strategy_key}: "
-            f"{baseline}"
+            f"Regime param overlays: captured baseline for {strategy_key}: {baseline}"
         )
 
     # ------------------------------------------------------------------
@@ -565,18 +742,25 @@ class RegimeParamOverlayManager:
 
         Returns:
             Dict with enabled flag, reference symbol, current regime,
-            loaded overlays, and the last applied state per strategy.
+            loaded overlays, refused overlays (losing or unscored rows
+            that were dropped, with the reason), and the last applied
+            state per strategy.
         """
         with self._lock:
             overlays: List[Dict[str, Any]] = [
                 {"strategy": key[0], "regime": key[1], "params": params}
                 for key, params in sorted(self._overlays.items())
             ]
+            refused: List[Dict[str, Any]] = [
+                {"strategy": key[0], "regime": key[1], "reason": reason}
+                for key, reason in sorted(self._refused.items())
+            ]
             return {
                 "enabled": self.enabled,
                 "reference_symbol": self.reference_symbol,
                 "current_regime": self._current_regime,
                 "loaded_overlays": overlays,
+                "refused_overlays": refused,
                 "last_applied": dict(self._last_applied),
                 "baselines_captured": sorted(self._baselines.keys()),
             }

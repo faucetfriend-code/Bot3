@@ -152,9 +152,7 @@ class TestTrailingQuantileBucketer:
         rng = random.Random(11)
         seen = set()
         for i in range(600):
-            result = bucketer.observe(
-                START + timedelta(hours=4 * i), rng.random()
-            )
+            result = bucketer.observe(START + timedelta(hours=4 * i), rng.random())
             if result is not None:
                 seen.add(result.index)
         assert seen == {0, 1, 2}
@@ -232,8 +230,7 @@ class TestNoLookahead:
             buckets=3, min_observations=40, reference_days=10_000
         )
         short_out = [
-            short.observe(START + timedelta(hours=4 * i), v)
-            for i, v in enumerate(calm)
+            short.observe(START + timedelta(hours=4 * i), v) for i, v in enumerate(calm)
         ]
         long_out = [
             long.observe(START + timedelta(hours=4 * i), v)
@@ -313,18 +310,14 @@ class TestDetectorEquivalence:
             detector._clock = (lambda t: (lambda: t))(hour)
             window = [b.close for b in bars[max(0, idx - 59) : idx + 1]]
             regime = detector.detect_regime_cached("SYM", {"close": window})
-            at_hour[hour] = (
-                None if regime is MarketRegime.VOL_WARMUP else regime.value
-            )
+            at_hour[hour] = None if regime is MarketRegime.VOL_WARMUP else regime.value
         live = [at_hour[bar.time] for bar in bars]
         assert analysis == live
         assert any(label is not None for label in live)
 
     def test_bucket_names_match_the_shipped_enum(self):
         """k = 3 labels are literally the persisted enum values."""
-        assert bucket_names(SHIPPED_BUCKETS) == tuple(
-            r.value for r in BUCKET_REGIMES
-        )
+        assert bucket_names(SHIPPED_BUCKETS) == tuple(r.value for r in BUCKET_REGIMES)
         assert bucket_names(4) == (
             "vol_1of4",
             "vol_2of4",
@@ -346,9 +339,7 @@ class TestEffectSizeFastPath:
             values = [rng.gauss(0, 1) for _ in range(2000)]
             ranks = average_ranks(values)
             order = sorted(set(labels))
-            codes = np.asarray(
-                [order.index(lab) for lab in labels], dtype=np.int64
-            )
+            codes = np.asarray([order.index(lab) for lab in labels], dtype=np.int64)
             slow = epsilon_squared(labels, ranks, len(values))
             fast = epsilon_squared_coded(
                 codes, np.asarray(ranks, dtype=float), len(values), len(order)
@@ -431,9 +422,7 @@ class TestStrategyMapping:
         for suffix in ("LOW", "MID", "HIGH", "WARMUP"):
             monkeypatch.delenv(f"REGIME_VOL_STRATEGIES_{suffix}", raising=False)
         detector = VolatilityRegimeDetector(compute_adx=False)
-        assert detector.get_active_strategies(MarketRegime.VOL_LOW) == [
-            "MeanReversion"
-        ]
+        assert detector.get_active_strategies(MarketRegime.VOL_LOW) == ["MeanReversion"]
         assert detector.get_active_strategies(MarketRegime.VOL_MID) == [
             "GridTrading",
             "VWAPScalping",
@@ -468,9 +457,7 @@ class TestStrategyMapping:
         """The shipped ADX rule is exactly what strategy_manager now asks."""
         detector = MarketRegimeDetector()
         allowed = {
-            regime
-            for regime in MarketRegime
-            if detector.is_grid_allowed(regime)
+            regime for regime in MarketRegime if detector.is_grid_allowed(regime)
         }
         assert allowed == {
             MarketRegime.RANGING_CALM,
@@ -520,9 +507,7 @@ class TestBackwardCompatibility:
         closes = _prices(300, seed=21)
         seen = set()
         for i in range(60, len(closes)):
-            detector._clock = (lambda t: (lambda: t))(
-                START + timedelta(hours=4 * i)
-            )
+            detector._clock = (lambda t: (lambda: t))(START + timedelta(hours=4 * i))
             seen.add(
                 detector.detect_regime_cached(
                     "A", {"close": closes[max(0, i - 59) : i + 1]}

@@ -642,6 +642,16 @@
                     <div class="stat-item"><strong>Trades:</strong> <span id="trades-count">0</span></div>
                     <div class="stat-item"><strong>P&L:</strong> $<span id="pnl">0</span></div>
                     <div class="stat-item"><strong>Regime:</strong> <span id="current-regime" class="regime">Unknown</span></div>
+                    <div class="stat-item"><strong>Exchange:</strong>
+                        <span id="active-exchange" style="font-weight:bold;">-</span>
+                        <span id="exchange-mode" style="padding:2px 6px;border-radius:4px;background:#444;color:#fff;font-size:0.85em;">-</span>
+                        <select id="exchange-selector" onchange="switchExchange(this.value)" style="margin-left:6px;">
+                            <option value="">switch...</option>
+                            <option value="pacifica">pacifica</option>
+                            <option value="blofin-demo">blofin (demo)</option>
+                            <option value="blofin-live">blofin (LIVE)</option>
+                        </select>
+                    </div>
                     <div class="stat-item"><strong>Grids:</strong> <span id="active-grids">0</span></div>
                     <div class="stat-item"><strong>Hub:</strong> <span id="ws-status" class="ws-status">Connecting...</span></div>
                     <span id="circuit-breaker" class="circuit-breaker-warning" style="display:none">CIRCUIT BREAKER</span>
@@ -965,16 +975,69 @@
             }
         }
 
+        // API token handling. Mutating and /api/debug routes require the
+        // X-Api-Token header when API_TOKEN is set in .env. The token lives in
+        // localStorage under "apiToken"; on the first 401 we prompt once,
+        // store it and retry. A cancelled prompt is remembered so polling
+        // does not nag on every refresh (reload the page to be asked again).
+        const API_TOKEN_STORAGE_KEY = 'apiToken';
+        let apiTokenPromptDeclined = false;
+
+        function readStoredApiToken() {
+            try {
+                return localStorage.getItem(API_TOKEN_STORAGE_KEY) || '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function buildApiHeaders(data) {
+            const headers = {};
+            if (data) {
+                headers['Content-Type'] = 'application/json';
+            }
+            const token = readStoredApiToken();
+            if (token) {
+                headers['X-Api-Token'] = token;
+            }
+            return headers;
+        }
+
+        function promptForApiToken() {
+            if (apiTokenPromptDeclined) {
+                return false;
+            }
+            const token = prompt('This server requires an API token (API_TOKEN in .env). Enter it to continue:');
+            if (!token) {
+                apiTokenPromptDeclined = true;
+                return false;
+            }
+            try {
+                localStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+            } catch (e) {
+                console.warn('Could not persist API token:', e);
+            }
+            return true;
+        }
+
+        async function apiFetch(url, method, data) {
+            const options = { method, headers: buildApiHeaders(data) };
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            let response = await fetch(url, options);
+            if (response.status === 401 && promptForApiToken()) {
+                options.headers = buildApiHeaders(data);
+                response = await fetch(url, options);
+            }
+            return response;
+        }
+
         async function apiCall(endpoint, method = 'GET', data = null) {
             const startTime = performance.now();
             try {
-                const options = { method };
-                if (data) {
-                    options.headers = { 'Content-Type': 'application/json' };
-                    options.body = JSON.stringify(data);
-                }
                 console.log(`Making API call to: ${API_BASE}${endpoint}`);
-                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const response = await apiFetch(`${API_BASE}${endpoint}`, method, data);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
@@ -1014,6 +1077,17 @@
                 const regime = data.current_regime || 'unknown';
                 regimeEl.textContent = regime.replace(/_/g, ' ');
                 regimeEl.className = 'regime regime-' + regime.replace(/_/g, '-');
+
+                // Active exchange + mode badge
+                const exEl = document.getElementById('active-exchange');
+                const modeEl = document.getElementById('exchange-mode');
+                if (exEl && data.exchange) {
+                    exEl.textContent = data.exchange;
+                    const mode = data.exchange_mode || '';
+                    modeEl.textContent = mode;
+                    modeEl.style.background =
+                        (mode === 'live' || mode === 'mainnet') ? '#c0392b' : '#27ae60';
+                }
 
                 // Active grids
                 document.getElementById('active-grids').textContent = data.active_grids || 0;
@@ -1698,6 +1772,25 @@
                 setLoadingState('signals-table', false);
             }
         }
+        async function switchExchange(choice) {
+            if (!choice) return;
+            const selector = document.getElementById('exchange-selector');
+            const label = selector.options[selector.selectedIndex].text;
+            if (!confirm('Switch exchange to ' + label + '? The bot will be ' +
+                         'stopped and a manual restart is required.')) {
+                selector.value = '';
+                return;
+            }
+            try {
+                const response = await apiCall('/exchange/select', 'POST',
+                                               { choice: choice });
+                showToast(response.message, response.success ? 'success' : 'error');
+            } catch (error) {
+                showToast('Exchange switch failed: ' + error.message, 'error');
+            }
+            selector.value = '';
+        }
+
         async function startBot() {
             const button = document.querySelector('button[onclick="startBot()"]');
             const originalText = button.textContent;

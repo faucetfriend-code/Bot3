@@ -92,25 +92,29 @@ Examples:
     # Strategy selection
     strategy_group = parser.add_mutually_exclusive_group()
     strategy_group.add_argument(
-        "--strategy", "-s",
+        "--strategy",
+        "-s",
         type=str,
         choices=list_strategies(),
         help="Strategy to optimize",
     )
     strategy_group.add_argument(
-        "--all", "-a",
+        "--all",
+        "-a",
         action="store_true",
         help="Optimize all strategies sequentially",
     )
     strategy_group.add_argument(
-        "--list", "-l",
+        "--list",
+        "-l",
         action="store_true",
         help="List completed studies",
     )
 
     # Optimization parameters
     parser.add_argument(
-        "--trials", "-n",
+        "--trials",
+        "-n",
         type=int,
         default=100,
         help="Number of optimization trials (default: 100)",
@@ -123,12 +127,25 @@ Examples:
         help="Sampler type (default: tpe)",
     )
     parser.add_argument(
-        "--objective", "-o",
+        "--seed",
+        type=int,
+        default=0,
+        help=(
+            "Run-level BASE seed. Each study's Optuna seed is derived "
+            "from it plus that study's identity (strategy, symbol, "
+            "regime, objective, window - see optuna_runner.study_seed), "
+            "so distinct studies search independently while pinning "
+            "this reproduces a run exactly (default: 0)"
+        ),
+    )
+    parser.add_argument(
+        "--objective",
+        "-o",
         type=str,
         choices=sorted(OBJECTIVE_ALIASES.keys()),
         default="sharpe_ratio",
         help="Objective metric to optimize (default: sharpe_ratio; "
-             "short forms like 'sharpe' accepted)",
+        "short forms like 'sharpe' accepted)",
     )
 
     # Regime-conditional optimization (P4)
@@ -136,26 +153,26 @@ Examples:
         "--regime",
         type=str,
         help="Target regime (e.g. RANGING_CALM). Scores each trial only "
-             "on closed trades whose entry regime matches; trials with "
-             "fewer than the derived minimum matching trades are pruned. "
-             "COMBINE WITH --chunked so the winner is graded out of "
-             "sample; without it the run fits and scores on one window. "
-             "Check the cell has the sample first with "
-             "python -m trading_bot_v2.validation.regime_census.",
+        "on closed trades whose entry regime matches; trials with "
+        "fewer than the derived minimum matching trades are pruned. "
+        "COMBINE WITH --chunked so the winner is graded out of "
+        "sample; without it the run fits and scores on one window. "
+        "Check the cell has the sample first with "
+        "python -m trading_bot_v2.validation.regime_census.",
     )
     parser.add_argument(
         "--min-trades",
         type=int,
         help="Minimum matching-regime trades per trial before pruning "
-             "(default: REGIME_OPT_MIN_TRADES, else the gate-derived "
-             "requirement from min_observations_for_sharpe - 33 at the "
-             "current gate settings)",
+        "(default: REGIME_OPT_MIN_TRADES, else the gate-derived "
+        "requirement from min_observations_for_sharpe - 33 at the "
+        "current gate settings)",
     )
     parser.add_argument(
         "--save-overlay",
         action="store_true",
         help="After the run, persist the best params as the active "
-             "overlay for (strategy, regime). Requires --regime.",
+        "overlay for (strategy, regime). Requires --regime.",
     )
 
     # Chunked cross-symbol sweep
@@ -163,39 +180,39 @@ Examples:
         "--chunked",
         action="store_true",
         help="Rolling-origin walk-forward across a SERIES of short "
-             "windows and several symbols (house style). Each fold "
-             "optimizes on its train window(s) and the winner is graded "
-             "on the next, held-out window. Headline number is "
-             "out-of-sample; the in-sample/out-of-sample gap is "
-             "reported as the overfitting signal.",
+        "windows and several symbols (house style). Each fold "
+        "optimizes on its train window(s) and the winner is graded "
+        "on the next, held-out window. Headline number is "
+        "out-of-sample; the in-sample/out-of-sample gap is "
+        "reported as the overfitting signal.",
     )
     parser.add_argument(
         "--train-windows",
         type=int,
         default=1,
         help="Chunk windows per training set for --chunked (default: 1). "
-             "Needs --windows > --train-windows to make a fold.",
+        "Needs --windows > --train-windows to make a fold.",
     )
     parser.add_argument(
         "--anchored",
         action="store_true",
         help="Expanding training set for --chunked (every window before "
-             "the test one) instead of the rolling fixed-length one.",
+        "the test one) instead of the rolling fixed-length one.",
     )
     parser.add_argument(
         "--in-sample-only",
         action="store_true",
         help="LEGACY: with --chunked, fit and score on the same windows. "
-             "The result is unfalsifiable - nothing separates a real "
-             "edge from the luckiest of N draws. Kept only to reproduce "
-             "older runs.",
+        "The result is unfalsifiable - nothing separates a real "
+        "edge from the luckiest of N draws. Kept only to reproduce "
+        "older runs.",
     )
     parser.add_argument(
         "--symbols",
         type=str,
         default="BTC-USDC,ETH-USDC,SUI-USDC",
         help="Comma-separated symbols for --chunked "
-             "(default: BTC-USDC,ETH-USDC,SUI-USDC)",
+        "(default: BTC-USDC,ETH-USDC,SUI-USDC)",
     )
     parser.add_argument(
         "--windows",
@@ -212,7 +229,8 @@ Examples:
 
     # Walk-forward options
     parser.add_argument(
-        "--walk-forward", "-w",
+        "--walk-forward",
+        "-w",
         action="store_true",
         help="Enable walk-forward validation",
     )
@@ -239,8 +257,8 @@ Examples:
         "--end",
         type=str,
         help="Backtest end date (ISO format, e.g., 2024-12-31). Uses config "
-             "default if not set. With --chunked this anchors the newest "
-             "window (only ever moves it earlier).",
+        "default if not set. With --chunked this anchors the newest "
+        "window (only ever moves it earlier).",
     )
 
     # Symbol and capital
@@ -258,11 +276,12 @@ Examples:
 
     # Output options
     parser.add_argument(
-        "--export", "-e",
+        "--export",
+        "-e",
         type=str,
         help="Export trial results to a CSV file (single-strategy and "
-             "--chunked --in-sample-only runs; the walk-forward path "
-             "prints its fold table instead)",
+        "--chunked --in-sample-only runs; the walk-forward path "
+        "prints its fold table instead)",
     )
     parser.add_argument(
         "--top",
@@ -279,15 +298,16 @@ Examples:
         "--data-dir",
         type=str,
         help="Candle store to read. MUST be absolute when running from a "
-             "git worktree: BACKTEST_DATA_DIR in .env is relative and "
-             "config.py loads it with override=True, so exporting the "
-             "variable does nothing. Matches run_backtest and "
-             "validation.runner.",
+        "git worktree: BACKTEST_DATA_DIR in .env is relative and "
+        "config.py loads it with override=True, so exporting the "
+        "variable does nothing. Matches run_backtest and "
+        "validation.runner.",
     )
 
     # Performance options
     parser.add_argument(
-        "--jobs", "-j",
+        "--jobs",
+        "-j",
         type=int,
         default=1,
         help="Number of parallel jobs (default: 1)",
@@ -300,12 +320,14 @@ Examples:
 
     # Verbosity
     parser.add_argument(
-        "--verbose", "-v",
+        "--verbose",
+        "-v",
         action="store_true",
         help="Enable verbose logging",
     )
     parser.add_argument(
-        "--quiet", "-q",
+        "--quiet",
+        "-q",
         action="store_true",
         help="Suppress most output",
     )
@@ -343,20 +365,29 @@ def save_overlay_from_study(
     strategy: str,
     regime: str,
     objective: str,
+    allow_losing: bool = False,
 ) -> bool:
     """Persist the best trial of a regime study as the active overlay.
+
+    A study whose best trial still lost money is refused by
+    ``DatabaseManager.save_regime_param_overlay``. That refusal is
+    logged at ERROR level and reported as False rather than raised, so
+    one losing regime does not abort a multi-regime sweep - but it is
+    never silent, and nothing is written.
 
     Args:
         study: Completed Optuna study.
         strategy: Snake_case strategy key.
         regime: Target regime (any accepted form).
         objective: Objective metric the study optimized (any form).
+        allow_losing: Store the overlay even if its best objective value
+            is at or below break-even. Deliberate opt-in only.
 
     Returns:
         True when an overlay was saved, False when the study had no
-        valid best trial.
+        valid best trial or the overlay was refused as losing.
     """
-    from ..database import DatabaseManager
+    from ..database import DatabaseManager, LosingOverlayRefused
     from ..regime_param_overlay import normalize_regime_value
 
     best_trial = get_best_trial_or_none(study)
@@ -370,15 +401,21 @@ def save_overlay_from_study(
     trade_count = best_trial.user_attrs.get("regime_trade_count")
 
     db = DatabaseManager()
-    row_id = db.save_regime_param_overlay(
-        strategy=strategy,
-        regime=regime_value,
-        params=dict(best_trial.params),
-        objective=normalize_objective(objective),
-        objective_value=study.best_value,
-        trade_count=trade_count,
-        study_name=study.study_name,
-    )
+    try:
+        row_id = db.save_regime_param_overlay(
+            strategy=strategy,
+            regime=regime_value,
+            params=dict(best_trial.params),
+            objective=normalize_objective(objective),
+            objective_value=study.best_value,
+            trade_count=trade_count,
+            study_name=study.study_name,
+            allow_losing=allow_losing,
+        )
+    except LosingOverlayRefused as e:
+        logger.error(str(e))
+        return False
+
     logger.info(
         f"Saved overlay id={row_id} for ({strategy}, {regime_value}): "
         f"value={study.best_value:.4f}, trades={trade_count}, "
@@ -434,9 +471,7 @@ def trial_funnel_payload(trial) -> dict:
         "by_strategy": attrs.get("by_strategy") or {},
         "regimes": attrs.get("regimes") or {},
         "notes": (
-            {"gate_metrics": attrs["gate_metrics"]}
-            if attrs.get("gate_metrics")
-            else {}
+            {"gate_metrics": attrs["gate_metrics"]} if attrs.get("gate_metrics") else {}
         ),
         "diagnosis": attrs.get("outcome", ""),
         "headline": attrs.get("headline", ""),
@@ -499,15 +534,13 @@ def print_per_symbol_table(trial) -> None:
         )
 
 
-def print_results_summary(
-    study, strategy: str, top_n: int = 10
-) -> None:
+def print_results_summary(study, strategy: str, top_n: int = 10) -> None:
     """Print a summary of optimization results."""
     from ..diagnostics.report import print_funnel_report
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"OPTIMIZATION RESULTS: {strategy.upper()}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     best = get_best_trial_or_none(study)
     if best is None:
@@ -517,13 +550,13 @@ def print_results_summary(
         probe = deepest_trial(study)
         if probe is None:
             print("  No valid trials completed (all pruned or failed).")
-            print(f"{'='*60}\n")
+            print(f"{'=' * 60}\n")
             return
         print(
             f"  No valid trials completed - explaining trial "
             f"#{probe.number}, the one that got furthest:"
         )
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         print_funnel_report(
             trial_funnel_payload(probe),
             title=f"{strategy} (deepest trial #{probe.number})",
@@ -556,38 +589,46 @@ def print_results_summary(
     # Summary statistics
     completed_trials = [t for t in study.trials if t.state.name == "COMPLETE"]
     if completed_trials:
-        values = [t.value for t in completed_trials if t.value is not None and t.value != float("-inf")]
+        values = [
+            t.value
+            for t in completed_trials
+            if t.value is not None and t.value != float("-inf")
+        ]
         if values:
             print("\n  Statistics:")
             print(f"    Completed trials: {len(completed_trials)}")
-            print(f"    Mean value:       {sum(values)/len(values):.4f}")
-            print(f"    Std deviation:    {(sum((v-sum(values)/len(values))**2 for v in values)/len(values))**0.5:.4f}")
+            print(f"    Mean value:       {sum(values) / len(values):.4f}")
+            print(
+                f"    Std deviation:    {(sum((v - sum(values) / len(values)) ** 2 for v in values) / len(values)) ** 0.5:.4f}"
+            )
             print(f"    Min value:        {min(values):.4f}")
             print(f"    Max value:        {max(values):.4f}")
 
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def print_studies_list(studies: list) -> None:
     """Print list of completed studies."""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("COMPLETED OPTIMIZATION STUDIES")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     if not studies:
         print("  No studies found.")
-        print(f"{'='*60}\n")
+        print(f"{'=' * 60}\n")
         return
 
     print(f"\n  {'Study Name':<45} {'Best Value':>12} {'Trials':>8}")
-    print(f"  {'-'*45} {'-'*12} {'-'*8}")
+    print(f"  {'-' * 45} {'-' * 12} {'-' * 8}")
 
     for study in studies:
-        best_str = f"{study['best_value']:.4f}" if study['best_value'] is not None else "N/A"
+        best_str = (
+            f"{study['best_value']:.4f}" if study["best_value"] is not None else "N/A"
+        )
         print(f"  {study['study_name']:<45} {best_str:>12} {study['trial_count']:>8}")
 
     print(f"\n  Total: {len(studies)} studies")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
 
 def run_chunked_walk_forward_cli(
@@ -635,11 +676,9 @@ def run_chunked_walk_forward_cli(
     return report
 
 
-def run_single_strategy(
-    args: argparse.Namespace, strategy: str
-) -> Optional[object]:
+def run_single_strategy(args: argparse.Namespace, strategy: str) -> Optional[object]:
     """Run optimization for a single strategy."""
-    runner = OptunaRunner(db_path=args.db_path)
+    runner = OptunaRunner(db_path=args.db_path, seed=args.seed)
 
     save_overlay = getattr(args, "save_overlay", False)
     regime = getattr(args, "regime", None)
@@ -696,9 +735,7 @@ def run_single_strategy(
             )
             print_results_summary(study, strategy, args.top)
             if save_overlay:
-                save_overlay_from_study(
-                    study, strategy, regime, args.objective
-                )
+                save_overlay_from_study(study, strategy, regime, args.objective)
             if args.export:
                 export_path = args.export
                 if not export_path.endswith(".csv"):
@@ -729,9 +766,7 @@ def run_single_strategy(
 
         # Persist best params as the active overlay for (strategy, regime)
         if save_overlay:
-            save_overlay_from_study(
-                study, strategy, regime, args.objective
-            )
+            save_overlay_from_study(study, strategy, regime, args.objective)
 
         # Export if requested
         if args.export:
@@ -748,6 +783,7 @@ def run_single_strategy(
         logger.error(f"Optimization failed for {strategy}: {e}")
         if args.verbose:
             import traceback
+
             traceback.print_exc()
         return None
 
@@ -758,7 +794,7 @@ def run_all_strategies(args: argparse.Namespace) -> dict:
     strategies = list_strategies()
 
     print(f"\nOptimizing {len(strategies)} strategies...")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     for i, strategy in enumerate(strategies, 1):
         print(f"\n[{i}/{len(strategies)}] Optimizing {strategy}...")
@@ -766,9 +802,9 @@ def run_all_strategies(args: argparse.Namespace) -> dict:
         results[strategy] = study
 
     # Summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("ALL STRATEGIES OPTIMIZED")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     for strategy, study in results.items():
         oos = getattr(study, "out_of_sample_objective", None)
@@ -782,7 +818,7 @@ def run_all_strategies(args: argparse.Namespace) -> dict:
         else:
             print(f"  {strategy:<25} Failed")
 
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     return results
 
@@ -803,7 +839,7 @@ def main() -> int:
 
     # Handle --list
     if args.list:
-        runner = OptunaRunner(db_path=args.db_path)
+        runner = OptunaRunner(db_path=args.db_path, seed=args.seed)
         studies = runner.list_studies()
         print_studies_list(studies)
         return 0

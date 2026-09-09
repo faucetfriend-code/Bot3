@@ -5,8 +5,6 @@ Tests the authoritative grid state management functionality.
 """
 
 import pytest
-import sys
-import os
 from unittest.mock import Mock, MagicMock
 
 # Use package import (relative imports require package context)
@@ -134,7 +132,9 @@ class TestGridLifecycleManager:
 
         # Verify emergency actions
         mock_client.cancel_all_orders.assert_called_with(symbol)
-        mock_client.place_order.assert_called_with(symbol, "sell", 100, "market")
+        mock_client.place_order.assert_called_with(
+            symbol, "sell", 100, "market", reduce_only=True
+        )
 
         # Grid should be removed
         assert not grid_manager.has_active_grid(symbol)
@@ -154,7 +154,9 @@ class TestGridLifecycleManager:
 
         # Verify controlled exit
         mock_client.cancel_all_orders.assert_called_with(symbol)
-        mock_client.place_order.assert_called_with(symbol, "sell", 100, "market")
+        mock_client.place_order.assert_called_with(
+            symbol, "sell", 100, "market", reduce_only=True
+        )
 
         # Grid is fully removed after force exit (no partial_unwind in test env)
         assert not grid_manager.has_active_grid(symbol)

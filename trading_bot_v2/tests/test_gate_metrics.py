@@ -222,9 +222,9 @@ class TestVWAPUnreachableThresholdRegression:
         """The interim 2.0 default must NOT be flagged."""
         _write(_collect_vwap(2.0), tmp_path)
         monkeypatch.setenv("GATE_CALIBRATION_DIR", str(tmp_path))
-        assert check_param_feasibility(
-            "vwap_scalping", {"sd_entry_threshold": 2.0}
-        ) == []
+        assert (
+            check_param_feasibility("vwap_scalping", {"sd_entry_threshold": 2.0}) == []
+        )
 
     def test_report_names_the_parameter_to_change(self):
         """A report must say WHICH knob to turn, not just that it failed."""
@@ -270,9 +270,7 @@ class TestCollector:
     def test_summary_statistics(self):
         collector = GateMetricCollector(strategy="s", symbol="X")
         for value in range(101):  # 0..100
-            collector.observe(
-                [GateMetric("m", float(value), 50.0, GATE_AT_LEAST, "k")]
-            )
+            collector.observe([GateMetric("m", float(value), 50.0, GATE_AT_LEAST, "k")])
         record = collector.summary()["m"]
         assert record["count"] == 101
         assert record["min"] == 0.0
@@ -302,9 +300,7 @@ class TestCollector:
 
     def test_null_collector_is_inert(self):
         assert NULL_GATE_METRICS.enabled is False
-        NULL_GATE_METRICS.observe(
-            [GateMetric("m", 1.0, 1.0, GATE_AT_LEAST, "k")]
-        )
+        NULL_GATE_METRICS.observe([GateMetric("m", 1.0, 1.0, GATE_AT_LEAST, "k")])
         assert NULL_GATE_METRICS.summary() == {}
         assert NULL_GATE_METRICS.to_artifact({}) == {}
 
@@ -328,9 +324,7 @@ class TestArtifactIO:
     def test_future_schema_is_ignored(self, tmp_path):
         path = tmp_path / "X_s.json"
         path.write_text(
-            json.dumps(
-                {"kind": ARTIFACT_KIND, "schema_version": SCHEMA_VERSION + 1}
-            ),
+            json.dumps({"kind": ARTIFACT_KIND, "schema_version": SCHEMA_VERSION + 1}),
             encoding="ascii",
         )
         assert load_artifact(path) is None
@@ -527,17 +521,20 @@ class TestNearMiss:
         assert near_miss(close) < 1.0
 
     def test_opened_gates_are_ignored(self):
-        assert near_miss(
-            {
-                "m": {
-                    "count": 10,
-                    "n_pass": 4,
-                    "closest_approach": 1.0,
-                    "threshold_at_calibration": 1.0,
-                    "direction": GATE_AT_LEAST,
+        assert (
+            near_miss(
+                {
+                    "m": {
+                        "count": 10,
+                        "n_pass": 4,
+                        "closest_approach": 1.0,
+                        "threshold_at_calibration": 1.0,
+                        "direction": GATE_AT_LEAST,
+                    }
                 }
-            }
-        ) == 0.0
+            )
+            == 0.0
+        )
 
     def test_empty_summary(self):
         assert near_miss({}) == 0.0
@@ -620,9 +617,7 @@ HOOKED_STRATEGIES = (
 class TestHookContract:
     @pytest.mark.parametrize("cls", HOOKED_STRATEGIES)
     def test_signature_is_uniform(self, cls):
-        params = list(
-            inspect.signature(cls.describe_gate_metrics).parameters
-        )
+        params = list(inspect.signature(cls.describe_gate_metrics).parameters)
         assert params == [
             "self",
             "symbol",
@@ -768,9 +763,7 @@ class TestCommittedArtifacts:
         for strategy in self.STRATEGIES:
             for payload in load_calibrations(strategy):
                 params = payload["provenance"]["params_at_calibration"]
-                hard, _ = threshold_verdicts(
-                    strategy, params, symbol=payload["symbol"]
-                )
+                hard, _ = threshold_verdicts(strategy, params, symbol=payload["symbol"])
                 assert hard == [], (
                     f"{strategy}/{payload['symbol']} ships an unreachable "
                     f"threshold: {[v.reason for v in hard]}"

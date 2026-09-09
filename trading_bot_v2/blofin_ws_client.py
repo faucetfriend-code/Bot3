@@ -39,7 +39,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import websockets
@@ -167,9 +167,7 @@ class BlofinWebSocketClient:
         """Return the cached book: {"bids": [{"p","a"}...], "asks": ...}."""
         return self._orderbook_cache.get(self._clean(symbol))
 
-    def get_orderbook_imbalance(
-        self, symbol: str, levels: int = 10
-    ) -> Optional[float]:
+    def get_orderbook_imbalance(self, symbol: str, levels: int = 10) -> Optional[float]:
         """Return bid volume / total volume over the top ``levels``."""
         book = self.get_orderbook(symbol)
         if not book:

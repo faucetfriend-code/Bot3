@@ -13,12 +13,10 @@ Tests the managers and helpers that route generated signals through:
 12 test classes, ~100 tests total.
 """
 
-import time
 import threading
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Any, Optional
-from unittest.mock import MagicMock, patch, PropertyMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -93,15 +91,21 @@ def _valid_multi_tf_data(n=50):
     for i in range(n):
         c = base + random.uniform(-2, 2)
         h = c + random.uniform(0, 1)
-        l = c - random.uniform(0, 1)
+        lo = c - random.uniform(0, 1)
         o = c + random.uniform(-0.5, 0.5)
         v = random.uniform(1000, 5000)
         closes.append(c)
         highs.append(h)
-        lows.append(l)
+        lows.append(lo)
         opens.append(o)
         volumes.append(v)
-    data = {"open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes}
+    data = {
+        "open": opens,
+        "high": highs,
+        "low": lows,
+        "close": closes,
+        "volume": volumes,
+    }
     return {"15m": dict(data), "1h": dict(data), "4h": dict(data)}
 
 
@@ -133,7 +137,9 @@ class TestEventBus:
 
     def test_subscribe_and_receive(self, fresh_event_bus):
         received = []
-        fresh_event_bus.subscribe(EventType.SIGNAL_GENERATED, lambda e: received.append(e))
+        fresh_event_bus.subscribe(
+            EventType.SIGNAL_GENERATED, lambda e: received.append(e)
+        )
         fresh_event_bus.publish(Event(EventType.SIGNAL_GENERATED, {"x": 1}, "test"))
         assert len(received) == 1
         assert received[0].data == {"x": 1}
@@ -147,7 +153,10 @@ class TestEventBus:
 
     def test_unsubscribe_stops_receiving(self, fresh_event_bus):
         received = []
-        cb = lambda e: received.append(e)
+
+        def cb(e):
+            received.append(e)
+
         fresh_event_bus.subscribe(EventType.SIGNAL_GENERATED, cb)
         fresh_event_bus.unsubscribe(EventType.SIGNAL_GENERATED, cb)
         fresh_event_bus.publish(Event(EventType.SIGNAL_GENERATED, {}, "test"))
@@ -155,7 +164,9 @@ class TestEventBus:
 
     def test_different_event_types_isolated(self, fresh_event_bus):
         received = []
-        fresh_event_bus.subscribe(EventType.SIGNAL_GENERATED, lambda e: received.append(e))
+        fresh_event_bus.subscribe(
+            EventType.SIGNAL_GENERATED, lambda e: received.append(e)
+        )
         fresh_event_bus.publish(Event(EventType.ORDER_PLACED, {}, "test"))
         assert len(received) == 0
 
@@ -318,22 +329,32 @@ class TestRiskManagerPositionSizing:
 
     def test_low_risk_profile_halves(self, make_signal):
         rm = self._rm()
-        sig = make_signal(entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.LOW.value)
-        qty_low = rm.get_position_size(sig, account_balance=10000, current_exposure=0)
+        sig = make_signal(
+            entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.LOW.value
+        )
+        rm.get_position_size(sig, account_balance=10000, current_exposure=0)
         # risk = 500 * 0.5 = 250, notional = 250/0.05 = 5000, BUT exposure cap = 1500
         # Both LOW and MEDIUM are capped by exposure at 1500 → qty = 15 for both
         # Use higher balance to avoid exposure cap dominating
         rm2 = self._rm(exposure=1.0)  # 100% exposure limit (effectively uncapped)
-        sig2 = make_signal(entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.LOW.value)
-        qty_low2 = rm2.get_position_size(sig2, account_balance=10000, current_exposure=0)
-        sig3 = make_signal(entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.MEDIUM.value)
+        sig2 = make_signal(
+            entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.LOW.value
+        )
+        qty_low2 = rm2.get_position_size(
+            sig2, account_balance=10000, current_exposure=0
+        )
+        sig3 = make_signal(
+            entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.MEDIUM.value
+        )
         qty_med = rm2.get_position_size(sig3, account_balance=10000, current_exposure=0)
         # LOW should produce half the position of MEDIUM
         assert qty_low2 == pytest.approx(qty_med * 0.5, rel=0.01)
 
     def test_high_risk_profile_increases(self, make_signal):
         rm = self._rm()
-        sig = make_signal(entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.HIGH.value)
+        sig = make_signal(
+            entry_price=100.0, stop_loss=95.0, risk_profile=RiskProfile.HIGH.value
+        )
         qty = rm.get_position_size(sig, account_balance=10000, current_exposure=0)
         # risk = 500 * 1.5 = 750, notional = 750/0.05 = 15000
         # BUT exposure cap: max_exposure = 10000*0.15 = 1500, notional capped to 1500
@@ -365,17 +386,35 @@ class TestRiskManagerPositionSizing:
         rm = self._rm()
         # Position notional = 5000 * 1 = 5000, risk_pct = 5000/10000 = 50%
         # Limit is 5% * 2 = 10% → 50% > 10% → False
-        assert rm.validate_position_size(quantity=50, account_balance=10000, current_exposure=0, entry_price=100) is False
+        assert (
+            rm.validate_position_size(
+                quantity=50, account_balance=10000, current_exposure=0, entry_price=100
+            )
+            is False
+        )
 
     def test_validate_exceeds_exposure(self):
         rm = self._rm()
         # total_exposure = 1400 + 200 = 1600, 16% > 15% → False
-        assert rm.validate_position_size(quantity=2, account_balance=10000, current_exposure=1400, entry_price=100) is False
+        assert (
+            rm.validate_position_size(
+                quantity=2,
+                account_balance=10000,
+                current_exposure=1400,
+                entry_price=100,
+            )
+            is False
+        )
 
     def test_validate_within_limits(self):
         rm = self._rm()
         # notional = 5*100 = 500, risk = 5% < 10%, exposure = 0+500 = 5% < 15%
-        assert rm.validate_position_size(quantity=5, account_balance=10000, current_exposure=0, entry_price=100) is True
+        assert (
+            rm.validate_position_size(
+                quantity=5, account_balance=10000, current_exposure=0, entry_price=100
+            )
+            is True
+        )
 
     def test_minimum_quantity_enforced(self, make_signal):
         rm = self._rm()
@@ -399,13 +438,17 @@ class TestRiskManagerCapitalAllocation:
 
     def test_basic_approval(self):
         rm = self._rm()
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 0
+        )
         assert result["approved"] is True
         assert result["allocated_amount"] == 500
 
     def test_zero_amount_rejected(self):
         rm = self._rm()
-        result = rm.request_capital_allocation("SUI-PERP", 0, "mean_reversion", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 0, "mean_reversion", 10000, 0
+        )
         assert result["approved"] is False
         assert result["reason"] == "invalid_request_amount"
 
@@ -418,31 +461,41 @@ class TestRiskManagerCapitalAllocation:
     def test_exposure_limit_caps(self):
         rm = self._rm()
         # max additional = 10000*0.15 - 1400 = 100
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 1400)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 1400
+        )
         assert result["approved"] is True
         assert result["allocated_amount"] == 100
 
     def test_grid_capped_at_4pct(self):
         rm = self._rm()
         # Grid cap: 10000 * 0.04 = 400
-        result = rm.request_capital_allocation("SUI-PERP", 1000, "grid_trading", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 1000, "grid_trading", 10000, 0
+        )
         assert result["approved"] is True
         assert result["allocated_amount"] == 400
 
     def test_approval_id_returned(self):
         rm = self._rm()
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 0
+        )
         assert "approval_id" in result
 
     def test_validate_usage_within_tolerance(self):
         rm = self._rm()
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 0
+        )
         # Actual usage <= allocated * 1.01 → True
         assert rm.validate_capital_usage(result["approval_id"], 500) is True
 
     def test_validate_usage_exceeds_tolerance(self):
         rm = self._rm()
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 0)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 0
+        )
         # Actual usage > allocated * 1.01 → False
         assert rm.validate_capital_usage(result["approval_id"], 600) is False
 
@@ -462,7 +515,9 @@ class TestRiskManagerEmergencyAndMigrated:
         rm = self._rm()
         rm.request_capital_allocation("SUI-PERP", 500, "mr", 10000, 0)
         rm.grid_exposure["SUI-PERP"] = 200.0
-        rm.register_migrated_position("SUI-PERP", {"side": "long", "qty": 1, "entry_price": 100, "has_stop": True})
+        rm.register_migrated_position(
+            "SUI-PERP", {"side": "long", "qty": 1, "entry_price": 100, "has_stop": True}
+        )
         rm.emergency_stop_all()
         assert rm._pending_approvals == {}
         assert rm.grid_exposure == {}
@@ -470,7 +525,9 @@ class TestRiskManagerEmergencyAndMigrated:
 
     def test_register_migrated_success(self):
         rm = self._rm()
-        ok = rm.register_migrated_position("SUI-PERP", {"side": "long", "qty": 5, "entry_price": 100, "has_stop": True})
+        ok = rm.register_migrated_position(
+            "SUI-PERP", {"side": "long", "qty": 5, "entry_price": 100, "has_stop": True}
+        )
         assert ok is True
         assert len(rm.migrated_positions["SUI-PERP"]) == 1
 
@@ -482,20 +539,32 @@ class TestRiskManagerEmergencyAndMigrated:
     def test_migrated_without_stop_warns(self):
         rm = self._rm()
         # Should still register but log a warning
-        ok = rm.register_migrated_position("SUI-PERP", {"side": "long", "qty": 1, "entry_price": 100, "has_stop": False})
+        ok = rm.register_migrated_position(
+            "SUI-PERP",
+            {"side": "long", "qty": 1, "entry_price": 100, "has_stop": False},
+        )
         assert ok is True
 
     def test_get_migrated_exposure(self):
         rm = self._rm()
-        rm.register_migrated_position("SUI-PERP", {"side": "long", "qty": 10, "entry_price": 50, "has_stop": True})
+        rm.register_migrated_position(
+            "SUI-PERP", {"side": "long", "qty": 10, "entry_price": 50, "has_stop": True}
+        )
         exposure = rm.get_migrated_exposure("SUI-PERP")
         assert exposure == pytest.approx(500.0)
 
     def test_migrated_exceeds_total_limit(self):
         rm = self._rm()
         # Register enough to exceed 20% of account
-        rm.register_migrated_position("SUI-PERP", {"side": "long", "qty": 100, "entry_price": 100, "has_stop": True})
-        result = rm.validate_migrated_position("ETH-PERP", {"side": "long", "qty": 200, "entry_price": 100, "has_stop": True}, account_balance=10000)
+        rm.register_migrated_position(
+            "SUI-PERP",
+            {"side": "long", "qty": 100, "entry_price": 100, "has_stop": True},
+        )
+        result = rm.validate_migrated_position(
+            "ETH-PERP",
+            {"side": "long", "qty": 200, "entry_price": 100, "has_stop": True},
+            account_balance=10000,
+        )
         assert result["valid"] is False
         assert any("exceed" in err.lower() for err in result["errors"])
 
@@ -542,19 +611,36 @@ class TestStrategyManagerValidation:
 
     def test_insufficient_candles_returns_empty(self):
         sm, _ = self._make_sm()
-        short = {"open": [1]*5, "high": [1]*5, "low": [1]*5, "close": [1]*5, "volume": [1]*5}
+        short = {
+            "open": [1] * 5,
+            "high": [1] * 5,
+            "low": [1] * 5,
+            "close": [1] * 5,
+            "volume": [1] * 5,
+        }
         data = {"15m": short, "1h": short, "4h": short}
         assert sm.generate_signals_for_market("SUI-PERP", data, 100.0) == []
 
     def test_zero_closes_returns_empty(self):
         sm, _ = self._make_sm()
-        zeros = {"open": [0]*50, "high": [0]*50, "low": [0]*50, "close": [0]*50, "volume": [0]*50}
+        zeros = {
+            "open": [0] * 50,
+            "high": [0] * 50,
+            "low": [0] * 50,
+            "close": [0] * 50,
+            "volume": [0] * 50,
+        }
         data = {"15m": zeros, "1h": zeros, "4h": zeros}
         assert sm.generate_signals_for_market("SUI-PERP", data, 100.0) == []
 
     def test_missing_ohlcv_field_returns_empty(self):
         sm, _ = self._make_sm()
-        no_vol = {"open": [1]*50, "high": [1.1]*50, "low": [0.9]*50, "close": [1]*50}
+        no_vol = {
+            "open": [1] * 50,
+            "high": [1.1] * 50,
+            "low": [0.9] * 50,
+            "close": [1] * 50,
+        }
         data = {"15m": no_vol, "1h": no_vol, "4h": no_vol}
         assert sm.generate_signals_for_market("SUI-PERP", data, 100.0) == []
 
@@ -722,8 +808,13 @@ class TestStrategyManagerRegimeRouting:
 
         detector = MagicMock()
         detector.detect_regime_cached.return_value = regime
-        detector.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(regime)
-        detector.get_strategy_weights.return_value = {"MACrossover": 0.5, "MomentumScalping": 0.3}
+        detector.get_active_strategies.return_value = (
+            MarketRegimeDetector().get_active_strategies(regime)
+        )
+        detector.get_strategy_weights.return_value = {
+            "MACrossover": 0.5,
+            "MomentumScalping": 0.3,
+        }
         # StrategyManager asks the detector whether grid may run in this
         # regime (so the rule follows the active taxonomy). A bare
         # MagicMock would answer "yes" to everything, which would silently
@@ -762,7 +853,9 @@ class TestStrategyManagerRegimeRouting:
     def test_ranging_calm_activates_mean_reversion_and_vwap(self):
         sm, det = self._make_sm_with_mock_strategies(MarketRegime.RANGING_CALM)
         det.detect_regime_cached.return_value = MarketRegime.RANGING_CALM
-        det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        det.get_active_strategies.return_value = (
+            MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        )
         sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
         assert sm.strategies["MeanReversion"].generate_signals.called
         # VWAPScalping is an overlay added in all regimes
@@ -771,26 +864,40 @@ class TestStrategyManagerRegimeRouting:
     def test_ranging_volatile_activates_grid_and_vwap(self):
         sm, det = self._make_sm_with_mock_strategies(MarketRegime.RANGING_VOLATILE)
         det.detect_regime_cached.return_value = MarketRegime.RANGING_VOLATILE
-        det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_VOLATILE)
+        det.get_active_strategies.return_value = (
+            MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_VOLATILE)
+        )
         sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
         assert sm.strategies["GridTrading"].generate_signals.called
         assert sm.strategies["VWAPScalping"].generate_signals.called
 
     def test_overlay_liquidation_capture_always_runs(self):
-        for regime in [MarketRegime.TRENDING_STRONG, MarketRegime.RANGING_CALM, MarketRegime.INDECISIVE]:
+        for regime in [
+            MarketRegime.TRENDING_STRONG,
+            MarketRegime.RANGING_CALM,
+            MarketRegime.INDECISIVE,
+        ]:
             sm, det = self._make_sm_with_mock_strategies(regime)
             det.detect_regime_cached.return_value = regime
-            det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(regime)
+            det.get_active_strategies.return_value = (
+                MarketRegimeDetector().get_active_strategies(regime)
+            )
             sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
-            assert sm.strategies["LiquidationCapture"].generate_signals.called, f"LiqCapture not called in {regime}"
+            assert sm.strategies["LiquidationCapture"].generate_signals.called, (
+                f"LiqCapture not called in {regime}"
+            )
 
     def test_overlay_funding_arb_always_runs(self):
         for regime in [MarketRegime.TRENDING_STRONG, MarketRegime.RANGING_VOLATILE]:
             sm, det = self._make_sm_with_mock_strategies(regime)
             det.detect_regime_cached.return_value = regime
-            det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(regime)
+            det.get_active_strategies.return_value = (
+                MarketRegimeDetector().get_active_strategies(regime)
+            )
             sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
-            assert sm.strategies["FundingArb"].generate_signals.called, f"FundingArb not called in {regime}"
+            assert sm.strategies["FundingArb"].generate_signals.called, (
+                f"FundingArb not called in {regime}"
+            )
 
     def test_overlay_orderbook_imbalance_always_runs(self):
         # OrderBookImbalance needs ws_client to provide orderbook data; without it, it won't get orderbook
@@ -798,7 +905,9 @@ class TestStrategyManagerRegimeRouting:
         # The key test is that it's in the active list.
         sm, det = self._make_sm_with_mock_strategies(MarketRegime.RANGING_CALM)
         det.detect_regime_cached.return_value = MarketRegime.RANGING_CALM
-        det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        det.get_active_strategies.return_value = (
+            MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        )
         sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
         # OrderBookImbalance needs ws_client for orderbook data; without it the generate path
         # still tries to call it or skips with "no orderbook". Either way the strategy should
@@ -808,7 +917,10 @@ class TestStrategyManagerRegimeRouting:
     def test_grid_disabled_in_trending_strong(self):
         sm, det = self._make_sm_with_mock_strategies(MarketRegime.TRENDING_STRONG)
         det.detect_regime_cached.return_value = MarketRegime.TRENDING_STRONG
-        det.get_active_strategies.return_value = ["MACrossover", "GridTrading"]  # Even if detector returns it
+        det.get_active_strategies.return_value = [
+            "MACrossover",
+            "GridTrading",
+        ]  # Even if detector returns it
         sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
         # Grid should be stripped by the ENFORCE GRID REGIME CONSTRAINTS code
         assert not sm.strategies["GridTrading"].generate_signals.called
@@ -816,7 +928,9 @@ class TestStrategyManagerRegimeRouting:
     def test_momentum_only_in_trending_regimes(self):
         sm, det = self._make_sm_with_mock_strategies(MarketRegime.RANGING_CALM)
         det.detect_regime_cached.return_value = MarketRegime.RANGING_CALM
-        det.get_active_strategies.return_value = MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        det.get_active_strategies.return_value = (
+            MarketRegimeDetector().get_active_strategies(MarketRegime.RANGING_CALM)
+        )
         sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
         # MomentumScalping only added in TRENDING_STRONG / TRENDING_MODERATE
         assert not sm.strategies["MomentumScalping"].generate_signals.called
@@ -834,7 +948,10 @@ class TestConflictResolution:
         from trading_bot_v2.strategy_manager import StrategyManager
 
         detector = MagicMock()
-        detector.get_strategy_weights.return_value = {"MeanReversion": 0.7, "VWAPScalping": 0.3}
+        detector.get_strategy_weights.return_value = {
+            "MeanReversion": 0.7,
+            "VWAPScalping": 0.3,
+        }
         sm = StrategyManager(
             regime_detector=detector,
             enable_mean_reversion=False,
@@ -862,7 +979,9 @@ class TestConflictResolution:
     def test_high_conviction_overrides(self):
         sm = self._make_sm()
         normal = _make_signal(confidence=0.9)
-        hc = _make_signal(confidence=0.7, quality=TradeQuality.HIGH_CONVICTION, side=OrderSide.SELL)
+        hc = _make_signal(
+            confidence=0.7, quality=TradeQuality.HIGH_CONVICTION, side=OrderSide.SELL
+        )
         result = sm._resolve_signal_conflicts([normal, hc], MarketRegime.RANGING_CALM)
         assert len(result) == 1
         assert result[0].quality == TradeQuality.HIGH_CONVICTION
@@ -887,8 +1006,12 @@ class TestConflictResolution:
 
     def test_same_direction_sell_combined(self):
         sm = self._make_sm()
-        s1 = _make_signal(confidence=0.8, side=OrderSide.SELL, strategy=StrategyType.MEAN_REVERSION)
-        s2 = _make_signal(confidence=0.6, side=OrderSide.SELL, strategy=StrategyType.VWAP_SCALPING)
+        s1 = _make_signal(
+            confidence=0.8, side=OrderSide.SELL, strategy=StrategyType.MEAN_REVERSION
+        )
+        s2 = _make_signal(
+            confidence=0.6, side=OrderSide.SELL, strategy=StrategyType.VWAP_SCALPING
+        )
         result = sm._resolve_signal_conflicts([s1, s2], MarketRegime.RANGING_CALM)
         assert len(result) == 1
         assert result[0].side == OrderSide.SELL
@@ -911,39 +1034,63 @@ class TestConflictResolution:
 
     def test_opposing_trending_trusts_higher_confidence(self):
         sm = self._make_sm()
-        buy = _make_signal(side=OrderSide.BUY, confidence=0.9, strategy=StrategyType.MA_CROSSOVER)
-        sell = _make_signal(side=OrderSide.SELL, confidence=0.5, strategy=StrategyType.MEAN_REVERSION)
+        buy = _make_signal(
+            side=OrderSide.BUY, confidence=0.9, strategy=StrategyType.MA_CROSSOVER
+        )
+        sell = _make_signal(
+            side=OrderSide.SELL, confidence=0.5, strategy=StrategyType.MEAN_REVERSION
+        )
         result = sm._resolve_signal_conflicts([buy, sell], MarketRegime.TRENDING_STRONG)
         assert len(result) == 1
         assert result[0].side == OrderSide.BUY
 
     def test_opposing_ranging_trusts_mean_reversion(self):
         sm = self._make_sm()
-        buy = _make_signal(side=OrderSide.BUY, confidence=0.5, strategy=StrategyType.VWAP_SCALPING)
-        sell = _make_signal(side=OrderSide.SELL, confidence=0.6, strategy=StrategyType.MEAN_REVERSION)
+        buy = _make_signal(
+            side=OrderSide.BUY, confidence=0.5, strategy=StrategyType.VWAP_SCALPING
+        )
+        sell = _make_signal(
+            side=OrderSide.SELL, confidence=0.6, strategy=StrategyType.MEAN_REVERSION
+        )
         result = sm._resolve_signal_conflicts([buy, sell], MarketRegime.RANGING_CALM)
         assert len(result) == 1
         assert result[0].strategy == StrategyType.MEAN_REVERSION
 
     def test_opposing_too_close_stays_flat(self):
         sm = self._make_sm()
-        buy = _make_signal(side=OrderSide.BUY, confidence=0.55, strategy=StrategyType.VWAP_SCALPING)
-        sell = _make_signal(side=OrderSide.SELL, confidence=0.50, strategy=StrategyType.VWAP_SCALPING)
+        buy = _make_signal(
+            side=OrderSide.BUY, confidence=0.55, strategy=StrategyType.VWAP_SCALPING
+        )
+        sell = _make_signal(
+            side=OrderSide.SELL, confidence=0.50, strategy=StrategyType.VWAP_SCALPING
+        )
         # Neither is mean_reversion in RANGING, so fallback tiebreaker with < 10% diff → flat
-        result = sm._resolve_signal_conflicts([buy, sell], MarketRegime.RANGING_VOLATILE)
+        result = sm._resolve_signal_conflicts(
+            [buy, sell], MarketRegime.RANGING_VOLATILE
+        )
         assert result == []
 
     def test_grid_buy_sell_pair_returned_together(self):
         sm = self._make_sm()
         buy = _make_signal(
-            strategy=StrategyType.GRID_TRADING, side=OrderSide.BUY,
-            entry_price=99.0, stop_loss=95.0, take_profit=103.0, confidence=0.6,
+            strategy=StrategyType.GRID_TRADING,
+            side=OrderSide.BUY,
+            entry_price=99.0,
+            stop_loss=95.0,
+            take_profit=103.0,
+            confidence=0.6,
         )
         sell = _make_signal(
-            strategy=StrategyType.GRID_TRADING, side=OrderSide.SELL,
-            entry_price=101.0, stop_loss=105.0, take_profit=97.0, confidence=0.6,
+            strategy=StrategyType.GRID_TRADING,
+            side=OrderSide.SELL,
+            entry_price=101.0,
+            stop_loss=105.0,
+            take_profit=97.0,
+            confidence=0.6,
         )
-        result = sm._resolve_signal_conflicts([buy, sell], MarketRegime.RANGING_VOLATILE)
+        result = sm._resolve_signal_conflicts(
+            [buy, sell], MarketRegime.RANGING_VOLATILE
+        )
         assert len(result) == 2
         sides = {s.side for s in result}
         assert sides == {OrderSide.BUY, OrderSide.SELL}
@@ -997,16 +1144,18 @@ class TestCooldownAndAntiSpam:
         sig = _make_signal()
         # Manually insert 3 recent trades
         for i in range(3):
-            sm._executed_trades.append({
-                "symbol": sig.asset,
-                "strategy": sig.strategy.value,
-                "side": "buy",
-                "quantity": 1,
-                "price": 100,
-                "timestamp": datetime.now(),
-                "order_id": f"o{i}",
-                "signal_confidence": 0.5,
-            })
+            sm._executed_trades.append(
+                {
+                    "symbol": sig.asset,
+                    "strategy": sig.strategy.value,
+                    "side": "buy",
+                    "quantity": 1,
+                    "price": 100,
+                    "timestamp": datetime.now(),
+                    "order_id": f"o{i}",
+                    "signal_confidence": 0.5,
+                }
+            )
         assert sm.should_skip_signal(sig) is True
 
     def test_different_symbol_unaffected(self):
@@ -1061,16 +1210,22 @@ class TestExecutionLayer:
                 drift = 0.1 * i if trend == "up" else -0.1 * i
                 c = base + drift + random.uniform(-0.5, 0.5)
                 h = c + random.uniform(0.2, 1.0)
-                l = c - random.uniform(0.2, 1.0)
+                lo = c - random.uniform(0.2, 1.0)
                 o = c + random.uniform(-0.3, 0.3)
                 # Create volume spike on last candle for timing confirmation
                 v = random.uniform(1000, 3000) if i < n - 1 else 5000.0
                 closes.append(c)
                 highs.append(h)
-                lows.append(l)
+                lows.append(lo)
                 opens.append(o)
                 volumes.append(v)
-            data[tf] = {"open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes}
+            data[tf] = {
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes,
+            }
         return data
 
     def test_disabled_passthrough(self):
@@ -1114,7 +1269,6 @@ class TestExecutionLayer:
         # Volume spike (last candle has 5000 vs ~2000 avg) → timing_good → +10%
         el = self._make_el()
         sig = _make_signal(confidence=0.70)
-        original_confidence = sig.confidence
         result = el.refine_entry(sig, "SUI-PERP")
         # Confidence should be modified (either boosted or reduced, depends on RSI/momentum)
         # The exact direction depends on indicator values from seed data.
@@ -1180,12 +1334,15 @@ class TestTradingBotSignalRouting:
         """Create TradingBot with heavily mocked dependencies."""
         from trading_bot_v2.trading_bot import TradingBot
 
-        with patch("trading_bot_v2.trading_bot.PacificaClient") as MockClient, \
-             patch("trading_bot_v2.trading_bot.DatabaseManager") as MockDB, \
-             patch("trading_bot_v2.trading_bot.get_ws_client") as mock_ws_getter, \
-             patch("trading_bot_v2.trading_bot.get_event_bus") as mock_bus_getter, \
-             patch("trading_bot_v2.trading_bot.get_component_registry") as mock_reg_getter:
-
+        with (
+            patch("trading_bot_v2.trading_bot.PacificaClient") as MockClient,
+            patch("trading_bot_v2.trading_bot.DatabaseManager") as MockDB,
+            patch("trading_bot_v2.trading_bot.get_ws_client") as mock_ws_getter,
+            patch("trading_bot_v2.trading_bot.get_event_bus") as mock_bus_getter,
+            patch(
+                "trading_bot_v2.trading_bot.get_component_registry"
+            ) as mock_reg_getter,
+        ):
             mock_client = MockClient.return_value
             mock_db = MockDB.return_value
             mock_ws = MagicMock()
@@ -1229,32 +1386,40 @@ class TestTradingBotSignalRouting:
         bot = self._make_bot()
         sig = _make_signal(all_flags=False)
         # Patch methods used internally
-        with patch.object(bot, "_get_account_balance", return_value=10000), \
-             patch.object(bot, "_get_current_exposure", return_value=0):
+        with (
+            patch.object(bot, "_get_account_balance", return_value=10000),
+            patch.object(bot, "_get_current_exposure", return_value=0),
+        ):
             result = bot._should_execute_signal(sig)
         assert result is False
 
     def test_should_execute_rejects_zero_balance(self):
         bot = self._make_bot()
         sig = _make_signal()
-        with patch.object(bot, "_get_account_balance", return_value=0), \
-             patch.object(bot, "_get_current_exposure", return_value=0):
+        with (
+            patch.object(bot, "_get_account_balance", return_value=0),
+            patch.object(bot, "_get_current_exposure", return_value=0),
+        ):
             result = bot._should_execute_signal(sig)
         assert result is False
 
     def test_should_execute_rejects_high_exposure(self):
         bot = self._make_bot()
         sig = _make_signal()
-        with patch.object(bot, "_get_account_balance", return_value=10000), \
-             patch.object(bot, "_get_current_exposure", return_value=8500):
+        with (
+            patch.object(bot, "_get_account_balance", return_value=10000),
+            patch.object(bot, "_get_current_exposure", return_value=8500),
+        ):
             result = bot._should_execute_signal(sig)
         assert result is False
 
     def test_should_execute_accepts_valid(self):
         bot = self._make_bot()
         sig = _make_signal()
-        with patch.object(bot, "_get_account_balance", return_value=10000), \
-             patch.object(bot, "_get_current_exposure", return_value=1000):
+        with (
+            patch.object(bot, "_get_account_balance", return_value=10000),
+            patch.object(bot, "_get_current_exposure", return_value=1000),
+        ):
             result = bot._should_execute_signal(sig)
         assert result is True
 
@@ -1263,11 +1428,12 @@ class TestTradingBotSignalRouting:
         grid_sig = _make_signal(strategy=StrategyType.GRID_TRADING)
         std_sig = _make_signal(strategy=StrategyType.MEAN_REVERSION)
 
-        with patch.object(bot, "_get_account_balance", return_value=10000), \
-             patch.object(bot, "_get_current_exposure", return_value=0), \
-             patch.object(bot, "_execute_grid_signal_coordinated") as mock_grid, \
-             patch.object(bot, "_execute_standard_signal_coordinated") as mock_std:
-
+        with (
+            patch.object(bot, "_get_account_balance", return_value=10000),
+            patch.object(bot, "_get_current_exposure", return_value=0),
+            patch.object(bot, "_execute_grid_signal_coordinated") as mock_grid,
+            patch.object(bot, "_execute_standard_signal_coordinated") as mock_std,
+        ):
             bot._coordinate_signal_execution(grid_sig)
             assert mock_grid.called
 
@@ -1282,9 +1448,11 @@ class TestTradingBotSignalRouting:
         sig = _make_signal()
         bot.risk_manager._approval_required = True
 
-        with patch.object(bot, "_get_account_balance", return_value=10000), \
-             patch.object(bot, "_get_current_exposure", return_value=9999), \
-             patch.object(bot, "_execute_standard_signal_coordinated") as mock_exec:
+        with (
+            patch.object(bot, "_get_account_balance", return_value=10000),
+            patch.object(bot, "_get_current_exposure", return_value=9999),
+            patch.object(bot, "_execute_standard_signal_coordinated") as mock_exec,
+        ):
             # exposure limit will reject capital allocation
             bot._coordinate_signal_execution(sig)
             # Since allocation is rejected, execution should NOT be called
@@ -1332,7 +1500,9 @@ class TestIntegrationPipeline:
         assert len(signals) == 1
 
         # Size through RiskManager
-        qty = rm.get_position_size(signals[0], account_balance=10000, current_exposure=0)
+        qty = rm.get_position_size(
+            signals[0], account_balance=10000, current_exposure=0
+        )
         assert qty >= 1.0
 
     def test_high_conviction_bypasses_conflict(self):
@@ -1341,7 +1511,10 @@ class TestIntegrationPipeline:
         detector = MagicMock()
         detector.detect_regime_cached.return_value = MarketRegime.RANGING_CALM
         detector.get_active_strategies.return_value = ["MeanReversion", "VWAPScalping"]
-        detector.get_strategy_weights.return_value = {"MeanReversion": 0.7, "VWAPScalping": 0.3}
+        detector.get_strategy_weights.return_value = {
+            "MeanReversion": 0.7,
+            "VWAPScalping": 0.3,
+        }
 
         sm = StrategyManager(
             regime_detector=detector,
@@ -1356,12 +1529,16 @@ class TestIntegrationPipeline:
         )
 
         # MR returns high conviction BUY
-        hc_sig = _make_signal(quality=TradeQuality.HIGH_CONVICTION, confidence=0.9, side=OrderSide.BUY)
+        hc_sig = _make_signal(
+            quality=TradeQuality.HIGH_CONVICTION, confidence=0.9, side=OrderSide.BUY
+        )
         mock_mr = MagicMock()
         mock_mr.generate_signals.return_value = [hc_sig]
 
         # VWAP returns standard SELL
-        normal_sig = _make_signal(confidence=0.7, side=OrderSide.SELL, strategy=StrategyType.VWAP_SCALPING)
+        normal_sig = _make_signal(
+            confidence=0.7, side=OrderSide.SELL, strategy=StrategyType.VWAP_SCALPING
+        )
         mock_vwap = MagicMock()
         mock_vwap.generate_signals.return_value = [normal_sig]
 
@@ -1404,7 +1581,13 @@ class TestIntegrationPipeline:
                 lows.append(c - random.uniform(0.1, 0.5))
                 opens.append(c + random.uniform(-0.2, 0.2))
                 volumes.append(4000.0 if i == n - 1 else random.uniform(1000, 2000))
-            exec_data[tf] = {"open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes}
+            exec_data[tf] = {
+                "open": opens,
+                "high": highs,
+                "low": lows,
+                "close": closes,
+                "volume": volumes,
+            }
 
         mock_fetcher = MagicMock()
         mock_fetcher.get_candles_multi_tf.return_value = exec_data
@@ -1441,12 +1624,20 @@ class TestIntegrationPipeline:
 
         # Grid returns BUY + SELL pair
         buy = _make_signal(
-            strategy=StrategyType.GRID_TRADING, side=OrderSide.BUY,
-            entry_price=99.0, stop_loss=95.0, take_profit=103.0, confidence=0.65,
+            strategy=StrategyType.GRID_TRADING,
+            side=OrderSide.BUY,
+            entry_price=99.0,
+            stop_loss=95.0,
+            take_profit=103.0,
+            confidence=0.65,
         )
         sell = _make_signal(
-            strategy=StrategyType.GRID_TRADING, side=OrderSide.SELL,
-            entry_price=101.0, stop_loss=105.0, take_profit=97.0, confidence=0.65,
+            strategy=StrategyType.GRID_TRADING,
+            side=OrderSide.SELL,
+            entry_price=101.0,
+            stop_loss=105.0,
+            take_profit=97.0,
+            confidence=0.65,
         )
         mock_grid = MagicMock()
         mock_grid.generate_signals.return_value = [buy, sell]
@@ -1461,6 +1652,8 @@ class TestIntegrationPipeline:
     def test_capital_rejection_stops_pipeline(self):
         rm = RiskManager(max_portfolio_risk_pct=0.05, max_portfolio_exposure_pct=0.15)
         # Exhaust exposure
-        result = rm.request_capital_allocation("SUI-PERP", 500, "mean_reversion", 10000, 1500)
+        result = rm.request_capital_allocation(
+            "SUI-PERP", 500, "mean_reversion", 10000, 1500
+        )
         assert result["approved"] is False
         assert result["reason"] == "exposure_limit_exceeded"

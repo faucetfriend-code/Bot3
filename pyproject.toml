@@ -10,7 +10,7 @@ dependencies = []
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core_logic*"]
+include = ["trading_bot_v2*"]
 
 [tool.pytest.ini_options]
 markers = [
@@ -21,3 +21,14 @@ markers = [
 # something. Timing-dependent tests opt in via -m perf, which overrides
 # this because command-line args are applied after addopts.
 addopts = "-m 'not perf'"
+[tool.ruff]
+# CI (.github/workflows/ci.yml) runs `ruff check` and `ruff format --check`
+# on trading_bot_v2/. The rule set is declared here so a newer ruff release
+# cannot silently widen it: unpinned ruff 0.16 expanded the defaults and
+# reported 5000 errors on a tree that passed 0.14 with zero. The version is
+# pinned in CI to the one the tree is formatted with.
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]

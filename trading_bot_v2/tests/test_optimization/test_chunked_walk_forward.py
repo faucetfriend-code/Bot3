@@ -252,9 +252,7 @@ class TestOverfitDetection:
 
     def test_a_regime_that_stops_working_shows_up_in_the_last_fold(self):
         """Worked historically, fails on recent data - the common case."""
-        report = _run(
-            OverfitAdapter(WINDOWS[:2]), n_trials=2, windows=WINDOWS
-        )
+        report = _run(OverfitAdapter(WINDOWS[:2]), n_trials=2, windows=WINDOWS)
         assert len(report.folds) == 2
         # Fold 1 trains and tests inside the period that worked.
         assert report.folds[0].out_of_sample > 0
@@ -356,9 +354,7 @@ class TestDeflationWiring:
         assert sum(r["n_trials"] for r in rows) == n_trials * len(report.folds)
 
         # The registry is what the gate reads.
-        assert tmp_db.get_total_trials("ma_crossover") == n_trials * len(
-            report.folds
-        )
+        assert tmp_db.get_total_trials("ma_crossover") == n_trials * len(report.folds)
         assert report.n_trials_total == n_trials * len(report.folds)
         assert report.n_trials_registry == report.n_trials_total
         assert report.n_trials_deflated == report.n_trials_total
@@ -377,9 +373,7 @@ class TestDeflationWiring:
         var = report.dsr.var_sharpe
 
         small = deflated_sharpe_ratio(returns, 4, var_sharpe_across_trials=var)
-        large = deflated_sharpe_ratio(
-            returns, 400, var_sharpe_across_trials=var
-        )
+        large = deflated_sharpe_ratio(returns, 400, var_sharpe_across_trials=var)
         assert large.benchmark_sr > small.benchmark_sr
         assert large.value <= small.value
 
@@ -481,9 +475,7 @@ class RegimeMixAdapter:
             {"pnl": -12.0 if i % 2 else -8.0, "regime": "ranging_calm"}
             for i in range(self.N_RANGING)
         ]
-        result = _result(
-            kwargs["symbol"], kwargs["start"], kwargs["end"], 1, 0.1, 0.0
-        )
+        result = _result(kwargs["symbol"], kwargs["start"], kwargs["end"], 1, 0.1, 0.0)
         result.trade_log = trade_log
         result.closed_trades = len(trade_log)
         return result
@@ -503,9 +495,7 @@ class RegimeMixAdapter:
             OptimizationAdapter,
         )
 
-        return OptimizationAdapter.calculate_objective_from_trades(
-            self, **kwargs
-        )
+        return OptimizationAdapter.calculate_objective_from_trades(self, **kwargs)
 
 
 class TestRegimeConditionalWalkForward:

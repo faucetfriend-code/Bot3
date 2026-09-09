@@ -146,9 +146,7 @@ def load_gate_policy() -> Dict[str, Any]:
     return {
         "min_closed_trades": min_pooled,
         "min_trades_per_symbol": int(
-            os.getenv(
-                "GATE_MIN_TRADES_PER_SYMBOL", str(DEFAULT_MIN_TRADES_PER_SYMBOL)
-            )
+            os.getenv("GATE_MIN_TRADES_PER_SYMBOL", str(DEFAULT_MIN_TRADES_PER_SYMBOL))
         ),
         "reference_sr": reference_sr,
         "min_profit_factor": float(os.getenv("GATE_MIN_PF", str(DEFAULT_MIN_PF))),
@@ -429,9 +427,7 @@ def evaluate_strategy_gate(
         detail += f" (only {len(symbols)} symbol(s) supplied)"
     elif len(eligible) < len(symbols):
         thin = [s for s in symbols if s not in eligible]
-        detail += (
-            f" (ignored, under {per_symbol_floor} trades: {', '.join(thin)})"
-        )
+        detail += f" (ignored, under {per_symbol_floor} trades: {', '.join(thin)})"
     verdict.checks.append(
         GateCheck(
             name="cross_symbol_consistency",
@@ -547,14 +543,13 @@ def verdict_label(verdict: GateVerdict) -> str:
 
 def print_verdict(verdict: GateVerdict) -> None:
     """Print a gate verdict as a fixed-width table."""
-    print(f"\n{'='*78}")
+    print(f"\n{'=' * 78}")
     print(
-        f"VALIDATION GATE: {verdict.strategy} | "
-        f"symbols: {', '.join(verdict.symbols)}"
+        f"VALIDATION GATE: {verdict.strategy} | symbols: {', '.join(verdict.symbols)}"
     )
-    print(f"{'='*78}")
+    print(f"{'=' * 78}")
     print(f"  {'Check':<26} {'Result':<9} {'Value':<28} Threshold")
-    print(f"  {'-'*74}")
+    print(f"  {'-' * 74}")
     for c in verdict.checks:
         tag = "PASS" if c.passed else "FAIL"
         if c.advisory:
@@ -562,13 +557,13 @@ def print_verdict(verdict: GateVerdict) -> None:
         print(f"  {c.name:<26} {tag:<9} {c.value:<28} {c.threshold}")
         if c.detail:
             print(f"  {'':<26} {'':<9} {c.detail}")
-    print(f"  {'-'*74}")
+    print(f"  {'-' * 74}")
     if any(c.advisory for c in verdict.checks):
         print("  * advisory - computed but not decisive on this sample size")
     print(f"  OVERALL: {verdict_label(verdict)}")
     if verdict.outcome_reason:
         print(f"  REASON:  {verdict.outcome_reason}")
-    print(f"{'='*78}\n")
+    print(f"{'=' * 78}\n")
 
 
 def _span_months(start: str, end: str) -> Optional[float]:
@@ -601,19 +596,29 @@ def main() -> int:
         description="Run the P5 validation gate for a strategy across symbols",
     )
     parser.add_argument(
-        "--strategy", "-s", required=True,
+        "--strategy",
+        "-s",
+        required=True,
         help="Strategy (snake_case, e.g. mean_reversion)",
     )
     parser.add_argument(
-        "--symbols", required=True,
+        "--symbols",
+        required=True,
         help="Comma-separated symbols (e.g. SUI-USDC,BTC-USDC)",
     )
-    parser.add_argument("--start", type=str, default=None,
-                        help="Backtest start date (default: config)")
-    parser.add_argument("--end", type=str, default=None,
-                        help="Backtest end date (default: config)")
-    parser.add_argument("--capital", "-c", type=float, default=10000.0,
-                        help="Initial capital per symbol (default: 10000)")
+    parser.add_argument(
+        "--start", type=str, default=None, help="Backtest start date (default: config)"
+    )
+    parser.add_argument(
+        "--end", type=str, default=None, help="Backtest end date (default: config)"
+    )
+    parser.add_argument(
+        "--capital",
+        "-c",
+        type=float,
+        default=10000.0,
+        help="Initial capital per symbol (default: 10000)",
+    )
     args = parser.parse_args()
 
     from ..backtesting.engine import BacktestEngine
@@ -638,9 +643,7 @@ def main() -> int:
             initial_capital=args.capital,
             strategy_filter=strategy_key,
         )
-        symbol_returns[symbol] = closed_trade_returns(
-            result.trade_log, args.capital
-        )
+        symbol_returns[symbol] = closed_trade_returns(result.trade_log, args.capital)
 
     n_trials: Optional[int] = None
     sr_variance: Optional[float] = None
