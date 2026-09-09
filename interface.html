@@ -975,16 +975,69 @@
             }
         }
 
+        // API token handling. Mutating and /api/debug routes require the
+        // X-Api-Token header when API_TOKEN is set in .env. The token lives in
+        // localStorage under "apiToken"; on the first 401 we prompt once,
+        // store it and retry. A cancelled prompt is remembered so polling
+        // does not nag on every refresh (reload the page to be asked again).
+        const API_TOKEN_STORAGE_KEY = 'apiToken';
+        let apiTokenPromptDeclined = false;
+
+        function readStoredApiToken() {
+            try {
+                return localStorage.getItem(API_TOKEN_STORAGE_KEY) || '';
+            } catch (e) {
+                return '';
+            }
+        }
+
+        function buildApiHeaders(data) {
+            const headers = {};
+            if (data) {
+                headers['Content-Type'] = 'application/json';
+            }
+            const token = readStoredApiToken();
+            if (token) {
+                headers['X-Api-Token'] = token;
+            }
+            return headers;
+        }
+
+        function promptForApiToken() {
+            if (apiTokenPromptDeclined) {
+                return false;
+            }
+            const token = prompt('This server requires an API token (API_TOKEN in .env). Enter it to continue:');
+            if (!token) {
+                apiTokenPromptDeclined = true;
+                return false;
+            }
+            try {
+                localStorage.setItem(API_TOKEN_STORAGE_KEY, token.trim());
+            } catch (e) {
+                console.warn('Could not persist API token:', e);
+            }
+            return true;
+        }
+
+        async function apiFetch(url, method, data) {
+            const options = { method, headers: buildApiHeaders(data) };
+            if (data) {
+                options.body = JSON.stringify(data);
+            }
+            let response = await fetch(url, options);
+            if (response.status === 401 && promptForApiToken()) {
+                options.headers = buildApiHeaders(data);
+                response = await fetch(url, options);
+            }
+            return response;
+        }
+
         async function apiCall(endpoint, method = 'GET', data = null) {
             const startTime = performance.now();
             try {
-                const options = { method };
-                if (data) {
-                    options.headers = { 'Content-Type': 'application/json' };
-                    options.body = JSON.stringify(data);
-                }
                 console.log(`Making API call to: ${API_BASE}${endpoint}`);
-                const response = await fetch(`${API_BASE}${endpoint}`, options);
+                const response = await apiFetch(`${API_BASE}${endpoint}`, method, data);
                 if (!response.ok) {
                     const errorText = await response.text();
                     throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);

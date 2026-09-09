@@ -104,7 +104,7 @@ def client(integration):
     Returns:
         A TestClient that never triggers startup handlers.
     """
-    return TestClient(api_server.app)
+    return TestClient(api_server.app, client=("127.0.0.1", 50000))
 
 
 class TestAPIServer:

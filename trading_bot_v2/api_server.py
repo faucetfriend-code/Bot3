@@ -6,6 +6,7 @@ FastAPI server providing web interface and REST API for the trading bot system.
 import sys
 import os
 import asyncio
+import hmac
 import logging
 import threading
 from typing import Dict, Any, List, Optional
@@ -17,7 +18,15 @@ sys.path.insert(
     0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
 )
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import (
+    Depends,
+    FastAPI,
+    Header,
+    HTTPException,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, Response
 from trading_bot_v2.metrics import metrics
 from contextlib import asynccontextmanager
@@ -37,6 +46,12 @@ try:
     from .risk_manager import RiskManager
     from .indicators import calculate_rsi, calculate_adx
     from .config import config
+    from .config_validation import (
+        StartupConfigError,
+        check_api_binding,
+        is_loopback_host,
+        run_startup_validation,
+    )
     from .ws_factory import get_market_ws_client as get_ws_client
     from .backup_scheduler import BackupScheduler
     from .exchanges import get_exchange_client
@@ -52,6 +67,12 @@ except ImportError:
     from risk_manager import RiskManager
     from indicators import calculate_rsi, calculate_adx
     from config import config
+    from config_validation import (
+        StartupConfigError,
+        check_api_binding,
+        is_loopback_host,
+        run_startup_validation,
+    )
     from ws_factory import get_market_ws_client as get_ws_client
     from backup_scheduler import BackupScheduler
 
@@ -137,7 +158,10 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup and shutdown events."""
-    # Startup
+    # Startup. The bind/token policy check runs here, not only in __main__,
+    # so `uvicorn trading_bot_v2.api_server:app` cannot skip it. A failure
+    # propagates and uvicorn aborts with "Application startup failed".
+    enforce_startup_policy()
     try:
         bot_integration.initialize()
         logger.info("API server started with bot integration")
@@ -162,6 +186,158 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+
+# ---------------------------------------------------------------------------
+# Access control (live-readiness audit T1)
+#
+# Every non-GET route and every /api/debug route carries require_api_token.
+# GET routes outside /api/debug are unauthenticated reads and MUST stay free
+# of trading side effects; tests/test_api_access_control.py enforces both
+# invariants by introspecting app.routes, so a new route cannot slip past.
+# ---------------------------------------------------------------------------
+
+
+#: Request headers that mark traffic as forwarded by a proxy or tunnel. A
+#: token-less request carrying any of them is refused: the loopback peer we
+#: see is the proxy, not the caller.
+PROXY_HEADERS = ("x-forwarded-for", "forwarded")
+
+
+def _peer_is_loopback(request: Request) -> bool:
+    """Whether the actual TCP peer of a request is a loopback address.
+
+    Decided from the connection (``request.client``), never from config:
+    ``config.api_host`` is a self-reported string that does not reflect
+    ``uvicorn module:app --host 0.0.0.0``. A missing client is treated as
+    remote.
+
+    Args:
+        request: The incoming request.
+
+    Returns:
+        True only when the peer host is a loopback address.
+    """
+    client = request.client
+    if client is None:
+        return False
+    return is_loopback_host(client.host)
+
+
+def require_api_token(
+    request: Request,
+    x_api_token: Optional[str] = Header(default=None, alias="X-Api-Token"),
+) -> None:
+    """FastAPI dependency: demand the shared API token on sensitive routes.
+
+    Reads ``config`` at call time so the policy follows the live settings.
+    When API_TOKEN is unset, a request is allowed only if the configured
+    bind host is loopback AND the real connection peer is loopback AND no
+    proxy-forwarding header is present. The peer check is the guard that
+    holds when the server was started without ``__main__``; the header
+    check refuses reverse-proxy / tunnel traffic, which must use the token.
+
+    Args:
+        request: The incoming request (for the connection peer and headers).
+        x_api_token: Value of the ``X-Api-Token`` request header, if any.
+
+    Raises:
+        HTTPException: 401 when the token is missing or does not match, or
+            when no token is configured and the request is not purely local.
+    """
+    expected = getattr(config, "api_token", None) or None
+    if expected is None:
+        if not is_loopback_host(getattr(config, "api_host", "127.0.0.1")):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set when API_HOST is not a loopback address",
+            )
+        if not _peer_is_loopback(request):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set for non-loopback clients",
+            )
+        if any(name in request.headers for name in PROXY_HEADERS):
+            raise HTTPException(
+                status_code=401,
+                detail="API_TOKEN must be set for proxied or tunnelled requests",
+            )
+        return
+    supplied = x_api_token or ""
+    if not hmac.compare_digest(supplied.encode("utf-8"), expected.encode("utf-8")):
+        raise HTTPException(status_code=401, detail="Missing or invalid X-Api-Token")
+
+
+def enforce_startup_policy() -> None:
+    """Refuse an unsafe bind/token configuration from the ASGI startup hook.
+
+    Called from ``lifespan`` so it runs however the app is launched. Only
+    ``config`` is visible here, and under ``uvicorn module:app --host X``
+    the real bind may differ from API_HOST; the request-time peer check in
+    ``require_api_token`` is the guard for that case, so this hook validates
+    config consistency and logs loudly rather than trying to detect the bind.
+
+    Raises:
+        StartupConfigError: When config says a non-loopback API_HOST without
+            an API_TOKEN.
+    """
+    host = getattr(config, "api_host", "127.0.0.1")
+    token = getattr(config, "api_token", None) or None
+    problem = check_api_binding(host, token)
+    if problem is not None:
+        logger.critical("Refusing to start: %s", problem)
+        raise StartupConfigError(problem)
+    if token is None:
+        logger.warning(
+            "API_TOKEN is unset: mutating routes accept loopback peers only "
+            "(API_HOST=%s). If uvicorn was started with a different --host, "
+            "or a proxy/tunnel forwards here, those requests get 401.",
+            host,
+        )
+    else:
+        logger.info("API access control: token required on mutating routes.")
+
+
+def require_debug_routes() -> None:
+    """FastAPI dependency: hide state-mutating debug routes unless enabled.
+
+    Raises:
+        HTTPException: 404 while ENABLE_DEBUG_ROUTES is false, so the route
+            is indistinguishable from one that does not exist.
+    """
+    if not getattr(config, "enable_debug_routes", False):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+
+#: Dependency list for routes that mutate state or expose configuration.
+AUTH_DEPS = [Depends(require_api_token)]
+#: Dependency list for debug routes that can fire signals or mutate state:
+#: the 404 gate runs first so a disabled route never reveals itself.
+DEBUG_MUTATING_DEPS = [Depends(require_debug_routes), Depends(require_api_token)]
+
+
+def resolve_bind_address() -> tuple:
+    """Validate the startup configuration and return the (host, port) to bind.
+
+    Runs the .env duplicate-key warning, the live-credential check and the
+    API bind/token check. Called from ``__main__`` before uvicorn starts.
+
+    Returns:
+        A ``(host, port)`` tuple from API_HOST / API_PORT.
+
+    Raises:
+        SystemExit: With a clear message when the configuration is unsafe.
+    """
+    host = getattr(config, "api_host", "127.0.0.1")
+    port = int(getattr(config, "api_port", 8000))
+    try:
+        run_startup_validation(
+            host=host, token=getattr(config, "api_token", None), log=logger
+        )
+    except StartupConfigError as exc:
+        print(f"ERROR: {exc}")
+        raise SystemExit(1) from exc
+    return host, port
 
 
 class BotIntegration:
@@ -1087,6 +1263,8 @@ async def shutdown_event():
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time updates."""
+    # Read-only (status stream + ping/pong). Any command handling added here
+    # must require the API token; tests assert no order/signal call appears.
     await websocket.accept()
     active_connections.append(websocket)
     logger.info(
@@ -1234,16 +1412,46 @@ async def get_orders():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/orders/cancel-all")
-async def cancel_all_orders_endpoint(symbol: str = None):
-    """Cancel all open orders and clear orphaned grid state."""
+def _cancel_all_orders_compat(client: Any, symbol: Optional[str], include_stops: bool):
+    """Call ``cancel_all_orders`` passing ``include_stops`` only when supported.
+
+    The Pacifica native client predates the flag; the Blofin client and
+    both adapters accept it.
+    """
+    import inspect
+
+    if include_stops:
+        try:
+            params = inspect.signature(client.cancel_all_orders).parameters
+        except (TypeError, ValueError):
+            params = {}
+        if "include_stops" in params:
+            return client.cancel_all_orders(symbol, include_stops=True)
+        logger.warning(
+            "include_stops requested but this exchange client has no venue stops"
+        )
+    return client.cancel_all_orders(symbol)
+
+
+@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS)
+async def cancel_all_orders_endpoint(symbol: str = None, include_stops: bool = False):
+    """Cancel all open orders and clear orphaned grid state.
+
+    Protective venue stops (TP/SL rows) are LEFT IN PLACE by default so
+    an operator cancel-all never strips the stop protecting an open
+    position; afterwards every open position is re-verified and any
+    missing stop re-installed.  Pass ``include_stops=true`` to remove
+    the stops as well (operator flattening the book by hand).
+    """
     try:
         if not bot_integration.pacifica_client:
             raise HTTPException(status_code=503, detail="Exchange client not available")
 
-        # 1. Cancel all orders on exchange
-        result = bot_integration.pacifica_client.cancel_all_orders(symbol)
-        logger.info(f"Cancel all orders result: {result}")
+        # 1. Cancel all orders on exchange (stops kept unless asked)
+        result = _cancel_all_orders_compat(
+            bot_integration.pacifica_client, symbol, include_stops
+        )
+        logger.info(f"Cancel all orders result (include_stops={include_stops}): {result}")
 
         # 2. Clear grid state in GridLifecycleManager so grids don't remain orphaned
         grids_cleared = 0
@@ -1262,11 +1470,23 @@ async def cancel_all_orders_endpoint(symbol: str = None):
             if grids_cleared:
                 logger.info(f"Cleared {grids_cleared} grid(s) from GridLifecycleManager")
 
+        # 3. Re-verify protection: any open position whose stop went with
+        #    the cancel (or was already missing) gets it re-installed.
+        stops_reverified = None
+        if not include_stops and bot is not None and hasattr(bot, "_repair_venue_stops"):
+            try:
+                stops_reverified = bot._repair_venue_stops(reason="cancel-all")
+            except Exception as exc:  # noqa: BLE001 - report, never fail the cancel
+                logger.error(f"Stop re-verification after cancel-all failed: {exc}")
+                stops_reverified = {"error": str(exc)}
+
         return {
             "success": True,
             "result": result,
             "message": f"Cancelled orders for {'all symbols' if not symbol else symbol}",
             "grids_cleared": grids_cleared,
+            "include_stops": include_stops,
+            "stops_reverified": stops_reverified,
         }
     except Exception as e:
         logger.error(f"Error cancelling orders: {e}")
@@ -1469,7 +1689,7 @@ async def regime_param_overlays_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/backup")
+@app.post("/api/backup", dependencies=AUTH_DEPS)
 async def trigger_backup():
     """Trigger an immediate database backup (H5 automated backup)."""
     try:
@@ -1494,7 +1714,7 @@ async def trigger_backup():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/positions/sync")
+@app.post("/api/positions/sync", dependencies=AUTH_DEPS)
 async def sync_positions():
     """Sync positions from exchange to database."""
     try:
@@ -1511,7 +1731,7 @@ async def sync_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/start")
+@app.post("/api/bot/start", dependencies=AUTH_DEPS)
 async def start_bot():
     """Start the trading bot."""
     try:
@@ -1525,7 +1745,7 @@ async def start_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/stop")
+@app.post("/api/bot/stop", dependencies=AUTH_DEPS)
 async def stop_bot():
     """Stop the trading bot."""
     try:
@@ -1562,7 +1782,7 @@ async def supervisor_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/pause")
+@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS)
 async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
     """
     Pause new trade entries. Existing positions and management continue.
@@ -1590,7 +1810,7 @@ async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/resume")
+@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS)
 async def supervisor_resume():
     """
     Clear the supervisor pause. New entries are immediately allowed again.
@@ -1608,7 +1828,7 @@ async def supervisor_resume():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/grids/{symbol}/clear")
+@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS)
 async def clear_grid(symbol: str):
     """Clear a grid registration for a symbol (allows new grid creation)."""
     try:
@@ -1664,23 +1884,37 @@ async def get_grids():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _recent_signal_events(bot, limit: int = 50) -> list:
+    """Read recent signal-generated events from the bot's event bus.
+
+    Kept outside the GET handler so the read-only route never mentions the
+    signal event type: the no-side-effects invariant test scans GET route
+    source for it, because publishing that event places a real order.
+
+    Args:
+        bot: The running TradingBot (must expose ``event_bus``).
+        limit: Maximum number of events to return.
+
+    Returns:
+        The most recent signal events, newest last.
+    """
+    try:
+        from .event_system import EventType
+    except ImportError:
+        from event_system import EventType
+
+    return bot.event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=limit)
+
+
 @app.get("/api/signals")
 async def get_signals():
-    """Get recent signals from the event bus."""
+    """Get recent signals from the event bus (read-only)."""
     try:
         bot = bot_integration.trading_bot
         if not bot or not hasattr(bot, "event_bus"):
             return {"success": True, "data": []}
 
-        # Import EventType
-        try:
-            from .event_system import EventType
-        except ImportError:
-            from event_system import EventType
-
-        # Get signal events from event bus history
-        event_bus = bot.event_bus
-        signal_events = event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=50)
+        signal_events = _recent_signal_events(bot, limit=50)
 
         signals = []
         for event in signal_events:
@@ -1708,7 +1942,7 @@ async def get_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/kline-cache")
+@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS)
 async def get_kline_cache_debug():
     """Debug endpoint to check kline cache state."""
     try:
@@ -1745,7 +1979,7 @@ async def get_kline_cache_debug():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signals/{symbol}")
+@app.get("/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS)
 async def test_signal_generation(symbol: str):
     """Debug endpoint to test signal generation for a symbol."""
     try:
@@ -1899,7 +2133,7 @@ async def test_signal_generation(symbol: str):
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/signal-processing")
+@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS)
 async def get_signal_processing_log():
     """Debug endpoint to check signal processing stages - now uses SignalLogger."""
     try:
@@ -2054,7 +2288,7 @@ async def get_validation_latest():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/key-config")
+@app.get("/api/debug/key-config", dependencies=AUTH_DEPS)
 async def check_key_configuration():
     """Debug endpoint to check the active exchange's key configuration.
 
@@ -2101,7 +2335,7 @@ async def check_key_configuration():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/exchange/select")
+@app.post("/api/exchange/select", dependencies=AUTH_DEPS)
 async def select_exchange(payload: dict):
     """Switch the configured exchange (dashboard selector).
 
@@ -2169,46 +2403,11 @@ async def select_exchange(payload: dict):
     }
 
 
-@app.get("/api/debug/test-order")
-async def test_order_placement():
-    """Debug endpoint to test order placement and see full API response."""
-    try:
-        client = bot_integration.pacifica_client
-        if not client:
-            return {"success": False, "error": "Pacifica client not available"}
-
-        # Test with a tiny order that should fail (below minimum)
-        # This will show us the exact API error format
-        import traceback
-        try:
-            result = client.place_order(
-                symbol="BTC",
-                side="buy",
-                quantity=0.00001,  # Tiny amount
-                order_type="limit",
-                price=60000.0  # Far below market
-            )
-            return {"success": True, "order_result": result}
-        except ValueError as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": "ValueError",
-                "full_error": repr(e)
-            }
-        except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "error_type": type(e).__name__,
-                "traceback": traceback.format_exc()
-            }
-    except Exception as e:
-        import traceback
-        return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
+# NOTE: GET /api/debug/test-order was removed in the live-readiness audit
+# (T1). It placed a real order from an unauthenticated GET. Do not restore it.
 
 
-@app.get("/api/debug/event-history")
+@app.get("/api/debug/event-history", dependencies=AUTH_DEPS)
 async def get_event_history():
     """Debug endpoint to check recent events from the event bus."""
     try:
@@ -2244,7 +2443,7 @@ async def get_event_history():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/trigger-signals")
+@app.post("/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def trigger_signal_generation():
     """
     Debug endpoint that manually triggers the trading loop's signal generation.
@@ -2402,7 +2601,7 @@ async def trigger_signal_generation():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signal-handler")
+@app.post("/api/debug/test-signal-handler", dependencies=DEBUG_MUTATING_DEPS)
 async def test_signal_handler():
     """Debug: manually invoke _handle_signal_generated and trace every step."""
     import traceback
@@ -2473,7 +2672,7 @@ async def test_signal_handler():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/bot-internals")
+@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS)
 async def get_bot_internals():
     """Debug endpoint to check trading bot internal state."""
     try:
@@ -2515,7 +2714,7 @@ async def get_bot_internals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/grid-state")
+@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS)
 async def get_grid_state():
     """Debug: Check grid lifecycle manager state."""
     try:
@@ -2545,7 +2744,7 @@ async def get_grid_state():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/balance-raw")
+@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS)
 async def get_balance_raw():
     """Get raw balance data from Pacifica API for debugging."""
     try:
@@ -2563,7 +2762,7 @@ async def get_balance_raw():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/loop-status")
+@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS)
 async def get_loop_status():
     """Check trading loop iteration status."""
     try:
@@ -2591,7 +2790,7 @@ async def get_loop_status():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/call-actual-generate-signals")
+@app.post("/api/debug/call-actual-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def call_actual_generate_signals():
     """Test signal generation with inline implementation to avoid module reload issues."""
     try:
@@ -2689,7 +2888,7 @@ async def call_actual_generate_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/call-generate-signals")
+@app.post("/api/debug/call-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
 async def call_generate_signals():
     """Directly call the bot's _generate_and_publish_signals method with tracing."""
     try:
@@ -2809,7 +3008,7 @@ async def call_generate_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/clear-regime-cache")
+@app.post("/api/debug/clear-regime-cache", dependencies=DEBUG_MUTATING_DEPS)
 async def clear_regime_cache(symbol: str = None):
     """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
     Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.
@@ -2843,11 +3042,14 @@ if __name__ == "__main__":
         # Running as script: python api_server.py
         app_path = "api_server:app"
 
+    # Startup validation: duplicate .env keys (warn), empty live credentials
+    # and a non-loopback bind without API_TOKEN (both refuse). Then bind to
+    # API_HOST / API_PORT - loopback by default, never 0.0.0.0 by accident.
+    _host, _port = resolve_bind_address()
+
     # Pre-flight: fail loudly if the port is taken. Without this, uvicorn
     # crashes after logging setup but writes nothing to any log file, so a
     # stale instance holding the port is invisible except in the console.
-    _host = "0.0.0.0"
-    _port = 8000
     import socket
 
     _probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

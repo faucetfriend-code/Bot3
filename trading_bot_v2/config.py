@@ -234,6 +234,20 @@ class Config:
 
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+        # ---- API server binding and access control (live-readiness T1) ----
+        # The control interface can start real orders, so it binds to
+        # loopback unless API_HOST is set deliberately, and a non-loopback
+        # bind refuses to start without API_TOKEN (see config_validation).
+        self.api_host: str = os.getenv("API_HOST", "127.0.0.1").strip() or "127.0.0.1"
+        try:
+            self.api_port: int = int(os.getenv("API_PORT", "8000"))
+        except ValueError:
+            self.api_port = 8000
+        self.api_token: Optional[str] = os.getenv("API_TOKEN", "").strip() or None
+        self.enable_debug_routes: bool = os.getenv(
+            "ENABLE_DEBUG_ROUTES", "false"
+        ).lower() in ("true", "1", "yes")
+
         # Backtesting
         self.backtest_start_date: str = os.getenv("BACKTEST_START_DATE", "2024-01-01")
         self.backtest_end_date: str = os.getenv("BACKTEST_END_DATE", "2024-12-31")
