@@ -26,7 +26,7 @@ Usage:
 
 import os
 from bisect import bisect_left, bisect_right
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from loguru import logger
 
@@ -324,6 +324,7 @@ class BacktestEngine:
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
         self._position_time_exit: Dict[str, Dict] = {}
+        self._pending_entry_order_ids: Dict[str, str] = {}
         self._sim_dt: Optional[datetime] = None
 
     # ------------------------------------------------------------------
@@ -734,6 +735,7 @@ class BacktestEngine:
         self._position_last_entry_candle = {}
         self._position_time_exit = {}
         self._pending_entry_ttl = {}
+        self._pending_entry_order_ids = {}
         self._position_trailing = {}
         self._sim_dt = None
         # Signal funnel: a backtest always wants diagnostics (the cost is
@@ -878,20 +880,27 @@ class BacktestEngine:
         }
 
         # --- Replay loop (one 5m candle at a time) ---
+        if replay_start < len(timestamps_5m):
+            performance.record_snapshot(
+                timestamps_5m[replay_start], exchange.equity(), {}
+            )
         for i in range(replay_start, len(timestamps_5m)):
             ts = timestamps_5m[i]
             # Advance the simulated exchange price to this candle's close
             candle_5m = self._candle_at(candles["5m"], i)
-            exchange.advance(candle_5m, ts)
+            decision_ts = (datetime.fromisoformat(ts) + timedelta(minutes=5)).isoformat()
+            # Expiry owns the boundary: an entry cannot fill in its expiry bar.
+            self._expire_stale_entries(exchange, i)
+            exchange.advance(candle_5m, decision_ts)
             # advance() fills resting orders, so position bookkeeping has to be
             # reconciled against the exchange before any signal is executed.
             self._sync_position_tracking(exchange, i)
 
             # --- Build multi-timeframe bundles ---
-            i_15m = self._nearest_idx(idx_map["15m"], sorted_ts["15m"], ts)
-            i_1h = self._nearest_idx(idx_map["1h"], sorted_ts["1h"], ts)
-            i_4h = self._nearest_idx(idx_map["4h"], sorted_ts["4h"], ts)
-            i_1m = self._nearest_idx(idx_map["1m"], sorted_ts["1m"], ts)
+            i_15m = self._completed_idx(idx_map["15m"], sorted_ts["15m"], ts, 15)
+            i_1h = self._completed_idx(idx_map["1h"], sorted_ts["1h"], ts, 60)
+            i_4h = self._completed_idx(idx_map["4h"], sorted_ts["4h"], ts, 240)
+            i_1m = self._completed_idx(idx_map["1m"], sorted_ts["1m"], ts, 1)
 
             # Regime / structure timeframes (required by StrategyManager)
             multi_tf_data = {
@@ -909,11 +918,14 @@ class BacktestEngine:
             # Skip until we have enough 4h history for regime detection (29 candles)
             if i_4h < 28:
                 funnel.count(STAGE_BARS_SKIPPED_WARMUP)
+                performance.record_snapshot(
+                    decision_ts, exchange.equity(), exchange._positions
+                )
                 continue
 
             # Advance simulated time so strategy cooldowns use candle timestamps
             try:
-                sim_dt = datetime.fromisoformat(ts)
+                sim_dt = datetime.fromisoformat(decision_ts)
             except (ValueError, TypeError):
                 sim_dt = None
             self._sim_dt = sim_dt
@@ -927,10 +939,6 @@ class BacktestEngine:
             # analysis/regime_stability.py.
             if sim_dt is not None:
                 strategy_manager.regime_detector._clock = lambda dt=sim_dt: dt
-
-            # --- Expire unfilled maker entries past their TTL ---
-            if self._pending_entry_ttl:
-                self._expire_stale_entries(exchange, i)
 
             # --- Ratchet trailing stops behind the favourable extreme ---
             if self._position_trailing:
@@ -997,10 +1005,11 @@ class BacktestEngine:
                     funnel.reject(REASON_EXEC_EXCEPTION)
                     logger.debug(f"Signal execution skipped: {e}")
 
-            # --- Equity snapshot every 60 candles (~5h) ---
-            if i % 60 == 0:
-                equity = float(exchange.get_account_balance()["balance"])
-                performance.record_snapshot(ts, equity, exchange._positions.copy())
+            # Record each completed bar, including the terminal one, so a
+            # drawdown between the old five-hour samples cannot disappear.
+            performance.record_snapshot(
+                decision_ts, exchange.equity(), exchange._positions
+            )
 
         # --- Finalise ---
         final_equity = float(exchange.get_account_balance()["balance"])
@@ -1063,6 +1072,13 @@ class BacktestEngine:
                 self._position_open_candle[asset] = candle_idx
                 self._position_entry_count.setdefault(asset, 1)
                 self._position_last_entry_candle.setdefault(asset, candle_idx)
+            info = self._position_time_exit.get(asset)
+            if info is not None and info.get("open_ts") is None:
+                parent = exchange._orders.get(info.get("entry_order_id"))
+                if parent is not None and parent.status == "filled":
+                    info["open_ts"] = datetime.fromisoformat(
+                        exchange._current_timestamp
+                    )
 
     # ------------------------------------------------------------------
     # Signal execution
@@ -1176,6 +1192,7 @@ class BacktestEngine:
                         quantity=str(close_qty),
                         order_type="limit",
                         price=signal.entry_price,
+                        reduce_only=True,
                     )
                 else:
                     exchange.place_order(
@@ -1183,6 +1200,7 @@ class BacktestEngine:
                         side=side,
                         quantity=str(close_qty),
                         order_type="market",
+                        reduce_only=True,
                     )
                 # Closing trades need no SL/TP - the position is being exited
                 self._position_open_candle.pop(signal.asset, None)
@@ -1204,17 +1222,16 @@ class BacktestEngine:
             funnel.reject(REASON_EXEC_QTY_NON_POSITIVE)
             return False
 
-        if is_pyramid_add:
-            # Replace the position's exit orders rather than stacking a second
-            # SL/TP set on top. Stacked exits total more than the position, so
-            # the second one to trigger over-closes and flips direction.
-            exchange.cancel_all_orders(signal.asset)
+        prior_order_ids = [
+            order.order_id for order in exchange._orders.values()
+            if order.symbol == signal.asset and order.status == "open"
+        ] if is_pyramid_add else []
 
         # Use limit order at entry_price if it differs from current price
         # by more than 0.1%, otherwise use market order for immediate fill
         price_diff_pct = abs(signal.entry_price - price) / price
         if price_diff_pct > 0.001:
-            exchange.place_order(
+            entry_result = exchange.place_order(
                 symbol=signal.asset,
                 side=side,
                 quantity=str(qty),
@@ -1222,20 +1239,36 @@ class BacktestEngine:
                 price=signal.entry_price,
             )
         else:
-            exchange.place_order(
+            entry_result = exchange.place_order(
                 symbol=signal.asset,
                 side=side,
                 quantity=str(qty),
                 order_type="market",
             )
 
+        if entry_result["status"] != "success":
+            funnel.count(STAGE_EXECUTION_BLOCKED)
+            return False
+
+        # Keep the existing protection if an add is rejected. After acceptance,
+        # replace only older orders, preserving the newly resting entry.
+        for order_id in prior_order_ids:
+            exchange.cancel_order(order_id)
+
         # Size the exits off the position that actually exists now, never off
         # the requested quantity. A market entry has already filled, so this is
         # the full (possibly pyramided) position; a resting limit entry has not,
-        # so exits cover only the requested size exactly as before. Either way
-        # the exits can never total more than the position and over-close it.
+        # so exits remain dormant until their parent fills. Reduce-only fills
+        # additionally cap the executed quantity at the current position size.
         position_after = exchange._positions.get(signal.asset)
         exit_qty = position_after.quantity if position_after is not None else qty
+        parent_order_id = entry_result["order_id"]
+        if is_pyramid_add and position_after is not None:
+            # Protection for an existing position must remain active while its
+            # add rests. Reduce-only caps this combined size until the add fills.
+            if exchange._orders[parent_order_id].status == "open":
+                exit_qty += qty
+            parent_order_id = None
 
         # A market order fills inside place_order(), so stamp the open candle
         # now to keep min-hold ageing identical to the pre-policy engine. A
@@ -1259,8 +1292,9 @@ class BacktestEngine:
         # entry did NOT fill inside place_order (position_after is None):
         # a filled market/limit entry needs no expiry.
         entry_ttl = (signal.indicators or {}).get("entry_ttl_candles")
-        if entry_ttl and position_after is None:
+        if entry_ttl and exchange._orders[entry_result["order_id"]].status == "open":
             self._pending_entry_ttl[signal.asset] = candle_idx + int(entry_ttl)
+            self._pending_entry_order_ids[signal.asset] = entry_result["order_id"]
 
         # Track trailing-stop config if the signal requests one
         trailing = (signal.indicators or {}).get("trailing")
@@ -1279,9 +1313,13 @@ class BacktestEngine:
 
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
-        if time_exit_hours and self._sim_dt is not None:
+        if (
+            time_exit_hours and self._sim_dt is not None
+            and signal.asset not in self._position_time_exit
+        ):
             self._position_time_exit[signal.asset] = {
-                "open_ts": self._sim_dt,
+                "open_ts": self._sim_dt if position_after is not None else None,
+                "entry_order_id": entry_result["order_id"],
                 "hours": float(time_exit_hours),
                 "strategy": signal.strategy.value,
             }
@@ -1297,6 +1335,8 @@ class BacktestEngine:
                     quantity=str(exit_qty),
                     order_type="stop",
                     price=signal.stop_loss,
+                    reduce_only=True,
+                    parent_order_id=parent_order_id,
                 )
         else:
             if signal.stop_loss and signal.stop_loss > 0:
@@ -1306,6 +1346,8 @@ class BacktestEngine:
                     quantity=str(exit_qty),
                     order_type="stop",
                     price=signal.stop_loss,
+                    reduce_only=True,
+                    parent_order_id=parent_order_id,
                 )
             if signal.take_profit and signal.take_profit > 0:
                 exchange.place_order(
@@ -1314,6 +1356,8 @@ class BacktestEngine:
                     quantity=str(exit_qty),
                     order_type="limit",
                     price=signal.take_profit,
+                    reduce_only=True,
+                    parent_order_id=parent_order_id,
                 )
 
         return True
@@ -1334,15 +1378,28 @@ class BacktestEngine:
         exit set - so no naked exit order can outlive its entry.
         """
         for asset in list(self._pending_entry_ttl):
-            if asset in exchange._positions:
+            entry_id = self._pending_entry_order_ids.get(asset)
+            entry = exchange._orders.get(entry_id)
+            if (entry is not None and entry.status != "open") or (
+                entry_id is None and asset in exchange._positions
+            ):
                 # Entry filled - the exits are live and legitimate now
                 del self._pending_entry_ttl[asset]
+                self._pending_entry_order_ids.pop(asset, None)
                 continue
             if candle_idx < self._pending_entry_ttl[asset]:
                 continue
-            exchange.cancel_all_orders(asset)
+            if entry_id is None:
+                exchange.cancel_all_orders(asset)
+            else:
+                exchange.cancel_order(entry_id)
+                for order in exchange._orders.values():
+                    if order.parent_order_id == entry_id and order.status == "open":
+                        exchange.cancel_order(order.order_id)
             del self._pending_entry_ttl[asset]
-            self._position_time_exit.pop(asset, None)
+            self._pending_entry_order_ids.pop(asset, None)
+            if asset not in exchange._positions:
+                self._position_time_exit.pop(asset, None)
             logger.debug(
                 f"entry_ttl: cancelled unfilled entry + exits for {asset} "
                 f"at candle {candle_idx}"
@@ -1427,6 +1484,7 @@ class BacktestEngine:
                 quantity=str(pos.quantity),
                 order_type="stop",
                 price=new_stop,
+                reduce_only=True,
             )
             cfg["placed_stop"] = new_stop
             logger.debug(
@@ -1449,9 +1507,15 @@ class BacktestEngine:
             info = self._position_time_exit[symbol]
             pos = exchange._positions.get(symbol)
             if pos is None:
+                entry = exchange._orders.get(info.get("entry_order_id"))
+                if entry is not None and entry.status == "open":
+                    continue
                 # Already closed by SL/TP - drop stale tracking
                 del self._position_time_exit[symbol]
                 continue
+
+            if info.get("open_ts") is None:
+                info["open_ts"] = sim_dt
 
             age_hours = (sim_dt - info["open_ts"]).total_seconds() / 3600.0
             if age_hours < info["hours"]:
@@ -1508,7 +1572,21 @@ class BacktestEngine:
         """
         if ts in idx_map:
             return idx_map[ts]
-        return max(0, bisect_right(sorted_ts, str(ts)) - 1)
+        return bisect_right(sorted_ts, str(ts)) - 1
+
+    @staticmethod
+    def _completed_idx(
+        idx_map: Dict, sorted_ts: List[str], ts: str, timeframe_minutes: int
+    ) -> int:
+        """Last completed candle at the close of the replayed five-minute bar.
+
+        Input series are stamped with candle OPEN times. A missing completed
+        candle is represented by -1, which yields an empty history slice.
+        """
+        cutoff = datetime.fromisoformat(str(ts)) + timedelta(
+            minutes=5 - timeframe_minutes
+        )
+        return BacktestEngine._nearest_idx(idx_map, sorted_ts, cutoff.isoformat())
 
     @staticmethod
     def _first_index_at_or_after(timestamps: List, boundary: str) -> int:

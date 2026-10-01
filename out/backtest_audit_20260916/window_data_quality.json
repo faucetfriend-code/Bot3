@@ -1,0 +1,122 @@
+[
+  {
+    "symbol": "BTC-USDC",
+    "tf": "1m",
+    "rows": 31680,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "BTC-USDC",
+    "tf": "5m",
+    "rows": 6336,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "BTC-USDC",
+    "tf": "15m",
+    "rows": 2112,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "BTC-USDC",
+    "tf": "1h",
+    "rows": 528,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "BTC-USDC",
+    "tf": "4h",
+    "rows": 132,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "ETH-USDC",
+    "tf": "1m",
+    "rows": 31680,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "ETH-USDC",
+    "tf": "5m",
+    "rows": 6336,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "ETH-USDC",
+    "tf": "15m",
+    "rows": 2112,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "ETH-USDC",
+    "tf": "1h",
+    "rows": 528,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "ETH-USDC",
+    "tf": "4h",
+    "rows": 132,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "SUI-USDC",
+    "tf": "1m",
+    "rows": 31680,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "SUI-USDC",
+    "tf": "5m",
+    "rows": 6336,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "SUI-USDC",
+    "tf": "15m",
+    "rows": 2112,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "SUI-USDC",
+    "tf": "1h",
+    "rows": 528,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  },
+  {
+    "symbol": "SUI-USDC",
+    "tf": "4h",
+    "rows": 132,
+    "cadence_gaps": 0,
+    "ohlcv_violations": 0,
+    "missing_values": 0
+  }
+]

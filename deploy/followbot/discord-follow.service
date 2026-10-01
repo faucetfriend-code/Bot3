@@ -1,0 +1,29 @@
+[Unit]
+Description=Discord follower - Pacifica paper mode
+After=network-online.target discord-follow-browser.service
+Wants=network-online.target discord-follow-browser.service
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=discord-follow
+Group=discord-follow
+WorkingDirectory=/var/lib/discord-follow/app
+EnvironmentFile=/etc/discord-follow/bot.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/discord-follow/venv/bin/python /opt/discord-follow/launch.py
+Restart=on-failure
+RestartPreventExitStatus=78
+RestartSec=30
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/discord-follow
+
+[Install]
+WantedBy=multi-user.target

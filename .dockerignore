@@ -1,0 +1,27 @@
+# Default-deny build context: never send workstation secrets/data to a builder.
+**
+!Dockerfile
+!trading_bot_v2/
+!trading_bot_v2/**
+!interface.html
+!deploy/
+!deploy/vps/
+!deploy/vps/sqlite_backup.py
+!deploy/vps/image_smoke.py
+**/.env
+**/.env.*
+**/*.pem
+**/*.key
+**/*.db
+**/*.db-*
+**/*.sqlite
+**/*.sqlite3
+**/*.parquet
+**/*.log
+**/__pycache__/
+**/.pytest_cache/
+**/.kline_cache/
+trading_bot_v2/tests/
+trading_bot_v2/backtesting/data/
+trading_bot_v2/logs/
+trading_bot_v2/backups/

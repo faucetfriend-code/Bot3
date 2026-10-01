@@ -1,0 +1,776 @@
+{
+  "arguments": {
+    "revision": "head",
+    "symbol": "SUI-USDC",
+    "strategy": "all",
+    "start": "2024-03-01",
+    "end": "2024-03-22"
+  },
+  "source_sha256": {
+    "trading_bot_v2/backtesting/simulated_exchange.py": "dfbdf729e983aa80cf400d1b1cacc42fc11dacd6e25141444bfdc599aa35bec2",
+    "trading_bot_v2/backtesting/performance.py": "ea68df319efca3b98eff922ee0c2d44626a93103b279139ce99f22a8eeeb9537",
+    "trading_bot_v2/backtesting/engine.py": "e2ab3d42ee7931b4eee3957a34418a21cfceac7560342eac53013ae41fb6a352"
+  },
+  "seconds": 3.6323297999915667,
+  "audits": {
+    "finite_equity": true,
+    "accounting_residual": 7.317903509829193e-07,
+    "trade_timestamps_monotonic": true,
+    "trade_timestamps_in_window": true,
+    "completed_candle_checks": 0,
+    "terminal_cash": 9801.728185222235,
+    "terminal_unrealised": -23.64663580626681,
+    "terminal_positions": [
+      {
+        "symbol": "SUI-USDC",
+        "side": "short",
+        "quantity": "119.47431299999998",
+        "entry_price": "1.6284776582639415",
+        "unrealised_pnl": "-23.6466"
+      }
+    ]
+  },
+  "result": {
+    "symbol": "SUI-USDC",
+    "start": "2024-03-01",
+    "end": "2024-03-22",
+    "initial_capital": 10000,
+    "final_equity": 9972.6428,
+    "total_return_pct": -0.2735719999999997,
+    "cagr_pct": -4.6529879977287525,
+    "profit_factor": 0.2145439055924023,
+    "win_rate_pct": 50.0,
+    "sharpe_ratio": -2.2149210236784427,
+    "sortino_ratio": -2.0776713665442372,
+    "max_drawdown_pct": 0.983614330503591,
+    "calmar_ratio": -4.7305004140662685,
+    "avg_drawdown_duration_days": 0.0,
+    "total_trades": 5,
+    "closed_trades": 2,
+    "avg_fee_per_trade": 0.05998008649969805,
+    "total_fees": 0.29990043249849024,
+    "total_funding_paid": -12.561697506975461,
+    "by_strategy": {},
+    "by_regime": {
+      "ranging_volatile": {
+        "closed_trades": 2,
+        "pnl": -15.972361999999999,
+        "wins": 1
+      }
+    },
+    "diagnostics": {
+      "label": "all/SUI-USDC 2024-03-01..2024-03-22",
+      "stages": {
+        "bars_evaluated": 6048,
+        "strategy_invoked": 30756,
+        "raw_signals": 488,
+        "conflict_dropped": 24,
+        "orders_placed": 3,
+        "execution_blocked": 353,
+        "validity_dropped": 108,
+        "confidence_dropped": 8,
+        "fills": 5,
+        "closed_trades": 2
+      },
+      "reasons": {
+        "conflict:lost_resolution": 24,
+        "exec:same_direction_skip": 194,
+        "exec:hedge_mode_block": 159,
+        "validity:multi_timeframe_alignment": 108,
+        "confidence:below_regime_threshold": 8,
+        "validity:volume_confirmation": 36
+      },
+      "by_strategy": {
+        "grid_trading": {
+          "strategy_invoked": 3828,
+          "raw_signals": 160,
+          "confidence_dropped": 8,
+          "confidence:below_regime_threshold": 8
+        },
+        "liquidation_capture": {
+          "strategy_invoked": 6048,
+          "raw_signals": 21
+        },
+        "vwap_scalping": {
+          "strategy_invoked": 4140,
+          "raw_signals": 125,
+          "validity_dropped": 62,
+          "validity:multi_timeframe_alignment": 62,
+          "conflict_dropped": 10,
+          "conflict:lost_resolution": 10
+        },
+        "funding_arb": {
+          "strategy_invoked": 6048,
+          "raw_signals": 2,
+          "conflict_dropped": 1,
+          "conflict:lost_resolution": 1
+        },
+        "vwap_pullback": {
+          "strategy_invoked": 6048,
+          "raw_signals": 47,
+          "conflict_dropped": 2,
+          "conflict:lost_resolution": 2
+        },
+        "ma_crossover": {
+          "strategy_invoked": 1908,
+          "raw_signals": 36,
+          "validity_dropped": 36,
+          "validity:volume_confirmation": 36,
+          "validity:multi_timeframe_alignment": 36
+        },
+        "momentum_scalping": {
+          "strategy_invoked": 1908
+        },
+        "mean_reversion": {
+          "strategy_invoked": 828,
+          "raw_signals": 97,
+          "conflict_dropped": 11,
+          "conflict:lost_resolution": 11,
+          "validity_dropped": 10,
+          "validity:multi_timeframe_alignment": 10
+        }
+      },
+      "regimes": {
+        "ranging_volatile": 3000,
+        "trending_moderate": 204,
+        "trending_strong": 1704,
+        "indecisive": 312,
+        "ranging_calm": 828
+      },
+      "notes": {
+        "execution_policy": {
+          "opposing_closes_position": false,
+          "min_hold_candles": 6,
+          "max_pyramid_entries": 1,
+          "pyramid_min_spacing_candles": 0
+        },
+        "funding_model": {
+          "model": "historical",
+          "venue_interval_hours": 8,
+          "settlements": 3651,
+          "conversion": "prorata",
+          "scale": 1.0,
+          "factor": 1.0,
+          "source_interval_hours": 8,
+          "funding_start": "2023-05-03T16:00:00",
+          "funding_end": "2026-09-01T08:00:00"
+        },
+        "data_coverage": {
+          "strictness": "all",
+          "warmup_candles": 60,
+          "degraded": {}
+        }
+      },
+      "diagnosis": "traded",
+      "headline": "488 raw signals over 6048 bars produced 2 closed trades; largest attrition at execution_blocked",
+      "binding_stage": "execution_blocked",
+      "progress": 0.9,
+      "top_reasons": [
+        [
+          "exec:same_direction_skip",
+          194
+        ],
+        [
+          "exec:hedge_mode_block",
+          159
+        ],
+        [
+          "validity:multi_timeframe_alignment",
+          108
+        ],
+        [
+          "validity:volume_confirmation",
+          36
+        ],
+        [
+          "conflict:lost_resolution",
+          24
+        ]
+      ]
+    },
+    "equity_curve": [
+      {
+        "timestamp": "2024-03-01T00:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-01T05:00:00",
+        "equity": 10000.9574,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-01T10:00:00",
+        "equity": 10003.5964,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-01T15:00:00",
+        "equity": 10003.1663,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-01T20:00:00",
+        "equity": 10004.7826,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-02T01:00:00",
+        "equity": 10007.8353,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-02T06:00:00",
+        "equity": 10008.6716,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-02T11:00:00",
+        "equity": 10012.9271,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-02T16:00:00",
+        "equity": 10015.3668,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-02T21:00:00",
+        "equity": 10016.1314,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-03T02:00:00",
+        "equity": 10014.4256,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-03T07:00:00",
+        "equity": 10016.5522,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-03T12:00:00",
+        "equity": 10019.1733,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-03T17:00:00",
+        "equity": 10017.9734,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-03T22:00:00",
+        "equity": 10021.1434,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-04T03:00:00",
+        "equity": 10028.1453,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-04T08:00:00",
+        "equity": 10029.2066,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-04T13:00:00",
+        "equity": 10034.6409,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-04T18:00:00",
+        "equity": 10047.2182,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-04T23:00:00",
+        "equity": 10038.2802,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-05T04:00:00",
+        "equity": 10043.0563,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-05T09:00:00",
+        "equity": 10030.8972,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-05T14:00:00",
+        "equity": 10036.5221,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-05T19:00:00",
+        "equity": 10035.7522,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-06T00:00:00",
+        "equity": 10064.7443,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-06T05:00:00",
+        "equity": 10055.6872,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-06T10:00:00",
+        "equity": 10048.5599,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-06T15:00:00",
+        "equity": 10061.8119,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-06T20:00:00",
+        "equity": 10052.7392,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-07T01:00:00",
+        "equity": 10035.802,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-07T06:00:00",
+        "equity": 10036.0403,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-07T11:00:00",
+        "equity": 10030.4312,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-07T16:00:00",
+        "equity": 10029.9865,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-07T21:00:00",
+        "equity": 10035.4208,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-08T02:00:00",
+        "equity": 10018.1531,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-08T07:00:00",
+        "equity": 10022.9915,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-08T12:00:00",
+        "equity": 10029.4957,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-08T17:00:00",
+        "equity": 10036.4354,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-08T22:00:00",
+        "equity": 10033.8374,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T03:00:00",
+        "equity": 10033.9514,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T08:00:00",
+        "equity": 10029.6485,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T13:00:00",
+        "equity": 10019.2805,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T18:00:00",
+        "equity": 10015.8998,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T23:00:00",
+        "equity": 10020.7858,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T04:00:00",
+        "equity": 10015.9762,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T09:00:00",
+        "equity": 10013.4276,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T14:00:00",
+        "equity": 10025.9168,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T19:00:00",
+        "equity": 10031.4822,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T00:00:00",
+        "equity": 10029.0687,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T05:00:00",
+        "equity": 10032.3102,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T10:00:00",
+        "equity": 10023.2458,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T15:00:00",
+        "equity": 10032.6842,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T20:00:00",
+        "equity": 10029.261,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T01:00:00",
+        "equity": 10025.4293,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T06:00:00",
+        "equity": 10022.6884,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T11:00:00",
+        "equity": 10036.7756,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T16:00:00",
+        "equity": 10032.2962,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T21:00:00",
+        "equity": 10025.0744,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T02:00:00",
+        "equity": 10003.2007,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T07:00:00",
+        "equity": 10011.1137,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T12:00:00",
+        "equity": 10019.1446,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T17:00:00",
+        "equity": 10020.232,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T22:00:00",
+        "equity": 10017.6102,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T03:00:00",
+        "equity": 10011.909,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T08:00:00",
+        "equity": 10017.6926,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T13:00:00",
+        "equity": 10028.4658,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T18:00:00",
+        "equity": 10037.7371,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T23:00:00",
+        "equity": 10034.7816,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-15T04:00:00",
+        "equity": 10056.3504,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-15T09:00:00",
+        "equity": 10068.3161,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-15T14:00:00",
+        "equity": 10064.4073,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-15T19:00:00",
+        "equity": 10056.1752,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-16T00:00:00",
+        "equity": 10047.707,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-16T05:00:00",
+        "equity": 10020.059,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-16T10:00:00",
+        "equity": 10003.3131,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-16T15:00:00",
+        "equity": 10017.1848,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-16T20:00:00",
+        "equity": 10025.566,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-17T01:00:00",
+        "equity": 10042.3967,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-17T06:00:00",
+        "equity": 10044.6609,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-17T11:00:00",
+        "equity": 10036.0327,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-17T16:00:00",
+        "equity": 10033.03,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-17T21:00:00",
+        "equity": 10032.9108,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-18T02:00:00",
+        "equity": 10020.0649,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-18T07:00:00",
+        "equity": 9990.9868,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-18T12:00:00",
+        "equity": 10014.5977,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-18T17:00:00",
+        "equity": 10023.0111,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-18T22:00:00",
+        "equity": 10036.573,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-19T03:00:00",
+        "equity": 10051.986,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-19T08:00:00",
+        "equity": 10037.3883,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-19T13:00:00",
+        "equity": 10009.3828,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-19T18:00:00",
+        "equity": 9994.2545,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-19T23:00:00",
+        "equity": 10018.9948,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-20T04:00:00",
+        "equity": 10032.1076,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-20T09:00:00",
+        "equity": 10030.691,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-20T14:00:00",
+        "equity": 10028.1169,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-20T19:00:00",
+        "equity": 10019.4782,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-21T00:00:00",
+        "equity": 9988.6999,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-21T05:00:00",
+        "equity": 9972.2972,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-21T10:00:00",
+        "equity": 9969.2827,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-21T15:00:00",
+        "equity": 9969.9995,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-21T20:00:00",
+        "equity": 9973.3835,
+        "open_positions": 1
+      }
+    ],
+    "trade_log": [
+      {
+        "order_id": "bt_000005",
+        "timestamp": "2024-03-01T00:05:00",
+        "symbol": "SUI-USDC",
+        "side": "ask",
+        "quantity": 119.474313,
+        "fill_price": 1.6719009098509265,
+        "fee": 0.07989968504340575,
+        "pnl": 0.0,
+        "balance_after": 9800.1709,
+        "strategy": "funding_arb",
+        "regime": "ranging_volatile",
+        "direction": "bear",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000003",
+        "timestamp": "2024-03-01T01:00:00",
+        "symbol": "SUI-USDC",
+        "side": "ask",
+        "quantity": 118.870728,
+        "fill_price": 1.7105335714285714,
+        "fee": 0.03049985563562314,
+        "pnl": 0.0,
+        "balance_after": 9596.808,
+        "strategy": "vwap_scalping",
+        "regime": "ranging_volatile",
+        "direction": "bear",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000001",
+        "timestamp": "2024-03-01T03:25:00",
+        "symbol": "SUI-USDC",
+        "side": "bid",
+        "quantity": 118.870728,
+        "fill_price": 1.6544664285714288,
+        "fee": 0.02950014432237686,
+        "pnl": 4.362781,
+        "balance_after": 9802.1717,
+        "strategy": "vwap_scalping",
+        "regime": "ranging_volatile",
+        "direction": "bear",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000002",
+        "timestamp": "2024-03-03T07:20:00",
+        "symbol": "SUI-USDC",
+        "side": "ask",
+        "quantity": 118.870728,
+        "fill_price": 1.5654686707543293,
+        "fee": 0.07443536022150378,
+        "pnl": 0.0,
+        "balance_after": 9617.1353,
+        "strategy": "vwap_pullback",
+        "regime": "ranging_volatile",
+        "direction": "bear",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000004",
+        "timestamp": "2024-03-21T00:15:00",
+        "symbol": "SUI-USDC",
+        "side": "bid",
+        "quantity": 118.870728,
+        "fill_price": 1.79954705239924,
+        "fee": 0.08556538727558073,
+        "pnl": -20.335143,
+        "balance_after": 9801.6335,
+        "strategy": "liquidation_capture",
+        "regime": "ranging_volatile",
+        "direction": "bear",
+        "role": "taker"
+      }
+    ]
+  }
+}

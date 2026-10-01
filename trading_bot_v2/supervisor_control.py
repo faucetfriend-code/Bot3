@@ -5,8 +5,8 @@ Lets a supervisor (Claude routine, human, monitoring system) pause new entries
 without killing the bot. Existing positions continue to be managed normally —
 only NEW signals are blocked while paused.
 
-State is persisted in `supervisor_pause.json` at the project root so it
-survives bot restarts.
+State is persisted at SUPERVISOR_STATE_PATH when configured, otherwise in
+`supervisor_pause.json` at the project root, so it survives bot restarts.
 
 Wire-up
 -------
@@ -24,8 +24,9 @@ Pause semantics
 
 Safety properties
 -----------------
-- Default state is NOT paused (fail-open if the file is missing/corrupt).
-  Rationale: a corrupt file should not silently halt trading.
+- A missing state file defaults to unpaused for compatibility.
+- Corrupt or unreadable state fails closed: new entries remain paused until
+  an operator repairs the state or explicitly resumes.
 - File write is atomic (write to .tmp, rename) to avoid partial reads.
 """
 
@@ -44,7 +45,14 @@ logger = logging.getLogger(__name__)
 # Pause file lives at project root (Bot3/supervisor_pause.json)
 # alongside trading_bot.db and other runtime state.
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
-_PAUSE_FILE = _PROJECT_ROOT / "supervisor_pause.json"
+_PAUSE_FILE = (
+    Path(
+        os.getenv("SUPERVISOR_STATE_PATH", "").strip()
+        or str(_PROJECT_ROOT / "supervisor_pause.json")
+    )
+    .expanduser()
+    .resolve()
+)
 
 
 class SupervisorControl:
@@ -75,22 +83,34 @@ class SupervisorControl:
     # ────────────────────────────────────────────────────────────────────
 
     def _read_state(self) -> dict:
-        """Read pause state from disk. Returns {} if missing/corrupt (fail-open)."""
-        if not _PAUSE_FILE.exists():
-            return {}
+        """Read state, preserving missing-file defaults and failing closed on damage."""
         try:
             with _PAUSE_FILE.open("r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError) as e:
-            logger.warning(
-                f"SupervisorControl: corrupt pause file ({e}); treating as not paused"
-            )
+                state = json.load(f)
+            if not isinstance(state, dict) or not isinstance(state.get("paused"), bool):
+                raise ValueError("Pause state must contain a boolean paused field")
+            if state.get("until_ts") is not None and not isinstance(
+                state["until_ts"], str
+            ):
+                raise ValueError("Pause expiry must be a string or null")
+            return state
+        except FileNotFoundError:
             return {}
+        except (ValueError, OSError) as e:
+            logger.error(
+                f"SupervisorControl: cannot trust pause state ({e}); "
+                "new entries paused until operator recovery"
+            )
+            return {
+                "paused": True,
+                "reason": "Pause state unreadable; operator recovery required",
+            }
 
     def _write_state(self, state: dict) -> None:
         """Atomic write: tmp file then rename."""
         tmp = _PAUSE_FILE.with_suffix(".json.tmp")
         with self._file_lock:
+            _PAUSE_FILE.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             with tmp.open("w", encoding="utf-8") as f:
                 json.dump(state, f, indent=2)
                 f.flush()

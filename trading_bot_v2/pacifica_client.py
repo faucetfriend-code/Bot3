@@ -6,6 +6,7 @@ import base58
 from collections import defaultdict, deque
 from typing import Dict, List, Any, Optional, Union, Tuple, Callable
 from enum import Enum
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
 import requests
 from solders.keypair import Keypair
@@ -333,7 +334,7 @@ class PacificaClient:
         self.rate_manager = RateLimitManager(max_requests_per_minute=30)
         self.cache = SmartCache(self.rate_manager)
 
-        # Per-symbol instrument spec cache (static data — tick_size, lot_size, min_order_size).
+        # Per-symbol instrument spec cache (tick_size, lot_size, min_order_size).
         # Instrument specs do not change during a session, so we cache indefinitely.
         self._instrument_cache: Dict[str, Dict[str, Any]] = {}
 
@@ -354,6 +355,11 @@ class PacificaClient:
         before_sleep=before_sleep_log(logger, logging.WARNING),
     )
     def _make_signed_request(
+        self, endpoint: str, payload: Dict[str, Any], request_type: str
+    ) -> Dict[str, Any]:
+        return self._signed_request_once(endpoint, payload, request_type)
+
+    def _signed_request_once(
         self, endpoint: str, payload: Dict[str, Any], request_type: str
     ) -> Dict[str, Any]:
         """
@@ -420,7 +426,7 @@ class PacificaClient:
             text_lower = parsed.strip().lower().strip('"').strip("'")
             if text_lower == "success":
                 logger.info(
-                    f"API returned string 'success' for {endpoint} — treating as OK"
+                    f"API returned string 'success' for {endpoint} - treating as OK"
                 )
                 return {"success": True, "data": {}, "status": "success"}
             else:
@@ -875,6 +881,7 @@ class PacificaClient:
         price: Optional[float] = None,
         reduce_only: bool = False,
         client_order_id: Optional[str] = None,
+        stop_loss: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Place a new order.
@@ -893,6 +900,8 @@ class PacificaClient:
         Returns:
             Order data as dict.
         """
+        if side not in ("buy", "sell"):
+            raise ValueError("Order side must be buy or sell")
         payload = {
             "symbol": symbol,
             "amount": str(quantity),
@@ -900,6 +909,20 @@ class PacificaClient:
             "client_order_id": str(client_order_id or uuid.uuid4()),
             "reduce_only": bool(reduce_only),
         }
+        if stop_loss is not None:
+            if reduce_only:
+                raise ValueError("Cannot attach an entry stop to a reduce-only order")
+            wire_symbol, trigger = self.prepare_stop(symbol, side, stop_loss)
+            payload["symbol"] = wire_symbol
+            payload["stop_loss"] = {
+                "stop_price": trigger,
+                "trigger_price_type": "last_trade_price",
+                "client_order_id": str(
+                    uuid.uuid5(
+                        uuid.NAMESPACE_URL, payload["client_order_id"] + ":stop_loss"
+                    )
+                ),
+            }
 
         if order_type == "limit":
             if price is None:
@@ -915,7 +938,86 @@ class PacificaClient:
         else:
             raise ValueError(f"Unsupported order type: {order_type}")
 
+        # An attached stop must never cause a replay of an ambiguous entry.
+        if stop_loss is not None:
+            ack = self._signed_request_once(endpoint, payload, request_type)
+            if isinstance(ack, dict) and "order_id" in ack and "success" not in ack:
+                ack = {"success": True, "data": ack}
+            return ack
         return self._make_signed_request(endpoint, payload, request_type)
+
+    def prepare_stop(
+        self, symbol: str, position_side: str, stop_price: float
+    ) -> Tuple[str, str]:
+        """Resolve the case-sensitive symbol and conservatively round its trigger."""
+        wanted = symbol.removesuffix("-PERP").upper()
+        matches = [
+            m for m in self.get_markets() if str(m.get("symbol", "")).upper() == wanted
+        ]
+        if len(matches) != 1:
+            raise ValueError("Cannot resolve exact Pacifica market for protection")
+        market = matches[0]
+        tick = Decimal(str(market.get("tick_size", "0")))
+        trigger = Decimal(str(stop_price))
+        if not tick.is_finite() or not trigger.is_finite() or min(tick, trigger) <= 0:
+            raise ValueError("Stop price and market tick must be finite and positive")
+        rounding = ROUND_CEILING if position_side in ("long", "buy") else ROUND_FLOOR
+        trigger = (trigger / tick).to_integral_value(rounding=rounding) * tick
+        if trigger <= 0:
+            raise ValueError("Stop price rounds to zero")
+        return str(market["symbol"]), format(trigger, "f")
+
+    def create_protective_stop(
+        self, symbol: str, close_side: str, stop_price: str, client_order_id: str
+    ) -> Dict[str, Any]:
+        """Create one full-position reduce-only stop-market, without blind retries.
+
+        Omitting amount protects the full position per the Pacifica stop API.
+        The caller retains the UUID to reconcile ambiguous transport outcomes.
+        """
+        if close_side not in ("bid", "ask"):
+            raise ValueError("Stop close side must be bid or ask")
+        payload = {
+            "symbol": symbol,
+            "side": close_side,
+            "reduce_only": True,
+            "stop_order": {
+                "stop_price": stop_price,
+                "trigger_price_type": "last_trade_price",
+                "client_order_id": str(uuid.UUID(client_order_id)),
+            },
+        }
+        return self._signed_request_once(
+            "/orders/stop/create", payload, "create_stop_order"
+        )
+
+    def cancel_protective_stop(self, symbol: str, order_id: str) -> Dict[str, Any]:
+        """Cancel a stop through the stop endpoint, with no ambiguous replay."""
+        if not str(order_id).isdigit() or int(order_id) <= 0:
+            raise ValueError("Pacifica stop order id must be a positive integer")
+        return self._signed_request_once(
+            "/orders/stop/cancel",
+            {"symbol": symbol, "order_id": int(order_id)},
+            "cancel_stop_order",
+        )
+
+    def get_protection_orders(self) -> List[Dict[str, Any]]:
+        """Read orders strictly; malformed/error responses never mean no stops."""
+        return self._get_protection_rows("/orders")
+
+    def get_protection_positions(self) -> List[Dict[str, Any]]:
+        """Read positions strictly when verifying stop coverage."""
+        return self._get_protection_rows("/positions")
+
+    def _get_protection_rows(self, endpoint: str) -> List[Dict[str, Any]]:
+        """Require an explicit successful list from an account read."""
+        ack = self._make_get_request(endpoint, {"account": self.account_public_key})
+        if not isinstance(ack, dict) or ack.get("success") is not True:
+            raise ValueError("Unable to verify Pacifica protection orders")
+        rows = ack.get("data")
+        if not isinstance(rows, list) or any(not isinstance(r, dict) for r in rows):
+            raise ValueError("Invalid Pacifica protection order list")
+        return rows
 
     def cancel_order(self, symbol: str, order_id: str) -> Dict[str, Any]:
         """
@@ -936,7 +1038,9 @@ class PacificaClient:
         }
         return self._make_signed_request("/orders/cancel", payload, "cancel_order")
 
-    def cancel_all_orders(self, symbol: str = None) -> Dict[str, Any]:
+    def cancel_all_orders(
+        self, symbol: Optional[str] = None, include_stops: bool = False
+    ) -> Dict[str, Any]:
         """
         Cancel all open orders, optionally for a specific symbol.
 
@@ -948,10 +1052,10 @@ class PacificaClient:
         """
         payload = {
             "all_symbols": symbol is None,
-            "exclude_reduce_only": False,
+            "exclude_reduce_only": not include_stops,
         }
         if symbol:
-            payload["symbol"] = symbol.upper()
+            payload["symbol"] = symbol
             payload["all_symbols"] = False
         return self._make_signed_request(
             "/orders/cancel_all", payload, "cancel_all_orders"

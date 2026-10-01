@@ -1,0 +1,164 @@
+[
+  {
+    "file": "BTC-USDC_15m.parquet",
+    "rows": 316455,
+    "first": "2017-08-17T04:00:00",
+    "last": "2026-09-01T10:45:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 11308163
+  },
+  {
+    "file": "BTC-USDC_1h.parquet",
+    "rows": 102275,
+    "first": "2015-01-01T00:00:00",
+    "last": "2026-09-01T10:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 4162842
+  },
+  {
+    "file": "BTC-USDC_1m.parquet",
+    "rows": 4550178,
+    "first": "2018-01-01T00:00:00",
+    "last": "2026-09-01T11:05:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 143980972
+  },
+  {
+    "file": "BTC-USDC_4h.parquet",
+    "rows": 25569,
+    "first": "2015-01-01T00:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 1099812
+  },
+  {
+    "file": "BTC-USDC_5m.parquet",
+    "rows": 949346,
+    "first": "2017-08-17T04:00:00",
+    "last": "2026-09-01T11:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 30648636
+  },
+  {
+    "file": "BTC-USDC_funding.parquet",
+    "rows": 7645,
+    "first": "2019-09-10T08:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 121707
+  },
+  {
+    "file": "ETH-USDC_15m.parquet",
+    "rows": 316456,
+    "first": "2017-08-17T04:00:00",
+    "last": "2026-09-01T11:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 9806780
+  },
+  {
+    "file": "ETH-USDC_1h.parquet",
+    "rows": 89953,
+    "first": "2016-05-18T00:00:00",
+    "last": "2026-09-01T10:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 3251622
+  },
+  {
+    "file": "ETH-USDC_1m.parquet",
+    "rows": 4746677,
+    "first": "2017-08-17T04:00:00",
+    "last": "2026-09-01T11:08:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 118238622
+  },
+  {
+    "file": "ETH-USDC_4h.parquet",
+    "rows": 22505,
+    "first": "2016-05-18T00:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 898667
+  },
+  {
+    "file": "ETH-USDC_5m.parquet",
+    "rows": 949347,
+    "first": "2017-08-17T04:00:00",
+    "last": "2026-09-01T11:05:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 25818950
+  },
+  {
+    "file": "ETH-USDC_funding.parquet",
+    "rows": 7411,
+    "first": "2019-11-27T08:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 119679
+  },
+  {
+    "file": "SUI-USDC_15m.parquet",
+    "rows": 116829,
+    "first": "2023-05-03T12:00:00",
+    "last": "2026-09-01T11:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 3105879
+  },
+  {
+    "file": "SUI-USDC_1h.parquet",
+    "rows": 29207,
+    "first": "2023-05-03T12:00:00",
+    "last": "2026-09-01T10:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 1007040
+  },
+  {
+    "file": "SUI-USDC_1m.parquet",
+    "rows": 1752431,
+    "first": "2023-05-03T12:00:00",
+    "last": "2026-09-01T11:10:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 32252387
+  },
+  {
+    "file": "SUI-USDC_4h.parquet",
+    "rows": 7302,
+    "first": "2023-05-03T12:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 291175
+  },
+  {
+    "file": "SUI-USDC_5m.parquet",
+    "rows": 350486,
+    "first": "2023-05-03T12:00:00",
+    "last": "2026-09-01T11:05:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 7382049
+  },
+  {
+    "file": "SUI-USDC_funding.parquet",
+    "rows": 3651,
+    "first": "2023-05-03T16:00:00",
+    "last": "2026-09-01T08:00:00",
+    "duplicate_timestamps": 0,
+    "monotonic": true,
+    "bytes": 77774
+  }
+]

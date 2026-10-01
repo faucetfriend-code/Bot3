@@ -20,6 +20,13 @@ Vocabulary boundary (the source of repeated bugs, see commit 86f9601):
 """
 
 import logging
+import math
+import os
+import sqlite3
+import uuid
+from contextlib import closing
+from decimal import Decimal
+from threading import RLock
 from typing import Any, Dict, List, Optional
 
 from ..models import OrderSide, OrderType
@@ -65,6 +72,7 @@ class PacificaExchange(ExchangeClient):
         native_position_sides=("long", "short"),
         amounts_as_strings=True,
         min_order_size_source="info_endpoint",
+        supports_venue_stops=True,
     )
 
     def __init__(self, rest_client: Any = None, ws_client: Any = None):
@@ -80,6 +88,7 @@ class PacificaExchange(ExchangeClient):
         """
         self._rest = rest_client
         self._ws = ws_client
+        self._stop_lock = RLock()
 
     # ------------------------------------------------------------------
     # Capabilities and underlying clients
@@ -207,9 +216,8 @@ class PacificaExchange(ExchangeClient):
         the native client then performs the final bid/ask and
         string-amount wire conversion.  ``reduce_only`` and
         ``client_order_id`` are forwarded only when set so legacy
-        positional mocks keep matching.  ``stop_loss`` is NOT forwarded:
-        Pacifica has no venue-side stop in this client, so the caller
-        must keep local enforcement (``supports_venue_stops`` is False).
+        positional mocks keep matching. Entry stops are sent to Pacifica;
+        callers must still verify protection after a confirmed fill.
 
         Returns:
             Raw Pacifica acknowledgement dict
@@ -217,14 +225,9 @@ class PacificaExchange(ExchangeClient):
         """
         side_str = self._to_order_side(side).value  # "buy" / "sell"
         type_str = self._to_order_type(order_type).value  # "market" / "limit"
-        if stop_loss is not None:
-            logger.warning(
-                "Pacifica adapter cannot attach a venue stop for %s (stop %.6f); "
-                "local stop enforcement only",
-                symbol,
-                stop_loss,
-            )
         extra: Dict[str, Any] = {}
+        if stop_loss is not None:
+            extra["stop_loss"] = stop_loss
         if reduce_only:
             extra["reduce_only"] = True
         if client_order_id:
@@ -248,6 +251,304 @@ class PacificaExchange(ExchangeClient):
             order_type=type_str,
             **extra,
         )
+
+    @staticmethod
+    def _stop_side(side: Any) -> str:
+        """Validate a position side without silently defaulting unknown input."""
+        return PacificaExchange._to_order_side(getattr(side, "value", side)).value
+
+    @staticmethod
+    def _stop_result(ack: Any, client_id: Optional[str] = None) -> OrderResult:
+        """Require a real venue id, including for bare success responses."""
+        if isinstance(ack, dict) and "order_id" in ack and "success" not in ack:
+            ack = {"success": True, "data": ack}
+        result = OrderResult.from_ack(ack)
+        result.client_order_id = client_id or result.client_order_id
+        if (
+            not result.order_id
+            or not result.order_id.isdigit()
+            or int(result.order_id) <= 0
+        ):
+            result.success = result.accepted = False
+            if not result.rejected:
+                result.status = OrderResultStatus.UNKNOWN.value
+                result.error = "Stop acknowledgement has no valid venue id"
+        return result
+
+    def list_stops(self, symbol: str) -> List[Dict[str, Any]]:
+        """List only reduce-only stop-market protection, excluding take profits.
+
+        Strict reads preserve the distinction between absent and unreachable.
+        Full-position stops can have an unspecified amount (normalized as None).
+        """
+        rows = self.rest_client.get_protection_orders()
+        normalized = []
+        wanted = symbol.removesuffix("-PERP").upper()
+        for row in rows:
+            if str(row.get("symbol", "")).upper() != wanted:
+                continue
+            if row.get("order_type") not in ("stop_market", "stop_loss_market"):
+                continue
+            if row.get("reduce_only") is not True:
+                continue
+            if not self._covers_position(row):
+                continue
+            trigger = float(row.get("stop_price") or 0)
+            order_id = str(row.get("order_id") or "")
+            side = row.get("side")
+            if (
+                not math.isfinite(trigger)
+                or trigger <= 0
+                or not order_id.isdigit()
+                or int(order_id) <= 0
+                or side not in ("bid", "ask")
+            ):
+                raise ValueError("Malformed Pacifica protective stop")
+            normalized.append(
+                {
+                    "tpsl_id": order_id,
+                    "symbol": row["symbol"],
+                    "side": "sell" if side == "ask" else "buy",
+                    "position_side": "long" if side == "ask" else "short",
+                    "sl_trigger_price": trigger,
+                    "tp_trigger_price": None,
+                    "size": row.get("initial_amount"),
+                    "order_type": "tpsl",
+                    "client_order_id": row.get("client_order_id"),
+                    "raw": row,
+                }
+            )
+        return normalized
+
+    def _covers_position(self, row: Dict[str, Any]) -> bool:
+        """Never promote a partial-quantity stop to full-position protection."""
+        amount = row.get("initial_amount")
+        if amount is None:
+            return True  # Omitted amount means full position in the stop API.
+        amount = Decimal(str(amount))
+        if not amount.is_finite() or amount < 0:
+            raise ValueError("Invalid protective order quantity")
+        if amount == 0:
+            raise ValueError("Zero stop quantity requires venue verification")
+        remaining = amount - Decimal(str(row.get("filled_amount") or 0))
+        remaining -= Decimal(str(row.get("cancelled_amount") or 0))
+        positions = self.rest_client.get_protection_positions()
+        for position in positions:
+            if position.get("symbol") != row.get("symbol"):
+                continue
+            side = self._stop_side(position.get("side"))
+            if (side == "buy") != (row.get("side") == "ask"):
+                continue
+            size = Decimal(str(position.get("amount", position.get("size", 0))))
+            if not size.is_finite() or not remaining.is_finite():
+                raise ValueError("Invalid position coverage quantity")
+            return size > 0 and remaining >= size
+        return False
+
+    def install_stop(
+        self, symbol: str, side: Any, quantity: float, stop_price: float
+    ) -> OrderResult:
+        """Serialize installs so repair and trailing updates cannot duplicate them."""
+        with self._stop_lock:
+            return self._install_stop(symbol, side, quantity, stop_price)
+
+    def _install_stop(
+        self, symbol: str, side: Any, quantity: float, stop_price: float
+    ) -> OrderResult:
+        """Recover matching protection before submitting a single replacement."""
+        try:
+            if not math.isfinite(quantity) or quantity <= 0:
+                raise ValueError("Protection requires positive finite quantity")
+            position_side = self._stop_side(side)
+            wire, trigger = self.rest_client.prepare_stop(
+                symbol, position_side, stop_price
+            )
+            close_side = "sell" if position_side == "buy" else "buy"
+            rows = self.list_stops(wire)
+            for row in rows:
+                if row["side"] == close_side and Decimal(
+                    str(row["sl_trigger_price"])
+                ) == Decimal(trigger):
+                    return self._stop_result({"order_id": row["tpsl_id"]})
+            identity = (
+                f"{getattr(self.rest_client, 'base_url', 'unknown')}:"
+                f"{self.rest_client.account_public_key}:{wire}:{close_side}"
+            )
+            cid = str(uuid.uuid5(uuid.NAMESPACE_URL, "pacifica:protection:" + identity))
+            return self._create_and_reconcile_stop(wire, close_side, trigger, cid)
+        except (ValueError, TypeError, ArithmeticError) as exc:
+            return OrderResult(status="unknown", error=str(exc))
+        except Exception as exc:  # noqa: BLE001 - never claim ambiguous protection
+            return OrderResult(
+                status="unknown", error=f"Protection unavailable: {type(exc).__name__}"
+            )
+
+    def _create_and_reconcile_stop(
+        self, symbol: str, close_side: str, trigger: str, cid: str
+    ) -> OrderResult:
+        """Send once; reconcile unknown acknowledgements by the exact client id."""
+        attempt_key = cid
+        cid, reserved = self._reserve_stop_attempt(attempt_key)
+        if not reserved:
+            for row in self.list_stops(symbol):
+                if (
+                    row.get("client_order_id") == cid
+                    and row["side"] == close_side
+                    and Decimal(str(row["sl_trigger_price"])) == Decimal(trigger)
+                ):
+                    self._finish_stop_attempt(attempt_key, cid, "accepted")
+                    return self._stop_result({"order_id": row["tpsl_id"]}, cid)
+            return OrderResult(
+                client_order_id=cid,
+                status="unknown",
+                error="Prior stop attempt unresolved; no resubmission",
+            )
+        try:
+            ack = self.rest_client.create_protective_stop(
+                symbol, "ask" if close_side == "sell" else "bid", trigger, cid
+            )
+            result = self._stop_result(ack, cid)
+        except Exception as exc:  # noqa: BLE001 - POST may have reached the venue
+            result = OrderResult(
+                client_order_id=cid,
+                status="unknown",
+                error=f"Stop submission ambiguous: {type(exc).__name__}",
+            )
+        if result.accepted or result.rejected:
+            self._finish_stop_attempt(attempt_key, cid, result.status)
+        if result.accepted:
+            return result
+        for row in self.list_stops(symbol):
+            if (
+                row.get("client_order_id") == cid
+                and row["side"] == close_side
+                and Decimal(str(row["sl_trigger_price"])) == Decimal(trigger)
+            ):
+                self._finish_stop_attempt(attempt_key, cid, "accepted")
+                return self._stop_result({"order_id": row["tpsl_id"]}, cid)
+        return result
+
+    @staticmethod
+    def _stop_journal_path() -> str:
+        """Use the same durable SQLite volume as persisted position protection."""
+        from ..database import DATABASE_PATH
+
+        if os.getenv("DATABASE_BACKEND", "sqlite").lower() != "sqlite":
+            raise ValueError("Pacifica protection requires a durable SQLite journal")
+        path = os.getenv("DATABASE_PATH", DATABASE_PATH)
+        if not path.strip() or path.strip() == ":memory:":
+            raise ValueError("Pacifica protection journal must persist across restart")
+        return path
+
+    def _reserve_stop_attempt(self, key: str) -> tuple[str, bool]:
+        """Commit intent before POST; concurrent/restarted processes share the gate."""
+        with closing(sqlite3.connect(self._stop_journal_path(), timeout=10)) as db:
+            with db:
+                db.execute("BEGIN IMMEDIATE")
+                db.execute(
+                    "CREATE TABLE IF NOT EXISTS pacifica_stop_attempts "
+                    "(attempt_key TEXT PRIMARY KEY, client_id TEXT NOT NULL, "
+                    "state TEXT NOT NULL)"
+                )
+                row = db.execute(
+                    "SELECT client_id, state FROM pacifica_stop_attempts "
+                    "WHERE attempt_key = ?",
+                    (key,),
+                ).fetchone()
+                if row and row[1] == "pending":
+                    return str(row[0]), False
+                cid = str(uuid.uuid4())
+                db.execute(
+                    "INSERT INTO pacifica_stop_attempts VALUES (?, ?, 'pending') "
+                    "ON CONFLICT(attempt_key) DO UPDATE SET "
+                    "client_id=excluded.client_id, state='pending'",
+                    (key, cid),
+                )
+            return cid, True
+
+    def _finish_stop_attempt(self, key: str, cid: str, state: str) -> None:
+        """Persist only confirmed acceptance/rejection; unknown remains pending."""
+        with closing(sqlite3.connect(self._stop_journal_path(), timeout=10)) as db:
+            with db:
+                db.execute(
+                    "UPDATE pacifica_stop_attempts SET state=? "
+                    "WHERE attempt_key=? AND client_id=?",
+                    (state, key, cid),
+                )
+
+    def amend_stop(
+        self,
+        symbol: str,
+        side: Any,
+        new_stop_price: float,
+        entry_order_id: Optional[str] = None,
+        stop_id: Optional[str] = None,
+    ) -> OrderResult:
+        """Create and verify replacement protection before removing the old stop."""
+        with self._stop_lock:
+            return self._amend_stop(symbol, side, new_stop_price, stop_id)
+
+    def _amend_stop(
+        self,
+        symbol: str,
+        side: Any,
+        new_stop_price: float,
+        stop_id: Optional[str],
+    ) -> OrderResult:
+        """Replace protection under the same lock used by the repair installer."""
+        try:
+            close = "sell" if self._stop_side(side) == "buy" else "buy"
+            rows = [r for r in self.list_stops(symbol) if r["side"] == close]
+            old = next((r for r in rows if r["tpsl_id"] == str(stop_id)), None)
+            if old is None and stop_id is None and len(rows) == 1:
+                old = rows[0]
+            if old is None:
+                return OrderResult(status="unknown", error="Existing stop not verified")
+            result = self.install_stop(symbol, side, 1.0, new_stop_price)
+            if not result.accepted or result.order_id == old["tpsl_id"]:
+                return result
+            verified = self.list_stops(symbol)
+            if not any(r["tpsl_id"] == result.order_id for r in verified):
+                return OrderResult(
+                    status="unknown", error="Replacement stop not visible"
+                )
+            cancelled = self.cancel_stop(old["symbol"], old["tpsl_id"])
+            if not cancelled.accepted:
+                result.error = (
+                    "Replacement installed; old stop cancellation unconfirmed"
+                )
+                result.raw["old_stop_id"] = old["tpsl_id"]
+            return result
+        except Exception as exc:  # noqa: BLE001 - keep old protection on any failure
+            return OrderResult(
+                status="unknown",
+                error=f"Stop amendment unavailable: {type(exc).__name__}",
+            )
+
+    def cancel_stop(self, symbol: str, stop_id: str) -> OrderResult:
+        """Cancel through the stop endpoint; success requires a venue confirmation."""
+        try:
+            ack = self.rest_client.cancel_protective_stop(symbol, stop_id)
+            if isinstance(ack, dict) and ack.get("success") is True:
+                return OrderResult(
+                    success=True,
+                    accepted=True,
+                    order_id=str(stop_id),
+                    status="accepted",
+                    raw=ack,
+                )
+            return OrderResult(
+                status="rejected"
+                if isinstance(ack, dict) and ack.get("success") is False
+                else "unknown",
+                error="Stop cancellation not explicitly acknowledged",
+                raw=ack if isinstance(ack, dict) else {},
+            )
+        except Exception as exc:  # noqa: BLE001 - cancellation may have been accepted
+            return OrderResult(
+                status="unknown",
+                error=f"Stop cancellation ambiguous: {type(exc).__name__}",
+            )
 
     def get_order_fill(
         self,
@@ -321,9 +622,10 @@ class PacificaExchange(ExchangeClient):
     ) -> Dict[str, Any]:
         """Cancel all open orders, optionally for one symbol (passthrough).
 
-        ``include_stops`` is accepted for interface parity and ignored:
-        Pacifica holds no venue-side stops to cancel.
+        Reduce-only orders are preserved unless explicitly requested otherwise.
         """
+        if include_stops:
+            return self.rest_client.cancel_all_orders(symbol=symbol, include_stops=True)
         return self.rest_client.cancel_all_orders(symbol=symbol)
 
     def get_positions(self) -> List[ExchangePosition]:

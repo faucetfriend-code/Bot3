@@ -277,7 +277,7 @@ class OptimizationAdapter:
             regime: Target state (enum value or name, case-insensitive)
 
         Returns:
-            List of closed-trade dicts (pnl != 0) matching the state
+            List of closing-fill dicts matching the state, including breakevens.
         """
         target = str(getattr(regime, "value", regime)).strip().lower()
         direction = None
@@ -295,7 +295,7 @@ class OptimizationAdapter:
         return [
             t
             for t in result.trade_log
-            if t.get("pnl", 0) != 0
+            if t.get("closed_qty", abs(t.get("pnl", 0))) > 0
             and str(t.get("regime", "")).strip().lower() == target
             and _direction_matches(t)
         ]
@@ -344,7 +344,7 @@ class OptimizationAdapter:
         if not trades:
             raise ValueError("Cannot compute objective from empty trade list")
 
-        pnls = [float(t.get("pnl", 0)) for t in trades]
+        pnls = [float(t.get("net_pnl", t.get("pnl", 0))) for t in trades]
         n = len(pnls)
         total_pnl = sum(pnls)
         total_return_pct = total_pnl / initial_capital * 100

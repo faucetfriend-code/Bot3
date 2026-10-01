@@ -44,6 +44,8 @@ class SimulatedOrder:
     fill_price: float = 0.0
     fee: float = 0.0
     timestamp: str = ""
+    reduce_only: bool = False
+    parent_order_id: Optional[str] = None
 
 
 @dataclass
@@ -57,6 +59,7 @@ class SimulatedPosition:
     funding_paid: float = 0.0
     entry_regime: str = ""  # Confirmed regime at position open (P4)
     entry_direction: str = ""  # Directional-bias state at open (bull/bear/neutral)
+    entry_fees: float = 0.0  # Unallocated fees for the remaining position.
 
 
 class SimulatedExchange:
@@ -240,6 +243,8 @@ class SimulatedExchange:
         quantity: str,
         order_type: str = "market",
         price: Optional[float] = None,
+        reduce_only: bool = False,
+        parent_order_id: Optional[str] = None,
     ) -> Dict:
         self._order_counter += 1
         order_id = f"bt_{self._order_counter:06d}"
@@ -253,13 +258,16 @@ class SimulatedExchange:
             quantity=qty,
             order_type=order_type,
             timestamp=self._current_timestamp,
+            reduce_only=reduce_only,
+            parent_order_id=parent_order_id,
         )
         self._orders[order_id] = order
 
         if order_type == "market":
             self._fill_order(order, is_taker=True)
 
-        return {"order_id": order_id, "status": "success"}
+        status = "rejected" if order.status == "cancelled" else "success"
+        return {"order_id": order_id, "status": status}
 
     def cancel_order(self, order_id: str) -> Dict:
         if order_id in self._orders:
@@ -424,7 +432,24 @@ class SimulatedExchange:
             bar_notional=self._bar_notional,
         )
 
-    def _fill_order(self, order: SimulatedOrder, is_taker: bool) -> None:
+    def _fill_order(
+        self, order: SimulatedOrder, is_taker: bool, bar_open: Optional[float] = None
+    ) -> None:
+        if order.parent_order_id is not None:
+            parent = self._orders.get(order.parent_order_id)
+            if parent is None or parent.status == "cancelled":
+                order.status = "cancelled"
+                return
+            if parent.status != "filled":
+                return
+        prior_pos = self._positions.get(order.symbol)
+        fill_side = "long" if order.side == "bid" else "short"
+        qty = order.quantity
+        if order.reduce_only:
+            if prior_pos is None or prior_pos.side == fill_side:
+                order.status = "cancelled"
+                return
+            qty = min(qty, prior_pos.quantity)
         direction = 1 if order.side == "bid" else -1
         if order.order_type == "market":
             # Market orders fill at current price with slippage (taker)
@@ -433,17 +458,39 @@ class SimulatedExchange:
             fill_price = self._current_price + slippage
         elif order.order_type == "stop":
             # Stop orders fill at the stop price with adverse slippage (taker)
-            slippage_pct = self._slippage_pct_for(order, order.price)
-            fill_price = order.price * (1 + slippage_pct * direction)
+            stop_price = order.price
+            if bar_open is not None:
+                stop_price = (
+                    max(stop_price, bar_open) if direction == 1
+                    else min(stop_price, bar_open)
+                )
+            slippage_pct = self._slippage_pct_for(order, stop_price)
+            fill_price = stop_price * (1 + slippage_pct * direction)
         else:
             # Limit orders fill at the limit price - no adverse slippage.
             fill_price = order.price
         role = LiquidityRole.TAKER if is_taker else LiquidityRole.MAKER
         fee_pct = self.costs.fee_pct(order.symbol, role)
-        fee = fill_price * order.quantity * fee_pct
+        fee = fill_price * qty * fee_pct
+
+        # Preflight the entire fill before mutating positions or cash. A flip
+        # can use released collateral and realised PnL, but must fund its fee.
+        available = self.balance
+        opening_qty = qty
+        close_qty = 0.0
+        entry_fees_closed = 0.0
+        if prior_pos is not None and prior_pos.side != fill_side:
+            close_qty = min(qty, prior_pos.quantity)
+            entry_fees_closed = prior_pos.entry_fees * close_qty / prior_pos.quantity
+            available += close_qty * prior_pos.entry_price
+            available += self._calculate_pnl(prior_pos, fill_price, close_qty)
+            opening_qty -= close_qty
+        if opening_qty > 0 and opening_qty * fill_price + fee > available:
+            order.status = "cancelled"
+            return
 
         order.fill_price = fill_price
-        order.filled_qty = order.quantity
+        order.filled_qty = qty
         order.fee = fee
         order.status = "filled"
 
@@ -462,11 +509,19 @@ class SimulatedExchange:
             direction_tag = self._current_direction
 
         realised_pnl = self._open_or_add_position(
-            symbol, fill_side, order.quantity, fill_price
+            symbol, fill_side, qty, fill_price
         )
+
+        position_after = self._positions.get(symbol)
+        closing_fee = fee * close_qty / qty if qty else 0.0
+        if position_after is not None:
+            if position_after is prior_pos:
+                position_after.entry_fees -= entry_fees_closed
+            position_after.entry_fees += fee - closing_fee
 
         if order.status == "filled":  # may have been cancelled by balance guard
             self.balance -= fee
+            self._update_unrealised_pnl()
             self._log_trade(
                 order,
                 fill_price,
@@ -475,6 +530,8 @@ class SimulatedExchange:
                 regime_tag,
                 direction_tag,
                 role.value,
+                closed_qty=close_qty,
+                net_pnl=realised_pnl - entry_fees_closed - closing_fee,
             )
 
     def _open_or_add_position(
@@ -484,9 +541,7 @@ class SimulatedExchange:
         Opens, adds to, or closes a position.
         Returns realised PnL (0.0 for opens/adds, non-zero for full/partial closes).
 
-        Fix 1 (balance guard): New positions and position additions check that
-        sufficient cash is available before proceeding. Insufficient-balance
-        orders are rejected and the SimulatedOrder is marked 'cancelled'.
+        The caller preflights affordability including fees before any mutation.
         """
         opposite = "short" if side == "long" else "long"
         existing = self._positions.get(symbol)
@@ -587,9 +642,22 @@ class SimulatedExchange:
 
         # Collect all orders that would trigger this candle
         triggered = []
+        deferred_stops = []
         for order in list(self._orders.values()):
             if order.status != "open":
                 continue
+            # Defer a resting entry's stops until the entry has been processed.
+            # Its TP waits until the next bar because OHLC cannot establish
+            # whether the profitable touch followed the entry.
+            if order.parent_order_id is not None:
+                parent = self._orders.get(order.parent_order_id)
+                if parent is None or parent.status == "cancelled":
+                    order.status = "cancelled"
+                    continue
+                if parent.status != "filled":
+                    if order.order_type == "stop":
+                        deferred_stops.append(order)
+                    continue
             if order.order_type == "stop":
                 if order.side == "ask" and low <= order.price:
                     triggered.append((order, True))
@@ -609,7 +677,20 @@ class SimulatedExchange:
 
         for order, is_taker in triggered:
             if order.status == "open":  # May have been cancelled by OCO
-                self._fill_order(order, is_taker=is_taker)
+                self._fill_order(
+                    order, is_taker=is_taker, bar_open=float(candle["open"])
+                )
+
+        # Conservative intrabar rule: a newly filled entry pays any touched
+        # protective stop in this bar. The stop was not active at the open, so
+        # do not use a pre-entry gap price for this newly activated protection.
+        for order in deferred_stops:
+            if order.status != "open":
+                continue
+            if (order.side == "ask" and low <= order.price) or (
+                order.side == "bid" and high >= order.price
+            ):
+                self._fill_order(order, is_taker=True)
 
     def _update_unrealised_pnl(self) -> None:
         for pos in self._positions.values():
@@ -679,12 +760,16 @@ class SimulatedExchange:
         regime: str = "",
         direction: str = "",
         role: str = "",
+        closed_qty: float = 0.0,
+        net_pnl: float = 0.0,
     ) -> None:
         """
         Fix 2 — PnL tracking:
             Records realised_pnl per fill. For opening trades pnl=0;
             for closing trades pnl reflects the actual profit/loss.
-            PerformanceTracker uses this field for win_rate and profit_factor.
+            closed_qty identifies closes even at a gross breakeven. net_pnl
+            subtracts allocated entry and closing fees for performance metrics;
+            funding remains a separate account cash flow.
 
         Fix 3 — Strategy attribution:
             Records _current_strategy (set by engine before place_order) so
@@ -712,10 +797,12 @@ class SimulatedExchange:
                 "timestamp": self._current_timestamp,
                 "symbol": order.symbol,
                 "side": order.side,
-                "quantity": order.quantity,
+                "quantity": order.filled_qty,
                 "fill_price": fill_price,
                 "fee": fee,
                 "pnl": round(realised_pnl, 6),
+                "closed_qty": closed_qty,
+                "net_pnl": net_pnl,
                 "balance_after": round(self.balance, 4),
                 "strategy": self._current_strategy,
                 "regime": regime,

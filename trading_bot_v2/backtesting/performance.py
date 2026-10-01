@@ -44,7 +44,7 @@ class BacktestResult:
 
     # Execution
     total_trades: int = 0  # total fills (opens + closes)
-    closed_trades: int = 0  # completed round-trips with realised PnL
+    closed_trades: int = 0  # closing fills, including partial closes and breakevens
     avg_fee_per_trade: float = 0.0
     total_fees: float = 0.0
     total_funding_paid: float = 0.0
@@ -157,32 +157,42 @@ class PerformanceTracker:
         except Exception:
             pass
 
-        # Sharpe (annualised, using hourly snapshots)
+        # Arithmetic-return drift and residual variance per elapsed hour.
+        # For unequal intervals, E[r_i] = drift * hours_i and variance scales
+        # with hours_i. Equal spacing reduces exactly to mean/std * sqrt(N/y).
+        # Preserve the historical conditional-downside Sortino convention.
         if len(equity_series) > 2:
-            returns = [
-                (equity_series[i] - equity_series[i - 1]) / equity_series[i - 1]
-                for i in range(1, len(equity_series))
-            ]
-            mean_r = sum(returns) / len(returns)
-            std_r = (sum((r - mean_r) ** 2 for r in returns) / len(returns)) ** 0.5
-            result.sharpe_ratio = (
-                (mean_r / std_r * math.sqrt(8760)) if std_r > 0 else 0.0
-            )
-
-            # Sortino (downside deviation only)
-            downside = [r for r in returns if r < 0]
-            if downside:
-                downside_std = (sum(r**2 for r in downside) / len(downside)) ** 0.5
-                result.sortino_ratio = (
-                    (mean_r / downside_std * math.sqrt(8760))
-                    if downside_std > 0
-                    else 0.0
-                )
+            intervals = []
+            for previous, current in zip(self._snapshots, self._snapshots[1:]):
+                hours = (
+                    datetime.fromisoformat(current["timestamp"])
+                    - datetime.fromisoformat(previous["timestamp"])
+                ).total_seconds() / 3600.0
+                # Percentage returns after zero/negative equity are undefined.
+                if hours > 0 and previous["equity"] > 0:
+                    change = current["equity"] / previous["equity"] - 1
+                    intervals.append((change, hours))
+            if len(intervals) >= 2:
+                elapsed = sum(hours for _, hours in intervals)
+                drift = sum(change for change, _ in intervals) / elapsed
+                variance = sum(
+                    (change - drift * hours) ** 2 for change, hours in intervals
+                ) / elapsed
+                if variance > 0:
+                    result.sharpe_ratio = drift / math.sqrt(variance) * math.sqrt(8760)
+                downside = [(r, hours) for r, hours in intervals if r < 0]
+                if downside:
+                    downside_variance = sum(r**2 for r, _ in downside) / sum(
+                        hours for _, hours in downside
+                    )
+                    result.sortino_ratio = (
+                        drift / math.sqrt(downside_variance) * math.sqrt(8760)
+                    )
 
         # Max drawdown
         peak = self.initial_capital
         max_dd = 0.0
-        for eq in equity_series:
+        for eq in [*equity_series, final_equity]:
             if eq > peak:
                 peak = eq
             dd = (peak - eq) / peak
@@ -195,12 +205,16 @@ class PerformanceTracker:
             else 0.0
         )
 
-        # Win/loss stats — only count closing fills (pnl != 0); opening fills have pnl=0
-        closed_trades = [t for t in trade_log if t.get("pnl", 0) != 0]
-        wins = [t for t in closed_trades if t.get("pnl", 0) > 0]
-        losses = [t for t in closed_trades if t.get("pnl", 0) < 0]
-        gross_profit = sum(t.get("pnl", 0) for t in wins)
-        gross_loss = abs(sum(t.get("pnl", 0) for t in losses))
+        # Win/loss stats count closing fills and use fee-adjusted realised PnL.
+        # New logs identify closes explicitly, including price breakevens.
+        # Keep gross-PnL fallback for archived logs without fee allocation.
+        closed_trades = [
+            t for t in trade_log if t.get("closed_qty", abs(t.get("pnl", 0))) > 0
+        ]
+        wins = [t for t in closed_trades if t.get("net_pnl", t.get("pnl", 0)) > 0]
+        losses = [t for t in closed_trades if t.get("net_pnl", t.get("pnl", 0)) < 0]
+        gross_profit = sum(t.get("net_pnl", t.get("pnl", 0)) for t in wins)
+        gross_loss = abs(sum(t.get("net_pnl", t.get("pnl", 0)) for t in losses))
         result.closed_trades = len(closed_trades)
         result.win_rate_pct = len(wins) / max(1, len(closed_trades)) * 100
         result.profit_factor = (
@@ -216,8 +230,8 @@ class PerformanceTracker:
                 regime, {"closed_trades": 0, "pnl": 0.0, "wins": 0}
             )
             cell["closed_trades"] += 1
-            cell["pnl"] += t.get("pnl", 0)
-            if t.get("pnl", 0) > 0:
+            cell["pnl"] += t.get("net_pnl", t.get("pnl", 0))
+            if t.get("net_pnl", t.get("pnl", 0)) > 0:
                 cell["wins"] += 1
         result.by_regime = by_regime
 

@@ -1,0 +1,495 @@
+{
+  "strategy": "vwap_pullback",
+  "symbol": "BTC-USDC",
+  "states": [
+    "vol_low:trend",
+    "vol_low:neutral",
+    "vol_mid:trend",
+    "vol_mid:neutral",
+    "vol_high:trend",
+    "vol_high:neutral"
+  ],
+  "trials_per_fold": 25,
+  "objective": "sharpe_ratio",
+  "folds": [
+    {
+      "train": [
+        "2020-07-01",
+        "2021-07-01"
+      ],
+      "test": [
+        "2021-07-01",
+        "2022-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.2121775968257621,
+            "extension_min_sd": 1.6839189926772327,
+            "atr_stop_buffer": 0.353226006577642,
+            "tp_rr": 1.8957870523518103,
+            "time_exit_hours": 45,
+            "rvol_min": 0.587228296747359,
+            "cooldown_hours": 3.7266520315180927
+          },
+          "train_score": 3.3243163621206064,
+          "train_n": 148,
+          "test_tuned": {
+            "n": 174,
+            "score": 6.90284888530234,
+            "pnl": 81.3024
+          },
+          "test_default": {
+            "n": 186,
+            "score": 6.116173996219985,
+            "pnl": 86.5462
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.3325521130130104,
+            "extension_min_sd": 1.7777076933834755,
+            "atr_stop_buffer": 0.5674566683711116,
+            "tp_rr": 1.6706847719652342,
+            "time_exit_hours": 8,
+            "rvol_min": 0.01799423377699627,
+            "cooldown_hours": 3.9722042134604565
+          },
+          "train_score": 4.946642360483823,
+          "train_n": 232,
+          "test_tuned": {
+            "n": 103,
+            "score": 4.063002943572635,
+            "pnl": 44.1742
+          },
+          "test_default": {
+            "n": 106,
+            "score": 3.33028671072099,
+            "pnl": 42.2659
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.2668088018810296,
+            "extension_min_sd": 1.5804867401632372,
+            "atr_stop_buffer": 0.2501143748173449,
+            "tp_rr": 1.6046651452636795,
+            "time_exit_hours": 14,
+            "rvol_min": 0.1846771895375956,
+            "cooldown_hours": 3.1175612682660256
+          },
+          "train_score": 5.049765098970596,
+          "train_n": 461,
+          "test_tuned": {
+            "n": 117,
+            "score": 3.4255864040624,
+            "pnl": 32.8651
+          },
+          "test_default": {
+            "n": 98,
+            "score": 2.410053604345682,
+            "pnl": 31.592
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2021-07-01",
+        "2022-07-01"
+      ],
+      "test": [
+        "2022-07-01",
+        "2023-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.48149689077794666,
+            "extension_min_sd": 1.3163122402221532,
+            "atr_stop_buffer": 0.3320949222750248,
+            "tp_rr": 1.7326848033500408,
+            "time_exit_hours": 42,
+            "rvol_min": 0.8125500860959016,
+            "cooldown_hours": 2.1632141953690978
+          },
+          "train_score": 6.791942072555453,
+          "train_n": 422,
+          "test_tuned": {
+            "n": 295,
+            "score": 3.5086210871190735,
+            "pnl": 46.6945
+          },
+          "test_default": {
+            "n": 226,
+            "score": 3.1815659966435446,
+            "pnl": 43.525
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.48149689077794666,
+            "extension_min_sd": 1.3163122402221532,
+            "atr_stop_buffer": 0.3320949222750248,
+            "tp_rr": 1.7326848033500408,
+            "time_exit_hours": 42,
+            "rvol_min": 0.8125500860959016,
+            "cooldown_hours": 2.1632141953690978
+          },
+          "train_score": 4.67843739446539,
+          "train_n": 266,
+          "test_tuned": {
+            "n": 128,
+            "score": 6.491957387663601,
+            "pnl": 54.7529
+          },
+          "test_default": {
+            "n": 102,
+            "score": 4.603450499629386,
+            "pnl": 44.8438
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.49886115846687845,
+            "extension_min_sd": 1.4528758899798424,
+            "atr_stop_buffer": 0.27069411493112194,
+            "tp_rr": 2.4546324788376297,
+            "time_exit_hours": 48,
+            "rvol_min": 0.8687067843048613,
+            "cooldown_hours": 2.185501515685085
+          },
+          "train_score": 4.411028426887838,
+          "train_n": 248,
+          "test_tuned": {
+            "n": 44,
+            "score": 4.310277623243099,
+            "pnl": 42.9513
+          },
+          "test_default": {
+            "n": 44,
+            "score": 2.1083703925147796,
+            "pnl": 21.2242
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2022-07-01",
+        "2023-07-01"
+      ],
+      "test": [
+        "2023-07-01",
+        "2024-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.10513863181451341,
+            "extension_min_sd": 0.8643860197807344,
+            "atr_stop_buffer": 0.9786170733305015,
+            "tp_rr": 2.4806480204193813,
+            "time_exit_hours": 8,
+            "rvol_min": 0.9849705104524455,
+            "cooldown_hours": 7.027427217877186
+          },
+          "train_score": 4.429782336474832,
+          "train_n": 199,
+          "test_tuned": {
+            "n": 77,
+            "score": 2.0415416484905298,
+            "pnl": 9.9434
+          },
+          "test_default": {
+            "n": 135,
+            "score": 4.042881184025096,
+            "pnl": 16.5234
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.3772551673251986,
+            "extension_min_sd": 1.1606805765061092,
+            "atr_stop_buffer": 0.40686773847496327,
+            "tp_rr": 2.0892980360636892,
+            "time_exit_hours": 39,
+            "rvol_min": 0.6127270647523595,
+            "cooldown_hours": 3.3317473035930885
+          },
+          "train_score": 4.733601869076019,
+          "train_n": 277,
+          "test_tuned": {
+            "n": 160,
+            "score": 1.8537245941790232,
+            "pnl": 9.9955
+          },
+          "test_default": {
+            "n": 145,
+            "score": 1.326012654749445,
+            "pnl": 7.1228
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.4519646723277407,
+            "extension_min_sd": 0.8083175038999569,
+            "atr_stop_buffer": 0.2792148417930187,
+            "tp_rr": 1.6968460963855745,
+            "time_exit_hours": 8,
+            "rvol_min": 1.0965298717199046,
+            "cooldown_hours": 5.8625981498615545
+          },
+          "train_score": 4.764580555930251,
+          "train_n": 118,
+          "test_tuned": {
+            "n": 86,
+            "score": 1.9801970211395448,
+            "pnl": 9.8323
+          },
+          "test_default": {
+            "n": 137,
+            "score": 3.7926309703329837,
+            "pnl": 30.2694
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2023-07-01",
+        "2024-07-01"
+      ],
+      "test": [
+        "2024-07-01",
+        "2025-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.32872862201605646,
+            "extension_min_sd": 1.4290321487620428,
+            "atr_stop_buffer": 1.1470723857270504,
+            "tp_rr": 2.037611027560778,
+            "time_exit_hours": 38,
+            "rvol_min": 0.9903100564909034,
+            "cooldown_hours": 5.39490648248412
+          },
+          "train_score": 5.457328550984352,
+          "train_n": 163,
+          "test_tuned": {
+            "n": 71,
+            "score": 2.7681556413246478,
+            "pnl": 24.3349
+          },
+          "test_default": {
+            "n": 115,
+            "score": 3.5401014339267074,
+            "pnl": 23.1262
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.35692940139296647,
+            "extension_min_sd": 1.9739811946498325,
+            "atr_stop_buffer": 0.9780831878010352,
+            "tp_rr": 1.8781537572392557,
+            "time_exit_hours": 41,
+            "rvol_min": 0.8995339046332308,
+            "cooldown_hours": 5.928621278317077
+          },
+          "train_score": 3.3721741102367666,
+          "train_n": 147,
+          "test_tuned": {
+            "n": 84,
+            "score": 5.023301527116612,
+            "pnl": 51.6968
+          },
+          "test_default": {
+            "n": 141,
+            "score": 6.917577526043544,
+            "pnl": 56.8331
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.2784903696487118,
+            "extension_min_sd": 1.5014050628973634,
+            "atr_stop_buffer": 0.998303380968013,
+            "tp_rr": 1.627457113734215,
+            "time_exit_hours": 40,
+            "rvol_min": 0.7538650936631353,
+            "cooldown_hours": 6.056821965573422
+          },
+          "train_score": 4.545332925391929,
+          "train_n": 187,
+          "test_tuned": {
+            "n": 78,
+            "score": 4.055063671422415,
+            "pnl": 59.6485
+          },
+          "test_default": {
+            "n": 120,
+            "score": 5.799945485128255,
+            "pnl": 76.5281
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2024-07-01",
+        "2025-07-01"
+      ],
+      "test": [
+        "2025-07-01",
+        "2026-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "band_sd": 0.41439380024762135,
+            "extension_min_sd": 1.3540002419343606,
+            "atr_stop_buffer": 0.6303423406473301,
+            "tp_rr": 1.7505099920635683,
+            "time_exit_hours": 12,
+            "rvol_min": 0.9238460176120524,
+            "cooldown_hours": 7.974941486777314
+          },
+          "train_score": 4.998323310503098,
+          "train_n": 179,
+          "test_tuned": {
+            "n": 49,
+            "score": 4.637224091581577,
+            "pnl": 13.7527
+          },
+          "test_default": {
+            "n": 77,
+            "score": 5.120760000193274,
+            "pnl": 18.6001
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "params": {
+            "band_sd": 0.24463493472416475,
+            "extension_min_sd": 1.67798437623815,
+            "atr_stop_buffer": 0.38457529029276094,
+            "tp_rr": 2.3693443242618457,
+            "time_exit_hours": 17,
+            "rvol_min": 1.1468546833834823,
+            "cooldown_hours": 5.862191159233812
+          },
+          "train_score": 5.957534730570177,
+          "train_n": 132,
+          "test_tuned": {
+            "n": 67,
+            "score": 3.5322079723321496,
+            "pnl": 18.5526
+          },
+          "test_default": {
+            "n": 127,
+            "score": 6.460265760249529,
+            "pnl": 35.1219
+          }
+        },
+        "vol_mid:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:trend": {
+          "params": {
+            "band_sd": 0.4650507054815133,
+            "extension_min_sd": 1.737216080657788,
+            "atr_stop_buffer": 0.34420273217732267,
+            "tp_rr": 1.7220968369276182,
+            "time_exit_hours": 9,
+            "rvol_min": 1.0927166970816138,
+            "cooldown_hours": 6.776856325136025
+          },
+          "train_score": 6.217724964637382,
+          "train_n": 118,
+          "test_tuned": {
+            "n": 90,
+            "score": 6.539780743938127,
+            "pnl": 45.0118
+          },
+          "test_default": {
+            "n": 151,
+            "score": 5.280555132186685,
+            "pnl": 51.2789
+          }
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    }
+  ],
+  "summary": {
+    "vol_low:trend": {
+      "folds": 5,
+      "tuned": 3.9716782707636336,
+      "default": 4.400296522201721,
+      "edge": -0.4286182514380874
+    },
+    "vol_low:neutral": {
+      "folds": 0
+    },
+    "vol_mid:trend": {
+      "folds": 5,
+      "tuned": 4.192838884972804,
+      "default": 4.527518630278579,
+      "edge": -0.3346797453057748
+    },
+    "vol_mid:neutral": {
+      "folds": 0
+    },
+    "vol_high:trend": {
+      "folds": 5,
+      "tuned": 4.062181092761117,
+      "default": 3.878311116901677,
+      "edge": 0.18386997585943998
+    },
+    "vol_high:neutral": {
+      "folds": 0
+    }
+  }
+}

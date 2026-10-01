@@ -16,6 +16,7 @@ No network, no live database (conftest isolates DATABASE_PATH).
 """
 
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, patch
@@ -48,6 +49,14 @@ STOP_CAPS = ExchangeCapabilities(
     min_order_size_source="x",
     supports_venue_stops=True,
 )
+
+
+class UnsupportedExchange(PacificaExchange):
+    """Keep local fallback coverage independent of supported venues."""
+
+    @classmethod
+    def capabilities(cls):
+        return replace(STOP_CAPS, supports_venue_stops=False)
 
 
 def _accepted(order_id: str = "t-new", method: str = "") -> OrderResult:
@@ -307,7 +316,7 @@ class TestRepairSweep:
 
     def test_unsupported_exchange_is_a_no_op(self):
         client = FakeClient([{"symbol": "BTC", "side": "long", "quantity": 1.0}])
-        bot = _repair_bot(PacificaExchange(rest_client=client), client, FakeDb([]))
+        bot = _repair_bot(UnsupportedExchange(rest_client=client), client, FakeDb([]))
         summary = bot._repair_venue_stops("test")
         assert summary.get("unsupported") is True and client.calls == []
 
@@ -475,7 +484,7 @@ class TestTrailingCoordination:
             FakeClient([]),
             FakeRiskManager([]),
             None,
-            venue_exchange_resolver=lambda: PacificaExchange(
+            venue_exchange_resolver=lambda: UnsupportedExchange(
                 rest_client=FakeClient([])
             ),
         )
@@ -523,7 +532,7 @@ def _enforce_bot(rows, exchange_positions, price: float, risk_manager=None):
     client = FakeClient(exchange_positions)
     bot = SimpleNamespace(
         client=client,
-        exchange=PacificaExchange(rest_client=client),
+        exchange=UnsupportedExchange(rest_client=client),
         db=FakeDb(rows),
         risk_manager=risk_manager,
         _protection_records={},

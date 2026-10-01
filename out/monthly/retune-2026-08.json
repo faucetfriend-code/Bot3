@@ -1,0 +1,469 @@
+{
+  "month": "2026-08",
+  "window": {
+    "start": "2026-08-01",
+    "end": "2026-09-01"
+  },
+  "generated_by": "trading_bot_v2.optimization.monthly_retune",
+  "refresh": {
+    "cmd": "C:\\Python314\\python.exe -m trading_bot_v2.data_manager --symbols BTC-USDC,ETH-USDC,SUI-USDC --timeframes 1m,5m,15m,1h,4h --update --funding",
+    "returncode": 0,
+    "seconds": 449.0,
+    "log": "G:\\Candle Data\\Temp Test holding\\monthly-refresh-2026-08.log",
+    "ok": true
+  },
+  "scorecard": [
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "BTC-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 4,
+      "profit_factor": 1.549,
+      "net_pnl": 2.03,
+      "return_pct": 0.02,
+      "win_rate_pct": 50.0,
+      "max_drawdown_pct": 0.06,
+      "fees": 0.54
+    },
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "ETH-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 5,
+      "profit_factor": 1.345,
+      "net_pnl": 2.8,
+      "return_pct": 0.03,
+      "win_rate_pct": 40.0,
+      "max_drawdown_pct": 0.1,
+      "fees": 0.7
+    },
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "SUI-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 1,
+      "profit_factor": 0.0,
+      "net_pnl": -12.6,
+      "return_pct": -0.13,
+      "win_rate_pct": 0.0,
+      "max_drawdown_pct": 0.14,
+      "fees": 0.16
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "BTC-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 61,
+      "profit_factor": 2.206,
+      "net_pnl": 8.57,
+      "return_pct": 0.09,
+      "win_rate_pct": 57.4,
+      "max_drawdown_pct": 0.07,
+      "fees": 7.76
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "ETH-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 66,
+      "profit_factor": 1.423,
+      "net_pnl": 0.48,
+      "return_pct": 0.0,
+      "win_rate_pct": 53.0,
+      "max_drawdown_pct": 0.09,
+      "fees": 8.51
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "SUI-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 73,
+      "profit_factor": 0.852,
+      "net_pnl": -17.95,
+      "return_pct": -0.18,
+      "win_rate_pct": 50.7,
+      "max_drawdown_pct": 0.3,
+      "fees": 9.46
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "BTC-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 7,
+      "profit_factor": 0.232,
+      "net_pnl": -2.89,
+      "return_pct": -0.03,
+      "win_rate_pct": 28.6,
+      "max_drawdown_pct": 0.05,
+      "fees": 1.1
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "ETH-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 15,
+      "profit_factor": 1.187,
+      "net_pnl": 1.95,
+      "return_pct": 0.02,
+      "win_rate_pct": 53.3,
+      "max_drawdown_pct": 0.06,
+      "fees": 2.08
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "SUI-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 17,
+      "profit_factor": 1.1,
+      "net_pnl": -1.66,
+      "return_pct": -0.02,
+      "win_rate_pct": 58.8,
+      "max_drawdown_pct": 0.05,
+      "fees": 2.3
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "BTC-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 15,
+      "profit_factor": 1.539,
+      "net_pnl": 3.19,
+      "return_pct": 0.03,
+      "win_rate_pct": 66.7,
+      "max_drawdown_pct": 0.05,
+      "fees": 1.18
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "ETH-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 14,
+      "profit_factor": 1.12,
+      "net_pnl": 57.32,
+      "return_pct": 0.57,
+      "win_rate_pct": 64.3,
+      "max_drawdown_pct": 0.14,
+      "fees": 1.06
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "SUI-USDC",
+      "start": "2026-08-01",
+      "end": "2026-09-01",
+      "closed_trades": 35,
+      "profit_factor": 1.822,
+      "net_pnl": 16.41,
+      "return_pct": 0.16,
+      "win_rate_pct": 74.3,
+      "max_drawdown_pct": 0.08,
+      "fees": 2.61
+    }
+  ],
+  "retune": {
+    "cmd": "C:\\Python314\\python.exe -m trading_bot_v2.optimization.run_composite_tuning --strategy mean_reversion --symbol BTC-USDC --start 2023-09-01 --end 2026-09-01 --trials 25 --report out\\monthly\\composite_mean_reversion_2026-08.json --directional-gate enforce --log-level WARNING --baseline-params C:\\Users\\z_shi\\AppData\\Local\\Temp\\adopted-ebm8j6z3.json",
+    "returncode": 0,
+    "seconds": 3885.5,
+    "log": "G:\\Candle Data\\Temp Test holding\\monthly-retune-2026-08.log",
+    "ok": true,
+    "env_overrides": {
+      "REGIME_MODE": "volatility",
+      "BACKTEST_HISTORY_LOOKBACK": "100",
+      "REGIME_VOL_STRATEGIES_LOW": "MeanReversion",
+      "REGIME_VOL_WEIGHTS_LOW": "MeanReversion:1.0",
+      "REGIME_VOL_STRATEGIES_MID": "MeanReversion",
+      "REGIME_VOL_WEIGHTS_MID": "MeanReversion:1.0",
+      "REGIME_VOL_STRATEGIES_HIGH": "MeanReversion",
+      "REGIME_VOL_WEIGHTS_HIGH": "MeanReversion:1.0"
+    },
+    "window": "2023-09-01..2026-09-01",
+    "baseline_params": {
+      "vol_low:trend": {
+        "rsi_oversold": 32.7504,
+        "rsi_overbought": 62.3545,
+        "bb_std_dev": 2.7145,
+        "atr_stop_multiplier": 2.3388
+      },
+      "vol_mid:trend": {
+        "rsi_oversold": 32.7239,
+        "rsi_overbought": 63.8175,
+        "bb_std_dev": 2.4479,
+        "atr_stop_multiplier": 1.8305
+      }
+    }
+  },
+  "env_overrides": {
+    "REGIME_MODE": "volatility",
+    "BACKTEST_HISTORY_LOOKBACK": "100",
+    "REGIME_VOL_STRATEGIES_LOW": "MeanReversion",
+    "REGIME_VOL_WEIGHTS_LOW": "MeanReversion:1.0",
+    "REGIME_VOL_STRATEGIES_MID": "MeanReversion",
+    "REGIME_VOL_WEIGHTS_MID": "MeanReversion:1.0",
+    "REGIME_VOL_STRATEGIES_HIGH": "MeanReversion",
+    "REGIME_VOL_WEIGHTS_HIGH": "MeanReversion:1.0"
+  },
+  "comparison": {
+    "vol_low:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": 1.1638285675955868,
+        "default": 0.7525884886235508,
+        "edge": 0.41124007897203607,
+        "baseline_folds": 4,
+        "baseline": 1.585739536984376,
+        "baseline_tuned": 1.1638285675955868,
+        "edge_vs_baseline": -0.42191096938878925,
+        "median_folds": 3,
+        "median": 2.8806135809489697,
+        "median_default": 1.188850127349485,
+        "edge_median_vs_default": 1.6917634535994848,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": 2.8806135809489697,
+        "median_tuned": 1.3157299337991697,
+        "edge_median_vs_tuned": 1.5648836471498,
+        "median_baseline_folds": 3,
+        "median_on_baseline_folds": 2.8806135809489697,
+        "median_baseline": 2.17458962484547,
+        "edge_median_vs_baseline": 0.7060239561034996
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 35.1516,
+        "rsi_overbought": 68.8461,
+        "bb_std_dev": 2.8207,
+        "atr_stop_multiplier": 2.0484
+      },
+      "adopted_params": {
+        "rsi_oversold": 32.7504,
+        "rsi_overbought": 62.3545,
+        "bb_std_dev": 2.7145,
+        "atr_stop_multiplier": 2.3388
+      },
+      "adopted_oos": {
+        "score": 1.585739536984376,
+        "folds": 4,
+        "tuned_paired": 1.1638285675955868,
+        "edge_vs_adopted": -0.42191096938878925
+      },
+      "prequential_median_oos": {
+        "score": 2.8806135809489697,
+        "folds": 3,
+        "edge_vs_default": 1.6917634535994848,
+        "edge_vs_tuned": 1.5648836471498,
+        "edge_vs_adopted": 0.7060239561034996
+      },
+      "beats_default": true,
+      "beats_adopted": false,
+      "verdict": "no_change",
+      "median_drift_vs_adopted": {
+        "rsi_oversold": 2.4012,
+        "rsi_overbought": 6.4916,
+        "bb_std_dev": 0.1062,
+        "atr_stop_multiplier": -0.2904
+      }
+    },
+    "vol_low:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": 0.3350256347849313,
+        "default": -1.2010950116738888,
+        "edge": 1.5361206464588202,
+        "median_folds": 3,
+        "median": 0.042253694965755866,
+        "median_default": -1.6343276873892887,
+        "edge_median_vs_default": 1.6765813823550446,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": 0.042253694965755866,
+        "median_tuned": 0.19310474100156058,
+        "edge_median_vs_tuned": -0.1508510460358047
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 38.7928,
+        "rsi_overbought": 65.0296,
+        "bb_std_dev": 2.8033,
+        "atr_stop_multiplier": 1.5645
+      },
+      "adopted_params": null,
+      "adopted_oos": null,
+      "prequential_median_oos": {
+        "score": 0.042253694965755866,
+        "folds": 3,
+        "edge_vs_default": 1.6765813823550446,
+        "edge_vs_tuned": -0.1508510460358047,
+        "edge_vs_adopted": null
+      },
+      "beats_default": true,
+      "beats_adopted": null,
+      "verdict": "adopt_first_time"
+    },
+    "vol_mid:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": 2.2640917104750873,
+        "default": 1.9294430188007472,
+        "edge": 0.3346486916743401,
+        "baseline_folds": 4,
+        "baseline": 2.566158396326463,
+        "baseline_tuned": 2.2640917104750873,
+        "edge_vs_baseline": -0.30206668585137564,
+        "median_folds": 3,
+        "median": 2.558145180185978,
+        "median_default": 1.7195740860655284,
+        "edge_median_vs_default": 0.8385710941204494,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": 2.558145180185978,
+        "median_tuned": 2.3618516880521514,
+        "edge_median_vs_tuned": 0.1962934921338264,
+        "median_baseline_folds": 3,
+        "median_on_baseline_folds": 2.558145180185978,
+        "median_baseline": 2.221576780042902,
+        "edge_median_vs_baseline": 0.33656840014307576
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 35.2151,
+        "rsi_overbought": 62.14,
+        "bb_std_dev": 2.7686,
+        "atr_stop_multiplier": 1.9979
+      },
+      "adopted_params": {
+        "rsi_oversold": 32.7239,
+        "rsi_overbought": 63.8175,
+        "bb_std_dev": 2.4479,
+        "atr_stop_multiplier": 1.8305
+      },
+      "adopted_oos": {
+        "score": 2.566158396326463,
+        "folds": 4,
+        "tuned_paired": 2.2640917104750873,
+        "edge_vs_adopted": -0.30206668585137564
+      },
+      "prequential_median_oos": {
+        "score": 2.558145180185978,
+        "folds": 3,
+        "edge_vs_default": 0.8385710941204494,
+        "edge_vs_tuned": 0.1962934921338264,
+        "edge_vs_adopted": 0.33656840014307576
+      },
+      "beats_default": true,
+      "beats_adopted": false,
+      "verdict": "no_change",
+      "median_drift_vs_adopted": {
+        "rsi_oversold": 2.4912,
+        "rsi_overbought": -1.6775,
+        "bb_std_dev": 0.3207,
+        "atr_stop_multiplier": 0.1674
+      }
+    },
+    "vol_mid:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": -0.9501189440939,
+        "default": 0.33987905791983436,
+        "edge": -1.2899980020137343,
+        "median_folds": 3,
+        "median": -0.7435073978007902,
+        "median_default": 0.331279098109635,
+        "edge_median_vs_default": -1.0747864959104252,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": -0.7435073978007902,
+        "median_tuned": -1.5867112485066988,
+        "edge_median_vs_tuned": 0.8432038507059085
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 33.4052,
+        "rsi_overbought": 67.1312,
+        "bb_std_dev": 2.6477,
+        "atr_stop_multiplier": 2.1109
+      },
+      "adopted_params": null,
+      "adopted_oos": null,
+      "prequential_median_oos": {
+        "score": -0.7435073978007902,
+        "folds": 3,
+        "edge_vs_default": -1.0747864959104252,
+        "edge_vs_tuned": 0.8432038507059085,
+        "edge_vs_adopted": null
+      },
+      "beats_default": false,
+      "beats_adopted": null,
+      "verdict": "no_change"
+    },
+    "vol_high:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": 0.8743015287259389,
+        "default": 0.5841977071641072,
+        "edge": 0.2901038215618317,
+        "median_folds": 3,
+        "median": -0.5645308895428133,
+        "median_default": 0.4428397733654525,
+        "edge_median_vs_default": -1.0073706629082657,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": -0.5645308895428133,
+        "median_tuned": 0.7784384943597144,
+        "edge_median_vs_tuned": -1.3429693839025276
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 37.8569,
+        "rsi_overbought": 69.1006,
+        "bb_std_dev": 2.7517,
+        "atr_stop_multiplier": 1.7721
+      },
+      "adopted_params": null,
+      "adopted_oos": null,
+      "prequential_median_oos": {
+        "score": -0.5645308895428133,
+        "folds": 3,
+        "edge_vs_default": -1.0073706629082657,
+        "edge_vs_tuned": -1.3429693839025276,
+        "edge_vs_adopted": null
+      },
+      "beats_default": true,
+      "beats_adopted": null,
+      "verdict": "adopt_first_time"
+    },
+    "vol_high:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": -1.1835840509273414,
+        "default": -1.3292748025537269,
+        "edge": 0.14569075162638545,
+        "median_folds": 3,
+        "median": -0.8996516049719521,
+        "median_default": -1.5562534393138805,
+        "edge_median_vs_default": 0.6566018343419284,
+        "median_tuned_folds": 3,
+        "median_on_tuned_folds": -0.8996516049719521,
+        "median_tuned": -1.7583133986335213,
+        "edge_median_vs_tuned": 0.8586617936615693
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 31.4432,
+        "rsi_overbought": 66.6003,
+        "bb_std_dev": 2.7335,
+        "atr_stop_multiplier": 2.2189
+      },
+      "adopted_params": null,
+      "adopted_oos": null,
+      "prequential_median_oos": {
+        "score": -0.8996516049719521,
+        "folds": 3,
+        "edge_vs_default": 0.6566018343419284,
+        "edge_vs_tuned": 0.8586617936615693,
+        "edge_vs_adopted": null
+      },
+      "beats_default": true,
+      "beats_adopted": null,
+      "verdict": "adopt_first_time"
+    }
+  }
+}

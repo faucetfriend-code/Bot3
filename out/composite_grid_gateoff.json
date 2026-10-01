@@ -1,0 +1,672 @@
+{
+  "strategy": "grid_trading",
+  "symbol": "BTC-USDC",
+  "states": [
+    "vol_low:trend",
+    "vol_low:neutral",
+    "vol_mid:trend",
+    "vol_mid:neutral",
+    "vol_high:trend",
+    "vol_high:neutral"
+  ],
+  "trials_per_fold": 25,
+  "objective": "sharpe_ratio",
+  "folds": [
+    {
+      "train": [
+        "2020-07-01",
+        "2021-07-01"
+      ],
+      "test": [
+        "2021-07-01",
+        "2022-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "grid_levels": 7,
+            "grid_spacing_atr_multiplier": 0.7100691483349127,
+            "emergency_stop_loss_pct": 0.03957875444369551,
+            "adx_regime_threshold": 18.578385455459852,
+            "min_confidence": 0.4610821084076413
+          },
+          "train_score": 2.283641349556525,
+          "train_n": 36,
+          "test_tuned": {
+            "n": 44,
+            "score": 0.9251016329734183,
+            "pnl": 13.8966
+          },
+          "test_default": {
+            "n": 40,
+            "score": 0.8225086160880395,
+            "pnl": 11.315
+          }
+        },
+        "vol_low:neutral": {
+          "params": {
+            "grid_levels": 8,
+            "grid_spacing_atr_multiplier": 0.7542977515465478,
+            "emergency_stop_loss_pct": 0.044680707418683976,
+            "adx_regime_threshold": 17.877753385863485,
+            "min_confidence": 0.3825071430295694
+          },
+          "train_score": 0.9707306303361009,
+          "train_n": 31,
+          "test_tuned": {
+            "n": 17,
+            "score": 1.6119831629422097,
+            "pnl": 14.3121
+          },
+          "test_default": {
+            "n": 27,
+            "score": 1.8550113796352938,
+            "pnl": 19.8472
+          }
+        },
+        "vol_mid:trend": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.5890177061448185,
+            "emergency_stop_loss_pct": 0.05189317169269413,
+            "adx_regime_threshold": 21.683029378479503,
+            "min_confidence": 0.48536129474868794
+          },
+          "train_score": 1.4980647129167324,
+          "train_n": 55,
+          "test_tuned": {
+            "n": 22,
+            "score": 0.7669514616578942,
+            "pnl": 8.5921
+          },
+          "test_default": {
+            "n": 8,
+            "score": -1.8191387051433046,
+            "pnl": -12.16
+          }
+        },
+        "vol_mid:neutral": {
+          "params": {
+            "grid_levels": 5,
+            "grid_spacing_atr_multiplier": 0.43804075831738204,
+            "emergency_stop_loss_pct": 0.05284080589650042,
+            "adx_regime_threshold": 24.94625844294528,
+            "min_confidence": 0.4227641487714091
+          },
+          "train_score": 1.5560034747591587,
+          "train_n": 16,
+          "test_tuned": {
+            "n": 32,
+            "score": 3.4290822920654462,
+            "pnl": 30.356
+          },
+          "test_default": {
+            "n": 9,
+            "score": -1.2515504022305282,
+            "pnl": -9.7112
+          }
+        },
+        "vol_high:trend": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.5890177061448185,
+            "emergency_stop_loss_pct": 0.05189317169269413,
+            "adx_regime_threshold": 21.683029378479503,
+            "min_confidence": 0.48536129474868794
+          },
+          "train_score": 2.298243407212432,
+          "train_n": 58,
+          "test_tuned": {
+            "n": 19,
+            "score": 1.0392016881613342,
+            "pnl": 12.1692
+          },
+          "test_default": {
+            "n": 6,
+            "score": 20.004600531087284,
+            "pnl": 22.6487
+          }
+        },
+        "vol_high:neutral": {
+          "params": {
+            "grid_levels": 4,
+            "grid_spacing_atr_multiplier": 0.3449585411604422,
+            "emergency_stop_loss_pct": 0.057930671339614374,
+            "adx_regime_threshold": 20.08311986608836,
+            "min_confidence": 0.45029120512260823
+          },
+          "train_score": 1.8821187524747203,
+          "train_n": 40,
+          "test_tuned": {
+            "n": 17,
+            "score": 5.369679368708101,
+            "pnl": 24.2176
+          },
+          "test_default": {
+            "n": 1,
+            "score": 0.0,
+            "pnl": 3.0525
+          }
+        }
+      }
+    },
+    {
+      "train": [
+        "2021-07-01",
+        "2022-07-01"
+      ],
+      "test": [
+        "2022-07-01",
+        "2023-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "grid_levels": 7,
+            "grid_spacing_atr_multiplier": 0.31296311591394566,
+            "emergency_stop_loss_pct": 0.05748312389393546,
+            "adx_regime_threshold": 19.353223926182768,
+            "min_confidence": 0.45509195052187223
+          },
+          "train_score": 1.75877900030619,
+          "train_n": 128,
+          "test_tuned": {
+            "n": 17,
+            "score": -1.6105300373850078,
+            "pnl": -10.1331
+          },
+          "test_default": {
+            "n": 13,
+            "score": 1.962922032622342,
+            "pnl": 12.0086
+          }
+        },
+        "vol_low:neutral": {
+          "params": {
+            "grid_levels": 11,
+            "grid_spacing_atr_multiplier": 0.7269876463197444,
+            "emergency_stop_loss_pct": 0.05471184186909639,
+            "adx_regime_threshold": 23.465614853574678,
+            "min_confidence": 0.3699113692522652
+          },
+          "train_score": 1.9657154362999154,
+          "train_n": 24,
+          "test_tuned": {
+            "n": 19,
+            "score": -1.0675164826654204,
+            "pnl": -10.0034
+          },
+          "test_default": {
+            "n": 12,
+            "score": 0.3234522861720859,
+            "pnl": 2.2462
+          }
+        },
+        "vol_mid:trend": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.5051442984638721,
+            "emergency_stop_loss_pct": 0.04864956098566039,
+            "adx_regime_threshold": 17.269394862604823,
+            "min_confidence": 0.3536296726117036
+          },
+          "train_score": 1.3366427010969542,
+          "train_n": 22,
+          "test_tuned": {
+            "n": 10,
+            "score": 1.8555999929040354,
+            "pnl": 8.6055
+          },
+          "test_default": {
+            "n": 18,
+            "score": 0.35181976956831235,
+            "pnl": 3.3634
+          }
+        },
+        "vol_mid:neutral": {
+          "params": {
+            "grid_levels": 10,
+            "grid_spacing_atr_multiplier": 0.39311250568688205,
+            "emergency_stop_loss_pct": 0.03041001168017489,
+            "adx_regime_threshold": 21.680004766734353,
+            "min_confidence": 0.5125084145479675
+          },
+          "train_score": 1.8612881070665808,
+          "train_n": 54,
+          "test_tuned": {
+            "n": 25,
+            "score": -0.9197594232584055,
+            "pnl": -8.7443
+          },
+          "test_default": {
+            "n": 14,
+            "score": 0.09665680846821233,
+            "pnl": 0.7886
+          }
+        },
+        "vol_high:trend": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.5051442984638721,
+            "emergency_stop_loss_pct": 0.04864956098566039,
+            "adx_regime_threshold": 17.269394862604823,
+            "min_confidence": 0.3536296726117036
+          },
+          "train_score": 2.834474307658016,
+          "train_n": 28,
+          "test_tuned": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          },
+          "test_default": {
+            "n": 3,
+            "score": 3.4667986401351447,
+            "pnl": 6.1351
+          }
+        },
+        "vol_high:neutral": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.4385380522879844,
+            "emergency_stop_loss_pct": 0.03579780209788869,
+            "adx_regime_threshold": 15.360553101968662,
+            "min_confidence": 0.42657450164476923
+          },
+          "train_score": 24.270941143642144,
+          "train_n": 16,
+          "test_tuned": {
+            "n": 5,
+            "score": 28.394090637655903,
+            "pnl": 9.9594
+          },
+          "test_default": {
+            "n": 5,
+            "score": 2.043048266548685,
+            "pnl": 8.9742
+          }
+        }
+      }
+    },
+    {
+      "train": [
+        "2022-07-01",
+        "2023-07-01"
+      ],
+      "test": [
+        "2023-07-01",
+        "2024-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "grid_levels": 10,
+            "grid_spacing_atr_multiplier": 0.4187745281149996,
+            "emergency_stop_loss_pct": 0.030530184988405422,
+            "adx_regime_threshold": 15.71656866597125,
+            "min_confidence": 0.3642953789258293
+          },
+          "train_score": 1.9403798311419325,
+          "train_n": 10,
+          "test_tuned": {
+            "n": 8,
+            "score": 1.1833088397049973,
+            "pnl": 2.5381
+          },
+          "test_default": {
+            "n": 11,
+            "score": -0.08675998552341081,
+            "pnl": -0.2802
+          }
+        },
+        "vol_low:neutral": {
+          "params": {
+            "grid_levels": 4,
+            "grid_spacing_atr_multiplier": 0.626705451261768,
+            "emergency_stop_loss_pct": 0.05789203811942255,
+            "adx_regime_threshold": 18.61564763062578,
+            "min_confidence": 0.40626362620995793
+          },
+          "train_score": 1.4946118411189575,
+          "train_n": 19,
+          "test_tuned": {
+            "n": 4,
+            "score": -0.5608791805061132,
+            "pnl": -1.0992
+          },
+          "test_default": {
+            "n": 3,
+            "score": -1.944708603684692,
+            "pnl": -3.3157
+          }
+        },
+        "vol_mid:trend": {
+          "params": {
+            "grid_levels": 11,
+            "grid_spacing_atr_multiplier": 0.48659722752976453,
+            "emergency_stop_loss_pct": 0.030021015920407606,
+            "adx_regime_threshold": 15.118015333092583,
+            "min_confidence": 0.49840519928270705
+          },
+          "train_score": 2.631216333099022,
+          "train_n": 13,
+          "test_tuned": {
+            "n": 2,
+            "score": 17.904011245891635,
+            "pnl": 2.3995
+          },
+          "test_default": {
+            "n": 6,
+            "score": -3.112868740939262,
+            "pnl": -5.5085
+          }
+        },
+        "vol_mid:neutral": {
+          "params": {
+            "grid_levels": 11,
+            "grid_spacing_atr_multiplier": 0.48659722752976453,
+            "emergency_stop_loss_pct": 0.030021015920407606,
+            "adx_regime_threshold": 15.118015333092583,
+            "min_confidence": 0.49840519928270705
+          },
+          "train_score": 0.7428581057998003,
+          "train_n": 14,
+          "test_tuned": {
+            "n": 2,
+            "score": -0.292241455420236,
+            "pnl": -0.4111
+          },
+          "test_default": {
+            "n": 5,
+            "score": -0.22393191571262275,
+            "pnl": -0.8407
+          }
+        },
+        "vol_high:trend": {
+          "params": {
+            "grid_levels": 12,
+            "grid_spacing_atr_multiplier": 0.6361918379564069,
+            "emergency_stop_loss_pct": 0.0751417054269199,
+            "adx_regime_threshold": 23.45750871293179,
+            "min_confidence": 0.44449851033222226
+          },
+          "train_score": 2.5788805671311676,
+          "train_n": 24,
+          "test_tuned": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          },
+          "test_default": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          }
+        },
+        "vol_high:neutral": {
+          "params": {
+            "grid_levels": 12,
+            "grid_spacing_atr_multiplier": 0.6361918379564069,
+            "emergency_stop_loss_pct": 0.0751417054269199,
+            "adx_regime_threshold": 23.45750871293179,
+            "min_confidence": 0.44449851033222226
+          },
+          "train_score": 0.7193558703391204,
+          "train_n": 24,
+          "test_tuned": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          },
+          "test_default": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          }
+        }
+      }
+    },
+    {
+      "train": [
+        "2023-07-01",
+        "2024-07-01"
+      ],
+      "test": [
+        "2024-07-01",
+        "2025-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "grid_levels": 7,
+            "grid_spacing_atr_multiplier": 0.7744886533907813,
+            "emergency_stop_loss_pct": 0.06931529929675305,
+            "adx_regime_threshold": 23.662892985816985,
+            "min_confidence": 0.393291355373987
+          },
+          "train_score": 0.4182782869911577,
+          "train_n": 10,
+          "test_tuned": {
+            "n": 24,
+            "score": -0.21872429176658417,
+            "pnl": -1.6351
+          },
+          "test_default": {
+            "n": 16,
+            "score": -0.18752568782580542,
+            "pnl": -0.979
+          }
+        },
+        "vol_low:neutral": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:trend": {
+          "verdict": "insufficient_data"
+        },
+        "vol_mid:neutral": {
+          "params": {
+            "grid_levels": 6,
+            "grid_spacing_atr_multiplier": 0.44311588649998346,
+            "emergency_stop_loss_pct": 0.06458057725828678,
+            "adx_regime_threshold": 18.187575207389735,
+            "min_confidence": 0.4338358958662981
+          },
+          "train_score": -0.6234924355700996,
+          "train_n": 11,
+          "test_tuned": {
+            "n": 9,
+            "score": -1.3143536762617767,
+            "pnl": -7.8391
+          },
+          "test_default": {
+            "n": 12,
+            "score": -0.3643330176625156,
+            "pnl": -2.7137
+          }
+        },
+        "vol_high:trend": {
+          "verdict": "insufficient_data"
+        },
+        "vol_high:neutral": {
+          "verdict": "insufficient_data"
+        }
+      }
+    },
+    {
+      "train": [
+        "2024-07-01",
+        "2025-07-01"
+      ],
+      "test": [
+        "2025-07-01",
+        "2026-01-01"
+      ],
+      "states": {
+        "vol_low:trend": {
+          "params": {
+            "grid_levels": 8,
+            "grid_spacing_atr_multiplier": 0.7907343688030053,
+            "emergency_stop_loss_pct": 0.049947240195142524,
+            "adx_regime_threshold": 23.137324775869182,
+            "min_confidence": 0.4866141244931194
+          },
+          "train_score": 0.5107393661771099,
+          "train_n": 24,
+          "test_tuned": {
+            "n": 21,
+            "score": 0.2238215164886128,
+            "pnl": 1.1005
+          },
+          "test_default": {
+            "n": 6,
+            "score": -1.6199736639271336,
+            "pnl": -3.5669
+          }
+        },
+        "vol_low:neutral": {
+          "params": {
+            "grid_levels": 7,
+            "grid_spacing_atr_multiplier": 0.6151508879314554,
+            "emergency_stop_loss_pct": 0.0368475057969823,
+            "adx_regime_threshold": 21.12359339385863,
+            "min_confidence": 0.4553683613304359
+          },
+          "train_score": 1.0352520535597018,
+          "train_n": 11,
+          "test_tuned": {
+            "n": 3,
+            "score": 0.16322303548349493,
+            "pnl": 0.311
+          },
+          "test_default": {
+            "n": 2,
+            "score": 24899.274670220424,
+            "pnl": 2.3993
+          }
+        },
+        "vol_mid:trend": {
+          "params": {
+            "grid_levels": 5,
+            "grid_spacing_atr_multiplier": 0.7353661530886881,
+            "emergency_stop_loss_pct": 0.04033595776697132,
+            "adx_regime_threshold": 24.186109079379214,
+            "min_confidence": 0.4721027971987073
+          },
+          "train_score": 2.8900722765305122,
+          "train_n": 26,
+          "test_tuned": {
+            "n": 26,
+            "score": 0.9051709774337476,
+            "pnl": 5.4095
+          },
+          "test_default": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          }
+        },
+        "vol_mid:neutral": {
+          "params": {
+            "grid_levels": 5,
+            "grid_spacing_atr_multiplier": 0.3828064306006338,
+            "emergency_stop_loss_pct": 0.07819652645339709,
+            "adx_regime_threshold": 24.60226715285694,
+            "min_confidence": 0.39710366389898377
+          },
+          "train_score": 0.45064319949658976,
+          "train_n": 51,
+          "test_tuned": {
+            "n": 22,
+            "score": 3.3710983149827185,
+            "pnl": 12.8669
+          },
+          "test_default": {
+            "n": 9,
+            "score": -0.15581044269727035,
+            "pnl": -0.3948
+          }
+        },
+        "vol_high:trend": {
+          "params": {
+            "grid_levels": 9,
+            "grid_spacing_atr_multiplier": 0.3008210863580226,
+            "emergency_stop_loss_pct": 0.05577363059526967,
+            "adx_regime_threshold": 21.39795176130857,
+            "min_confidence": 0.5964061007010472
+          },
+          "train_score": 0.8874235480148398,
+          "train_n": 62,
+          "test_tuned": {
+            "n": 8,
+            "score": 4.57830298757123,
+            "pnl": 7.2263
+          },
+          "test_default": {
+            "n": 1,
+            "score": 0.0,
+            "pnl": 1.4481
+          }
+        },
+        "vol_high:neutral": {
+          "params": {
+            "grid_levels": 5,
+            "grid_spacing_atr_multiplier": 0.7353661530886881,
+            "emergency_stop_loss_pct": 0.04033595776697132,
+            "adx_regime_threshold": 24.186109079379214,
+            "min_confidence": 0.4721027971987073
+          },
+          "train_score": 2.389180929103543,
+          "train_n": 15,
+          "test_tuned": {
+            "n": 9,
+            "score": -1.1741816092763204,
+            "pnl": -3.1799
+          },
+          "test_default": {
+            "n": 0,
+            "score": null,
+            "pnl": 0
+          }
+        }
+      }
+    }
+  ],
+  "summary": {
+    "vol_low:trend": {
+      "folds": 5,
+      "tuned": 0.10059553200308731,
+      "default": 0.17823426228680633,
+      "edge": -0.07763873028371902
+    },
+    "vol_low:neutral": {
+      "folds": 4,
+      "tuned": 0.036702633813542745,
+      "default": 6224.877106320637,
+      "edge": -6224.840403686823
+    },
+    "vol_mid:trend": {
+      "folds": 3,
+      "tuned": 6.842187566817855,
+      "default": -1.5267292255047513,
+      "edge": 8.368916792322606
+    },
+    "vol_mid:neutral": {
+      "folds": 5,
+      "tuned": 0.8547652104215493,
+      "default": -0.3797937939669449,
+      "edge": 1.2345590043884942
+    },
+    "vol_high:trend": {
+      "folds": 2,
+      "tuned": 2.808752337866282,
+      "default": 10.002300265543642,
+      "edge": -7.1935479276773595
+    },
+    "vol_high:neutral": {
+      "folds": 2,
+      "tuned": 16.881885003182003,
+      "default": 1.0215241332743425,
+      "edge": 15.86036086990766
+    }
+  }
+}

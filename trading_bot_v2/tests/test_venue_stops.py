@@ -16,7 +16,7 @@ behaviour at the wire, adapter, entry-path, database and grid layers:
   the default policy and kept (state ``missing``) under ``local``;
 * the positions table round-trips the new columns, on a fresh database
   and on one created before the columns existed;
-* the Pacifica adapter reports ``unsupported`` and fabricates no stop id;
+* adapters without venue-stop support fabricate no stop id;
 * the orphan-grid heuristic never counts TP/SL rows.
 
 No network: the Blofin HTTP session is a fake that records the outgoing
@@ -25,6 +25,7 @@ JSON body per endpoint path.
 
 import json
 import sqlite3
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import MagicMock, patch
@@ -35,7 +36,7 @@ import trading_bot_v2.database as db_mod
 from trading_bot_v2.blofin_client import BlofinClient
 from trading_bot_v2.config import AssetClass, StrategyType
 from trading_bot_v2.database import DatabaseManager, _ConnectionWrapper
-from trading_bot_v2.exchanges.base import ExchangeCapabilities
+from trading_bot_v2.exchanges.base import ExchangeCapabilities, ExchangeClient
 from trading_bot_v2.exchanges.blofin import BlofinExchange
 from trading_bot_v2.exchanges.pacifica import PacificaExchange
 from trading_bot_v2.grid_lifecycle_manager import (
@@ -51,6 +52,20 @@ from trading_bot_v2.venue_stops import (
     STOP_STATE_STANDALONE,
     STOP_STATE_UNSUPPORTED,
 )
+
+
+class UnsupportedExchange(PacificaExchange):
+    """Exercise generic fallback independently of Pacifica capabilities."""
+
+    @classmethod
+    def capabilities(cls):
+        return replace(PacificaExchange.capabilities(), supports_venue_stops=False)
+
+    install_stop = ExchangeClient.install_stop
+    amend_stop = ExchangeClient.amend_stop
+    cancel_stop = ExchangeClient.cancel_stop
+    list_stops = ExchangeClient.list_stops
+
 
 INSTRUMENTS = {
     "code": "0",
@@ -444,7 +459,7 @@ class TestBlofinCancelAllStops:
 class TestBlofinAdapterStops:
     def test_capability_advertised(self):
         assert BlofinExchange.capabilities().supports_venue_stops is True
-        assert PacificaExchange.capabilities().supports_venue_stops is False
+        assert PacificaExchange.capabilities().supports_venue_stops is True
 
     def test_stop_loss_forwarded_only_when_set(self):
         rest = MagicMock()
@@ -512,9 +527,9 @@ class TestBlofinAdapterStops:
         assert rest.cancel_all_orders.call_args.kwargs["include_stops"] is True
 
 
-class TestPacificaAdapterUnsupported:
+class TestUnsupportedAdapter:
     def test_stop_methods_report_unsupported_and_no_id(self):
-        exchange = PacificaExchange(rest_client=MagicMock())
+        exchange = UnsupportedExchange(rest_client=MagicMock())
         for result in (
             exchange.install_stop("BTC", "long", 1.0, 95.0),
             exchange.amend_stop("BTC", "long", 96.0, entry_order_id="1", stop_id="t"),
@@ -525,21 +540,6 @@ class TestPacificaAdapterUnsupported:
             assert "unsupported" in result.error
             assert result.raw.get("unsupported") is True
         assert exchange.list_stops("BTC") == []
-
-    def test_stop_loss_not_forwarded_to_native_client(self):
-        rest = MagicMock()
-        rest.place_order.return_value = {"success": True, "data": {"order_id": "1"}}
-        PacificaExchange(rest_client=rest).place_order(
-            "BTC", OrderSide.BUY, 1.0, OrderType.MARKET, stop_loss=95.0
-        )
-        rest.place_order.assert_called_once_with(
-            symbol="BTC", side="buy", quantity=1.0, order_type="market"
-        )
-
-    def test_cancel_all_ignores_include_stops(self):
-        rest = MagicMock()
-        PacificaExchange(rest_client=rest).cancel_all_orders("BTC", include_stops=True)
-        rest.cancel_all_orders.assert_called_once_with(symbol="BTC")
 
 
 # ======================================================================
@@ -608,7 +608,7 @@ class StopExchange:
         self.installs: List[tuple] = []
 
     def capabilities(self):
-        return STOP_CAPS if self.supported else PacificaExchange.capabilities()
+        return STOP_CAPS if self.supported else UnsupportedExchange.capabilities()
 
     def place_order(self, **kwargs):
         self.orders.append(kwargs)

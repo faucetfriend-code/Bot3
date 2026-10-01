@@ -1,0 +1,316 @@
+{
+  "month": "2026-07",
+  "window": {
+    "start": "2026-07-01",
+    "end": "2026-08-01"
+  },
+  "generated_by": "trading_bot_v2.optimization.monthly_retune",
+  "refresh": {
+    "cmd": "C:\\Python314\\python.exe -m trading_bot_v2.data_manager --symbols BTC-USDC,ETH-USDC,SUI-USDC --timeframes 1m,5m,15m,1h,4h --update --funding",
+    "returncode": 0,
+    "seconds": 394.5,
+    "log": "G:\\Candle Data\\Temp Test holding\\monthly-refresh-2026-07.log",
+    "ok": true
+  },
+  "scorecard": [
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "BTC-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 4,
+      "profit_factor": 0.431,
+      "net_pnl": -6.49,
+      "return_pct": -0.06,
+      "win_rate_pct": 25.0,
+      "max_drawdown_pct": 0.1,
+      "fees": 0.59
+    },
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "ETH-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 3,
+      "profit_factor": 2.045,
+      "net_pnl": 4.64,
+      "return_pct": 0.05,
+      "win_rate_pct": 66.7,
+      "max_drawdown_pct": 0.05,
+      "fees": 0.38
+    },
+    {
+      "strategy": "momentum_scalping",
+      "symbol": "SUI-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 5,
+      "profit_factor": 0.0,
+      "net_pnl": -25.24,
+      "return_pct": -0.25,
+      "win_rate_pct": 0.0,
+      "max_drawdown_pct": 0.31,
+      "fees": 0.87
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "BTC-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 65,
+      "profit_factor": 1.558,
+      "net_pnl": 1.14,
+      "return_pct": 0.01,
+      "win_rate_pct": 58.5,
+      "max_drawdown_pct": 0.05,
+      "fees": 8.5
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "ETH-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 53,
+      "profit_factor": 4.815,
+      "net_pnl": 30.42,
+      "return_pct": 0.3,
+      "win_rate_pct": 77.4,
+      "max_drawdown_pct": 0.02,
+      "fees": 6.45
+    },
+    {
+      "strategy": "vwap_pullback",
+      "symbol": "SUI-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 65,
+      "profit_factor": 0.57,
+      "net_pnl": -27.5,
+      "return_pct": -0.28,
+      "win_rate_pct": 52.3,
+      "max_drawdown_pct": 0.29,
+      "fees": 8.58
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "BTC-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 12,
+      "profit_factor": 1.501,
+      "net_pnl": 2.73,
+      "return_pct": 0.03,
+      "win_rate_pct": 50.0,
+      "max_drawdown_pct": 0.07,
+      "fees": 1.62
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "ETH-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 9,
+      "profit_factor": 0.685,
+      "net_pnl": -4.67,
+      "return_pct": -0.05,
+      "win_rate_pct": 33.3,
+      "max_drawdown_pct": 0.09,
+      "fees": 1.29
+    },
+    {
+      "strategy": "mean_reversion",
+      "symbol": "SUI-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 15,
+      "profit_factor": 0.318,
+      "net_pnl": -25.94,
+      "return_pct": -0.26,
+      "win_rate_pct": 26.7,
+      "max_drawdown_pct": 0.35,
+      "fees": 2.2
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "BTC-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 20,
+      "profit_factor": 0.727,
+      "net_pnl": -6.82,
+      "return_pct": -0.07,
+      "win_rate_pct": 50.0,
+      "max_drawdown_pct": 0.11,
+      "fees": 1.7
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "ETH-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 27,
+      "profit_factor": 0.982,
+      "net_pnl": -1.48,
+      "return_pct": -0.01,
+      "win_rate_pct": 59.3,
+      "max_drawdown_pct": 0.13,
+      "fees": 2.21
+    },
+    {
+      "strategy": "grid_trading",
+      "symbol": "SUI-USDC",
+      "start": "2026-07-01",
+      "end": "2026-08-01",
+      "closed_trades": 38,
+      "profit_factor": 2.137,
+      "net_pnl": 33.63,
+      "return_pct": 0.34,
+      "win_rate_pct": 78.9,
+      "max_drawdown_pct": 0.13,
+      "fees": 2.68
+    }
+  ],
+  "retune": {
+    "cmd": "C:\\Python314\\python.exe -m trading_bot_v2.optimization.run_composite_tuning --strategy mean_reversion --symbol BTC-USDC --start 2023-08-01 --end 2026-08-01 --trials 25 --report out\\monthly\\_tune\\composite_mean_reversion_2026-07.json --directional-gate enforce --log-level WARNING",
+    "returncode": 0,
+    "seconds": 3292.8,
+    "log": "G:\\Candle Data\\Temp Test holding\\monthly-retune-2026-07.log",
+    "ok": true,
+    "window": "2023-08-01..2026-08-01"
+  },
+  "comparison": {
+    "vol_low:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": 1.8906546841634153,
+        "default": 1.2157547181899544,
+        "edge": 0.6748999659734609
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 39.2136,
+        "rsi_overbought": 62.9686,
+        "bb_std_dev": 2.8036,
+        "atr_stop_multiplier": 2.1846,
+        "min_confidence": 0.459
+      },
+      "adopted_params": {
+        "rsi_oversold": 32.7504,
+        "rsi_overbought": 62.3545,
+        "bb_std_dev": 2.7145,
+        "atr_stop_multiplier": 2.3388,
+        "min_confidence": 0.5228
+      },
+      "median_drift_vs_adopted": {
+        "rsi_oversold": 6.4632,
+        "rsi_overbought": 0.6141,
+        "bb_std_dev": 0.0891,
+        "atr_stop_multiplier": -0.1542,
+        "min_confidence": -0.0638
+      }
+    },
+    "vol_low:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": -0.4162320274296385,
+        "default": -1.166837731870382,
+        "edge": 0.7506057044407435
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 35.1231,
+        "rsi_overbought": 69.7257,
+        "bb_std_dev": 2.7561,
+        "atr_stop_multiplier": 1.979,
+        "min_confidence": 0.5051
+      },
+      "adopted_params": null
+    },
+    "vol_mid:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": 2.3085552037544863,
+        "default": 1.9793042689592664,
+        "edge": 0.32925093479521994
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 35.7255,
+        "rsi_overbought": 61.6706,
+        "bb_std_dev": 1.6958,
+        "atr_stop_multiplier": 1.9583,
+        "min_confidence": 0.5469
+      },
+      "adopted_params": {
+        "rsi_oversold": 32.7239,
+        "rsi_overbought": 63.8175,
+        "bb_std_dev": 2.4479,
+        "atr_stop_multiplier": 1.8305,
+        "min_confidence": 0.5375
+      },
+      "median_drift_vs_adopted": {
+        "rsi_oversold": 3.0016,
+        "rsi_overbought": -2.1469,
+        "bb_std_dev": -0.7521,
+        "atr_stop_multiplier": 0.1278,
+        "min_confidence": 0.0094
+      }
+    },
+    "vol_mid:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": 1.3688367779441735,
+        "default": 0.45737567969260445,
+        "edge": 0.911461098251569
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 39.6604,
+        "rsi_overbought": 66.4775,
+        "bb_std_dev": 2.7672,
+        "atr_stop_multiplier": 2.4877,
+        "min_confidence": 0.4596
+      },
+      "adopted_params": null
+    },
+    "vol_high:trend": {
+      "oos": {
+        "folds": 4,
+        "tuned": -0.05313067559863299,
+        "default": 0.14301065693284304,
+        "edge": -0.19614133253147603
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 34.8356,
+        "rsi_overbought": 64.8912,
+        "bb_std_dev": 2.5879,
+        "atr_stop_multiplier": 2.0173,
+        "min_confidence": 0.3915
+      },
+      "adopted_params": null
+    },
+    "vol_high:neutral": {
+      "oos": {
+        "folds": 4,
+        "tuned": -1.7628184750618063,
+        "default": -1.4121014698571943,
+        "edge": -0.350717005204612
+      },
+      "fresh_median_params": {
+        "rsi_oversold": 35.7268,
+        "rsi_overbought": 66.0106,
+        "bb_std_dev": 2.6742,
+        "atr_stop_multiplier": 2.3532,
+        "min_confidence": 0.4355
+      },
+      "adopted_params": null
+    }
+  },
+  "env_overrides": {
+    "REGIME_MODE": "volatility",
+    "REGIME_VOL_STRATEGIES_LOW": "MeanReversion",
+    "REGIME_VOL_STRATEGIES_MID": "MeanReversion",
+    "REGIME_VOL_STRATEGIES_HIGH": "MeanReversion",
+    "REGIME_VOL_WEIGHTS_LOW": "MeanReversion:1.0",
+    "REGIME_VOL_WEIGHTS_MID": "MeanReversion:1.0",
+    "REGIME_VOL_WEIGHTS_HIGH": "MeanReversion:1.0",
+    "BACKTEST_HISTORY_LOOKBACK": "100",
+    "_note": "Applied to the re-tune phase ONLY. The scorecard phase ran with a clean environment (shipped .env) so it stays comparable with prior months; regime mode and history lookback both change scorecard results."
+  }
+}

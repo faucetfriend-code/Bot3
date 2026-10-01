@@ -59,6 +59,7 @@ _singleton_lock = threading.Lock()
 def _resolve_name(name: Optional[str]) -> str:
     """Resolve and validate the exchange name (env fallback, defaults)."""
     resolved = (name or os.getenv("EXCHANGE") or DEFAULT_EXCHANGE).strip().lower()
+    resolved = resolved or DEFAULT_EXCHANGE
     if resolved not in EXCHANGE_REGISTRY:
         valid = ", ".join(sorted(EXCHANGE_REGISTRY))
         raise ValueError(

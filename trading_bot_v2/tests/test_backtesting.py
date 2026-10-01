@@ -4,6 +4,8 @@ Tests for the backtesting engine.
 Uses synthetic candle data (no real API calls, no disk I/O required).
 """
 
+from datetime import datetime, timedelta
+
 import pytest
 from unittest.mock import MagicMock
 from trading_bot_v2.backtesting.simulated_exchange import SimulatedExchange
@@ -90,7 +92,8 @@ class TestPerformanceTracker:
         eq = 10000.0
         for i in range(100):
             eq += 10  # Steady gains, no drawdown
-            tracker.record_snapshot(f"2024-01-01T{i:02d}:00:00", eq, {})
+            timestamp = datetime(2024, 1, 1) + timedelta(hours=i)
+            tracker.record_snapshot(timestamp.isoformat(), eq, {})
         result = tracker.finalise(eq, [], "SUI-USDC", "2024-01-01", "2024-04-10")
         assert result.sharpe_ratio > 0
 

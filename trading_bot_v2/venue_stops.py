@@ -14,7 +14,7 @@ Venue stop state (``positions.venue_stop_state``):
 * ``standalone``  - a reduce-only TP/SL order placed separately.
 * ``missing``     - the venue has NO stop for this position; only the local
   loop check protects it.  Logged at ERROR every loop.
-* ``unsupported`` - the exchange has no venue-side stop orders (Pacifica);
+* ``unsupported`` - the adapter does not implement venue-side stop orders;
   the local loop check is the only protection by design.
 """
 

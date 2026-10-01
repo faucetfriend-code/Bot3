@@ -1,0 +1,1016 @@
+{
+  "arguments": {
+    "revision": "head",
+    "symbol": "BTC-USDC",
+    "strategy": "grid_trading",
+    "start": "2024-03-01",
+    "end": "2024-03-22"
+  },
+  "source_sha256": {
+    "trading_bot_v2/backtesting/simulated_exchange.py": "dfbdf729e983aa80cf400d1b1cacc42fc11dacd6e25141444bfdc599aa35bec2",
+    "trading_bot_v2/backtesting/performance.py": "ea68df319efca3b98eff922ee0c2d44626a93103b279139ce99f22a8eeeb9537",
+    "trading_bot_v2/backtesting/engine.py": "e2ab3d42ee7931b4eee3957a34418a21cfceac7560342eac53013ae41fb6a352"
+  },
+  "seconds": 4.241069499985315,
+  "audits": {
+    "finite_equity": true,
+    "accounting_residual": 4.071176590514369e-05,
+    "trade_timestamps_monotonic": true,
+    "trade_timestamps_in_window": true,
+    "completed_candle_checks": 0,
+    "terminal_cash": 9993.02165954511,
+    "terminal_unrealised": 0,
+    "terminal_positions": []
+  },
+  "result": {
+    "symbol": "BTC-USDC",
+    "start": "2024-03-01",
+    "end": "2024-03-22",
+    "initial_capital": 10000,
+    "final_equity": 9993.0217,
+    "total_return_pct": -0.06978300000001214,
+    "cagr_pct": -1.2068083804854357,
+    "profit_factor": 0.6852913281111657,
+    "win_rate_pct": 58.333333333333336,
+    "sharpe_ratio": -5.504781219316374,
+    "sortino_ratio": -2.2641204310819334,
+    "max_drawdown_pct": 0.09550933459347545,
+    "calmar_ratio": -12.635501918446794,
+    "avg_drawdown_duration_days": 0.0,
+    "total_trades": 24,
+    "closed_trades": 12,
+    "avg_fee_per_trade": 0.04040816421252102,
+    "total_fees": 0.9697959411005045,
+    "total_funding_paid": -0.5209382293346309,
+    "by_strategy": {},
+    "by_regime": {
+      "ranging_calm": {
+        "closed_trades": 9,
+        "pnl": 9.280897,
+        "wins": 7
+      },
+      "ranging_volatile": {
+        "closed_trades": 3,
+        "pnl": -15.81038,
+        "wins": 0
+      }
+    },
+    "diagnostics": {
+      "label": "grid_trading/BTC-USDC 2024-03-01..2024-03-22",
+      "stages": {
+        "bars_evaluated": 6048,
+        "strategy_invoked": 1188,
+        "raw_signals": 50,
+        "orders_placed": 24,
+        "execution_blocked": 20,
+        "confidence_dropped": 6,
+        "fills": 24,
+        "closed_trades": 12
+      },
+      "reasons": {
+        "strategy:not_initialized": 10092,
+        "exec:same_direction_skip": 10,
+        "exec:hedge_mode_block": 10,
+        "confidence:below_regime_threshold": 6
+      },
+      "by_strategy": {
+        "ma_crossover": {
+          "strategy:not_initialized": 4416
+        },
+        "momentum_scalping": {
+          "strategy:not_initialized": 4416
+        },
+        "liquidation_capture": {
+          "strategy:not_initialized": 444
+        },
+        "mean_reversion": {
+          "strategy:not_initialized": 816
+        },
+        "grid_trading": {
+          "strategy_invoked": 1188,
+          "raw_signals": 50,
+          "confidence_dropped": 6,
+          "confidence:below_regime_threshold": 6
+        }
+      },
+      "regimes": {
+        "trending_strong": 3984,
+        "indecisive": 444,
+        "ranging_calm": 816,
+        "trending_moderate": 432,
+        "ranging_volatile": 372
+      },
+      "notes": {
+        "execution_policy": {
+          "opposing_closes_position": false,
+          "min_hold_candles": 6,
+          "max_pyramid_entries": 1,
+          "pyramid_min_spacing_candles": 0
+        },
+        "funding_model": {
+          "model": "historical",
+          "venue_interval_hours": 8,
+          "settlements": 7645,
+          "conversion": "prorata",
+          "scale": 1.0,
+          "factor": 1.0,
+          "source_interval_hours": 8,
+          "funding_start": "2019-09-10T08:00:00",
+          "funding_end": "2026-09-01T08:00:00"
+        },
+        "data_coverage": {
+          "strictness": "all",
+          "warmup_candles": 60,
+          "degraded": {}
+        }
+      },
+      "diagnosis": "traded",
+      "headline": "50 raw signals over 6048 bars produced 12 closed trades; largest attrition at execution_blocked",
+      "binding_stage": "execution_blocked",
+      "progress": 0.9,
+      "top_reasons": [
+        [
+          "exec:hedge_mode_block",
+          10
+        ],
+        [
+          "exec:same_direction_skip",
+          10
+        ],
+        [
+          "confidence:below_regime_threshold",
+          6
+        ]
+      ]
+    },
+    "equity_curve": [
+      {
+        "timestamp": "2024-03-01T00:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-01T05:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-01T10:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-01T15:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-01T20:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-02T01:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-02T06:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-02T11:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-02T16:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-02T21:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-03T02:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-03T07:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-03T12:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-03T17:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-03T22:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-04T03:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-04T08:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-04T13:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-04T18:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-04T23:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-05T04:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-05T09:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-05T14:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-05T19:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-06T00:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-06T05:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-06T10:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-06T15:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-06T20:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-07T01:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-07T06:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-07T11:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-07T16:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-07T21:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-08T02:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-08T07:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-08T12:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-08T17:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-08T22:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-09T03:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-09T08:00:00",
+        "equity": 10000.0,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-09T13:00:00",
+        "equity": 10001.0922,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T18:00:00",
+        "equity": 10000.1212,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-09T23:00:00",
+        "equity": 10000.7633,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T04:00:00",
+        "equity": 10000.4291,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-10T09:00:00",
+        "equity": 10000.5412,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-10T14:00:00",
+        "equity": 10001.8496,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-10T19:00:00",
+        "equity": 10001.8496,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-11T00:00:00",
+        "equity": 10001.8496,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-11T05:00:00",
+        "equity": 10001.8496,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-11T10:00:00",
+        "equity": 9998.6262,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T15:00:00",
+        "equity": 9997.1278,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-11T20:00:00",
+        "equity": 9997.5548,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T01:00:00",
+        "equity": 9997.7321,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T06:00:00",
+        "equity": 9998.321,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T11:00:00",
+        "equity": 9998.089,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T16:00:00",
+        "equity": 9998.8374,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-12T21:00:00",
+        "equity": 10001.4789,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-13T02:00:00",
+        "equity": 10000.8312,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T07:00:00",
+        "equity": 9998.6471,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T12:00:00",
+        "equity": 9996.2429,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-13T17:00:00",
+        "equity": 9993.1098,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-13T22:00:00",
+        "equity": 9992.8915,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T03:00:00",
+        "equity": 9993.0497,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T08:00:00",
+        "equity": 9992.2969,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T13:00:00",
+        "equity": 9993.6563,
+        "open_positions": 1
+      },
+      {
+        "timestamp": "2024-03-14T18:00:00",
+        "equity": 9997.9136,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-14T23:00:00",
+        "equity": 10001.0585,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-15T04:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-15T09:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-15T14:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-15T19:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-16T00:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-16T05:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-16T10:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-16T15:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-16T20:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-17T01:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-17T06:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-17T11:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-17T16:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-17T21:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-18T02:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-18T07:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-18T12:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-18T17:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-18T22:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-19T03:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-19T08:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-19T13:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-19T18:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-19T23:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-20T04:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-20T09:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-20T14:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-20T19:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-21T00:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-21T05:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-21T10:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-21T15:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      },
+      {
+        "timestamp": "2024-03-21T20:00:00",
+        "equity": 9993.0217,
+        "open_positions": 0
+      }
+    ],
+    "trade_log": [
+      {
+        "order_id": "bt_000001",
+        "timestamp": "2024-03-09T10:20:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002927,
+        "fill_price": 68087.94360714285,
+        "fee": 0.029894011640716065,
+        "pnl": 0.0,
+        "balance_after": 9800.6767,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000003",
+        "timestamp": "2024-03-10T01:00:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002927,
+        "fill_price": 68571.67639285715,
+        "fee": 0.030106394520283925,
+        "pnl": 1.415886,
+        "balance_after": 10001.2412,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000007",
+        "timestamp": "2024-03-10T01:10:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002916,
+        "fill_price": 68811.82802999999,
+        "fee": 0.030098293580321997,
+        "pnl": 0.0,
+        "balance_after": 9800.5558,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000008",
+        "timestamp": "2024-03-10T04:10:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002916,
+        "fill_price": 69363.69632850749,
+        "fee": 0.08090581539757115,
+        "pnl": -1.609248,
+        "balance_after": 9999.5209,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000009",
+        "timestamp": "2024-03-10T06:20:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002883,
+        "fill_price": 69151.50060714287,
+        "fee": 0.029904566437558934,
+        "pnl": 0.0,
+        "balance_after": 9800.1272,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000011",
+        "timestamp": "2024-03-10T08:55:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002883,
+        "fill_price": 69570.25939285714,
+        "fee": 0.03008565867444107,
+        "pnl": 1.207282,
+        "balance_after": 10000.5412,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000013",
+        "timestamp": "2024-03-10T09:15:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002876,
+        "fill_price": 69299.28607142856,
+        "fee": 0.029895712011214277,
+        "pnl": 0.0,
+        "balance_after": 9801.2065,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000015",
+        "timestamp": "2024-03-10T09:45:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002876,
+        "fill_price": 69775.11392857143,
+        "fee": 0.030100984148785714,
+        "pnl": 1.368481,
+        "balance_after": 10001.8496,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000019",
+        "timestamp": "2024-03-11T06:55:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002911,
+        "fill_price": 69081.47092857142,
+        "fee": 0.03016442428096071,
+        "pnl": 0.0,
+        "balance_after": 9800.7233,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000020",
+        "timestamp": "2024-03-11T07:10:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002911,
+        "fill_price": 70224.74746699845,
+        "fee": 0.081769695950573,
+        "pnl": -3.328078,
+        "balance_after": 9998.4096,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "bull",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000023",
+        "timestamp": "2024-03-11T09:30:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002806,
+        "fill_price": 71753.93185714286,
+        "fee": 0.030201229918671427,
+        "pnl": 0.0,
+        "balance_after": 9797.0379,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000021",
+        "timestamp": "2024-03-12T16:20:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002806,
+        "fill_price": 70785.68814285714,
+        "fee": 0.029793696139328564,
+        "pnl": 2.716892,
+        "balance_after": 10001.4789,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000027",
+        "timestamp": "2024-03-13T00:05:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002815,
+        "fill_price": 71660.6284642857,
+        "fee": 0.030258700369044635,
+        "pnl": 0.0,
+        "balance_after": 9799.7239,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "bull",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000028",
+        "timestamp": "2024-03-13T08:25:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002815,
+        "fill_price": 73527.43477709894,
+        "fee": 0.08279189155901341,
+        "pnl": -5.25506,
+        "balance_after": 9996.2429,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "bull",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000029",
+        "timestamp": "2024-03-13T12:25:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002729,
+        "fill_price": 72962.32896428571,
+        "fee": 0.029867129361530353,
+        "pnl": 0.0,
+        "balance_after": 9797.0988,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000030",
+        "timestamp": "2024-03-13T13:50:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002729,
+        "fill_price": 72000.83148270592,
+        "fee": 0.07859610764652179,
+        "pnl": -2.623927,
+        "balance_after": 9993.5105,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "neutral",
+        "role": "taker"
+      },
+      {
+        "order_id": "bt_000035",
+        "timestamp": "2024-03-13T14:10:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002757,
+        "fill_price": 72872.6755,
+        "fee": 0.030136494953024996,
+        "pnl": 0.0,
+        "balance_after": 9792.5704,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000033",
+        "timestamp": "2024-03-14T13:35:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002757,
+        "fill_price": 72129.7645,
+        "fee": 0.029829264108974997,
+        "pnl": 2.048206,
+        "balance_after": 9995.717,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000039",
+        "timestamp": "2024-03-14T14:20:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002775,
+        "fill_price": 72439.96707142857,
+        "fee": 0.030153136293482142,
+        "pnl": 0.0,
+        "balance_after": 9794.6659,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000037",
+        "timestamp": "2024-03-14T14:45:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002775,
+        "fill_price": 71626.79292857143,
+        "fee": 0.029814652556517857,
+        "pnl": 2.256558,
+        "balance_after": 9997.9136,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000041",
+        "timestamp": "2024-03-14T18:45:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002824,
+        "fill_price": 70234.18696428572,
+        "fee": 0.02975120159807143,
+        "pnl": 0.0,
+        "balance_after": 9799.5425,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000043",
+        "timestamp": "2024-03-14T22:05:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002824,
+        "fill_price": 71369.07303571429,
+        "fee": 0.03023193933792857,
+        "pnl": 3.204918,
+        "balance_after": 10001.0585,
+        "strategy": "grid_trading",
+        "regime": "ranging_calm",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000045",
+        "timestamp": "2024-03-15T02:25:00",
+        "symbol": "BTC-USDC",
+        "side": "bid",
+        "quantity": 0.002791,
+        "fill_price": 70758.28,
+        "fee": 0.029622953921999998,
+        "pnl": 0.0,
+        "balance_after": 9803.5425,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "neutral",
+        "role": "maker"
+      },
+      {
+        "order_id": "bt_000046",
+        "timestamp": "2024-03-15T03:20:00",
+        "symbol": "BTC-USDC",
+        "side": "ask",
+        "quantity": 0.002791,
+        "fill_price": 67916.50545858784,
+        "fee": 0.07582198669396746,
+        "pnl": -7.931393,
+        "balance_after": 9993.0217,
+        "strategy": "grid_trading",
+        "regime": "ranging_volatile",
+        "direction": "neutral",
+        "role": "taker"
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+# Use this file alone, not as an overlay on the root development Compose file.
+name: bot3-vps
+services:
+  bot:
+    image: bot3:${BOT3_IMAGE_TAG:-candidate}
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+      target: production
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    env_file:
+      - ${BOT3_ENV_FILE:-/etc/bot3/bot.env}
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: "8000"
+      DOTENV_OVERRIDE: "false"
+      DATABASE_BACKEND: sqlite
+      DATABASE_PATH: /app/data/trading_bot.db
+      SUPERVISOR_STATE_PATH: /app/data/supervisor_pause.json
+      EXCHANGE: pacifica
+      TESTNET: "true"
+      ENABLE_AUTO_TRADING: "false"
+      ENABLE_DEBUG_ROUTES: "false"
+      DATA_AUTODOWNLOAD: "false"
+      BACKUP_DIR: /app/backups
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - bot-data:/app/data
+      - bot-logs:/app/server logs reports
+      - ${BOT3_BACKUP_DIR:-/var/backups/bot3}:/app/backups
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+volumes:
+  bot-data:
+  bot-logs:

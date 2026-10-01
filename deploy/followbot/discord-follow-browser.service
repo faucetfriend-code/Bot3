@@ -1,0 +1,20 @@
+[Unit]
+Description=Private Chrome session for Discord follower
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=discord-follow
+Group=discord-follow
+ExecStart=/usr/bin/google-chrome-stable --headless=new --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 --user-data-dir=/var/lib/discord-follow/chrome-profile --no-first-run https://discord.com/channels/@me
+Restart=on-failure
+RestartSec=30
+TimeoutStopSec=30
+UMask=0077
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -58,7 +58,10 @@ def main():
 
     if args.walk_forward:
         wf = WalkForwardAnalyzer(engine)
-        results = wf.run(args.start, args.end, args.symbol, args.capital)
+        results = wf.run(
+            args.start, args.end, args.symbol, args.capital,
+            strategy=strategy_filter,
+        )
         # Save combined report for walk-forward
         for i, r in enumerate(results):
             r.save_html(f"backtest_wf_{i + 1:02d}.html")
