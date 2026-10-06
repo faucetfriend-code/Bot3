@@ -55,7 +55,7 @@ Kelly % = (Win Rate × Avg Win - Loss Rate × Avg Loss) ÷ Avg Win
 
 ### File Location
 ```
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\kelly_position_sizer.py
+G:\ai-workspace\Bot 3\trading_bot_v2\kelly_position_sizer.py
 ```
 
 ### Dependencies

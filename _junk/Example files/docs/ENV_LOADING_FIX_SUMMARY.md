@@ -269,7 +269,7 @@ pip show python-dotenv
 
 1. **Check working directory:**
    ```bash
-   cd "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot"
+   cd "G:\ai-workspace\trade bot"
    python api_server.py
    ```
 

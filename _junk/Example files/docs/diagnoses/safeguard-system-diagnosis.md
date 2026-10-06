@@ -17,7 +17,7 @@ self.project_root = Path(__file__).parent.parent  # WRONG: Goes up 2 levels
 
 **Evidence**:
 - Manual testing confirms files exist at correct path
-- Path calculation goes to `C:\Users\z_shi\Desktop\N8NPROJECTS` instead of `C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot`
+- Path calculation goes to `G:\ai-workspace` instead of `G:\ai-workspace\trade bot`
 - Files exist in the latter location but not the former
 
 ### 2. Database Schema Validation Error
@@ -50,10 +50,10 @@ critical_tables = ["trades", "positions", "profiles"]  # WRONG: Should be "accou
 ### File Path Resolution Test
 ```bash
 # Current (broken) calculation
-Path(__file__).parent.parent = C:\Users\z_shi\Desktop\N8NPROJECTS
+Path(__file__).parent.parent = G:\ai-workspace
 
 # Correct calculation
-Path(__file__).parent = C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot
+Path(__file__).parent = G:\ai-workspace\trade bot
 
 # Verification
 Files exist at correct path: ✅ All critical files present

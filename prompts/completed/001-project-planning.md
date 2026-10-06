@@ -1,14 +1,14 @@
 <objective>
-Read the project description from "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\anewbeginning.md" and create a comprehensive plan to build out the full project. The plan must ensure the complete system architecture is finalized and fully functional before any building begins, to maintain consistency across all features. Break down the project into small, manageable steps to prevent errors during implementation.
+Read the project description from "G:\ai-workspace\Bot 3\anewbeginning.md" and create a comprehensive plan to build out the full project. The plan must ensure the complete system architecture is finalized and fully functional before any building begins, to maintain consistency across all features. Break down the project into small, manageable steps to prevent errors during implementation.
 </objective>
 
 <context>
-This is for building a fresh project based on the description in anewbeginning.md. The project is located in the Bot 3 directory. There are example files in "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\Example files" that can provide ideas, but the build must be fresh without copying existing implementations. The plan will be used by developers to implement the project step by step.
+This is for building a fresh project based on the description in anewbeginning.md. The project is located in the Bot 3 directory. There are example files in "G:\ai-workspace\Bot 3\Example files" that can provide ideas, but the build must be fresh without copying existing implementations. The plan will be used by developers to implement the project step by step.
 </context>
 
 <requirements>
-1. Read the entire content of "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\anewbeginning.md" to understand the project requirements, features, and goals.
-2. Examine the example files in "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\Example files" to gather ideas for implementation approaches, but do not copy code directly - use them only for inspiration.
+1. Read the entire content of "G:\ai-workspace\Bot 3\anewbeginning.md" to understand the project requirements, features, and goals.
+2. Examine the example files in "G:\ai-workspace\Bot 3\Example files" to gather ideas for implementation approaches, but do not copy code directly - use them only for inspiration.
 3. Thoroughly analyze the project requirements to identify all necessary components, features, and integrations.
 4. Design and finalize the complete system architecture, including data flow, component interactions, and technology stack choices.
 5. Break down the implementation into small, simple tasks that can be completed without errors, ensuring each step builds on the previous one.

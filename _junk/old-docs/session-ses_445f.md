@@ -13,7 +13,7 @@ Execute one or more prompts from `./prompts/` using delegated sub-tasks with fre
 </objective>
 
 <input>
-The user will specify which prompt(s) to run via "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\completed\036-performance-optimization.md", which can be:
+The user will specify which prompt(s) to run via "G:\ai-workspace\Bot 3\prompts\completed\036-performance-optimization.md", which can be:
 
 **Single prompt:**
 
@@ -30,7 +30,7 @@ The user will specify which prompt(s) to run via "C:\Users\z_shi\Desktop\N8NPROJ
 
 <process>
 <step1_parse_arguments>
-Parse "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\036-performance-optimization.md" to extract:
+Parse "G:\ai-workspace\Bot 3\prompts\036-performance-optimization.md" to extract:
 - Prompt numbers/names (all arguments that are not flags)
 - Execution strategy flag (--parallel or --sequential)
 
@@ -148,11 +148,11 @@ By delegating to a sub-task, the actual implementation work happens in fresh con
 
 _Thinking:_
 
-The input is "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\036-performance-optimization.md". This looks like a single prompt file path.
+The input is "G:\ai-workspace\Bot 3\prompts\036-performance-optimization.md". This looks like a single prompt file path.
 
 
 ## Examining Input  
-- The input provided is "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\036-performance-optimization.
+- The input provided is "G:\ai-workspace\Bot 3\prompts\036-performance-optimization.
 
 ```
 Tool: read
@@ -160,7 +160,7 @@ Tool: read
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot 3\\prompts\\036-performance-optimization.md"
+  "filePath": "G:\\ai-workspace\\Bot 3\\prompts\\036-performance-optimization.md"
 }
 ```
 **Output:**
@@ -2746,7 +2746,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\database.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\database.py">
 ERROR [365:49] Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
   "None" is not assignable to "tuple[Unknown, ...]"
 ERROR [408:16] "aiosqlite" is possibly unbound
@@ -2816,7 +2816,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\database.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\database.py">
 ERROR [365:49] Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
   "None" is not assignable to "tuple[Unknown, ...]"
 ERROR [408:16] "aiosqlite" is possibly unbound
@@ -2888,7 +2888,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\database.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\database.py">
 ERROR [365:49] Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
   "None" is not assignable to "tuple[Unknown, ...]"
 ERROR [408:16] "aiosqlite" is possibly unbound
@@ -2958,7 +2958,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\database.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\database.py">
 ERROR [365:49] Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
   "None" is not assignable to "tuple[Unknown, ...]"
 ERROR [408:16] "aiosqlite" is possibly unbound
@@ -3028,7 +3028,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\database.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\database.py">
 ERROR [365:49] Expression of type "None" cannot be assigned to parameter of type "tuple[Unknown, ...]"
   "None" is not assignable to "tuple[Unknown, ...]"
 ERROR [408:16] "aiosqlite" is possibly unbound
@@ -3098,7 +3098,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\api_server.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\api_server.py">
 ERROR [19:6] Import "models" could not be resolved
 ERROR [350:22] Import "indicators" could not be resolved
 ERROR [186:45] Cannot access attribute "get_ticker" for class "PacificaClient"
@@ -3137,7 +3137,7 @@ Tool: edit
 Edit applied successfully.
 
 LSP errors detected in this file:
-<diagnostics file="C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\api_server.py">
+<diagnostics file="G:\ai-workspace\Bot 3\trading_bot_v2\api_server.py">
 ERROR [20:6] Import "models" could not be resolved
 ERROR [351:22] Import "indicators" could not be resolved
 ERROR [187:45] Cannot access attribute "get_ticker" for class "PacificaClient"

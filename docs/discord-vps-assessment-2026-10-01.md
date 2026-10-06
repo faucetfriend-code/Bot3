@@ -1,7 +1,7 @@
 # Discord follower: read-only VPS assessment
 
 Date: 2026-10-01. Source inspected read-only:
-`C:/Users/z_shi/Desktop/N8NPROJECTS/Discord Bot`.
+`G:/ai-workspace/Discord Bot`.
 No source changes, application imports, startup, account requests or trades were
 performed. Instructions read: `AGENTS.md` and its referenced `CLAUDE.md`.
 

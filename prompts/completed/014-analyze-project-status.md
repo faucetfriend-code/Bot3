@@ -66,4 +66,4 @@ Before declaring complete, verify your work:
 - Analysis provides clear direction for stakeholders
 - Recommendations are practical and prioritized
 </success_criteria></content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\014-analyze-project-status.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\prompts\014-analyze-project-status.md

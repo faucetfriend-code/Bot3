@@ -82,4 +82,4 @@ Before declaring complete, verify your work:
 - Phase 3.5 completed successfully
 - System ready for Phase 4 deployment
 </success_criteria></content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\012-complete-phase-3-5.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\prompts\012-complete-phase-3-5.md

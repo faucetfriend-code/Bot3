@@ -76,4 +76,4 @@ Before declaring complete, verify your work:
 - Database ready for full Phase 3.5 integration
 - Real API data successfully stored and retrieved
 </success_criteria></content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\011-test-api-construct-database.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\prompts\011-test-api-construct-database.md

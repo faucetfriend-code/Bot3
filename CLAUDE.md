@@ -31,7 +31,7 @@ Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures 
 # Preferred: double-click run_bot.bat (sets PYTHONPATH automatically)
 
 # Or manually:
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3"
+cd "G:\ai-workspace\Bot3"
 python -m trading_bot_v2.api_server
 
 # Dashboard: http://localhost:8000

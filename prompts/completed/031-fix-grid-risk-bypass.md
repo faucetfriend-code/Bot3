@@ -6,8 +6,8 @@ Implement comprehensive grid trading risk controls according to the Grid Trading
 Grid execution currently bypasses RiskManager completely, allowing unlimited position accumulation and silent leverage build-up. The Grid Trading Brief specifies mandatory risk controls, regime constraints, and execution rules to make grid trading safe.
 
 References:
-- "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #9
-- "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\Grid trading brief.txt" - Complete specification
+- "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #9
+- "G:\ai-workspace\Bot 3\research\Grid trading brief.txt" - Complete specification
 
 Current dangerous issue:
 ```python

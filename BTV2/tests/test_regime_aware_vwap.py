@@ -18,7 +18,7 @@ Entry Modes per Regime:
 """
 
 import sys
-sys.path.insert(0, "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/BTV2")
+sys.path.insert(0, "G:/ai-workspace/Bot3/BTV2")
 
 import pandas as pd
 import numpy as np
@@ -528,7 +528,7 @@ def main():
         })
 
     df_results = pd.DataFrame(rows)
-    output_path = Path("C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/BTV2/tests/results") / "regime_vwap_comparison_2024.csv"
+    output_path = Path("G:/ai-workspace/Bot3/BTV2/tests/results") / "regime_vwap_comparison_2024.csv"
     output_path.parent.mkdir(exist_ok=True)
     df_results.to_csv(output_path, index=False)
     print(f"Results saved to {output_path}")

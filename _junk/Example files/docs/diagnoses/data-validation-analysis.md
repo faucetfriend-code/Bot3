@@ -117,4 +117,4 @@
    - Show which specific fields are missing
    - Provide more detailed validation failure reasons
    - Help developers understand validation issues</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\diagnoses\data-validation-analysis.md
+<parameter name="filePath">G:\ai-workspace\trade bot\diagnoses\data-validation-analysis.md

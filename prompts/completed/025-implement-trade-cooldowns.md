@@ -5,7 +5,7 @@ Implement trade cooldowns and post-trade feedback loop to prevent signal re-firi
 <context>
 After execution, StrategyManager is unaware of trades, allowing same signals to re-fire endlessly. No cooldown prevents over-trading and position stacking.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 5
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 5
 
 Current issue:
 ```python

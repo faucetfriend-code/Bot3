@@ -5,7 +5,7 @@ Fix bracket order failure handling to prevent naked positions. This is QUALITY C
 <context>
 When stop-loss order placement fails after entry, the bot currently logs the error but leaves the position unprotected. This creates naked positions that can lose unlimited amounts.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #8
+Reference: "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #8
 
 Current dangerous code:
 ```python

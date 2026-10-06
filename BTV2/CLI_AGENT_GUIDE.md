@@ -66,7 +66,7 @@ The key architectural decision: **`strategies.py`, `agent.py`, `optimizer_agent.
 ## Quick Start
 
 ```bash
-cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2
+cd G:\ai-workspace\Bot3\BTV2
 pip install -r requirements.txt
 
 # Human UI
@@ -482,7 +482,7 @@ read optimize.md → propose params via Optuna TPE → run walk-forward
 
 #### Quick Start
 ```bash
-cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3
+cd G:\ai-workspace\Bot3
 
 # Run from optimize.md (recommended — reads strategy/period/trials from file)
 python BTV2/optimizer_agent.py --from-program

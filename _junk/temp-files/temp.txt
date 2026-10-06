@@ -1,4 +1,4 @@
-Starting trading bot with PYTHONPATH=C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\
+Starting trading bot with PYTHONPATH=G:\ai-workspace\Bot 3\
 2026-01-14 15:48:42.610 | INFO     | trading_bot_v2.risk_manager:__init__:55 - RiskManager initialized: max_risk=2.0%, max_exposure=10.0%
 CRITICAL:root:🚀 TRADING BOT __INIT__: WebSocket Integration v2.1 (2026-01-11 22:27)
 2026-01-14 15:48:42.649 | INFO     | core_logic.pacifica_client:__init__:182 - Initialized Pacifica client (TESTNET)

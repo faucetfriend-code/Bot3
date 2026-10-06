@@ -486,7 +486,7 @@ def main():
     print("-" * 70)
 
     # Load data
-    csv_path = "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/trading_bot_v2/backtesting/data/BTC-USDC_5m_2023.csv"
+    csv_path = "G:/ai-workspace/Bot3/trading_bot_v2/backtesting/data/BTC-USDC_5m_2023.csv"
 
     print("\n[1] Loading 2023 data...")
     df_full = load_data(csv_path)

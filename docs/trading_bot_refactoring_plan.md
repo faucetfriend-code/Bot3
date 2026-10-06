@@ -319,4 +319,4 @@ This refactoring plan transforms the trading bot from a monolithic application i
 2. Set up development branch for refactoring
 3. Begin Phase 1 implementation
 4. Daily standups to track progress and address issues</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\analysis\trading_bot_refactoring_plan.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\analysis\trading_bot_refactoring_plan.md

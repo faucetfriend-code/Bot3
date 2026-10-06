@@ -5,7 +5,7 @@ Fix RiskManager position sizing to properly handle notional vs quantity calculat
 <context>
 RiskManager.get_position_size() returns notional size (dollar amount), but the bot treats it as quantity/contracts. This causes incorrect position sizing when instruments have different contract sizes or prices.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #6
+Reference: "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #6
 
 Current issue:
 ```python

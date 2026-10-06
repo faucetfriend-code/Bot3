@@ -4,7 +4,7 @@
 
 ### Run Automated Health Check
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python monitor_bot.py
 ```
 
@@ -87,7 +87,7 @@ python monitor_bot.py --check position_limits
 1. **Create batch file:** `monitor_bot.bat`
 ```batch
 @echo off
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python monitor_bot.py >> monitoring_log.txt 2>&1
 ```
 
@@ -97,7 +97,7 @@ python monitor_bot.py >> monitoring_log.txt 2>&1
    - Name: Trading Bot Monitor
    - Trigger: Daily, repeat every 5 minutes
    - Action: Start a program
-   - Program: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\monitor_bot.bat`
+   - Program: `G:\ai-workspace\Bot 3\trading_bot_v2\monitor_bot.bat`
 
 4. **View Logs:**
 ```bash
@@ -216,7 +216,7 @@ curl -s http://localhost:8000/api/activity | python -m json.tool
 
 ### Database Query
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python -c "
 import sqlite3
 conn = sqlite3.connect('data/trading_bot.db')
@@ -249,7 +249,7 @@ curl -X POST http://localhost:8000/api/bot/start
 taskkill /F /IM python.exe
 
 # Start new instance
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 start python api_server.py
 ```
 

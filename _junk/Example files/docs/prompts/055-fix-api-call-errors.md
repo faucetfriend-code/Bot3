@@ -12,7 +12,7 @@ Key files to examine:
 @pacifica_market_data.py - Market data handler making API calls for candles and indicators
 @api_server.py - Server endpoints that call market data functions
 
-Reference the python-sdk directory at "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\python-sdk" for correct API usage patterns and parameter requirements.
+Reference the python-sdk directory at "G:\ai-workspace\trade bot\python-sdk" for correct API usage patterns and parameter requirements.
 
 The errors show missing 'symbol' parameters in API calls and JSON parsing failures when error responses aren't handled correctly.
 </context>

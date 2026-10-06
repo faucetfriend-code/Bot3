@@ -3,7 +3,7 @@ Implement all fixes identified in the server errors analysis report to resolve t
 </objective>
 
 <context>
-This implementation addresses critical errors found in the trading bot project (`trading_bot_v2`) that were preventing proper operation. The errors include API client failures, data insufficiency issues, configuration problems, and missing attributes. The fixes will be applied based on the detailed analysis in "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\server-errors-analysis.md".
+This implementation addresses critical errors found in the trading bot project (`trading_bot_v2`) that were preventing proper operation. The errors include API client failures, data insufficiency issues, configuration problems, and missing attributes. The fixes will be applied based on the detailed analysis in "G:\ai-workspace\Bot 3\research\server-errors-analysis.md".
 
 The fixes are needed to ensure the trading bot can operate reliably without runtime errors, especially during API server operations.
 </context>

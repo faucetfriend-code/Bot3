@@ -109,7 +109,7 @@ Robocopy preserves timestamps and handles the long paths under `node_modules`
 and `.git` better than Explorer drag-and-drop:
 
 ```
-robocopy "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3" "<NEW>" /E /COPY:DAT /R:2 /W:2 ^
+robocopy "G:\ai-workspace\Bot3" "<NEW>" /E /COPY:DAT /R:2 /W:2 ^
   /XD __pycache__ .mypy_cache .pytest_cache .ruff_cache node_modules _junk ^
       "server logs reports" worktrees ^
   /XF *.pyc *.pyo bot_console.err.log validation_run_*.log
@@ -151,7 +151,7 @@ Confirmed portable by inspection - listed so you do not go hunting:
 `trading_bot_v2/monitor_ai.bat` and `trading_bot_v2/monitor_alerts.bat` both do:
 
 ```
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 ```
 
 Note the space: `Bot 3`, not `Bot3`. That directory exists as a separate sibling
@@ -171,7 +171,7 @@ any future move.
 C:\Users\z_shi\AppData\Roaming\Python\Python314\site-packages\__editable__.trading_bot-2.1.0.pth
 ```
 
-contains a single line: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3` - again the
+contains a single line: `G:\ai-workspace\Bot 3` - again the
 sibling with the space. This injects that other tree onto `sys.path` for *every*
 Python process on the machine, so `import core_logic` can resolve to the wrong
 project. Running `python -m` from the repo root currently masks it because the
@@ -191,7 +191,7 @@ from outside the repo - nothing in `trading_bot_v2/` imports it today.
 ### 4.3 Claude Code permission allowlist (degrades silently)
 
 `.claude/settings.local.json` holds 31 permission entries keyed on the absolute
-path `C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3`. After the move they stop
+path `G:\\ai-workspace\\Bot3`. After the move they stop
 matching and you get permission prompts for commands that used to be
 pre-approved. Nothing breaks; it is friction.
 
@@ -204,7 +204,7 @@ file. It is a per-machine file and should arguably not be tracked at all
 `C:\Users\z_shi\.claude\scheduled-tasks\monthly-retune\SKILL.md` states on line 8:
 
 ```
-Working directory: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3
+Working directory: G:\ai-workspace\Bot3
 ```
 
 and line 24 points at the project memory directory
@@ -248,7 +248,7 @@ audit because another agent held that file (see section 7).
 `BTV2/tests/test_regime_aware_vwap.py:21`:
 
 ```python
-sys.path.insert(0, "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/BTV2")
+sys.path.insert(0, "G:/ai-workspace/Bot3/BTV2")
 ```
 
 The only absolute path of its kind in the tree. Replace with the idiom used by

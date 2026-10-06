@@ -21,7 +21,7 @@ The current approach is getting ~28% WR but losing money. Let me check what work
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 100,
   "offset": 1985
 }
@@ -29,7 +29,7 @@ The current approach is getting ~28% WR but losing money. Let me check what work
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>1985: 
 1986: 
@@ -272,7 +272,7 @@ Now let's test with the new reversal confirmation logic and higher SD thresholds
 2026-04-16 17:30:18 | INFO     | [5/6] {'sd_threshold': 2.5, 'atr_multiplier': 1.0, 'entry_mode': 'mean_reversion'} => WR=0.0%
 2026-04-16 17:30:18 | INFO     | STRATEGY | initialized
 2026-04-16 17:30:34 | INFO     | [6/6] {'sd_threshold': 2.5, 'atr_multiplier': 1.5, 'entry_mode': 'mean_reversion'} => WR=0.0%
-2026-04-16 17:30:34 | INFO     | Saved results to: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
+2026-04-16 17:30:34 | INFO     | Saved results to: G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
 
 ============================================================
 TOP RESULTS (by Win Rate)
@@ -433,7 +433,7 @@ The test is still running. Let me check for results file.
 
 **Output:**
 ```
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
+G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
 ```
 
 ---
@@ -477,10 +477,10 @@ The test seems to still be running or got stuck. Let me check the latest result 
 
 **Output:**
 ```
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113810.csv
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113527.csv
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113109.csv
+G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_173034.csv
+G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113810.csv
+G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113527.csv
+G:\ai-workspace\Bot3\BTV2\results\comprehensive_vwap_grid_20260416_113109.csv
 ```
 
 ---
@@ -837,14 +837,14 @@ Let me check the original mean reversion results from the past to understand wha
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\results\\mean_reversion_live_settings_validation.csv",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\results\\mean_reversion_live_settings_validation.csv",
   "limit": 30
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\mean_reversion_live_settings_validation.csv</path>
+<path>G:\ai-workspace\Bot3\BTV2\results\mean_reversion_live_settings_validation.csv</path>
 <type>file</type>
 <content>1: Year,Mode,Trades,WR%,PF,Net%,Sharpe,MaxDD%
 2: 2019,normal,6,66.7,5.327,7.11,2.296,-2.33
@@ -897,7 +897,7 @@ Let me check what the daily mean reversion does differently.
 **Output:**
 ```
 Found 1 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 833: def run_mean_reversion(
 ```
 
@@ -914,7 +914,7 @@ Let me look at the original mean_reversion strategy in strategies.py to understa
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 120,
   "offset": 830
 }
@@ -922,7 +922,7 @@ Let me look at the original mean_reversion strategy in strategies.py to understa
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>830: # ─────────────────────────────────────────────────────────────────────────────
 831: # 1. MEAN REVERSION
@@ -1064,13 +1064,13 @@ Let me check what parameters worked in the earlier tests:
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\results\\mean_reversion_best_config_yearly.csv"
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\results\\mean_reversion_best_config_yearly.csv"
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\mean_reversion_best_config_yearly.csv</path>
+<path>G:\ai-workspace\Bot3\BTV2\results\mean_reversion_best_config_yearly.csv</path>
 <type>file</type>
 <content>1: Config,Year,Trades,WR%,PF,Net%,Sharpe,MaxDD%
 2: "Best (adx=20, trail=1.0, rsi=30/75)",2018,1,100.0,inf,1.12,1.0,-0.41
@@ -1194,14 +1194,14 @@ You're right. Let me compile all our findings into one comprehensive review:
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\.claude\\worktrees\\eager-nobel\\signals_log.csv",
+  "filePath": "G:\\ai-workspace\\Bot3\\.claude\\worktrees\\eager-nobel\\signals_log.csv",
   "limit": 5
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\.claude\worktrees\eager-nobel\signals_log.csv</path>
+<path>G:\ai-workspace\Bot3\.claude\worktrees\eager-nobel\signals_log.csv</path>
 <type>file</type>
 <content>1: timestamp,symbol,strategy,side,entry_price,stop_loss,take_profit,confidence,quality,regime,status,rejection_reason,execution_result,order_id,filled_price,filled_quantity,pnl,notes
 2: 2026-02-10T12:44:12.010313,AVAX,GRID_TRADING,BUY,8.774228,8.46827647912088,8.987819282800523,0.8450299625849885,STANDARD,,rejected,Invalid account balance (<=0),,,,,,
@@ -1213,7 +1213,7 @@ You're right. Let me compile all our findings into one comprehensive review:
 </content>
 
 <system-reminder>
-Instructions from: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\.claude\worktrees\eager-nobel\AGENTS.md
+Instructions from: G:\ai-workspace\Bot3\.claude\worktrees\eager-nobel\AGENTS.md
 # Agent Guidelines for Trading Bot v2
 
 ## Build/Lint/Test Commands
@@ -2359,10 +2359,10 @@ Total Trades:    0
 Win Rate:        0.0%
 Return:          0.00%
 Traceback (most recent call last):
-  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\comprehensive_vwap_strategy.py", line 765, in <module>
+  File "G:\ai-workspace\Bot3\BTV2\comprehensive_vwap_strategy.py", line 765, in <module>
     main()
     ~~~~^^
-  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\comprehensive_vwap_strategy.py", line 757, in main
+  File "G:\ai-workspace\Bot3\BTV2\comprehensive_vwap_strategy.py", line 757, in main
     print(f"Avg PnL:         {result.metrics['avg_pnl']*100:.2f}%")
                               ~~~~~~~~~~~~~~^^^^^^^^^^^
 KeyError: 'avg_pnl'
@@ -2496,7 +2496,7 @@ Build a profitable automated VWAP trading strategy for BTC using the BTV2 walk-f
 ## Relevant files / directories
 
 ```
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\
+G:\ai-workspace\Bot3\
 ├── BTV2\
 │   ├── comprehensive_vwap_strategy.py     # Main strategy being tested
 │   ├── strategies.py                       # Contains working mean reversion + liquidation capture
@@ -2527,7 +2527,7 @@ The user is asking if we've tried an anchored VWAP strategy. Let me search our m
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "anchored.*vwap|anchored_vwap|anchor.*vwap"
 }
 ```
@@ -2535,232 +2535,232 @@ The user is asking if we've tried an anchored VWAP strategy. Let me search our m
 **Output:**
 ```
 Found 112 matches (showing first 100)
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\quick_regime_test.py:
+G:\ai-workspace\Bot3\BTV2\quick_regime_test.py:
   Line 79:         "use_anchored_vwap": True, "use_session_filter": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_regime_specific.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_regime_specific.py:
   Line 65:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_two_sided_entry_fast.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_two_sided_entry_fast.py:
   Line 80:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_two_sided_entry.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_two_sided_entry.py:
   Line 91:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_regime_entry_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_regime_entry_test.py:
   Line 145:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_comprehensive_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_comprehensive_test.py:
   Line 137:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_sd3_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_sd3_test.py:
   Line 94:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_high_sd_thresholds.py:
+G:\ai-workspace\Bot3\BTV2\test_high_sd_thresholds.py:
   Line 133:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_quick.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_quick.py:
   Line 100:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_focused.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_focused.py:
   Line 105:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
   Line 126:         "use_anchored_vwap": True,
   Line 202:             "use_anchored_vwap": True, "use_session_filter": False, "require_reversal_candle": False,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_fast.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_fast.py:
   Line 120:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_optimization.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_optimization.py:
   Line 139:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_test.py:
   Line 95:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v4_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v4_test.py:
   Line 89:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_htf_regime_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_htf_regime_test.py:
   Line 187:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\optimizer_trials.jsonl:
+G:\ai-workspace\Bot3\BTV2\results\optimizer_trials.jsonl:
   Line 1: {"strategy": "VWAP Scalping", "trial": 1, "timestamp": "2026-04-14T18:16:40.793639", "accepted": 1, "status": "ok", "mean_oos_sharpe": -2.552, "total_return_pct": -25.18, "cagr_pct": -4.06, "max_dd_pct": -25.18, "win_rate_pct": 32.0, "profit_factor": 0.24, "n_trades": 75, "n_windows": 20, "consistency_pct": 10.0, "params": {"use_trend_filter": true, "use_volume_filter": true, "use_trailing_stop": true, "use_session_filter": true, "use_htf_ema": true, "use_anchored_vwap": true, "require_reversal_candle": true, "use_stoch_filter": false, "use_htf_vwap": true, "sd_threshold": 3.5, "entry_mode": "bear_pullback", "atr_stop": 3.0, "tp_mode": "atr", "trailing_atr": 2.0}}
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_grid_search.py:
+G:\ai-workspace\Bot3\BTV2\vwap_grid_search.py:
   Line 65:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\vwap_code_differences.md:
+G:\ai-workspace\Bot3\BTV2\results\vwap_code_differences.md:
   Line 27:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_matrix_direct.py:
+G:\ai-workspace\Bot3\BTV2\test_matrix_direct.py:
   Line 52:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_vwap_ranging_quick.py:
+G:\ai-workspace\Bot3\BTV2\test_vwap_ranging_quick.py:
   Line 101:         "use_anchored_vwap": True,
   Line 155:         "use_anchored_vwap": True,
   Line 209:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_vwap_ranging_exact.py:
+G:\ai-workspace\Bot3\BTV2\test_vwap_ranging_exact.py:
   Line 108:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_full_2018_2025_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_full_2018_2025_validation.py:
   Line 141:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_tuner_v3_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_tuner_v3_validation.py:
   Line 170:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_tuner_v2_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_tuner_v2_validation.py:
   Line 81:     "use_anchored_vwap": True,
   Line 305:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_regime_tuning_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_regime_tuning_validation.py:
   Line 94:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tune_vwap_regime_params.py:
+G:\ai-workspace\Bot3\BTV2\tune_vwap_regime_params.py:
   Line 77:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_regime_entry_matrix.py:
+G:\ai-workspace\Bot3\BTV2\vwap_regime_entry_matrix.py:
   Line 81:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\regime_performance_matrix.py:
+G:\ai-workspace\Bot3\BTV2\regime_performance_matrix.py:
   Line 90:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_v6.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_v6.py:
   Line 79:     "use_anchored_vwap": True,
   Line 116:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md:
+G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md:
   Line 1155: | `use_anchored_vwap` | `True` | Daily-reset session VWAP instead of rolling 20-bar window |
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 1094:     use_anchored_vwap: bool = True,    # daily-reset session VWAP (vs. rolling 20-bar window)
   Line 1155:     UTM Enhancements (use_anchored_vwap / use_session_filter / require_reversal_candle):
   Line 1174:     if use_anchored_vwap:
   Line 2437:     "use_anchored_vwap":       True,   # daily-reset session VWAP
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_sui_2024_final.py:
+G:\ai-workspace\Bot3\BTV2\test_sui_2024_final.py:
   Line 71:             "use_anchored_vwap": True,
   Line 90:             "use_anchored_vwap": True,
   Line 109:             "use_anchored_vwap": True,
   Line 128:             "use_anchored_vwap": True,
   Line 146:             "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_sui_exact_params.py:
+G:\ai-workspace\Bot3\BTV2\test_sui_exact_params.py:
   Line 101:             "use_anchored_vwap": True,
   Line 121:             "use_anchored_vwap": True,
   Line 141:             "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_exact_analysis_params_v2.py:
+G:\ai-workspace\Bot3\BTV2\test_exact_analysis_params_v2.py:
   Line 78:             "use_anchored_vwap": True,
   Line 98:             "use_anchored_vwap": True,
   Line 118:             "use_anchored_vwap": True,
   Line 141:             "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_exact_analysis_params.py:
+G:\ai-workspace\Bot3\BTV2\test_exact_analysis_params.py:
   Line 77:     "use_anchored_vwap": True,
   Line 97:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_optimized.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_optimized.py:
   Line 130:         "use_anchored_vwap": True,
   Line 158:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\analyze_vwap_trade_details.py:
+G:\ai-workspace\Bot3\BTV2\analyze_vwap_trade_details.py:
   Line 35: compute_vwap_anchored = strategies.compute_vwap_anchored
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_final.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_final.py:
   Line 83:         "use_trailing_stop": True, "trailing_atr": 1.2, "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_validation.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_validation.py:
   Line 81:         "use_trailing_stop": True, "trailing_atr": 1.2, "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_fast.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_fast.py:
   Line 88:         "use_trailing_stop": True, "trailing_atr": 1.2, "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_quick.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_quick.py:
   Line 60:     "use_trailing_stop": True, "trailing_atr": 1.2, "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_comprehensive.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_comprehensive.py:
   Line 86:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_tp_mode_sweep.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_tp_mode_sweep.py:
   Line 111:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_tp_mode.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_tp_mode.py:
   Line 50:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_atr7.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_atr7.py:
   Line 68:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_fixed.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_fixed.py:
   Line 68:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_scalping_live_settings.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_scalping_live_settings.py:
   Line 74:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_enhanced_regime_next_steps.py:
+G:\ai-workspace\Bot3\BTV2\test_enhanced_regime_next_steps.py:
   Line 133:     "use_anchored_vwap": True, "use_session_filter": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_enhanced_regime.py:
+G:\ai-workspace\Bot3\BTV2\test_enhanced_regime.py:
   Line 153:     "use_anchored_vwap": True, "use_session_filter": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_regime_filter.py:
+G:\ai-workspace\Bot3\BTV2\test_regime_filter.py:
   Line 149:     "use_anchored_vwap": True, "use_session_filter": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_all_modes_trend_direction.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_all_modes_trend_direction.py:
   Line 113:     use_anchored_vwap=True,
   Line 283:     use_anchored_vwap = BASE_PARAMS["use_anchored_vwap"]
   Line 291:     if use_anchored_vwap:
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_sd345_yearly.py:
+G:\ai-workspace\Bot3\BTV2\test_sd345_yearly.py:
   Line 103:     "use_anchored_vwap": False,  # Use rolling VWAP (original behavior)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\vwap_yearly_test_report.md:
+G:\ai-workspace\Bot3\BTV2\results\vwap_yearly_test_report.md:
   Line 21:     use_anchored_vwap = True
   Line 42:     use_anchored_vwap = True
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_yearly_backtest.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_yearly_backtest.py:
   Line 50:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_final_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_final_test.py:
   Line 75:     'use_anchored_vwap': True,
   Line 107:     'use_anchored_vwap': True,
   Line 131:     'use_anchored_vwap': True,
   Line 159:     'use_anchored_vwap': True,
   Line 202:     'use_anchored_vwap': True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_year_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_year_test.py:
   Line 68:     'use_anchored_vwap': True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_relaxed_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_relaxed_test.py:
   Line 74:     'use_anchored_vwap': True,
   Line 133:     'use_anchored_vwap': False,  # Rolling VWAP
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_quick.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_fix_quick.py:
   Line 79:     'use_anchored_vwap': True,
   Line 121:     'use_anchored_vwap': True,
   Line 144:     'use_anchored_vwap': True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_extended.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_fix_extended.py:
   Line 90:     'use_anchored_vwap': True,
   Line 116:     'use_anchored_vwap': True,
   Line 147:     'use_anchored_vwap': True,
   Line 177:     'use_anchored_vwap': True,
   Line 208:     'use_anchored_vwap': True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_fix_test.py:
   Line 105:     'use_anchored_vwap': True,
   Line 152:     'use_anchored_vwap': True,
   Line 189:     'use_anchored_vwap': True,
   Line 220:     'use_anchored_vwap': True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_tp_mode_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_tp_mode_test.py:
   Line 79:         "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_exit_analysis.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_exit_analysis.py:
   Line 101:     "use_anchored_vwap": True,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_df_exit_usage.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_df_exit_usage.py:
   Line 103:     "use_anchored_vwap": True,
 
 (Results truncated: showing 100 of 112 matches (12 hidden). Consider using a more specific path or pattern.)
@@ -2790,7 +2790,7 @@ Let me check the key differences:
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "compute_vwap_anchored|def.*vwap"
 }
 ```
@@ -2798,45 +2798,45 @@ Let me check the key differences:
 **Output:**
 ```
 Found 56 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\comprehensive_vwap_strategy.py:
+G:\ai-workspace\Bot3\BTV2\comprehensive_vwap_strategy.py:
   Line 50:     compute_vwap_anchored,
   Line 235:             vwap, vwap_std = compute_vwap_anchored(high, low, close, volume)
   Line 471:             vwap, vwap_std = compute_vwap_anchored(high, low, close, volume)
   Line 713:     parser.add_argument("--tp-mode", type=str, default="vwap", choices=["vwap", "rr"], 
   Line 714:                        help="Take profit mode (default: vwap)")
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_regime_entry_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_regime_entry_test.py:
   Line 343: def run_vwap_with_params(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_comprehensive_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_comprehensive_test.py:
   Line 371: def run_vwap_with_params(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_sd3_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_sd3_test.py:
   Line 216: def run_vwap_with_params(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_test.py:
   Line 217: def run_vwap_with_params(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v4_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v4_test.py:
   Line 174: def run_vwap_v4(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_htf_regime_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_htf_regime_test.py:
   Line 154: def run_vwap_filtered(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_matrix_debug.py:
+G:\ai-workspace\Bot3\BTV2\test_matrix_debug.py:
   Line 53: from BTV2.strategies import compute_vwap_anchored
   Line 54: session_vwap, session_std = compute_vwap_anchored(df["High"], df["Low"], df["Close"], df["Volume"])
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_vwap_ranging_exact.py:
+G:\ai-workspace\Bot3\BTV2\test_vwap_ranging_exact.py:
   Line 73: def run_vwap_regime_test(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_full_2018_2025_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_full_2018_2025_validation.py:
   Line 104: def run_vwap_with_regime(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_tuner_v3_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_tuner_v3_validation.py:
   Line 139: def run_vwap_filtered(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md:
+G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md:
   Line 209:     tp_mode          = "atr",  # "atr" = ATR backstop (v6 default, was "vwap")
   Line 630: **Root cause:** `compute_vwap_anchored()` was receiving `fc` (Butterworth low-pass filtered close) instead of raw close prices. The filter compresses price deviation around the mean — so VWAP bands became narrower than they should be, making `sd_threshold=2.0` effectively trigger on much smaller deviations than intended on real data.
   Line 637: vwap, vs = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])  # ← wrong
@@ -2844,84 +2844,84 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md:
   Line 1277: vwap, vs = compute_vwap_anchored(df["High"], df["Low"], df["Close"], df["Volume"])
   Line 1281: vwap, vs = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])  # ← DO NOT
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 175: def compute_vwap_rolling(high: pd.Series, low: pd.Series, close: pd.Series,
   Line 188: def compute_vwap_anchored(
   Line 351:     vwap, vwap_std = compute_vwap_anchored(
   Line 1064: def run_vwap_scalping(
   Line 1175:         vwap, vs = compute_vwap_anchored(df["High"], df["Low"], raw_close, df["Volume"])
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\analyze_vwap_trade_details.py:
+G:\ai-workspace\Bot3\BTV2\analyze_vwap_trade_details.py:
   Line 35: compute_vwap_anchored = strategies.compute_vwap_anchored
   Line 61:     vwap, vsd = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])
   Line 101: def run_vwap_with_trade_logging(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_redesign_comprehensive.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_redesign_comprehensive.py:
   Line 17:     compute_vwap_anchored,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_all_modes_trend_direction.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_all_modes_trend_direction.py:
   Line 259:         compute_vwap_anchored,
   Line 292:         vwap, vs = compute_vwap_anchored(df["High"], df["Low"], fc, df["Volume"])
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_rr_issue.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_rr_issue.py:
   Line 87: def patched_vwap_scalping(df, cutoff, **params):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_regime_aware_vwap.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_regime_aware_vwap.py:
   Line 73: def run_vwap_backtest(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\reports\VWAP 50k .txt:
+G:\ai-workspace\Bot3\BTV2\reports\VWAP 50k .txt:
   Line 47: parser.add_argument("--output", default="vwap_full_sweep_2018_now.csv")
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_reversal_exact.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_reversal_exact.py:
   Line 37: def run_vwap_momentum_original(df, cutoff=0.10, sd_threshold=2.5, atr_stop=0.7, 
   Line 150: def run_vwap_momentum_reversed(df, cutoff=0.10, sd_threshold=2.5, atr_stop=0.7, 
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_reversal_v2.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_reversal_v2.py:
   Line 37: def run_vwap_momentum(df, cutoff=0.10, sd_threshold=2.5, atr_stop=0.7, atr_target=2.0,
   Line 152: def run_vwap_meanrev(df, cutoff=0.10, sd_threshold=2.0, atr_stop=0.7, atr_target=2.0,
   Line 265: def run_vwap_meanrev_macd(df, cutoff=0.10, sd_threshold=2.0, atr_stop=0.7, atr_target=2.0,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_quick.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_quick.py:
   Line 34: def run_vwap_test(df, params):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_reversal.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_reversal.py:
   Line 59: def run_vwap_original(
   Line 231: def run_vwap_reversed(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_relaxed.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_relaxed.py:
   Line 36: def run_vwap_entry_test(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_inverted.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_inverted.py:
   Line 48: def run_vwap_inverted(df_exit=None, **params):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_final.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_final.py:
   Line 29: def run_vwap_momentum(df, cutoff, sd_threshold, atr_stop, atr_target, 
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_focused.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_focused.py:
   Line 36: def run_vwap_test(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_entry_modes.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_entry_modes.py:
   Line 45: def run_vwap_entry_test(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_entry_v2.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_entry_v2.py:
   Line 35: def run_vwap_entry_test(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_cutoffs.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_cutoffs.py:
   Line 25: def run_vwap_simple(df, cutoff, sd_threshold, atr_stop, vwap_period=20):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_c08_sd.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_c08_sd.py:
   Line 25: def run_vwap_simple(df, cutoff, sd_threshold, atr_stop, vwap_period=20):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_5m_comprehensive.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_5m_comprehensive.py:
   Line 26: def run_vwap_custom(df, cutoff, sd_threshold, atr_stop, macd_fast=12, macd_slow=26, macd_sig=9, vwap_period=20, rsi_filter=None, vol_filter=None):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_1m_highsd.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_1m_highsd.py:
   Line 25: def run_vwap_simple(df, cutoff, sd_threshold, atr_stop, vwap_period=20):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_1m.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_1m.py:
   Line 25: def run_vwap_simple(df, cutoff, sd_threshold, atr_stop, vwap_period=20):
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\reports\vwap next upgrade.txt:
+G:\ai-workspace\Bot3\BTV2\reports\vwap next upgrade.txt:
   Line 33: def run_vwap_scalping(
 ```
 
@@ -2946,7 +2946,7 @@ Let me clarify what we've tried vs. what they might be asking about.
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 60,
   "offset": 175
 }
@@ -2954,7 +2954,7 @@ Let me clarify what we've tried vs. what they might be asking about.
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>175: def compute_vwap_rolling(high: pd.Series, low: pd.Series, close: pd.Series,
 176:                           volume: pd.Series, period: int = 20) -> tuple[pd.Series, pd.Series]:
@@ -3072,7 +3072,7 @@ Let me check one key test comparing them:
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "use_anchored_vwap.*False"
 }
 ```
@@ -3080,19 +3080,19 @@ Let me check one key test comparing them:
 **Output:**
 ```
 Found 5 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
   Line 202:             "use_anchored_vwap": True, "use_session_filter": False, "require_reversal_candle": False,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_sd345_yearly.py:
+G:\ai-workspace\Bot3\BTV2\test_sd345_yearly.py:
   Line 103:     "use_anchored_vwap": False,  # Use rolling VWAP (original behavior)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_relaxed_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_relaxed_test.py:
   Line 133:     'use_anchored_vwap': False,  # Rolling VWAP
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_utm_15m.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_utm_15m.py:
   Line 63:               "use_anchored_vwap": False, "use_session_filter": False,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_utm_anchored.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_utm_anchored.py:
   Line 61:               "use_anchored_vwap": False, "use_session_filter": False,
 ```
 
@@ -3158,7 +3158,7 @@ Good idea. Different trading sessions (London, NY, Asia) have different volume p
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 80,
   "offset": 185
 }
@@ -3166,7 +3166,7 @@ Good idea. Different trading sessions (London, NY, Asia) have different volume p
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>185:     return vwap, np.sqrt(var)
 186: 
@@ -3290,7 +3290,7 @@ Good — I'll create a session-anchored VWAP that resets at different trading se
 {
   "command": "Create session-anchored VWAP test",
   "description": "Create session-anchored VWAP test",
-  "prompt": "Create a new test file in `C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2` called `test_session_vwap.py` that:\n\n1. **Adds a session-anchored VWAP function** `compute_vwap_session_anchored(high, low, close, volume, session_start_hour, session_end_hour)` that:\n   - Takes session start/end hours in UTC (e.g., London 8-16, NY 13:30-20:00, Asia 0-8)\n   - Creates session IDs based on which session the bar falls into\n   - Resets VWAP calculation at session start\n   - Uses cumulative TP×Volume / cumulative Volume within each session\n   - Returns (vwap, vwap_std) aligned to the original index\n\n2. **Test the following session anchors**:\n   - Asia session: 00:00-08:00 UTC\n   - London session: 08:00-16:00 UTC  \n   - NY session: 13:30-20:00 UTC\n   - London/NY overlap: 13:30-16:00 UTC\n   - Full trading day: 00:00-24:00 (for comparison with daily)\n\n3. **Use the best SFP config from prior work**:\n   - sd_threshold: 3.5\n   - atr_stop: 2.0\n   - tp_mode: \"rr\" (2:1 risk reward)\n   - require_sfp: True\n   - require_volume: True\n\n4. **Run backtest on the same data period** as prior tests (2023-2025 or available data)\n\n5. **Output results** showing:\n   - Number of trades\n   - Win rate\n   - Total return %\n   - Best performing session anchor\n\nUse existing imports from the project. The function should work with the current strategy logic.",
+  "prompt": "Create a new test file in `G:\\ai-workspace\\Bot3\\BTV2` called `test_session_vwap.py` that:\n\n1. **Adds a session-anchored VWAP function** `compute_vwap_session_anchored(high, low, close, volume, session_start_hour, session_end_hour)` that:\n   - Takes session start/end hours in UTC (e.g., London 8-16, NY 13:30-20:00, Asia 0-8)\n   - Creates session IDs based on which session the bar falls into\n   - Resets VWAP calculation at session start\n   - Uses cumulative TP×Volume / cumulative Volume within each session\n   - Returns (vwap, vwap_std) aligned to the original index\n\n2. **Test the following session anchors**:\n   - Asia session: 00:00-08:00 UTC\n   - London session: 08:00-16:00 UTC  \n   - NY session: 13:30-20:00 UTC\n   - London/NY overlap: 13:30-16:00 UTC\n   - Full trading day: 00:00-24:00 (for comparison with daily)\n\n3. **Use the best SFP config from prior work**:\n   - sd_threshold: 3.5\n   - atr_stop: 2.0\n   - tp_mode: \"rr\" (2:1 risk reward)\n   - require_sfp: True\n   - require_volume: True\n\n4. **Run backtest on the same data period** as prior tests (2023-2025 or available data)\n\n5. **Output results** showing:\n   - Number of trades\n   - Win rate\n   - Total return %\n   - Best performing session anchor\n\nUse existing imports from the project. The function should work with the current strategy logic.",
   "subagent_type": "generator"
 }
 ```
@@ -3306,7 +3306,7 @@ The test is complete and working. Let me provide a summary of what was created:
 
 ## Summary
 
-### Created File: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_session_vwap.py`
+### Created File: `G:\ai-workspace\Bot3\BTV2\test_session_vwap.py`
 
 **Key Features:**
 
@@ -3379,7 +3379,7 @@ Let me run the test to see the full results:
 **Input:**
 ```json
 {
-  "command": "cd C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2 && python test_session_vwap.py",
+  "command": "cd G:\\ai-workspace\\Bot3\\BTV2 && python test_session_vwap.py",
   "description": "Run session VWAP test",
   "timeout": 180000
 }
@@ -3407,7 +3407,7 @@ The path issue is because this system is running on Windows. Let me fix the path
   "command": "python test_session_vwap.py",
   "description": "Run session VWAP test",
   "timeout": 180000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
@@ -3483,7 +3483,7 @@ Full_Day                       147     29.3     -31.13    -4.58   -31.50
 
 Best performing session: London_NY_Overlap (-8.17% return)
 
-Results saved to C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\session_vwap_results.csv
+Results saved to G:\ai-workspace\Bot3\BTV2\results\session_vwap_results.csv
 
 ```
 
@@ -3570,7 +3570,7 @@ Let me delegate this to the generator agent to create an optimized test.
 ```json
 {
   "description": "Optimize session VWAP params",
-  "prompt": "Create a new test file in `C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2` called `test_session_vwap_optimized.py` that:\n\n1. **Uses London/NY Overlap session** (13:00-16:00 UTC) as the primary session anchor — this was the best performer from the prior test\n\n2. **Run a grid search** over these parameter combinations:\n   - sd_threshold: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]\n   - atr_stop: [0.5, 0.7, 1.0, 1.5, 2.0]\n   - tp_mode: [\"rr\", \"atr\"] \n   - atr_target: [1.5, 2.0, 2.5, 3.0, 4.0] (for RR mode, this is the RR multiple)\n   - entry_mode: [\"bull_pullback\", \"bear_pullback\", \"reversal\"]\n   - require_sfp: [True, False]\n   - use_regime_filter: [True, False] (only trade when ADX < 20)\n\n3. **Keep these fixed**:\n   - session_start_hour: 13\n   - session_end_hour: 16\n   - use_volume_filter: True\n   - volume_mult: 1.5\n\n4. **Use the same data** (2023-2025 or available)\n\n5. **Output**:\n   - All parameter combinations tested with results (trades, win rate, return %, sharpe, max DD)\n   - Top 10 best performing configs\n   - Identify best overall config\n\n6. **Also test** combining session anchor WITH daily anchor (i.e., session-anchored VWAP + daily bands)\n\nUse existing imports from the project. Make it run efficiently (don't test every single combination, use a smart subset based on what we know works).\n\nReturn the full results and the best configuration found.",
+  "prompt": "Create a new test file in `G:\\ai-workspace\\Bot3\\BTV2` called `test_session_vwap_optimized.py` that:\n\n1. **Uses London/NY Overlap session** (13:00-16:00 UTC) as the primary session anchor — this was the best performer from the prior test\n\n2. **Run a grid search** over these parameter combinations:\n   - sd_threshold: [2.5, 3.0, 3.5, 4.0, 4.5, 5.0]\n   - atr_stop: [0.5, 0.7, 1.0, 1.5, 2.0]\n   - tp_mode: [\"rr\", \"atr\"] \n   - atr_target: [1.5, 2.0, 2.5, 3.0, 4.0] (for RR mode, this is the RR multiple)\n   - entry_mode: [\"bull_pullback\", \"bear_pullback\", \"reversal\"]\n   - require_sfp: [True, False]\n   - use_regime_filter: [True, False] (only trade when ADX < 20)\n\n3. **Keep these fixed**:\n   - session_start_hour: 13\n   - session_end_hour: 16\n   - use_volume_filter: True\n   - volume_mult: 1.5\n\n4. **Use the same data** (2023-2025 or available)\n\n5. **Output**:\n   - All parameter combinations tested with results (trades, win rate, return %, sharpe, max DD)\n   - Top 10 best performing configs\n   - Identify best overall config\n\n6. **Also test** combining session anchor WITH daily anchor (i.e., session-anchored VWAP + daily bands)\n\nUse existing imports from the project. Make it run efficiently (don't test every single combination, use a smart subset based on what we know works).\n\nReturn the full results and the best configuration found.",
   "subagent_type": "generator"
 }
 ```
@@ -3586,7 +3586,7 @@ The test file has been created and provides all results. Here's the complete sum
 
 ---
 
-## Test File Created: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_session_vwap_optimized.py`
+## Test File Created: `G:\ai-workspace\Bot3\BTV2\test_session_vwap_optimized.py`
 
 ### Session Comparison Results (from test_session_vwap.py):
 
@@ -3667,7 +3667,7 @@ Let me run the test to see the full results:
   "command": "python test_session_vwap_optimized.py",
   "description": "Run optimized session VWAP test",
   "timeout": 300000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
@@ -3844,7 +3844,7 @@ You're absolutely right — let me check what scalping params we've tested and s
 ```json
 {
   "include": "*.py",
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "atr_stop.*0\\.[3-5]|scalp|tight.*stop"
 }
 ```
@@ -3852,16 +3852,16 @@ You're absolutely right — let me check what scalping params we've tested and s
 **Output:**
 ```
 Found 486 matches (showing first 100)
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_session_vwap_optimized.py:
+G:\ai-workspace\Bot3\BTV2\test_session_vwap_optimized.py:
   Line 82: 1. London/NY Overlap (13:00-16:00 UTC) is the BEST session for VWAP scalping
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_session_vwap.py:
+G:\ai-workspace\Bot3\BTV2\test_session_vwap.py:
   Line 33:     run_vwap_scalping,
   Line 53: # Using tight stops and SFP confirmation
   Line 251:     eq, trades = run_vwap_scalping(
   Line 323:     eq, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 1064: def run_vwap_scalping(
   Line 1068:     atr_stop: float = 1.0,        # stop multiplier (widened: 5m noise stops out tight stops)
   Line 1428:             # Entry logic - Multiple entry modes for VWAP scalping
@@ -3872,33 +3872,33 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
   Line 2490:     "Momentum Scalping":   (run_momentum_scalping,   MS_GRID, MS_DEFAULTS),
   Line 2498:     "VWAP Scalping":       "VWAP breakout + EMA trend + Volume · Trend following scalping on 1-5m bars.",
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\quick_regime_test.py:
+G:\ai-workspace\Bot3\BTV2\quick_regime_test.py:
   Line 21:     run_vwap_scalping,
   Line 90:     equity, trades = run_vwap_scalping(df_c, CUTOFF, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_regime_specific.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_regime_specific.py:
   Line 24:     run_vwap_scalping,
   Line 205:     equity, trades = run_vwap_scalping(df_copy, CUTOFF, df_exit=df_exit_copy, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_two_sided_entry_fast.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_two_sided_entry_fast.py:
   Line 31:     run_vwap_scalping,
   Line 271:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\grid_search_two_sided_entry.py:
+G:\ai-workspace\Bot3\BTV2\grid_search_two_sided_entry.py:
   Line 42:     run_vwap_scalping,
   Line 210:     """Run VWAP scalping backtest with specific parameters."""
   Line 238:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\regime_parameters.py:
+G:\ai-workspace\Bot3\BTV2\regime_parameters.py:
   Line 251:             self.atr_stop = min(3.0, self.atr_stop + 0.3)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_regime_entry_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_regime_entry_test.py:
   Line 40:     run_vwap_scalping,
   Line 370:     equity, trades = run_vwap_scalping(
   Line 415:         equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
   Line 475:         equity, trades = run_vwap_scalping(df_month, CUTOFF, df_exit=df_exit_month, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_comprehensive_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v6_comprehensive_test.py:
   Line 38:     run_vwap_scalping,
   Line 87: ATR_TIGHTEN_THRESHOLD = 35.0  # If WR < 35%, tighten stop
   Line 398:     equity, trades = run_vwap_scalping(
@@ -3907,120 +3907,120 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v6_comprehensive_test.py:
   Line 538:         equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
   Line 589:         equity, trades = run_vwap_scalping(df_month, CUTOFF, df_exit=df_exit_month, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_sd3_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_sd3_test.py:
   Line 36:     run_vwap_scalping,
   Line 241:     equity, trades = run_vwap_scalping(
   Line 295:         equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
   Line 347:         equity, trades = run_vwap_scalping(df_month, CUTOFF, df_exit=df_exit_month, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_high_sd_thresholds.py:
+G:\ai-workspace\Bot3\BTV2\test_high_sd_thresholds.py:
   Line 29:     run_vwap_scalping,
   Line 151:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_quick.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_quick.py:
   Line 21:     run_vwap_scalping,
   Line 118:     equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_focused.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_focused.py:
   Line 22:     run_vwap_scalping,
   Line 123:     equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_ultra_fast.py:
   Line 102:     from BTV2.strategies import run_vwap_scalping, compute_metrics, INTERVAL_BARS_PER_YEAR
   Line 144:     equity, trades = run_vwap_scalping(
   Line 173:     from BTV2.strategies import run_vwap_scalping, compute_metrics, compute_reference_levels, INTERVAL_BARS_PER_YEAR
   Line 209:         equity, trades = run_vwap_scalping(df_year, CUTOFF, df_exit=df_exit_year, **param_dict)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_fast.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_fast.py:
   Line 23:     run_vwap_scalping,
   Line 138:     equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_2023_2025_optimization.py:
+G:\ai-workspace\Bot3\BTV2\vwap_2023_2025_optimization.py:
   Line 35:     run_vwap_scalping,
   Line 157:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v5_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v5_test.py:
   Line 37:     run_vwap_scalping,
   Line 242:     equity, trades = run_vwap_scalping(
   Line 321:         equity, trades = run_vwap_scalping(df, CUTOFF, df_exit=df_exit, **params)
   Line 374:         equity, trades = run_vwap_scalping(df_month, CUTOFF, df_exit=df_exit_month, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_v4_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_v4_test.py:
   Line 35:     run_vwap_scalping,
   Line 194:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tuner_htf_regime_test.py:
+G:\ai-workspace\Bot3\BTV2\tuner_htf_regime_test.py:
   Line 39:     run_vwap_scalping,
   Line 205:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\regime_detector.py:
+G:\ai-workspace\Bot3\BTV2\regime_detector.py:
   Line 853:         "vwap_scalping": {
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_grid_search.py:
+G:\ai-workspace\Bot3\BTV2\vwap_grid_search.py:
   Line 26:     run_vwap_scalping,
   Line 117:             eq_oos, trades_oos = run_vwap_scalping(df_test, cutoff, **params)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\optimizer_agent.py:
+G:\ai-workspace\Bot3\BTV2\optimizer_agent.py:
   Line 67:     run_vwap_scalping,
   Line 68:     run_momentum_scalping,
   Line 152:         "run_fn": run_vwap_scalping,
   Line 194:         "run_fn": run_momentum_scalping,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_matrix_debug.py:
+G:\ai-workspace\Bot3\BTV2\test_matrix_debug.py:
   Line 14: from BTV2.strategies import run_vwap_scalping, compute_reference_levels, apply_butterworth
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_matrix_direct.py:
+G:\ai-workspace\Bot3\BTV2\test_matrix_direct.py:
   Line 13: from BTV2.strategies import run_vwap_scalping, compute_reference_levels, compute_metrics, COST_PER_SIDE, INTERVAL_BARS_PER_YEAR
   Line 61: eq, trades = run_vwap_scalping(
   Line 96: eq2, trades2 = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_vwap_ranging_quick.py:
+G:\ai-workspace\Bot3\BTV2\test_vwap_ranging_quick.py:
   Line 16:     run_vwap_scalping,
   Line 113:     eq1, trades1 = run_vwap_scalping(df_5m, CUTOFF, df_exit=df_1m, **params1)
   Line 167:     eq2, trades2 = run_vwap_scalping(df_5m, CUTOFF, df_exit=df_1m, **params2)
   Line 221:     eq3, trades3 = run_vwap_scalping(df_5m, CUTOFF, df_exit=df_1m, **params3)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_vwap_ranging_exact.py:
+G:\ai-workspace\Bot3\BTV2\test_vwap_ranging_exact.py:
   Line 24:     run_vwap_scalping,
   Line 126:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_full_2018_2025_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_full_2018_2025_validation.py:
   Line 28:     run_vwap_scalping,
   Line 159:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_tuner_v3_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_tuner_v3_validation.py:
   Line 34:     run_vwap_scalping,
   Line 188:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_tuner_v2_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_tuner_v2_validation.py:
   Line 33:     run_vwap_scalping,
   Line 262:     equity, trades = run_vwap_scalping(
   Line 321:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_regime_tuning_validation.py:
+G:\ai-workspace\Bot3\BTV2\vwap_regime_tuning_validation.py:
   Line 46:     run_vwap_scalping,
   Line 190:     equity, trades = run_vwap_scalping(
   Line 223:     equity, trades = run_vwap_scalping(
   Line 259:     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tune_vwap_regime_params.py:
+G:\ai-workspace\Bot3\BTV2\tune_vwap_regime_params.py:
   Line 17: from strategies import run_vwap_scalping
   Line 115:                     equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\vwap_regime_entry_matrix.py:
+G:\ai-workspace\Bot3\BTV2\vwap_regime_entry_matrix.py:
   Line 5: Uses the real run_vwap_scalping function for accurate results.
   Line 17: from strategies import run_vwap_scalping
   Line 97:         equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\regime_performance_matrix.py:
+G:\ai-workspace\Bot3\BTV2\regime_performance_matrix.py:
   Line 26:     run_vwap_scalping,
   Line 174:         _, vwap_trades = run_vwap_scalping(df_5m, cutoff=0.10, regime_series=regimes, allowed_regimes=[regime], df_exit=df_1m, levels=levels, **VWAP_PARAMS)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\validate_vwap_v6.py:
+G:\ai-workspace\Bot3\BTV2\validate_vwap_v6.py:
   Line 42:     run_vwap_scalping,
   Line 253:         equity, trades = run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_sui_2024_final.py:
+G:\ai-workspace\Bot3\BTV2\test_sui_2024_final.py:
   Line 15: from BTV2.strategies import run_vwap_scalping, compute_metrics
   Line 157:         equity, trades = run_vwap_scalping(
 
@@ -4044,7 +4044,7 @@ Let me check the actual scalping strategy defaults to see what we've been testin
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 100,
   "offset": 1060
 }
@@ -4052,7 +4052,7 @@ Let me check the actual scalping strategy defaults to see what we've been testin
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>1060: 
 1061: # ─────────────────────────────────────────────────────────────────────────────
@@ -4175,7 +4175,7 @@ Let me check what results we've seen from the actual run_vwap_scalping function 
 ```json
 {
   "include": "*.py",
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "run_vwap_scalping.*atr_stop.*0\\.[3-5]"
 }
 ```
@@ -4199,7 +4199,7 @@ We haven't tested tighter stops like 0.3-0.5! Let me check what ATR values have 
 ```json
 {
   "include": "*.py",
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "atr_stop.*=.*0\\.[3-5]|atr_stop:.*0\\.[3-5]|\"atr_stop\".*0\\.[3-5]"
 }
 ```
@@ -4207,22 +4207,22 @@ We haven't tested tighter stops like 0.3-0.5! Let me check what ATR values have 
 **Output:**
 ```
 Found 131 matches (showing first 100)
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 2415:     "atr_stop":        [0.5, 0.7, 1.0, 1.5],   # 4  — stop multiplier (wider range for optimizer)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\regime_parameters.py:
+G:\ai-workspace\Bot3\BTV2\regime_parameters.py:
   Line 251:             self.atr_stop = min(3.0, self.atr_stop + 0.3)
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_final_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_final_test.py:
   Line 185: combo1['atr_stop'] = 0.5
   Line 193: combo2['atr_stop'] = 0.3
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_quick.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_fix_quick.py:
   Line 98: p1['atr_stop'] = 0.5
   Line 104: p2['atr_stop'] = 0.5
   Line 110: p3['atr_stop'] = 0.5
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_fix_test.py:
   Line 115: # Test 1.1: R:R = 1:1 (atr_stop=0.5, atr_target=0.5)
   Line 117: params['atr_stop'] = 0.5
   Line 121: # Test 1.2: R:R = 1.5:1 (atr_stop=0.5, atr_target=0.75)
@@ -4231,28 +4231,28 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_fix_test.py:
   Line 129: params['atr_stop'] = 0.5
   Line 171: htf_params_1h['atr_stop'] = 0.3  # Tighter stops on higher TF
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_tp_mode_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_tp_mode_test.py:
   Line 74:         "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_exit_analysis.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_exit_analysis.py:
   Line 95:     "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_df_exit_usage.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_df_exit_usage.py:
   Line 97:     "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_rr_issue.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_rr_issue.py:
   Line 119: # With atr_stop=0.5 and atr_target=3.5
   Line 124: print(f"\nWith atr_stop=0.5, atr_target=3.5:")
   Line 145:     "atr_stop": 0.5,
   Line 201: params2["atr_stop"] = 0.5
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_exit_detail.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_exit_detail.py:
   Line 108:         "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\debug_rr_exit.py:
+G:\ai-workspace\Bot3\BTV2\tests\debug_rr_exit.py:
   Line 160:         "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_high_rr_sweep.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_high_rr_sweep.py:
   Line 60:         "atr_stop": 0.5,
   Line 161:     configs.append({"name": "sd2.5_atr_7:1", "sd_threshold": 2.5, "atr_stop": 0.5, "atr_target": 3.5,
   Line 163:     configs.append({"name": "sd2.5_atr_10:1", "sd_threshold": 2.5, "atr_stop": 0.5, "atr_target": 5.0,
@@ -4273,15 +4273,15 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_high_rr_sweep.py:
   Line 213:     configs.append({"name": "sd1.5_atr_10:1", "sd_threshold": 1.5, "atr_stop": 0.5, "atr_target": 5.0,
   Line 215:     configs.append({"name": "sd1.5_atr_15:1", "sd_threshold": 1.5, "atr_stop": 0.5, "atr_target": 7.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_multivariate_sweep.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_multivariate_sweep.py:
   Line 88:     {"atr_stop": 0.5, "atr_target": 1.5, "rr_ratio": "3:1"},
   Line 90:     {"atr_stop": 0.5, "atr_target": 2.5, "rr_ratio": "5:1"},
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_regime_aware_vwap.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_regime_aware_vwap.py:
   Line 44:     "uptrend": {"sd_threshold": 2.0, "atr_stop": 1.0, "atr_target": 2.0, "entry_mode": "cross", "deviation_pct": 0.5},
   Line 45:     "downtrend": {"sd_threshold": 2.0, "atr_stop": 1.0, "atr_target": 2.0, "entry_mode": "cross", "deviation_pct": 0.5},
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_momentum_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_momentum_test.py:
   Line 77:     {"entry_mode": "momentum", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 30, "rsi_max": 50, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.5},
   Line 78:     {"entry_mode": "momentum", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 35, "rsi_max": 55, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.5},
   Line 79:     {"entry_mode": "momentum", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 40, "rsi_max": 60, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.5},
@@ -4301,7 +4301,7 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_momentum_test.py:
   Line 100:     {"entry_mode": "momentum", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 30, "rsi_max": 50, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.5, "momentum_bars": 4, "use_htf_vwap": False},
   Line 115:         "atr_stop": cfg.get("atr_stop", 0.5),
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_atr_test.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_atr_test.py:
   Line 78:     {"entry_mode": "cross", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 25, "rsi_max": 45, "volume_mult": 2.0, "atr_stop": 0.3, "atr_target": 0.7, "use_htf_vwap": False},
   Line 79:     {"entry_mode": "cross", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 25, "rsi_max": 45, "volume_mult": 2.0, "atr_stop": 0.4, "atr_target": 1.0, "use_htf_vwap": False},
   Line 80:     {"entry_mode": "cross", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 25, "rsi_max": 45, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.2, "use_htf_vwap": False},
@@ -4317,46 +4317,46 @@ C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_atr_test.py:
   Line 99:     {"entry_mode": "momentum", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 25, "rsi_max": 45, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 1.5, "use_htf_vwap": False},
   Line 114:         "atr_stop": cfg.get("atr_stop", 0.5),
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_param_sweep_2yr.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_param_sweep_2yr.py:
   Line 96:     {"entry_mode": "mean_reversion", "stoch_oversold": 20, "stoch_overbought": 80, "adx_max": 25, "rsi_max": 45, "volume_mult": 1.5, "atr_stop": 0.5, "atr_target": 4.0, "use_htf_vwap": False},
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\vwap_param_sweep_quick.py:
+G:\ai-workspace\Bot3\BTV2\tests\vwap_param_sweep_quick.py:
   Line 81:     {"entry_mode": "bull_pullback", "stoch_oversold": 10, "stoch_overbought": 90, "adx_max": 16, "rsi_max": 35, "volume_mult": 1.0, "atr_stop": 0.5, "atr_target": 4.0},
   Line 84:     {"entry_mode": "mean_reversion", "stoch_oversold": 10, "stoch_overbought": 90, "adx_max": 16, "rsi_max": 35, "volume_mult": 1.0, "atr_stop": 0.5, "atr_target": 4.0},
   Line 92:     {"entry_mode": "mean_reversion", "stoch_oversold": 15, "stoch_overbought": 85, "adx_max": 25, "rsi_max": 45, "volume_mult": 2.0, "atr_stop": 0.5, "atr_target": 5.0},
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_stochastic_v2.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_stochastic_v2.py:
   Line 136:             "atr_stop": 0.5,
   Line 158:             "atr_stop": 0.5,
   Line 177:             "atr_stop": 0.5,
   Line 197:             "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_entry_debug.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_entry_debug.py:
   Line 95:             "atr_stop": 0.5,
   Line 111:             "atr_stop": 0.5,
   Line 127:             "atr_stop": 0.5,
   Line 143:             "atr_stop": 0.5,
   Line 162:             "atr_stop": 0.4,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_debug_bull.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_debug_bull.py:
   Line 100:             "atr_stop": 0.5,
   Line 116:             "atr_stop": 0.5,
   Line 133:             "atr_stop": 0.5,
   Line 152:             "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_yearly_v2.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_yearly_v2.py:
   Line 201:             "atr_stop": 0.5,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_yearly_v3.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_yearly_v3.py:
   Line 168:                 "atr_stop": 0.4,
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_yearly.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_yearly.py:
   Line 98:         "atr_stop": 0.6,            # User: 0.5-0.7
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_param_sweep.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_param_sweep.py:
   Line 79: atr_stops = [0.5, 0.6, 0.7]
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_vwap_params.py:
+G:\ai-workspace\Bot3\BTV2\tests\test_vwap_params.py:
   Line 50:     atr_stop=0.5,
 
 (Results truncated: showing 100 of 131 matches (31 hidden). Consider using a more specific path or pattern.)
@@ -4391,7 +4391,7 @@ You're right — we have tested tight stops extensively (0.3-0.5 ATR). Let me ch
   "command": "python tests/vwap_atr_test.py 2>&1 | head -100",
   "description": "Run ATR tight stop test",
   "timeout": 300000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
@@ -4539,7 +4539,7 @@ Let me create a proper **scalp test** with percentage-based stops (more realisti
 ```json
 {
   "description": "Create scalp VWAP test",
-  "prompt": "Create a new test file in `C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2` called `test_scalp_session_vwap.py` that:\n\n1. **Purpose**: Test TRUE scalping — tight percentage-based stops + targets within the London/NY overlap session\n\n2. **Key Innovation**: Use percentage-based stops instead of ATR multiples for 5m scalping. ATR on 5m bars is too small (~$50-100 for BTC), causing us to get stopped out by normal noise.\n\n3. **Test these parameter combinations**:\n\n   **Stop/Target (% of entry price):**\n   - stop_pct: [0.10, 0.15, 0.20, 0.25, 0.30]  (% to stop loss)\n   - target_pct: [0.20, 0.30, 0.40, 0.50, 0.60]  (take profit %)\n   - aim for 1.5:1 to 2:1 R ratio minimum\n\n   **Session anchors to test:**\n   - London/NY overlap: 13:00-16:00 UTC\n   - NY session: 13:00-20:00 UTC  \n   - London session: 08:00-16:00 UTC\n\n4. **Keep fixed:**\n   - sd_threshold: 3.0 (outer band for high-quality entries)\n   - require_sfp: True (rejection candle confirmation)\n   - use_volume_filter: True\n   - entry_mode: \"bull_pullback\" (for longs), also test \"bear_pullback\" (for shorts)\n\n5. **Test BOTH long and short** (two-sided) — prior tests may have been mostly one-directional\n\n6. **Use the session-anchored VWAP** from test_session_vwap.py or the anchored VWAP in strategies.py\n\n7. **Output**:\n   - Results table with all combinations (stop_pct, target_pct, session, trades, WR, return%, sharpe)\n   - Top 10 best configs\n   - Best overall config\n\n8. **Cost model**: 0.30% per side (0.60% round trip)\n\nMake the code efficient. Test a smart subset of combinations first, then refine. Return the complete results.",
+  "prompt": "Create a new test file in `G:\\ai-workspace\\Bot3\\BTV2` called `test_scalp_session_vwap.py` that:\n\n1. **Purpose**: Test TRUE scalping — tight percentage-based stops + targets within the London/NY overlap session\n\n2. **Key Innovation**: Use percentage-based stops instead of ATR multiples for 5m scalping. ATR on 5m bars is too small (~$50-100 for BTC), causing us to get stopped out by normal noise.\n\n3. **Test these parameter combinations**:\n\n   **Stop/Target (% of entry price):**\n   - stop_pct: [0.10, 0.15, 0.20, 0.25, 0.30]  (% to stop loss)\n   - target_pct: [0.20, 0.30, 0.40, 0.50, 0.60]  (take profit %)\n   - aim for 1.5:1 to 2:1 R ratio minimum\n\n   **Session anchors to test:**\n   - London/NY overlap: 13:00-16:00 UTC\n   - NY session: 13:00-20:00 UTC  \n   - London session: 08:00-16:00 UTC\n\n4. **Keep fixed:**\n   - sd_threshold: 3.0 (outer band for high-quality entries)\n   - require_sfp: True (rejection candle confirmation)\n   - use_volume_filter: True\n   - entry_mode: \"bull_pullback\" (for longs), also test \"bear_pullback\" (for shorts)\n\n5. **Test BOTH long and short** (two-sided) — prior tests may have been mostly one-directional\n\n6. **Use the session-anchored VWAP** from test_session_vwap.py or the anchored VWAP in strategies.py\n\n7. **Output**:\n   - Results table with all combinations (stop_pct, target_pct, session, trades, WR, return%, sharpe)\n   - Top 10 best configs\n   - Best overall config\n\n8. **Cost model**: 0.30% per side (0.60% round trip)\n\nMake the code efficient. Test a smart subset of combinations first, then refine. Return the complete results.",
   "subagent_type": "generator"
 }
 ```
@@ -4555,7 +4555,7 @@ The test is complete. Here's the summary:
 
 ## Test Results Summary
 
-**File Created:** `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\test_scalp_session_vwap.py`
+**File Created:** `G:\ai-workspace\Bot3\BTV2\test_scalp_session_vwap.py`
 
 ### Key Results (Saved to `results/scalp_session_vwap_results.csv`):
 
@@ -4606,7 +4606,7 @@ Let me run the test and see the full results.
   "command": "python test_scalp_session_vwap.py",
   "description": "Run scalp session VWAP test",
   "timeout": 300000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
@@ -4653,8 +4653,8 @@ BEST OVERALL CONFIG
   Max Drawdown: 11.88%
   Profit Factor: 0.35
 
-Results saved to C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\scalp_session_vwap_results.csv
-Best config saved to C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\scalp_session_vwap_best.csv
+Results saved to G:\ai-workspace\Bot3\BTV2\results\scalp_session_vwap_results.csv
+Best config saved to G:\ai-workspace\Bot3\BTV2\results\scalp_session_vwap_best.csv
 
 ```
 
@@ -4666,7 +4666,7 @@ Best config saved to C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\results\scalp_
 
 ## User
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md read this. there has been another massive update.
+G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md read this. there has been another massive update.
 
 ---
 
@@ -4681,13 +4681,13 @@ The user wants me to read the CLI_AGENT_GUIDE.md file to see the massive update 
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md"
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md"
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
+<path>G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
 <type>file</type>
 <content>1: # BTV2 — CLI Agent Integration Guide  (v6)
 2: 
@@ -4748,7 +4748,7 @@ The user wants me to read the CLI_AGENT_GUIDE.md file to see the massive update 
 57: ## Quick Start
 58: 
 59: ```bash
-60: cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2
+60: cd G:\ai-workspace\Bot3\BTV2
 61: pip install -r requirements.txt
 62: 
 63: # Human UI
@@ -5166,7 +5166,7 @@ The user wants me to read the CLI_AGENT_GUIDE.md file to see the massive update 
 475: 
 476: #### Quick Start
 477: ```bash
-478: cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3
+478: cd G:\ai-workspace\Bot3
 479: 
 480: # Run from optimize.md (recommended — reads strategy/period/trials from file)
 481: python BTV2/optimizer_agent.py --from-program
@@ -5863,14 +5863,14 @@ Let me read the rest of this file to see what other updates were made.
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md",
   "offset": 1157
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
+<path>G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
 <type>file</type>
 <content>1157: | `require_reversal_candle` | `False` | SFP: wick past band + close back — **disabled in v6** |
 1158: | `require_mss` | `False` | UTM Step 3: wait for BOS above SFP candle high before entry |
@@ -6254,7 +6254,7 @@ Let me run a proper test using the built-in `run_vwap_scalping` with v6 defaults
 ```json
 {
   "description": "Run v6 VWAP comprehensive test",
-  "prompt": "Create a new test file in `C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2` called `test_vwap_v6_comprehensive.py` that:\n\n1. **Uses the BUILT-IN `run_vwap_scalping` function** from strategies.py with v6 defaults (VS_DEFAULTS)\n\n2. **Test these configurations systematically**:\n\n   **A. v6 Baseline** (VS_DEFAULTS):\n   ```\n   entry_mode=\"mean_reversion\", sd_threshold=3.0, atr_stop=1.0, \n   tp_mode=\"atr\", use_stoch_filter=False, use_htf_vwap=False,\n   require_reversal_candle=False, use_session_filter=True\n   ```\n\n   **B. v6 with session filter disabled** (compare session impact)\n\n   **C. v6 with Phase 1 features**:\n   - Add `levels=compute_reference_levels(df)` and `tp_mode=\"nearest\"`\n\n   **D. v6 with Phase 3 features**:\n   - Add `use_cvd_filter=True, cvd_window=20`\n   - Or add `require_mss=True` (MSS confirmation)\n\n   **E. Grid search over key params**:\n   - sd_threshold: [2.5, 3.0, 3.5, 4.0]\n   - entry_mode: [\"mean_reversion\", \"cross\", \"bull_pullback\", \"bear_pullback\"]\n   - tp_mode: [\"atr\", \"nearest\"] (if levels provided)\n   - use_session_filter: [True, False]\n\n3. **Use walk-forward** (3m train / 1m test) for realistic OOS results\n\n4. **Use 1m exit resolution** (`df_exit=df_1m`) for accurate SL/TP detection\n\n5. **Cost model**: 0.30% per side (0.60% round trip) — the cost model in strategies.py\n\n6. **Output**:\n   - Results table for all configs (config name, trades, WR%, return%, Sharpe, Max DD)\n   - Best overall config\n   - Session filter impact analysis\n   - Phase features impact analysis\n\nUse the proper data loading from data_manager.py. Run on 2023-2025 data for efficiency.\n\nIMPORTANT: Use `run_vwap_scalping` from strategies.py with VS_DEFAULTS as the baseline. Do NOT reimplement VWAP logic — use the built-in function.",
+  "prompt": "Create a new test file in `G:\\ai-workspace\\Bot3\\BTV2` called `test_vwap_v6_comprehensive.py` that:\n\n1. **Uses the BUILT-IN `run_vwap_scalping` function** from strategies.py with v6 defaults (VS_DEFAULTS)\n\n2. **Test these configurations systematically**:\n\n   **A. v6 Baseline** (VS_DEFAULTS):\n   ```\n   entry_mode=\"mean_reversion\", sd_threshold=3.0, atr_stop=1.0, \n   tp_mode=\"atr\", use_stoch_filter=False, use_htf_vwap=False,\n   require_reversal_candle=False, use_session_filter=True\n   ```\n\n   **B. v6 with session filter disabled** (compare session impact)\n\n   **C. v6 with Phase 1 features**:\n   - Add `levels=compute_reference_levels(df)` and `tp_mode=\"nearest\"`\n\n   **D. v6 with Phase 3 features**:\n   - Add `use_cvd_filter=True, cvd_window=20`\n   - Or add `require_mss=True` (MSS confirmation)\n\n   **E. Grid search over key params**:\n   - sd_threshold: [2.5, 3.0, 3.5, 4.0]\n   - entry_mode: [\"mean_reversion\", \"cross\", \"bull_pullback\", \"bear_pullback\"]\n   - tp_mode: [\"atr\", \"nearest\"] (if levels provided)\n   - use_session_filter: [True, False]\n\n3. **Use walk-forward** (3m train / 1m test) for realistic OOS results\n\n4. **Use 1m exit resolution** (`df_exit=df_1m`) for accurate SL/TP detection\n\n5. **Cost model**: 0.30% per side (0.60% round trip) — the cost model in strategies.py\n\n6. **Output**:\n   - Results table for all configs (config name, trades, WR%, return%, Sharpe, Max DD)\n   - Best overall config\n   - Session filter impact analysis\n   - Phase features impact analysis\n\nUse the proper data loading from data_manager.py. Run on 2023-2025 data for efficiency.\n\nIMPORTANT: Use `run_vwap_scalping` from strategies.py with VS_DEFAULTS as the baseline. Do NOT reimplement VWAP logic — use the built-in function.",
   "subagent_type": "generator"
 }
 ```
@@ -6268,7 +6268,7 @@ Tool execution aborted
 
 ## User
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md sorry, i had not updated from github yet. here is v7
+G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md sorry, i had not updated from github yet. here is v7
 
 ---
 
@@ -6283,13 +6283,13 @@ The user is saying they updated the CLI_AGENT_GUIDE.md with v7 changes. Let me r
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md"
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md"
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
+<path>G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
 <type>file</type>
 <content>1: # BTV2 — CLI Agent Integration Guide  (v7)
 2: 
@@ -6353,7 +6353,7 @@ The user is saying they updated the CLI_AGENT_GUIDE.md with v7 changes. Let me r
 60: ## Quick Start
 61: 
 62: ```bash
-63: cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2
+63: cd G:\ai-workspace\Bot3\BTV2
 64: pip install -r requirements.txt
 65: 
 66: # Human UI
@@ -6771,7 +6771,7 @@ The user is saying they updated the CLI_AGENT_GUIDE.md with v7 changes. Let me r
 478: 
 479: #### Quick Start
 480: ```bash
-481: cd C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3
+481: cd G:\ai-workspace\Bot3
 482: 
 483: # Run from optimize.md (recommended — reads strategy/period/trials from file)
 484: python BTV2/optimizer_agent.py --from-program
@@ -7457,14 +7457,14 @@ This is v7 now! Let me read the rest to see what v7 adds.
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\CLI_AGENT_GUIDE.md",
   "offset": 1149
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
+<path>G:\ai-workspace\Bot3\BTV2\CLI_AGENT_GUIDE.md</path>
 <type>file</type>
 <content>1149: | `"atr"` | entry + atr_target×ATR | entry − atr_target×ATR | **v6 default** — trailing stop is primary |
 1150: | `"vwap"` | Session VWAP | Session VWAP | Was v5 default; too close for 3σ entries |
@@ -8057,23 +8057,23 @@ Let me run the proper v7 validation:
   "command": "python btv2_validate.py --strategy \"VWAP Scalping\" --start 2023-01-01 --end 2025-12-31 --no-gmm --json-out vwap_v7_validation.json 2>&1",
   "description": "Run v7 VWAP validation",
   "timeout": 300000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
 **Output:**
 ```
 Traceback (most recent call last):
-  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\btv2_validate.py", line 414, in <module>
+  File "G:\ai-workspace\Bot3\BTV2\btv2_validate.py", line 414, in <module>
     main()
     ~~~~^^
-  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\btv2_validate.py", line 392, in main
+  File "G:\ai-workspace\Bot3\BTV2\btv2_validate.py", line 392, in main
     result = run_validation(
         strategy_name = args.strategy,
     ...<8 lines>...
         verbose       = not args.quiet,
     )
-  File "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\btv2_validate.py", line 195, in run_validation
+  File "G:\ai-workspace\Bot3\BTV2\btv2_validate.py", line 195, in run_validation
     print(f"\n[1/4] Loading {symbol} {intv} candles  ({start} \u2192 {end})�")
     ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
   File "C:\Python314\Lib\encodings\cp1252.py", line 19, in encode
@@ -8103,7 +8103,7 @@ Unicode issue on Windows. Let me run a direct test instead:
   "command": "python -c \"\nimport sys\nsys.path.insert(0, '.')\nfrom datetime import datetime, timezone\nfrom data_manager import get_candles, TICKER_MAP\nfrom strategies import (\n    STRATEGY_REGISTRY, STRATEGY_TIMEFRAME_CONFIG, INTERVAL_BARS_PER_YEAR,\n    build_windows, compute_metrics, stitch_oos_equity,\n    VS_DEFAULTS, monte_carlo_validate, compute_robustness_score\n)\n\nprint('Loading 5m data...')\ndf = get_candles('BTCUSDT', '5m',\n    datetime(2023, 1, 1, tzinfo=timezone.utc),\n    datetime(2025, 12, 31, tzinfo=timezone.utc))\nprint(f'Loaded {len(df)} bars')\n\nprint('Loading 1m exit data...')\ndf_1m = get_candles('BTCUSDT', '1m',\n    datetime(2023, 1, 1, tzinfo=timezone.utc),\n    datetime(2025, 12, 31, tzinfo=timezone.utc))\nprint(f'Loaded {len(df_1m)} bars')\n\nfunc = STRATEGY_REGISTRY['VWAP Scalping'][0]\nwindows = build_windows(datetime(2023, 1, 1).date(), datetime(2025, 12, 31).date(),\n    train_months=3, test_months=1)\nprint(f'Running walk-forward on {len(windows)} windows...')\n\nsegments, all_trades = [], []\nfor w in windows:\n    df_train = df.loc[str(w['train_start']):str(w['train_end'])]\n    df_test = df.loc[str(w['test_start']):str(w['test_end'])]\n    if len(df_train) < 50 or len(df_test) < 10:\n        continue\n    df_exit_slice = df_1m.loc[str(w['test_start']):str(w['test_end'])] if len(df_1m) > 0 else None\n    eq, trd = func(df_test, 0.10, **VS_DEFAULTS, df_exit=df_exit_slice)\n    segments.append(eq)\n    all_trades.extend(trd)\n    print(f'  Fold {w[\\\"fold\\\"]}: {len(trd)} trades, equity: {eq.iloc[-1]:.4f}')\n\noos_equity = stitch_oos_equity(segments)\nmetrics = compute_metrics(oos_equity, all_trades, bars_per_year=INTERVAL_BARS_PER_YEAR['5m'])\nprint(f'')\nprint(f'=== OOS RESULTS ===')\nprint(f'Trades: {metrics[\\\"n_trades\\\"]}')\nprint(f'Win Rate: {metrics[\\\"win_rate_pct\\\"]:.1f}%')\nprint(f'Return: {metrics[\\\"total_return_pct\\\"]:+.1f}%')\nprint(f'Sharpe: {metrics[\\\"sharpe\\\"]:.3f}')\nprint(f'Max DD: {metrics[\\\"max_dd_pct\\\"]:.1f}%')\nprint(f'Profit Factor: {metrics[\\\"profit_factor\\\"]:.2f}')\nprint(f'')\nprint(f'=== MONTE CARLO ===')\nmc = monte_carlo_validate(all_trades, n_sims=500)\nprint(f'P(loss): {mc[\\\"prob_of_loss_pct\\\"]:.1f}%')\nprint(f'P5 Return: {mc[\\\"p5_return_pct\\\"]:.1f}%')\nprint(f'P50 Return: {mc[\\\"p50_return_pct\\\"]:.1f}%')\nprint(f'P95 Return: {mc[\\\"p95_return_pct\\\"]:.1f}%')\nprint(f'Verdict: {mc[\\\"verdict\\\"]}')\n\" 2>&1",
   "description": "Run v7 VWAP validation directly",
   "timeout": 600000,
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2"
+  "workdir": "G:\\ai-workspace\\Bot3\\BTV2"
 }
 ```
 
@@ -8114,7 +8114,7 @@ Traceback (most recent call last):
     from strategies import (
     ...<3 lines>...
     )
-ImportError: cannot import name 'STRATEGY_TIMEFRAME_CONFIG' from 'strategies' (C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py)
+ImportError: cannot import name 'STRATEGY_TIMEFRAME_CONFIG' from 'strategies' (G:\ai-workspace\Bot3\BTV2\strategies.py)
 
 ```
 
@@ -8133,7 +8133,7 @@ The CLI_AGENT_GUIDE.md says v7 has these features but the actual strategies.py m
 {
   "command": "python -c \"from BTV2.strategies import VS_DEFAULTS, monte_carlo_validate; print('VS_DEFAULTS:', VS_DEFAULTS); print('monte_carlo_validate:', monte_carlo_validate)\" 2>&1",
   "description": "Check v7 features availability",
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3"
+  "workdir": "G:\\ai-workspace\\Bot3"
 }
 ```
 
@@ -8163,7 +8163,7 @@ The `VS_DEFAULTS` shows `atr_stop: 7.0` — matching the live bot! Let me check 
 {
   "command": "python -c \"from BTV2.strategies import VS_DEFAULTS; import json; print(json.dumps(VS_DEFAULTS, indent=2))\"",
   "description": "Check VWAP defaults",
-  "workdir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3"
+  "workdir": "G:\\ai-workspace\\Bot3"
 }
 ```
 
@@ -8195,7 +8195,7 @@ The `VS_DEFAULTS` only has 2 params — this looks like an old/incomplete versio
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "pattern": "VS_DEFAULTS"
 }
 ```
@@ -8203,7 +8203,7 @@ The `VS_DEFAULTS` only has 2 params — this looks like an old/incomplete versio
 **Output:**
 ```
 Found 2 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 806: VS_DEFAULTS = {"sd_threshold": 3.0, "atr_stop": 7.0}
   Line 831:     "VWAP Scalping":       (run_vwap_scalping,       VS_GRID, VS_DEFAULTS),
 ```
@@ -8223,7 +8223,7 @@ Let me check the full defaults by looking at the run_vwap_scalping function sign
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 40,
   "offset": 800
 }
@@ -8231,7 +8231,7 @@ Let me check the full defaults by looking at the run_vwap_scalping function sign
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>800: MR_GRID     = {"rsi_oversold": [25, 30, 35], "rsi_overbought": [65, 70, 75],
 801:                "bb_proximity": [0.05, 0.10, 0.20]}          # 27 combos
@@ -8300,7 +8300,7 @@ The `VS_DEFAULTS` is incomplete - only has 2 params instead of the full v7 confi
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "pattern": "def run_vwap_scalping"
 }
 ```
@@ -8308,7 +8308,7 @@ The `VS_DEFAULTS` is incomplete - only has 2 params instead of the full v7 confi
 **Output:**
 ```
 Found 1 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 332: def run_vwap_scalping(
 ```
 
@@ -8325,7 +8325,7 @@ There's a `run_vwap_scalping` function. Let me check its full signature and defa
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\strategies.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\strategies.py",
   "limit": 120,
   "offset": 330
 }
@@ -8333,7 +8333,7 @@ There's a `run_vwap_scalping` function. Let me check its full signature and defa
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\strategies.py</path>
 <type>file</type>
 <content>330: # 2. VWAP SCALPING
 331: # ─────────────────────────────────────────────────────────────────────────────
@@ -8506,7 +8506,7 @@ The **comprehensive VWAP** with all the session-anchored/SFP features is in `com
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2",
   "pattern": "def run_vwap_scalping"
 }
 ```
@@ -8514,10 +8514,10 @@ The **comprehensive VWAP** with all the session-anchored/SFP features is in `com
 **Output:**
 ```
 Found 2 matches
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\strategies.py:
+G:\ai-workspace\Bot3\BTV2\strategies.py:
   Line 332: def run_vwap_scalping(
 
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\reports\vwap next upgrade.txt:
+G:\ai-workspace\Bot3\BTV2\reports\vwap next upgrade.txt:
   Line 33: def run_vwap_scalping(
 ```
 
@@ -8536,7 +8536,7 @@ Let me check the comprehensive_vwap_strategy.py to see what it has.
 **Input:**
 ```json
 {
-  "path": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\comprehensive_vwap_strategy.py",
+  "path": "G:\\ai-workspace\\Bot3\\BTV2\\comprehensive_vwap_strategy.py",
   "pattern": "def run_vwap_scalping|def compute_vwap|def compute_sfp"
 }
 ```
@@ -8559,14 +8559,14 @@ The comprehensive VWAP strategy must use a different function name. Let me check
 **Input:**
 ```json
 {
-  "filePath": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\BTV2\\comprehensive_vwap_strategy.py",
+  "filePath": "G:\\ai-workspace\\Bot3\\BTV2\\comprehensive_vwap_strategy.py",
   "limit": 50
 }
 ```
 
 **Output:**
 ```
-<path>C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\comprehensive_vwap_strategy.py</path>
+<path>G:\ai-workspace\Bot3\BTV2\comprehensive_vwap_strategy.py</path>
 <type>file</type>
 <content>1: """
 2: comprehensive_vwap_strategy.py — Clean SFP + Volume VWAP Strategy

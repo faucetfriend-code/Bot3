@@ -12,7 +12,7 @@
 
 ### Step 1: Test the AI Instruction Generation
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python monitor_with_ai_instructions.py
 ```
 
@@ -32,8 +32,8 @@ python monitor_with_ai_instructions.py
 
 3. **Action:**
    - Start a program
-   - Program: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\monitor_ai.bat`
-   - Start in: `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2`
+   - Program: `G:\ai-workspace\Bot 3\trading_bot_v2\monitor_ai.bat`
+   - Start in: `G:\ai-workspace\Bot 3\trading_bot_v2`
 
 4. **Settings:**
    - ✅ Run with highest privileges
@@ -84,7 +84,7 @@ n8n start
    - Add **Execute Command** node:
      ```
      Command: python monitor_with_alerts.py
-     Working Directory: C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2
+     Working Directory: G:\ai-workspace\Bot 3\trading_bot_v2
      ```
    - Add **IF** node to check for critical issues
    - Add **Send Email** node for alerts
@@ -108,7 +108,7 @@ n8n start
       "type": "n8n-nodes-base.executeCommand",
       "parameters": {
         "command": "python monitor_with_alerts.py",
-        "cwd": "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot 3/trading_bot_v2"
+        "cwd": "G:/ai-workspace/Bot 3/trading_bot_v2"
       }
     },
     {
@@ -161,14 +161,14 @@ If you have WSL (Windows Subsystem for Linux):
 crontab -e
 
 # Add this line:
-*/5 * * * * cd "/mnt/c/Users/z_shi/Desktop/N8NPROJECTS/Bot 3/trading_bot_v2" && python3 monitor_with_alerts.py >> monitoring.log 2>&1
+*/5 * * * * cd "/mnt/g/ai-workspace/Bot 3/trading_bot_v2" && python3 monitor_with_alerts.py >> monitoring.log 2>&1
 ```
 
 ## Monitoring Dashboard
 
 ### Quick Status Check
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python monitor_bot.py
 ```
 

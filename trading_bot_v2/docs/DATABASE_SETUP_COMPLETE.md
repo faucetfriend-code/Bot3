@@ -165,7 +165,7 @@ trading_bot_v2/
 
 ### Database Path
 **Relative:** `data/trading_bot.db`
-**Absolute:** `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\data\trading_bot.db`
+**Absolute:** `G:\ai-workspace\Bot 3\trading_bot_v2\data\trading_bot.db`
 
 ## Next Steps (Optional Enhancements)
 

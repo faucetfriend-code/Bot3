@@ -1,7 +1,7 @@
 # Discord follower - Pacifica paper-mode Linux candidate
 
 This deployment template targets the separately migrated source at
-`C:/Users/z_shi/Desktop/N8NPROJECTS/Discord Bot`. The old Blofin implementation
+`G:/ai-workspace/Discord Bot`. The old Blofin implementation
 is historical; the intended migrated release uses Pacifica with its own account.
 Use only the final migration release after its offline checks pass. These files
 do not copy, execute, or modify that source automatically.

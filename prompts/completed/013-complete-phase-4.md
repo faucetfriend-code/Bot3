@@ -86,4 +86,4 @@ Before declaring complete, verify your work:
 - Phase 4 deliverables are complete and validated
 - System is ready for production deployment
 </success_criteria></content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\prompts\013-complete-phase-4.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\prompts\013-complete-phase-4.md

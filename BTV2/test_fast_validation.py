@@ -568,7 +568,7 @@ def main():
     print("=" * 70)
     
     # Load data
-    csv_path = "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/trading_bot_v2/backtesting/data/BTC-USDC_5m_2023.csv"
+    csv_path = "G:/ai-workspace/Bot3/trading_bot_v2/backtesting/data/BTC-USDC_5m_2023.csv"
     
     print("\n[1] Loading data...")
     df = load_data(csv_path, start_date="2023-10-01", end_date="2023-12-31")

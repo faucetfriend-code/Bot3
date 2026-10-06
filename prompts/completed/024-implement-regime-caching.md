@@ -5,7 +5,7 @@ Implement regime caching to prevent unnecessary recalculation every loop. This i
 <context>
 Market regime detection runs per symbol, per minute, using overlapping data. This causes unnecessary computation, possible regime flicker, and strategy thrashing.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 4
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 4
 
 Current code:
 ```python

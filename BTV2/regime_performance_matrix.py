@@ -220,7 +220,7 @@ def main():
     
     # Save
     print("\n[5] Saving...")
-    out_path = Path("C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/BTV2/results/regime_performance_matrix.csv")
+    out_path = Path("G:/ai-workspace/Bot3/BTV2/results/regime_performance_matrix.csv")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     df_out.to_csv(out_path, index=False)
     print(f"  Saved: {out_path}")

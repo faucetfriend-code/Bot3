@@ -66,4 +66,4 @@ The bot is actively analyzing markets every 120 seconds. Current market conditio
 *Report period: 15 minutes*
 *System uptime: 29h 15m (continuous)*
 *Next monitoring check: 2026-01-15T00:20:00Z*</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\monitoring\bot-signal-report.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\monitoring\bot-signal-report.md

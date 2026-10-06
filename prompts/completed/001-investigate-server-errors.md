@@ -3,7 +3,7 @@ Conduct a thorough investigation of all errors documented in the server errors l
 </objective>
 
 <context>
-This investigation is for the trading bot project (`trading_bot_v2`) that we recently stabilized. The errors are logged in "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\server errors2.txt" and primarily affect the API server component, though systemic changes may be needed to ensure all components work together seamlessly.
+This investigation is for the trading bot project (`trading_bot_v2`) that we recently stabilized. The errors are logged in "G:\ai-workspace\Bot 3\research\server errors2.txt" and primarily affect the API server component, though systemic changes may be needed to ensure all components work together seamlessly.
 
 The analysis will be used by developers to repair the problems and restore stable operation. The end goal is a fully functional trading bot with zero critical errors.
 </context>

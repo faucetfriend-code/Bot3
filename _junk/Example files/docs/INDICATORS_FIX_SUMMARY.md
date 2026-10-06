@@ -353,7 +353,7 @@ This fix also resolves:
 1. **Restart API Server:**
    ```bash
    # Stop current server (CTRL+C)
-   cd "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot"
+   cd "G:\ai-workspace\trade bot"
    python api_server.py
    ```
 

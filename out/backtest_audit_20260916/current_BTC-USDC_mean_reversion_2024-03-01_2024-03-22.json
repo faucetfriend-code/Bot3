@@ -20,7 +20,7 @@
     "backtest_taker_fee_pct": 0.0006,
     "backtest_maker_fee_pct": 0.0002,
     "backtest_funding_hourly_pct": 0.0001,
-    "backtest_data_dir": "C:\\Users\\z_shi\\Desktop\\N8NPROJECTS\\Bot3\\trading_bot_v2\\backtesting\\data",
+    "backtest_data_dir": "G:\\ai-workspace\\Bot3\\trading_bot_v2\\backtesting\\data",
     "backtest_walk_forward_train_months": 6,
     "backtest_walk_forward_test_months": 1,
     "backtest_hedge_mode": false,

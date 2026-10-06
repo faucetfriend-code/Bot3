@@ -288,7 +288,7 @@ The fixes are applied to the code but **require a server restart** to take effec
 # Press CTRL+C
 
 # Restart from project root
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot"
+cd "G:\ai-workspace\trade bot"
 python api_server.py
 ```
 
@@ -430,7 +430,7 @@ MASTER_ENCRYPTION_KEY=<paste 64-character hex string here>
 All artifacts saved in project root:
 
 ```
-C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\
+G:\ai-workspace\trade bot\
 ├── validate_groked.py                    # Automated validation (reusable)
 ├── groked_validation_report.md           # Technical validation report
 ├── GROKED_VALIDATION_ISSUES.md           # Issue tracking

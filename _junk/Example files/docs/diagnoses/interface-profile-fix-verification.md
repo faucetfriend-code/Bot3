@@ -115,4 +115,4 @@ def get_config() -> Dict[str, Any]:
 ## Next Steps
 
 The interface should now load credentials directly and immediately without unnecessary loading states or database dependencies. All orphaned code has been cleaned up and syntax errors resolved.</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\diagnoses\interface-profile-loading-diagnosis.md
+<parameter name="filePath">G:\ai-workspace\trade bot\diagnoses\interface-profile-loading-diagnosis.md

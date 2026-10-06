@@ -30,7 +30,7 @@
 
 **Command:**
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 curl -s http://localhost:8000/api/status
 ```
 
@@ -132,7 +132,7 @@ curl -s http://localhost:8000/api/activity | python -m json.tool
 
 **Command:**
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python -c "
 import sqlite3
 conn = sqlite3.connect('data/trading_bot.db')
@@ -183,7 +183,7 @@ Last position update: 2026-01-11 14:21:09
 
 **Command:**
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 tail -100 <log_file_or_stdout> | grep -i "error\|warning\|critical"
 ```
 
@@ -544,7 +544,7 @@ if __name__ == '__main__':
 
 **Usage:**
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python monitor_bot.py
 ```
 
@@ -565,7 +565,7 @@ CIRCUIT_BREAKER_LOSS_PCT=0.10    # 10% portfolio loss stops trading
 
 **Verify Configuration:**
 ```bash
-cd "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2"
+cd "G:\ai-workspace\Bot 3\trading_bot_v2"
 python -c "from config import config; print(f'Auto-trading: {config.enable_auto_trading}'); print(f'Testnet: {config.testnet}'); print(f'Circuit breaker: {config.circuit_breaker_loss_pct * 100}%')"
 ```
 
@@ -626,7 +626,7 @@ curl -X POST http://localhost:8000/api/bot/start
 ## 10. Contact Information
 
 **Developer:** User z_shi
-**System Location:** `C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2`
+**System Location:** `G:\ai-workspace\Bot 3\trading_bot_v2`
 **Documentation:** `CLAUDE.md`, `MONITORING_INSTRUCTIONS.md`
 **GitHub Issues:** (if applicable)
 

@@ -122,8 +122,8 @@ All tests showed Sharpe = 0.00 because:
 
 ### Test File Location
 
-`C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\test_regime_aware_vwap.py`
+`G:\ai-workspace\Bot3\BTV2\tests\test_regime_aware_vwap.py`
 
 ### Results CSV
 
-`C:\Users\z_shi\Desktop\N8NPROJECTS\Bot3\BTV2\tests\results\regime_vwap_comparison_2024.csv`
+`G:\ai-workspace\Bot3\BTV2\tests\results\regime_vwap_comparison_2024.csv`

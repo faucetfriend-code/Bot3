@@ -5,7 +5,7 @@ Fix duplicate/conflicting risk methods by removing legacy versions and ensuring 
 <context>
 Multiple versions of risk methods exist, creating confusion and potential bugs. Legacy methods like the old _validate_position_size(symbol, quantity) still exist alongside new RiskManager-backed versions.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #5
+Reference: "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #5
 
 Current state:
 - Legacy _validate_position_size(symbol, quantity) - uses leverage logic directly

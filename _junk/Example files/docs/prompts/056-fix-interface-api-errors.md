@@ -11,7 +11,7 @@ Key files to examine:
 @pacifica_client.py - API client with URL construction and request logic
 @api_server.py - server endpoints that trigger position fetching when interface loads
 
-Reference the python-sdk directory at "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\python-sdk" for correct API usage patterns.
+Reference the python-sdk directory at "G:\ai-workspace\trade bot\python-sdk" for correct API usage patterns.
 
 The interface appears to be fetching positions for all available symbols, but many return 404 errors.
 </context>

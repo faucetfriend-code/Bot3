@@ -12,7 +12,7 @@ Key files to examine:
 @pacifica_market_data.py - market data handler for indicators and charts
 @trading_bot_interface.html - frontend interface that displays the data
 
-Reference the python-sdk directory at "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\python-sdk" for correct data structures and API responses.
+Reference the python-sdk directory at "G:\ai-workspace\trade bot\python-sdk" for correct data structures and API responses.
 
 The positions endpoint is falling back to database, and other data sources are not properly connected to the UI.
 </context>

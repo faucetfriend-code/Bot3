@@ -5,7 +5,7 @@ Fix grid trading execution so it actually creates laddered limit orders instead 
 <context>
 Grid strategies generate BUY + SELL signals, but execution treats them as independent market orders. This creates no laddered orders, no grid spacing logic, and allows risk to stack rapidly.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 2
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 2
 
 Current conflict resolution:
 ```python

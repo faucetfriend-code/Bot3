@@ -193,4 +193,4 @@ async def get_prices() -> Dict[str, Any]:
 ✅ **Report comprehensive:** Detailed analysis of data flow, root cause, and multiple solutions provided
 
 The interface now successfully displays real-time price data from the WebSocket stream, resolving the critical blockage while maintaining the core functionality of live price updates.</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\investigation-data-flow-report.md
+<parameter name="filePath">G:\ai-workspace\Bot 3\investigation-data-flow-report.md

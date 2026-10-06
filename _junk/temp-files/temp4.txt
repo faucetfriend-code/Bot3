@@ -1,4 +1,4 @@
-Starting trading bot with PYTHONPATH=C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\
+Starting trading bot with PYTHONPATH=G:\ai-workspace\Bot 3\
 2026-01-14 19:28:44.074 | INFO     | trading_bot_v2.risk_manager:__init__:55 - RiskManager initialized: max_risk=2.0%, max_exposure=10.0%
 CRITICAL:root:🚀 TRADING BOT __INIT__: WebSocket Integration v2.1 (2026-01-11 22:27)
 2026-01-14 19:28:44.116 | INFO     | core_logic.pacifica_client:__init__:182 - Initialized Pacifica client (TESTNET)
@@ -102,7 +102,7 @@ INFO:     127.0.0.1:59199 - "GET /api/trades?limit=10 HTTP/1.1" 200 OK
 2026-01-14 19:29:15.530 | DEBUG    | core_logic.pacifica_client:_make_request:362 - Response Status: 200
 2026-01-14 19:29:15.531 | DEBUG    | core_logic.pacifica_client:get_ticker:1628 - SUI ticker: last=$1.8432, bid=$1.8396, ask=$1.8469
 ERROR:root:Error analyzing SUI: asyncio.run() cannot be called from a running event loop
-C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\api_server.py:396: RuntimeWarning: coroutine 'MultiTimeframeFetcher._fetch_all_timeframes_parallel' was never awaited
+G:\ai-workspace\Bot 3\trading_bot_v2\api_server.py:396: RuntimeWarning: coroutine 'MultiTimeframeFetcher._fetch_all_timeframes_parallel' was never awaited
   continue
 RuntimeWarning: Enable tracemalloc to get the object allocation traceback
 2026-01-14 19:29:15.723 | DEBUG    | core_logic.pacifica_client:_make_request:361 - API Request: GET https://test-api.pacifica.fi/api/v1/book

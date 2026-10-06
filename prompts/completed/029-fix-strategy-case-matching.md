@@ -5,7 +5,7 @@ Fix case-sensitive strategy name matching in RiskManager to prevent silent fallb
 <context>
 RiskManager strategy profile mapping uses lowercase keys, but signal.strategy.value returns PascalCase names like "MeanReversion", "MACrossover". This causes silent fallback to MEDIUM risk profile.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #7
+Reference: "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #7
 
 Current issue:
 ```python

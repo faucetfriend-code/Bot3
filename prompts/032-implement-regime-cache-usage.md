@@ -5,7 +5,7 @@ Implement the regime caching system that was added but never used. This is QUALI
 <context>
 Regime caching infrastructure was added to market_regime.py but detect_regime() never uses it. This creates false confidence in performance improvements that don't exist.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\quality control for the fixes.txt" - Issue #10
+Reference: "G:\ai-workspace\Bot 3\research\quality control for the fixes.txt" - Issue #10
 
 Current issue:
 ```python

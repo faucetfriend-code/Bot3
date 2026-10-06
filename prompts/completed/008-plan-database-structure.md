@@ -12,8 +12,8 @@ What it's for: Designing the foundation for persistent data storage in the tradi
 </context>
 
 <data_sources>
-@C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\project-plan.md - Read Phase 3.5 requirements and overall project specifications
-@C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\trading_bot_v2\.env - Extract Pacifica test network credentials for real data access
+@G:\ai-workspace\Bot 3\project-plan.md - Read Phase 3.5 requirements and overall project specifications
+@G:\ai-workspace\Bot 3\trading_bot_v2\.env - Extract Pacifica test network credentials for real data access
 ![python -c "from trading_bot_v2.pacifica_client import PacificaClient; import os; client = PacificaClient(api_key=os.getenv('PACIFICA_API_KEY'), api_secret=os.getenv('PACIFICA_API_SECRET'), testnet=True); print(client.get_positions())"] - Fetch real positions data from test network
 ![python -c "from trading_bot_v2.pacifica_client import PacificaClient; import os; client = PacificaClient(api_key=os.getenv('PACIFICA_API_KEY'), api_secret=os.getenv('PACIFICA_API_SECRET'), testnet=True); print(client.get_trades())"] - Fetch real trades data from test network
 ![python -c "from trading_bot_v2.pacifica_client import PacificaClient; import os; client = PacificaClient(api_key=os.getenv('PACIFICA_API_KEY'), api_secret=os.getenv('PACIFICA_API_SECRET'), testnet=True); print(client.get_market_data())"] - Fetch real market data from test network

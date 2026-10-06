@@ -11,7 +11,7 @@ Risk management is currently implemented inconsistently across three different l
 
 This causes inconsistent sizing, strategy overrides, and silent over-risking, especially with grid + liquidation strategies.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 3
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 3
 
 The bot needs a single source of truth for risk management.
 </context>

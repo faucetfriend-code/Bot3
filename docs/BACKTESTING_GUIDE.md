@@ -116,7 +116,7 @@ to accept the override and silently read the wrong store. Consequences:
 
 ```bash
 python -m trading_bot_v2.backtesting.run_backtest --symbol BTC-USDC \
-    --data-dir "C:/Users/z_shi/Desktop/N8NPROJECTS/Bot3/trading_bot_v2/backtesting/data"
+    --data-dir "G:/ai-workspace/Bot3/trading_bot_v2/backtesting/data"
 ```
 
   It prints `Candle store: <path>` so you can see which store a run actually read.

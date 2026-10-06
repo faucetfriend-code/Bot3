@@ -84,4 +84,4 @@ hasChange: asset && (asset.change_24h !== undefined && asset.change_24h !== null
 - ✅ **Data Integrity**: Only properly formatted data appears in UI (but more lenient)
 
 The interface now successfully validates incoming data and displays it correctly in the trading tables.</content>
-<parameter name="filePath">C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\diagnoses\data-validation-fix-verification.md
+<parameter name="filePath">G:\ai-workspace\trade bot\diagnoses\data-validation-fix-verification.md

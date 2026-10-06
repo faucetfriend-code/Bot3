@@ -5,7 +5,7 @@ Clean up trend following strategy references since it's not implemented. This is
 <context>
 Market regime detection enables TrendFollowing strategy, but no implementation exists. This causes confusion and potential runtime errors.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 6
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 6
 
 Current code references trend following but it's not implemented:
 ```python

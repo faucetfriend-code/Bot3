@@ -11,7 +11,7 @@ Key files to examine:
 @pacifica_ws_client.py - WebSocket client implementation with connection and subscription issues
 @api_server.py - server code that calls WebSocket subscription methods
 
-Reference the python-sdk directory at "C:\Users\z_shi\Desktop\N8NPROJECTS\trade bot\python-sdk" for correct code examples and patterns for WebSocket implementations.
+Reference the python-sdk directory at "G:\ai-workspace\trade bot\python-sdk" for correct code examples and patterns for WebSocket implementations.
 
 The WebSocket URL may have DNS resolution issues, and the client is missing a public subscribe method that's being called by the server.
 </context>

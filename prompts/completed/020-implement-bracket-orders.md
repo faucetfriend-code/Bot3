@@ -5,7 +5,7 @@ Implement bracket order execution for stop-loss and take-profit orders after mar
 <context>
 The trading bot currently generates signals with stop_loss and take_profit values, but these protective orders are NEVER placed after entry. This creates extreme risk where a single liquidation wick can wipe out the entire account.
 
-Reference: "C:\Users\z_shi\Desktop\N8NPROJECTS\Bot 3\research\trade managemet updates.txt" - Section 1: STOP-LOSS & TAKE-PROFIT ARE NEVER EXECUTED
+Reference: "G:\ai-workspace\Bot 3\research\trade managemet updates.txt" - Section 1: STOP-LOSS & TAKE-PROFIT ARE NEVER EXECUTED
 
 Current execution code in trading_bot.py::_execute_signal():
 ```python
