@@ -175,9 +175,10 @@ class PerformanceTracker:
             if len(intervals) >= 2:
                 elapsed = sum(hours for _, hours in intervals)
                 drift = sum(change for change, _ in intervals) / elapsed
-                variance = sum(
-                    (change - drift * hours) ** 2 for change, hours in intervals
-                ) / elapsed
+                variance = (
+                    sum((change - drift * hours) ** 2 for change, hours in intervals)
+                    / elapsed
+                )
                 if variance > 0:
                     result.sharpe_ratio = drift / math.sqrt(variance) * math.sqrt(8760)
                 downside = [(r, hours) for r, hours in intervals if r < 0]

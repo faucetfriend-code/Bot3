@@ -888,7 +888,9 @@ class BacktestEngine:
             ts = timestamps_5m[i]
             # Advance the simulated exchange price to this candle's close
             candle_5m = self._candle_at(candles["5m"], i)
-            decision_ts = (datetime.fromisoformat(ts) + timedelta(minutes=5)).isoformat()
+            decision_ts = (
+                datetime.fromisoformat(ts) + timedelta(minutes=5)
+            ).isoformat()
             # Expiry owns the boundary: an entry cannot fill in its expiry bar.
             self._expire_stale_entries(exchange, i)
             exchange.advance(candle_5m, decision_ts)
@@ -1222,10 +1224,15 @@ class BacktestEngine:
             funnel.reject(REASON_EXEC_QTY_NON_POSITIVE)
             return False
 
-        prior_order_ids = [
-            order.order_id for order in exchange._orders.values()
-            if order.symbol == signal.asset and order.status == "open"
-        ] if is_pyramid_add else []
+        prior_order_ids = (
+            [
+                order.order_id
+                for order in exchange._orders.values()
+                if order.symbol == signal.asset and order.status == "open"
+            ]
+            if is_pyramid_add
+            else []
+        )
 
         # Use limit order at entry_price if it differs from current price
         # by more than 0.1%, otherwise use market order for immediate fill
@@ -1314,7 +1321,8 @@ class BacktestEngine:
         # Track time-based exit if the signal requests one (e.g. SessionRangeBreakout)
         time_exit_hours = (signal.indicators or {}).get("time_exit_hours")
         if (
-            time_exit_hours and self._sim_dt is not None
+            time_exit_hours
+            and self._sim_dt is not None
             and signal.asset not in self._position_time_exit
         ):
             self._position_time_exit[signal.asset] = {

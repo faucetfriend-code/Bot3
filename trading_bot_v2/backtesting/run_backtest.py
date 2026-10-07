@@ -59,7 +59,10 @@ def main():
     if args.walk_forward:
         wf = WalkForwardAnalyzer(engine)
         results = wf.run(
-            args.start, args.end, args.symbol, args.capital,
+            args.start,
+            args.end,
+            args.symbol,
+            args.capital,
             strategy=strategy_filter,
         )
         # Save combined report for walk-forward

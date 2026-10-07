@@ -461,7 +461,8 @@ class SimulatedExchange:
             stop_price = order.price
             if bar_open is not None:
                 stop_price = (
-                    max(stop_price, bar_open) if direction == 1
+                    max(stop_price, bar_open)
+                    if direction == 1
                     else min(stop_price, bar_open)
                 )
             slippage_pct = self._slippage_pct_for(order, stop_price)
@@ -508,9 +509,7 @@ class SimulatedExchange:
             regime_tag = self._current_regime
             direction_tag = self._current_direction
 
-        realised_pnl = self._open_or_add_position(
-            symbol, fill_side, qty, fill_price
-        )
+        realised_pnl = self._open_or_add_position(symbol, fill_side, qty, fill_price)
 
         position_after = self._positions.get(symbol)
         closing_fee = fee * close_qty / qty if qty else 0.0
