@@ -208,7 +208,7 @@ Working directory: G:\ai-workspace\Bot3
 ```
 
 and line 24 points at the project memory directory
-`C:\Users\z_shi\.claude\projects\C--Users-z-shi-Desktop-N8NPROJECTS-Bot3\memory\`.
+`C:\Users\z_shi\.claude\projects\G--ai-workspace-Bot3\memory\`.
 
 Update the working directory to `<NEW>`. The memory path is keyed on the project
 directory name, so Claude Code will start a new memory namespace for the new
