@@ -13,7 +13,10 @@ Covered:
 * raw Pacifica positions (key ``amount``) are not treated as ghosts by
   position reconciliation;
 * RiskManager sizing has no 1.0-contract floor that discards regime and
-  risk-profile scaling on high-priced assets.
+  risk-profile scaling on high-priced assets;
+* the loop stores Pacifica's raw ``bid``/``ask`` side as LONG/SHORT;
+* the breaker sees a loss on venues whose positions carry no
+  ``unrealized_pnl`` key (Pacifica) by pricing them itself.
 """
 
 from types import SimpleNamespace
@@ -172,6 +175,60 @@ class TestPacificaPositionQuantity:
             [{"symbol": "BTC", "side": "bid", "amount": "1.5", "entry_price": "100"}]
         )
         db.close_position.assert_not_called()
+
+
+PACIFICA_LONG = {"symbol": "BTC", "side": "bid", "amount": "1", "entry_price": "1000"}
+
+
+def _raw_bot(positions, last_price: float, balance: float = 1_000.0) -> TradingBot:
+    """A TradingBot shell (no __init__) over raw exchange position dicts."""
+    bot = TradingBot.__new__(TradingBot)
+    bot.client = MagicMock()
+    bot.client.get_positions.return_value = positions
+    bot.db = MagicMock()
+    bot.hub_publish_func = None
+    bot.event_bus = MagicMock()
+    bot._circuit_breaker_triggered = False
+    bot._circuit_breaker_loss_pct = 0.10
+    bot.stop = MagicMock()
+    bot._get_ticker_ws = lambda symbol: {"last": last_price}
+    bot._get_account_balance = lambda: balance
+    bot._close_stale_local_positions = MagicMock()
+    bot._maybe_run_full_reconciliation = MagicMock()
+    return bot
+
+
+class TestPacificaSideSpelling:
+    """The positions table contract is LONG/SHORT, never the wire bid/ask."""
+
+    def test_update_positions_stores_normalized_side(self):
+        bot = _raw_bot([PACIFICA_LONG], last_price=1_000.0)
+        bot._update_positions()
+        bot.db.save_position.assert_called_once()
+        saved = bot.db.save_position.call_args[0][0]
+        assert saved["side"] == "LONG"
+        assert saved["quantity"] == 1.0
+
+
+class TestBreakerWithoutVenuePnl:
+    """Pacifica positions carry no unrealized_pnl; the breaker must price them."""
+
+    def test_breaker_trips_on_priced_loss(self):
+        bot = _raw_bot([PACIFICA_LONG], last_price=850.0, balance=1_000.0)
+        bot._monitor_risk()
+        assert bot._circuit_breaker_triggered is True
+
+    def test_short_loss_has_correct_sign(self):
+        short = {"symbol": "BTC", "side": "ask", "amount": "1", "entry_price": "1000"}
+        bot = _raw_bot([short], last_price=1_150.0, balance=1_000.0)
+        bot._monitor_risk()
+        assert bot._circuit_breaker_triggered is True
+
+    def test_short_gain_does_not_trip(self):
+        short = {"symbol": "BTC", "side": "ask", "amount": "1", "entry_price": "1000"}
+        bot = _raw_bot([short], last_price=850.0, balance=1_000.0)
+        bot._monitor_risk()
+        assert bot._circuit_breaker_triggered is False
 
 
 class TestSizingFloor:
