@@ -735,8 +735,11 @@ class TradingBot:
                 )
                 return
 
-            # Filter to real positions (non-zero quantity)
-            real_positions = [p for p in positions if float(p.get("quantity", 0)) > 0]
+            # Filter to real positions (non-zero quantity).  Raw Pacifica
+            # positions carry the size under "amount", not "quantity".
+            from .position_reconciler import position_quantity
+
+            real_positions = [p for p in positions if position_quantity(p) > 0]
             logging.info(
                 f"Positions from Pacifica: {len(positions)} total, {len(real_positions)} with quantity > 0"
             )
@@ -772,7 +775,7 @@ class TradingBot:
                 # Pacifica API returns "long"/"short" or "bid"/"ask" (lowercase)
                 raw_side = pos.get("side", "long")
                 side = raw_side.upper() if raw_side else "LONG"
-                quantity = float(pos.get("quantity", 0))
+                quantity = position_quantity(pos)
                 entry_price = float(pos.get("entry_price", 0))
                 current_price = current_prices.get(symbol, entry_price)
 
