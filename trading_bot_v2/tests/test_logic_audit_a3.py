@@ -84,7 +84,9 @@ def _breaker_bot(balance: float, unrealized_pnl: float) -> SimpleNamespace:
         _get_account_balance=lambda: balance,
         _get_current_exposure=lambda: 0.0,
     )
-    return _bind(bot, "_monitor_risk", "_monitor_risk_coordinated")
+    return _bind(
+        bot, "_monitor_risk", "_monitor_risk_coordinated", "_position_unrealized_pnl"
+    )
 
 
 class TestCircuitBreaker:

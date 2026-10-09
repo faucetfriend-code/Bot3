@@ -86,7 +86,7 @@ from .component_registry import get_component_registry
 from .telegram_alerts import telegram_alerts
 
 # Import PositionReconciler for H4 position reconciliation
-from .position_reconciler import PositionReconciler
+from .position_reconciler import PositionReconciler, position_quantity
 
 
 def _signal_stop_price(signal: Any) -> Optional[float]:
@@ -737,8 +737,6 @@ class TradingBot:
 
             # Filter to real positions (non-zero quantity).  Raw Pacifica
             # positions carry the size under "amount", not "quantity".
-            from .position_reconciler import position_quantity
-
             real_positions = [p for p in positions if position_quantity(p) > 0]
             logging.info(
                 f"Positions from Pacifica: {len(positions)} total, {len(real_positions)} with quantity > 0"
@@ -3378,6 +3376,40 @@ class TradingBot:
         except Exception as e:
             logging.error(f"Error saving grid position: {e}")
 
+    def _position_unrealized_pnl(self, pos: Dict[str, Any]) -> float:
+        """Unrealized P&L of one raw exchange position.
+
+        Blofin reports ``unrealized_pnl`` directly.  Pacifica positions
+        carry no such key, so the loss is priced here from the entry
+        price and the latest price; without that the circuit breaker
+        summed zeros on Pacifica and could never trip.
+
+        Args:
+            pos: Raw position dict from the exchange client.
+
+        Returns:
+            Signed P&L in quote currency; 0.0 when it cannot be priced.
+        """
+        reported = pos.get("unrealized_pnl")
+        if reported not in (None, ""):
+            try:
+                return float(reported)
+            except (TypeError, ValueError):
+                pass
+        quantity = position_quantity(pos)
+        try:
+            entry_price = float(pos.get("entry_price") or 0)
+        except (TypeError, ValueError):
+            entry_price = 0.0
+        if quantity <= 0 or entry_price <= 0:
+            return 0.0
+        price = self._current_price_for(str(pos.get("symbol") or ""))
+        if price is None:
+            return 0.0
+        if position_side_lower(pos.get("side", "long")) == "long":
+            return (price - entry_price) * quantity
+        return (entry_price - price) * quantity
+
     def _monitor_risk(self) -> None:
         """
         Monitor risk and check circuit breaker.
@@ -3402,8 +3434,7 @@ class TradingBot:
             # Calculate total unrealized P&L
             total_pnl = 0.0
             for pos in positions:
-                unrealized_pnl = float(pos.get("unrealized_pnl", 0))
-                total_pnl += unrealized_pnl
+                total_pnl += self._position_unrealized_pnl(pos)
 
             # Calculate P&L percentage.  The configured threshold is a
             # fraction (0.10 = 10%), so compare in the same unit.
