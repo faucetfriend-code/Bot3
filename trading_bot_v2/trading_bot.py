@@ -696,10 +696,6 @@ class TradingBot:
             self._loop_step = "sleeping"
             time.sleep(getattr(config, "trading_loop_interval", 30))
 
-    def _monitor_risk(self) -> None:
-        """Monitor risk and trigger circuit breaker if needed."""
-        pass  # Placeholder for legacy method signature
-
     def _update_positions(self) -> None:
         """
         Update positions from Pacifica API and reconcile against local DB.
@@ -1397,6 +1393,10 @@ class TradingBot:
 
         Coordinator role: Check risk limits and publish events if exceeded.
         """
+        # Portfolio circuit breaker: the only caller of _monitor_risk.
+        # Before this delegation nothing in the loop evaluated it, so the
+        # documented 10% loss stop could never trigger.
+        self._monitor_risk()
         try:
             # Get account balance
             balance = self._get_account_balance()
