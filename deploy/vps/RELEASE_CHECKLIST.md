@@ -3,13 +3,35 @@
 Updated 2026-10-01. This is a preparation checklist, not a deployment record.
 Pacifica is selected for Bot3; its supplied Compose file remains testnet-only
 with the strategy loop stopped on API startup.
-The Discord follower lives in `C:/Users/z_shi/Desktop/N8NPROJECTS/Discord Bot`.
+The Discord follower lives in `G:/ai-workspace/Discord Bot`.
 Its original Blofin implementation is being migrated to Pacifica at the user's
 request. It retains a logged-in Chrome/CDP session and a separate account;
 it is not a Discord bot-token relay. The migration and Linux launcher are
 paper-only: non-paper or non-testnet Pacifica settings are rejected.
 
 ## 1. Information to supply
+
+### Bot3 mandatory month-plus paper evaluation
+
+Bot3 has not completed operational paper testing. Do not start its trading
+strategy until a non-live forward-testing mode is configured and verified.
+Current Compose enforces testnet, but exchange testnet orders are different
+from simulated paper fills; no continuous simulated-paper runtime is wired into
+this service. Record the selected testing method explicitly before starting.
+
+- [ ] Verify the non-live testing method, endpoint, credentials and order boundary.
+- [ ] Record actual continuous paper-testing start: **not started / pending**.
+- [ ] Complete at least one month of observed paper testing from that actual start.
+  Backtests, mocked checks, an idle service and deployment/preparation dates do
+  not count. Record outages and extend testing for missing observation time.
+- [ ] Review simulated trades, risk controls, recovery, costs and unresolved
+  failures; extend testing if the evidence is insufficient.
+- [ ] Obtain a separate explicit user go-live decision after review. No timer,
+  elapsed-month setting or successful checklist automatically enables mainnet.
+
+Keep `TESTNET=true`, strategies stopped until the method is verified, and initial
+wallet fields blank. Do not set an unused `PAPER_MODE` flag. The Discord follower's
+prior Blofin testing is separate evidence and does not satisfy Bot3's requirement.
 
 | Item | Value to record |
 | --- | --- |
@@ -72,8 +94,9 @@ unavailable on 2026-10-01. No normal application container was launched here.
 - [ ] Check CPU, memory, disk and log growth under representative testnet load.
 
 These host and exchange acceptance checks have not been executed by this handoff.
-Changing the candidate to live trading requires its own reviewed configuration
-and explicit go-live decision; this checklist does not perform that change.
+Changing the candidate to live trading requires the month-plus paper evaluation
+above, its own reviewed configuration and explicit go-live decision; this
+checklist does not perform that change.
 
 ## 5. Separate Discord follower: verified contract and remaining work
 

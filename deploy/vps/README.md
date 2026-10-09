@@ -9,6 +9,28 @@ covering host details, image acceptance, private access and recovery. The same
 host is intended to run the separately located Discord follow bot; its verified
 runtime and remaining Linux adaptation work are tracked in the checklist.
 
+## Bot3 paper-testing requirement
+
+Bot3 has not completed operational paper testing and is not approved for live
+trading. It must remain in paper testing for **at least one month**, measured
+from the recorded start of actual continuous paper operation. Backtests, mocked
+tests, this preparation date and an idle deployment do not start that period.
+Record the actual start, observed uptime, interruptions, simulated fills,
+reconciliation failures and recovery results in the release checklist. Do not
+count an interruption as observed operation; extend the evaluation as needed.
+Elapsed time never enables trading automatically. Completion requires a reviewed
+record and a separate explicit user decision; failures can require longer testing.
+
+The current Bot3 service has no wired continuous simulated-paper mode. Its
+`SimulatedExchange` belongs to offline backtesting. `TESTNET=true` selects an
+exchange test environment and can still submit testnet orders; it is **not**
+simulated paper trading. Keep strategies stopped and wallet fields blank until
+an actual paper-testing path is established and verified. Do not add an unused
+`PAPER_MODE` flag or describe a testnet run as completing this requirement.
+Compose hardcodes `TESTNET=true` to keep the deployment off mainnet and retains
+`ENABLE_AUTO_TRADING=false`; the latter alone is not an execution kill switch.
+Prior testing of the separate Discord follower does not qualify Bot3.
+
 ## Proposed host and cost
 
 First inspect the existing agents-for-hire Hetzner project. An existing server
@@ -209,7 +231,9 @@ Exercise server reboot, container crash/restart, health failure, private-access
 denial, backup restore, stale market data and protective-order recovery on testnet.
 Docker's restart policy restarts an exited process; it does not restart a merely
 unhealthy container or authorize strategy resumption. Keep strategies stopped
-until the separate protection checks and user go-live decision are complete.
+until the appropriate testing path is verified. Mainnet remains prohibited
+through the month-plus paper evaluation and until a separate user go-live
+decision following review; completing protection checks alone is insufficient.
 
 Local validation limitation, rechecked 2026-10-01: Docker CLI exists, but no Docker daemon was available
 on the development workstation. No image build, VPS boot, Tailscale change or

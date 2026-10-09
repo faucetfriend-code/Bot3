@@ -2,6 +2,15 @@
 
 ## Status
 
+Updated requirement: Bot3 has not completed operational paper testing and must
+remain in paper testing for at least one month from the actual continuous
+testing start. No start is recorded. Offline tests and backtests do not count.
+Keep strategies stopped until a non-live forward-testing mode is configured and
+verified. The supplied testnet setting is not a simulated-paper mode; the current
+service has no wired continuous paper simulator. See the current
+[release checklist](../deploy/vps/RELEASE_CHECKLIST.md) for the required record and
+separate user approval after review. Elapsed time never authorizes live trading.
+
 This is an offline-tested deployment candidate, not a live deployment approval. No VPS was provisioned, image started, authenticated exchange request sent, or trading enabled during this work. Actual account and network verification remain required.
 
 ## Completed preparation

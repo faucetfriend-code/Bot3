@@ -2,6 +2,18 @@
 
 ## Current result
 
+**Bot3 is not operationally tested or approved for live trading.** It must
+remain in paper testing for at least one month beginning with actual continuous
+paper operation, not backtests, preparation or deployment. That start has not
+been recorded. Keep its strategy stopped until a non-live forward-testing mode
+is configured and verified. The supplied deployment hardcodes `TESTNET=true`;
+exchange testnet orders are not simulated paper fills, and this service has no
+wired continuous simulated-paper mode. Record the chosen method and observation
+period in the release checklist. Review failures and interruptions, extend the
+period where needed, and require a separate explicit user decision before any
+live change. Time passing never activates live trading. The Discord follower's
+prior Blofin testing does not count toward Bot3's requirement.
+
 Bot3 is configured with Pacifica as its primary exchange and remains on testnet.
 The separate Discord follower now selects Pacifica in **paper mode only**.
 Its runtime rejects attempts to disable paper mode or select Pacifica mainnet;
@@ -39,7 +51,7 @@ findings, not proof of behavior against a funded account.
 - **Bot3:** this repository; Docker service; its own Pacifica account and secret
   environment; persistent SQLite database, pause state, logs and backups.
   Dashboard published only on `127.0.0.1:8000`.
-- **Discord follower:** `C:/Users/z_shi/Desktop/N8NPROJECTS/Discord Bot`; dedicated
+- **Discord follower:** `G:/ai-workspace/Discord Bot`; dedicated
   Linux user, Python environment and systemd services; separate account/config,
   `bot.db`, `pacifica_requests.db`, browser profile and backups. Dashboard on
   `127.0.0.1:5050`; Chrome debugging on `127.0.0.1:9222`.
@@ -68,9 +80,12 @@ findings, not proof of behavior against a funded account.
 5. On the actual host, verify private dashboard access, independent restarts,
    durable state, consistent backups and restore/reboot drills. Bot3 service
    recovery does not automatically resume its trading strategy.
-6. Before Bot3 trading activation, complete the account/IP and authenticated
+6. Before any Bot3 test-strategy activation, configure and verify the non-live
+   forward-testing method. Complete the account/IP and authenticated
    testnet checks for entry, stop placement/replacement, partial exits and restart
-   reconciliation. Those exchange checks remain outstanding.
+   reconciliation if exchange testnet is used; those checks remain outstanding.
+   They do not replace the required month-plus paper evaluation or authorize live
+   trading. Record testnet separately from simulated paper testing.
 
 The earlier [backtesting audit](backtesting-audit-2026-09-16.md) and
 [historical rerun report](backtesting-rerun-2026-09-16.md) remain scoped evidence.

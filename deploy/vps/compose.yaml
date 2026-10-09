@@ -20,6 +20,9 @@ services:
       DATABASE_PATH: /app/data/trading_bot.db
       SUPERVISOR_STATE_PATH: /app/data/supervisor_pause.json
       EXCHANGE: pacifica
+      # Mandatory no-mainnet boundary during Bot3's month-plus paper evaluation.
+      # Testnet is not simulated paper trading; leave strategies stopped until
+      # the actual paper-testing path has been established and verified.
       TESTNET: "true"
       ENABLE_AUTO_TRADING: "false"
       ENABLE_DEBUG_ROUTES: "false"
