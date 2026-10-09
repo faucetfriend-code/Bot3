@@ -19,6 +19,7 @@ Covered:
   ``unrealized_pnl`` key (Pacifica) by pricing them itself.
 """
 
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -210,6 +211,35 @@ class TestPacificaSideSpelling:
         saved = bot.db.save_position.call_args[0][0]
         assert saved["side"] == "LONG"
         assert saved["quantity"] == 1.0
+
+
+class TestBreakerStopFromLoopThread:
+    """The breaker runs inside the loop thread; stop() must not join itself."""
+
+    def test_stop_from_loop_thread_publishes_breaker_event(self):
+        bot = _raw_bot([PACIFICA_LONG], last_price=850.0, balance=1_000.0)
+        del bot.stop  # use the real TradingBot.stop
+        bot.ws_client = None
+        bot._running_event = threading.Event()
+        bot._running_event.set()
+        events = []
+        bot.hub_publish_func = events.append
+        errors = []
+
+        def run():
+            bot.thread = threading.current_thread()
+            try:
+                bot._monitor_risk()
+            except Exception as exc:  # noqa: BLE001 - surfaced by the assert
+                errors.append(exc)
+
+        worker = threading.Thread(target=run)
+        worker.start()
+        worker.join(timeout=5)
+        assert errors == []
+        assert bot._circuit_breaker_triggered is True
+        assert bot.is_running is False
+        assert [e["type"] for e in events] == ["circuit_breaker"]
 
 
 class TestBreakerWithoutVenuePnl:
