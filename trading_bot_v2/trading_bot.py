@@ -2970,6 +2970,12 @@ class TradingBot:
 
         Returns:
             Total exposure in USD.
+
+        Raises:
+            RuntimeError: When the exchange positions cannot be read.  An
+                unknown exposure must never be reported as zero, or the
+                exposure limits are bypassed while the venue is unreachable;
+                every caller already handles the exception.
         """
         try:
             # Normalized positions from the exchange adapter (ghost
@@ -3001,7 +3007,7 @@ class TradingBot:
 
         except Exception as e:
             logging.error(f"Error calculating current exposure: {e}")
-            return 0.0
+            raise RuntimeError(f"Exposure unavailable: {e}") from e
 
     def _validate_position_size(self, quantity: float, entry_price: float = 0) -> bool:
         """
