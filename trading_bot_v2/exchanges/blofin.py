@@ -33,7 +33,7 @@ Vocabulary boundary
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from ..models import OrderSide, OrderType
 from ..order_result import OrderResult, OrderResultStatus
@@ -48,6 +48,9 @@ from .base import (
     PositionSide,
 )
 
+if TYPE_CHECKING:
+    from ..blofin_client import BlofinClient
+
 logger = logging.getLogger(__name__)
 
 # Keys checked (in order) when extracting fields from bot-native
@@ -56,7 +59,9 @@ _QTY_KEYS = ("size", "amount", "quantity", "position_size", "pos_size")
 _ENTRY_KEYS = ("avg_entry_price", "entry_price", "average_entry", "avg_price", "entry")
 
 
-def _first_float(data: Dict[str, Any], keys, default: float = 0.0) -> float:
+def _first_float(
+    data: Dict[str, Any], keys: Tuple[str, ...], default: float = 0.0
+) -> float:
     """Return the first parseable float among ``keys`` in ``data``."""
     for key in keys:
         if key in data and data[key] is not None:
@@ -92,7 +97,7 @@ class BlofinExchange(ExchangeClient):
                 singleton from ``blofin_ws_client.get_blofin_ws_client``
                 is used lazily on first access.
         """
-        self._rest = rest_client
+        self._rest: Optional["BlofinClient"] = rest_client
         self._ws = ws_client
 
     # ------------------------------------------------------------------
@@ -105,7 +110,7 @@ class BlofinExchange(ExchangeClient):
         return cls._CAPABILITIES
 
     @property
-    def rest_client(self) -> Any:
+    def rest_client(self) -> "BlofinClient":
         """Underlying BlofinClient (built lazily from env if needed)."""
         if self._rest is None:
             from ..blofin_client import BlofinClient

@@ -11,7 +11,7 @@ This module provides:
 
 import time
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, cast
 from loguru import logger
 
 from .pacifica_client import PacificaClient
@@ -20,7 +20,7 @@ from .pacifica_client import PacificaClient
 class MarketDataCache:
     """In-memory cache for market data with TTL (Time To Live)."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.cache: Dict[str, Tuple[Any, datetime]] = {}  # {key: (data, timestamp)}
 
     def get(self, key: str, ttl_seconds: int = 10) -> Optional[Any]:
@@ -73,7 +73,7 @@ class MarketDataCache:
         """Clear all cached data."""
         self.cache.clear()
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         return {"total_entries": len(self.cache), "keys": list(self.cache.keys())}
 
@@ -84,9 +84,9 @@ class PacificaMarketDataHandler:
     def __init__(
         self,
         pacifica_client: Optional[PacificaClient] = None,
-        markets: List[str] = None,
+        markets: Optional[List[str]] = None,
         use_mock: bool = False,
-    ):
+    ) -> None:
         """
         Initialize market data handler.
 
@@ -106,7 +106,7 @@ class PacificaMarketDataHandler:
             f"Initialized PacificaMarketDataHandler [{mode}] for markets: {', '.join(self.markets)}"
         )
 
-    def _generate_mock_ticker(self, market: str) -> Dict:
+    def _generate_mock_ticker(self, market: str) -> Dict[str, Any]:
         """
         Generate ticker data from order book API with database fallback.
         """
@@ -140,7 +140,7 @@ class PacificaMarketDataHandler:
 
             data = response.json()
             if data.get("success"):
-                return data.get("data", {})
+                return cast(Dict[str, Any], data.get("data", {}))
             else:
                 raise Exception(
                     f"API returned error: {data.get('error', 'Unknown error')}"
@@ -192,14 +192,16 @@ class PacificaMarketDataHandler:
             logger.error(f"Failed to extract ticker from order book for {symbol}: {e}")
             raise
 
-    def _enhance_ticker_with_db_specs(self, ticker_data: Dict, symbol: str) -> Dict:
+    def _enhance_ticker_with_db_specs(
+        self, ticker_data: Dict[str, Any], symbol: str
+    ) -> Dict[str, Any]:
         """
         Enhance ticker data with market specs from database.
         """
         try:
             # Get market specs from database
-            from market_data_collector import MarketDataCollector
-            from database import DatabaseManager
+            from market_data_collector import MarketDataCollector  # type: ignore[import-not-found]  # script-mode fallback
+            from database import DatabaseManager  # type: ignore[import-not-found]  # script-mode fallback
             import asyncio
 
             db_manager = DatabaseManager()
@@ -225,7 +227,7 @@ class PacificaMarketDataHandler:
 
         return ticker_data
 
-    def _get_ticker_from_database(self, symbol: str) -> Dict:
+    def _get_ticker_from_database(self, symbol: str) -> Dict[str, Any]:
         """
         Get ticker data from database as fallback.
         """
@@ -286,7 +288,7 @@ class PacificaMarketDataHandler:
 
     def get_ticker(
         self, market: str, use_cache: bool = True, cache_ttl: int = 10
-    ) -> Optional[Dict]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Get ticker data for a specific market with optional caching.
 
@@ -301,21 +303,21 @@ class PacificaMarketDataHandler:
         cache_key = f"ticker_{market}"
 
         if use_cache:
-            cached = self.cache.get(cache_key, cache_ttl)
+            cached: Optional[Dict[str, Any]] = self.cache.get(cache_key, cache_ttl)
             if cached:
                 logger.debug(f"Using cached ticker for {market}")
                 return cached
 
         # Use mock data if in mock mode
         if self.use_mock:
-            ticker = self._generate_mock_ticker(market)
+            ticker: Dict[str, Any] = self._generate_mock_ticker(market)
             self.cache.set(cache_key, ticker)
             logger.debug(f"Generated mock ticker for {market}")
             return ticker
 
         # Try live API
         try:
-            ticker = self.client.get_ticker(market)
+            ticker = cast(PacificaClient, self.client).get_ticker(market)  # type: ignore[attr-defined]  # no such method; reported
             self.cache.set(cache_key, ticker)
             logger.debug(f"Fetched fresh ticker for {market}")
             return ticker
@@ -327,7 +329,7 @@ class PacificaMarketDataHandler:
             self.cache.set(cache_key, ticker)
             return ticker
 
-    def get_all_tickers(self, use_cache: bool = True) -> Dict[str, Dict]:
+    def get_all_tickers(self, use_cache: bool = True) -> Dict[str, Dict[str, Any]]:
         """
         Get tickers for all configured markets.
 
@@ -367,7 +369,7 @@ class PacificaMarketDataHandler:
 
     def _generate_mock_candles(
         self, market: str, interval: str, limit: int
-    ) -> List[Dict]:
+    ) -> List[Dict[str, Any]]:
         """
         Generate candle data from Kline API with database fallback.
         """
@@ -381,7 +383,9 @@ class PacificaMarketDataHandler:
             # Return empty list as fallback
             return []
 
-    def _fetch_candles_api(self, symbol: str, interval: str, limit: int) -> List[Dict]:
+    def _fetch_candles_api(
+        self, symbol: str, interval: str, limit: int
+    ) -> List[Dict[str, Any]]:
         """
         Fetch candle data from Pacifica Kline API.
         """
@@ -391,7 +395,7 @@ class PacificaMarketDataHandler:
             base_url = "https://api.pacifica.fi/api/v1"
             url = f"{base_url}/kline"
 
-            params = {
+            params: Dict[str, str | int] = {
                 "symbol": symbol,
                 "interval": interval,
                 "limit": min(limit, 1000),  # API might have limits
@@ -427,7 +431,7 @@ class PacificaMarketDataHandler:
             logger.warning(f"Failed to fetch candles for {symbol}: {e}")
             raise
 
-    def _generate_mock_funding_rate(self, market: str) -> Dict:
+    def _generate_mock_funding_rate(self, market: str) -> Dict[str, Any]:
         """
         Generate funding rate data from Funding API with database fallback.
         """
@@ -441,7 +445,7 @@ class PacificaMarketDataHandler:
             # Fall back to database data
             return self._get_funding_rate_from_database(market)
 
-    def _fetch_funding_rate_api(self, symbol: str) -> Dict:
+    def _fetch_funding_rate_api(self, symbol: str) -> Dict[str, Any]:
         """
         Fetch funding rate data from Pacifica Funding API.
         """
@@ -451,7 +455,7 @@ class PacificaMarketDataHandler:
             base_url = "https://api.pacifica.fi/api/v1"
             url = f"{base_url}/funding"
 
-            params = {
+            params: Dict[str, str | int] = {
                 "symbol": symbol,
                 "limit": 1,  # Get latest
             }
@@ -483,7 +487,7 @@ class PacificaMarketDataHandler:
             logger.warning(f"Failed to fetch funding rate for {symbol}: {e}")
             raise
 
-    def _get_funding_rate_from_database(self, symbol: str) -> Dict:
+    def _get_funding_rate_from_database(self, symbol: str) -> Dict[str, Any]:
         """
         Get funding rate data from database as fallback.
         """
@@ -522,7 +526,7 @@ class PacificaMarketDataHandler:
                 "error": str(e),
             }
 
-    def _generate_mock_market_specs(self, market: str) -> Dict:
+    def _generate_mock_market_specs(self, market: str) -> Dict[str, Any]:
         """
         Generate market specifications from Info API with database fallback.
         """
@@ -536,7 +540,7 @@ class PacificaMarketDataHandler:
             # Fall back to database data
             return self._get_market_specs_from_database(market)
 
-    def _fetch_market_specs_api(self, symbol: str) -> Dict:
+    def _fetch_market_specs_api(self, symbol: str) -> Dict[str, Any]:
         """
         Fetch market specifications from Pacifica Info API.
         """
@@ -577,7 +581,7 @@ class PacificaMarketDataHandler:
             logger.warning(f"Failed to fetch market specs for {symbol}: {e}")
             raise
 
-    def _get_market_specs_from_database(self, symbol: str) -> Dict:
+    def _get_market_specs_from_database(self, symbol: str) -> Dict[str, Any]:
         """
         Get market specifications from database as fallback.
         """
@@ -628,7 +632,7 @@ class PacificaMarketDataHandler:
         interval: str = "1h",
         limit: int = 100,
         use_cache: bool = True,
-    ) -> Optional[List[Dict]]:
+    ) -> Optional[List[Dict[str, Any]]]:
         """
         Get candlestick (OHLCV) data for a market.
 
@@ -644,14 +648,18 @@ class PacificaMarketDataHandler:
         cache_key = f"candles_{market}_{interval}"
 
         if use_cache:
-            cached = self.cache.get(cache_key, ttl_seconds=60)
+            cached: Optional[List[Dict[str, Any]]] = self.cache.get(
+                cache_key, ttl_seconds=60
+            )
             if cached:
                 logger.debug(f"Using cached candles for {market} {interval}")
                 return cached
 
         # Use mock data if in mock mode
         if self.use_mock:
-            candles = self._generate_mock_candles(market, interval, limit)
+            candles: List[Dict[str, Any]] = self._generate_mock_candles(
+                market, interval, limit
+            )
             self.cache.set(cache_key, candles)
             logger.debug(
                 f"Generated {len(candles)} mock candles for {market} {interval}"
@@ -660,7 +668,9 @@ class PacificaMarketDataHandler:
 
         # Try live API
         try:
-            candles = self.client.get_candles(market, interval, limit=limit)
+            candles = cast(PacificaClient, self.client).get_candles(
+                market, interval, limit=limit
+            )
             self.cache.set(cache_key, candles)
             logger.debug(
                 f"Fetched {len(candles) if candles else 0} candles for {market} {interval}"
@@ -674,7 +684,9 @@ class PacificaMarketDataHandler:
             self.cache.set(cache_key, candles)
             return candles
 
-    def get_funding_rate(self, market: str, use_cache: bool = True) -> Optional[Dict]:
+    def get_funding_rate(
+        self, market: str, use_cache: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """
         Get current funding rate for a market.
 
@@ -690,21 +702,23 @@ class PacificaMarketDataHandler:
         cache_key = f"funding_{market}"
 
         if use_cache:
-            cached = self.cache.get(cache_key, ttl_seconds=300)  # 5 minute cache
+            cached: Optional[Dict[str, Any]] = self.cache.get(
+                cache_key, ttl_seconds=300
+            )  # 5 minute cache
             if cached:
                 logger.debug(f"Using cached funding rate for {market}")
                 return cached
 
         # Use mock data if in mock mode
         if self.use_mock:
-            funding = self._generate_mock_funding_rate(market)
+            funding: Optional[Dict[str, Any]] = self._generate_mock_funding_rate(market)
             self.cache.set(cache_key, funding)
             logger.debug(f"Generated mock funding rate for {market}")
             return funding
 
         # Try live API
         try:
-            funding = self.client.get_funding_rate(market)
+            funding = cast(PacificaClient, self.client).get_funding_rate(market)
             self.cache.set(cache_key, funding)
             logger.debug(f"Fetched funding rate for {market}")
             return funding
@@ -716,7 +730,9 @@ class PacificaMarketDataHandler:
             self.cache.set(cache_key, funding)
             return funding
 
-    def get_funding_rates_all(self, use_cache: bool = True) -> Dict[str, Dict]:
+    def get_funding_rates_all(
+        self, use_cache: bool = True
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Get funding rates for all configured markets.
 
@@ -755,7 +771,9 @@ class PacificaMarketDataHandler:
 
         return rates
 
-    def get_market_specs(self, market: str, use_cache: bool = True) -> Optional[Dict]:
+    def get_market_specs(
+        self, market: str, use_cache: bool = True
+    ) -> Optional[Dict[str, Any]]:
         """
         Get market specifications (tick size, lot size, leverage limits).
 
@@ -769,7 +787,7 @@ class PacificaMarketDataHandler:
         cache_key = f"specs_{market}"
 
         if use_cache:
-            cached = self.cache.get(
+            cached: Optional[Dict[str, Any]] = self.cache.get(
                 cache_key, ttl_seconds=3600
             )  # 1 hour cache (rarely changes)
             if cached:
@@ -777,14 +795,14 @@ class PacificaMarketDataHandler:
 
         # Use mock data if in mock mode
         if self.use_mock:
-            specs = self._generate_mock_market_specs(market)
+            specs: Dict[str, Any] = self._generate_mock_market_specs(market)
             self.cache.set(cache_key, specs)
             logger.debug(f"Generated mock market specs for {market}")
             return specs
 
         # Try live API
         try:
-            specs = self.client.get_market_specs(market)
+            specs = cast(PacificaClient, self.client).get_market_specs(market)  # type: ignore[attr-defined]  # no such method; reported
             self.cache.set(cache_key, specs)
             logger.debug(f"Fetched market specs for {market}")
             return specs
@@ -796,7 +814,7 @@ class PacificaMarketDataHandler:
             self.cache.set(cache_key, specs)
             return specs
 
-    def get_all_market_specs(self, use_cache: bool = True) -> Dict[str, Dict]:
+    def get_all_market_specs(self, use_cache: bool = True) -> Dict[str, Dict[str, Any]]:
         """Get market specifications for all configured markets."""
         specs = {}
 

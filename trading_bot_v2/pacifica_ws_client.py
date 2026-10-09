@@ -16,16 +16,32 @@ import os
 import time
 import threading
 from datetime import datetime
-from typing import Dict, Any, Optional, Callable, List, Union
+from typing import (
+    TYPE_CHECKING,
+    Dict,
+    Any,
+    ClassVar,
+    Mapping,
+    Optional,
+    Callable,
+    List,
+    Tuple,
+    Union,
+)
 import websockets
 from websockets.exceptions import ConnectionClosed
 from loguru import logger
 from solders.keypair import Keypair
 import base58
 
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+    from .pacifica_client import PacificaClient
+
 
 class PacificaWebSocketClient:
-    _instance = None
+    _instance: ClassVar[Optional["PacificaWebSocketClient"]] = None
     _lock = threading.Lock()
 
     __slots__ = (
@@ -52,14 +68,14 @@ class PacificaWebSocketClient:
         "_message_count",
     )
 
-    def __new__(cls):
+    def __new__(cls) -> "PacificaWebSocketClient":
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
                     cls._instance = super().__new__(cls)
         return cls._instance
 
-    def __init__(self):
+    def __init__(self) -> None:
         if hasattr(self, "_initialized"):
             return
         self._initialized = True
@@ -68,7 +84,7 @@ class PacificaWebSocketClient:
         self._running = False
         self._connected = False
         self._reconnect_delay = 1
-        self._last_heartbeat = 0
+        self._last_heartbeat: float = 0
         self._ui_callbacks: List[Callable[[Dict[str, Any]], None]] = []
         self._channel_callbacks: Dict[str, Callable[[Dict[str, Any]], None]] = {}
 
@@ -123,19 +139,19 @@ class PacificaWebSocketClient:
 
         # Event loop in background thread
         self._loop = asyncio.new_event_loop()
-        self._task = None
+        self._task: Optional["asyncio.Task[Any]"] = None
         threading.Thread(target=self._loop.run_forever, daemon=True).start()
 
     # ====================== PUBLIC API ======================
 
-    def start(self):
+    def start(self) -> None:
         """Start the WebSocket client (idempotent)"""
         if self._running:
             return
         self._running = True
         asyncio.run_coroutine_threadsafe(self._run(), self._loop)
 
-    def stop(self):
+    def stop(self) -> None:
         """Stop the client"""
         self._running = False
         if hasattr(self, "_task") and self._task:
@@ -149,13 +165,13 @@ class PacificaWebSocketClient:
         """Get latest funding info"""
         return self._funding_cache.get(symbol.upper())
 
-    def get_positions(self) -> Dict[str, Dict[str, Any]]:
+    def get_positions(self) -> Mapping[str, Dict[str, Any]]:
         """Get all current positions (read-only view to avoid memory copies)"""
         from types import MappingProxyType
 
         return MappingProxyType(self._position_cache)
 
-    def get_balance(self) -> Dict[str, Any]:
+    def get_balance(self) -> Mapping[str, Any]:
         """Get latest balance info (read-only view to avoid memory copies)"""
         from types import MappingProxyType
 
@@ -255,13 +271,13 @@ class PacificaWebSocketClient:
 
     def bootstrap_kline_cache(
         self,
-        rest_client,
-        symbols: List[str] = None,
-        intervals: List[str] = None,
+        rest_client: "PacificaClient",
+        symbols: Optional[List[str]] = None,
+        intervals: Optional[List[str]] = None,
         lookback: int = 250,
         use_disk_cache: bool = True,
         max_concurrent: int = 3,
-    ):
+    ) -> None:
         """
         Pre-populate kline cache with historical data - OPTIMIZED VERSION.
 
@@ -347,7 +363,9 @@ class PacificaWebSocketClient:
             "4h": {"minutes": 240, "lookback": lookback},
         }
 
-        def fetch_candles(symbol: str, interval: str) -> tuple:
+        def fetch_candles(
+            symbol: str, interval: str
+        ) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
             """Fetch candles for a single symbol/interval pair."""
             try:
                 config = interval_config.get(interval, {"minutes": 60, "lookback": 50})
@@ -451,7 +469,7 @@ class PacificaWebSocketClient:
             except Exception as e:
                 logger.warning(f"Failed to save disk cache: {e}")
 
-    async def subscribe_candle(self, symbol: str, interval: str):
+    async def subscribe_candle(self, symbol: str, interval: str) -> None:
         """Dynamically subscribe to a specific candle stream"""
         if not self._running or not self._connected:
             logger.warning(
@@ -478,7 +496,7 @@ class PacificaWebSocketClient:
         except Exception as e:
             logger.error(f"Failed to subscribe to candle {symbol} {interval}: {e}")
 
-    def update_trading_symbols(self, active_symbols: List[str]):
+    def update_trading_symbols(self, active_symbols: List[str]) -> None:
         """
         Update WebSocket subscriptions to only include actively traded symbols.
 
@@ -506,24 +524,25 @@ class PacificaWebSocketClient:
         # Run all subscriptions concurrently
         if subscription_tasks:
             asyncio.run_coroutine_threadsafe(
-                asyncio.gather(*subscription_tasks, return_exceptions=True), self._loop
+                asyncio.gather(*subscription_tasks, return_exceptions=True),  # type: ignore[arg-type]  # gather() is a Future, not a coroutine; reported
+                self._loop,
             )
             logger.info(
                 f"✅ Updated WebSocket subscriptions for {len(normalized_symbols)} symbols: {normalized_symbols}"
             )
 
-    async def _send_subscription(self, subscription_msg: dict):
+    async def _send_subscription(self, subscription_msg: Dict[str, Any]) -> None:
         """Send a subscription message through the WebSocket"""
         if self._ws and self._connected:
             await self._ws.send(json.dumps(subscription_msg))
 
-    def register_ui_callback(self, callback: Callable[[Dict[str, Any]], None]):
+    def register_ui_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Register callback for FastAPI /ws to forward events to browser"""
         self._ui_callbacks.append(callback)
 
     async def subscribe(
         self, channel_type: str, callback: Callable[[Dict[str, Any]], None]
-    ):
+    ) -> None:
         """Subscribe to a channel with a callback"""
         # Map channel type to event type
         channel_map = {
@@ -539,7 +558,7 @@ class PacificaWebSocketClient:
 
     # ====================== INTERNAL ======================
 
-    async def _run(self):
+    async def _run(self) -> None:
         logger.info("Starting Pacifica WebSocket client...")
         while self._running:
             try:
@@ -592,7 +611,7 @@ class PacificaWebSocketClient:
                 self._reconnect_delay = min(self._reconnect_delay * 2, 60)
                 self._connected = False
 
-    async def _authenticate(self, ws):
+    async def _authenticate(self, ws: "ClientConnection") -> None:
         timestamp = int(time.time() * 1000)
         message = json.dumps(
             {"op": "auth", "timestamp": timestamp, "account": self._account_pubkey}
@@ -610,7 +629,7 @@ class PacificaWebSocketClient:
         await ws.send(json.dumps(auth_msg))
         logger.info("Sent auth message")
 
-    async def _subscribe_public(self, ws):
+    async def _subscribe_public(self, ws: "ClientConnection") -> None:
         # Subscribe to all-market price stream (SDK format)
         await ws.send(
             json.dumps({"method": "subscribe", "params": {"source": "prices"}})
@@ -651,14 +670,14 @@ class PacificaWebSocketClient:
         except Exception as e:
             logger.warning(f"❌ Candle WebSocket subscriptions failed: {e}")
 
-    async def _subscribe_private(self, ws):
+    async def _subscribe_private(self, ws: "ClientConnection") -> None:
         # Wait a moment for auth to settle
         await asyncio.sleep(1)
         subs = ["position", "order", "executionReport", "balance"]
         await ws.send(json.dumps({"op": "subscribe", "channels": subs}))
         logger.info(f"Subscribed to private: {subs}")
 
-    async def _handle_message(self, raw: Union[str, bytes]):
+    async def _handle_message(self, raw: Union[str, bytes]) -> None:
         try:
             if isinstance(raw, bytes):
                 raw = raw.decode("utf-8")
@@ -863,17 +882,17 @@ class PacificaWebSocketClient:
                         )
 
         except Exception as e:
-            logger.error(f"Error handling WS message: {e} | Raw: {raw[:200]}")
+            logger.error(f"Error handling WS message: {e} | Raw: {raw[:200]}")  # type: ignore[str-bytes-safe]  # bytes frame logs as b'..'; reported
 
-    def _call_channel_callback(self, event_type: str, event: Dict[str, Any]):
+    def _call_channel_callback(self, event_type: str, event: Dict[str, Any]) -> None:
         """Call the specific channel callback"""
         if event_type in self._channel_callbacks:
             try:
-                asyncio.create_task(self._channel_callbacks[event_type](event))
+                asyncio.create_task(self._channel_callbacks[event_type](event))  # type: ignore[arg-type]  # callback typed as sync; reported
             except Exception as e:
                 logger.error(f"Channel callback error for {event_type}: {e}")
 
-    def _broadcast(self, event: Dict[str, Any]):
+    def _broadcast(self, event: Dict[str, Any]) -> None:
         """Send event to all registered UI callbacks (FastAPI /ws)"""
         for cb in self._ui_callbacks[:]:
             try:

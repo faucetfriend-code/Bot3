@@ -18,10 +18,19 @@ Features:
 import asyncio
 import concurrent.futures
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Protocol, cast
 from loguru import logger
 from .pacifica_client import PacificaClient
 from .data_validation import DataValidator
+
+
+class KlineDataSource(Protocol):
+    # Typing-only view of the WebSocket client surface this fetcher reads
+    # (PacificaWebSocketClient and BlofinWebSocketClient both provide it).
+    def get_kline_data(
+        self, symbol: str, interval: str
+    ) -> Optional[List[Dict[str, Any]]]: ...
+
 
 # Timeframe constants for clear separation of concerns
 # Regime timeframes: Used for market state detection and strategy enablement
@@ -53,8 +62,11 @@ class MultiTimeframeFetcher:
     }
 
     def __init__(
-        self, client: PacificaClient, ws_client=None, cache_ttl_seconds: int = 300
-    ):
+        self,
+        client: PacificaClient,
+        ws_client: Optional[KlineDataSource] = None,
+        cache_ttl_seconds: int = 300,
+    ) -> None:
         """
         Initialize MultiTimeframeFetcher.
 
@@ -66,7 +78,7 @@ class MultiTimeframeFetcher:
         self.client = client
         self.ws_client = ws_client
         self.cache_ttl = cache_ttl_seconds  # Default TTL (used if TF not in TIERED_TTL)
-        self.cache: Dict[Tuple[str, str], Tuple[Dict, datetime]] = {}
+        self.cache: Dict[Tuple[str, str], Tuple[Dict[str, List[float]], datetime]] = {}
 
         # Instantiated once (not per-call) since DataValidator is stateless
         # per-invocation but construction does I/O-free setup only.
@@ -77,7 +89,10 @@ class MultiTimeframeFetcher:
         )
 
     def get_candles_multi_tf(
-        self, symbol: str, timeframes: List[str] = None, lookback_candles: int = 200
+        self,
+        symbol: str,
+        timeframes: Optional[List[str]] = None,
+        lookback_candles: int = 200,
     ) -> Dict[str, Dict[str, List[float]]]:
         """
         Fetch candles for multiple timeframes with intelligent data sources.
@@ -222,7 +237,7 @@ class MultiTimeframeFetcher:
         self, symbol: str, timeframes: List[str], lookback_candles: int
     ) -> Dict[str, Dict[str, List[float]]]:
         """Fetch data for all timeframes in parallel for better performance."""
-        result = {}
+        result: Dict[str, Dict[str, List[float]]] = {}
 
         # Create tasks for each timeframe
         tasks = []
@@ -243,7 +258,9 @@ class MultiTimeframeFetcher:
                 logger.error(f"Error fetching {symbol} {tf}: {completed_result}")
                 continue
             elif completed_result is not None:
-                result[tf] = completed_result
+                # Only Exception is filtered above; a BaseException from
+                # gather(return_exceptions=True) would pass through (reported).
+                result[tf] = cast(Dict[str, List[float]], completed_result)
 
         return result
 
@@ -433,7 +450,7 @@ class MultiTimeframeFetcher:
 
         return True
 
-    def _validate_candle(self, candle: Dict, use_abbreviated: bool) -> bool:
+    def _validate_candle(self, candle: Dict[str, Any], use_abbreviated: bool) -> bool:
         """
         Validate a single candle has all required fields with valid numeric data.
 
@@ -473,7 +490,7 @@ class MultiTimeframeFetcher:
         return True
 
     def _to_validator_candle(
-        self, candle: Dict, use_abbreviated: bool
+        self, candle: Dict[str, Any], use_abbreviated: bool
     ) -> Dict[str, Any]:
         """
         Normalize a raw candle dict to the field names DataValidator expects.
@@ -504,8 +521,8 @@ class MultiTimeframeFetcher:
         }
 
     def _validate_candles_with_data_validator(
-        self, candles: List[Dict], use_abbreviated: bool
-    ) -> List[Dict]:
+        self, candles: List[Dict[str, Any]], use_abbreviated: bool
+    ) -> List[Dict[str, Any]]:
         """
         Run candles through the richer DataValidator checks and drop bad ones.
 
@@ -567,7 +584,7 @@ class MultiTimeframeFetcher:
             logger.debug(f"DataValidator batch check skipped due to error: {e}")
             return candles
 
-    def _safe_float(self, value, default: float = 0.0) -> float:
+    def _safe_float(self, value: Any, default: float = 0.0) -> float:
         """
         Safely convert value to float with fallback.
 
@@ -589,7 +606,9 @@ class MultiTimeframeFetcher:
         except (TypeError, ValueError):
             return default
 
-    def _parse_candles(self, raw_candles: List[Dict]) -> Dict[str, List[float]]:
+    def _parse_candles(
+        self, raw_candles: List[Dict[str, Any]]
+    ) -> Dict[str, List[float]]:
         """
         Parse raw API candles into separate OHLCV lists with robust validation.
 
@@ -616,7 +635,9 @@ class MultiTimeframeFetcher:
             must handle both epoch-ms ints and ISO-8601 strings since backtest
             data uses ISO strings.
         """
-        empty_result = {
+        # List[Any] because the "timestamp" list carries the raw source
+        # value (epoch-ms int, ISO string or None), see the docstring.
+        empty_result: Dict[str, List[Any]] = {
             "high": [],
             "low": [],
             "close": [],
@@ -659,7 +680,7 @@ class MultiTimeframeFetcher:
         # Parse validated candles into OHLCV lists.
         # "timestamp" keeps the raw source value (epoch-ms int for Pacifica
         # REST/WS candles) so downstream consumers see consistent units.
-        parsed = {
+        parsed: Dict[str, List[Any]] = {
             "high": [],
             "low": [],
             "close": [],

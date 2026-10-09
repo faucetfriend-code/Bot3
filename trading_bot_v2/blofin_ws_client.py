@@ -40,11 +40,16 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 import websockets
 
 from .blofin_client import BAR_MAP
+
+if TYPE_CHECKING:
+    from websockets.asyncio.client import ClientConnection
+
+    from .blofin_client import BlofinClient
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +102,7 @@ class BlofinWebSocketClient:
         self._running = False
         self._connected = False
         self._reconnect_delay = 1
-        self._ws = None
+        self._ws: Optional["ClientConnection"] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._loop_thread: Optional[threading.Thread] = None
         self._message_count = 0
@@ -204,7 +209,7 @@ class BlofinWebSocketClient:
 
     def bootstrap_kline_cache(
         self,
-        rest_client,
+        rest_client: "BlofinClient",
         symbols: Optional[List[str]] = None,
         intervals: Optional[List[str]] = None,
         lookback: int = 250,
@@ -258,7 +263,9 @@ class BlofinWebSocketClient:
             except (ValueError, OSError) as exc:
                 logger.warning("Failed to load Blofin kline disk cache: %s", exc)
 
-        def fetch(symbol: str, interval: str):
+        def fetch(
+            symbol: str, interval: str
+        ) -> Tuple[str, List[Dict[str, Any]], Optional[str]]:
             count = 50 if interval in execution_intervals else lookback
             try:
                 candles = rest_client.get_candles(
@@ -342,7 +349,7 @@ class BlofinWebSocketClient:
                 await asyncio.sleep(self._reconnect_delay)
                 self._reconnect_delay = min(self._reconnect_delay * 2, 60)
 
-    async def _ping_loop(self, ws) -> None:
+    async def _ping_loop(self, ws: "ClientConnection") -> None:
         """Send the literal 'ping' text frame Blofin expects (<30s idle)."""
         try:
             while self._running:
@@ -351,7 +358,7 @@ class BlofinWebSocketClient:
         except (asyncio.CancelledError, Exception):  # noqa: BLE001
             return
 
-    async def _subscribe_all(self, ws) -> None:
+    async def _subscribe_all(self, ws: "ClientConnection") -> None:
         """Send tickers + candle + pending book subscriptions."""
         args: List[Dict[str, str]] = []
         for symbol in self._symbols:

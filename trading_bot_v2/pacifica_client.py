@@ -4,7 +4,7 @@ import time
 import uuid
 import base58
 from collections import defaultdict, deque
-from typing import Dict, List, Any, Optional, Union, Tuple, Callable
+from typing import Dict, List, Any, Optional, Union, Tuple, Callable, cast
 from enum import Enum
 from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 
@@ -52,13 +52,15 @@ class RateLimitManager:
             max_requests_per_minute: Maximum requests per minute (conservative limit)
         """
         self.max_rpm = max_requests_per_minute
-        self.requests = deque(maxlen=max_requests_per_minute)
+        self.requests: deque[float] = deque(maxlen=max_requests_per_minute)
         self.last_reset = time.time()
         self.circuit_breaker_active = False
-        self.circuit_breaker_until = 0
+        self.circuit_breaker_until: float = 0
         self.rate_limit_hits = 0
         self.total_requests = 0
-        self.priority_stats = defaultdict(lambda: {"count": 0, "success": 0})
+        self.priority_stats: defaultdict[RequestPriority, Dict[str, int]] = defaultdict(
+            lambda: {"count": 0, "success": 0}
+        )
 
     def can_make_request(
         self, priority: Union[str, RequestPriority] = RequestPriority.NORMAL
@@ -99,7 +101,7 @@ class RateLimitManager:
         self,
         priority: Union[str, RequestPriority] = RequestPriority.NORMAL,
         success: bool = True,
-    ):
+    ) -> None:
         """Record a request was made."""
         if isinstance(priority, str):
             priority = RequestPriority[priority.upper()]
@@ -110,7 +112,7 @@ class RateLimitManager:
         if success:
             self.priority_stats[priority]["success"] += 1
 
-    def record_rate_limit_hit(self):
+    def record_rate_limit_hit(self) -> None:
         """Record a rate limit hit and activate circuit breaker if needed."""
         self.rate_limit_hits += 1
 
@@ -120,7 +122,7 @@ class RateLimitManager:
         if recent_hits >= 3:
             self.activate_circuit_breaker(duration=30)
 
-    def activate_circuit_breaker(self, duration: int = 30):
+    def activate_circuit_breaker(self, duration: int = 30) -> None:
         """Temporarily pause requests due to rate limit."""
         self.circuit_breaker_active = True
         self.circuit_breaker_until = time.time() + duration
@@ -145,7 +147,9 @@ class SmartCache:
 
     def __init__(self, rate_manager: RateLimitManager):
         self.cache: Dict[str, Tuple[Any, float, RequestPriority]] = {}
-        self.cache_stats = defaultdict(lambda: {"hits": 0, "misses": 0})
+        self.cache_stats: defaultdict[str, Dict[str, int]] = defaultdict(
+            lambda: {"hits": 0, "misses": 0}
+        )
         self.rate_manager = rate_manager
 
         # TTL by data type (in seconds)
@@ -206,7 +210,7 @@ class SmartCache:
                 return ttl
         return 300  # Default 5 minutes
 
-    def _wait_for_rate_limit(self, priority: RequestPriority):
+    def _wait_for_rate_limit(self, priority: RequestPriority) -> None:
         """Wait until rate limit allows requests."""
         wait_count = 0
         while not self.rate_manager.can_make_request(priority):
@@ -215,7 +219,7 @@ class SmartCache:
                 raise RateLimitError("Extended rate limit exceeded")
             time.sleep(1)
 
-    def invalidate(self, pattern: Optional[str] = None):
+    def invalidate(self, pattern: Optional[str] = None) -> None:
         """Invalidate cache entries matching pattern (or all if None)."""
         if pattern is None:
             self.cache.clear()
@@ -252,14 +256,16 @@ class RateLimitTier(Enum):
     VIP = {"rest_per_second": 50, "websocket_subscriptions": 200}
 
 
-def sign_message(header, payload, keypair):
+def sign_message(
+    header: Dict[str, Any], payload: Dict[str, Any], keypair: Keypair
+) -> Tuple[str, str]:
     message = prepare_message(header, payload)
     message_bytes = message.encode("utf-8")
     signature = keypair.sign_message(message_bytes)
     return (message, base58.b58encode(bytes(signature)).decode("ascii"))
 
 
-def prepare_message(header, payload):
+def prepare_message(header: Dict[str, Any], payload: Dict[str, Any]) -> str:
     if (
         "type" not in header
         or "timestamp" not in header
@@ -280,9 +286,9 @@ def prepare_message(header, payload):
     return message
 
 
-def sort_json_keys(value):
+def sort_json_keys(value: object) -> object:
     if isinstance(value, dict):
-        sorted_dict = {}
+        sorted_dict: Dict[Any, object] = {}
         for key in sorted(value.keys()):
             sorted_dict[key] = sort_json_keys(value[key])
         return sorted_dict
@@ -417,7 +423,7 @@ class PacificaClient:
         elif response.status_code >= 400:
             raise ValueError(f"API error: {response.text}")
 
-        parsed = response.json()
+        parsed: Union[Dict[str, Any], str] = response.json()
 
         # Pacifica market-order endpoint intermittently returns the JSON string
         # "success" (or '"success"') instead of an order object.  Normalise it
@@ -496,7 +502,7 @@ class PacificaClient:
                     f"API error: {response.reason or response.text or 'Unknown error'}"
                 )
 
-        return response.json()
+        return cast(Dict[str, Any], response.json())
 
     @retry(
         stop=stop_after_attempt(5),
@@ -601,7 +607,7 @@ class PacificaClient:
             )
 
         try:
-            return response.json()
+            return cast(Dict[str, Any], response.json())
         except ValueError:
             # Handle non-JSON responses
             return {"data": response.text, "success": response.status_code < 400}
@@ -634,10 +640,10 @@ class PacificaClient:
             "type": "get_account",
         }
 
-        payload = {}
+        payload: Dict[str, Any] = {}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -666,7 +672,7 @@ class PacificaClient:
         elif response.status_code >= 400:
             raise ValueError(f"API error: {response.text}")
 
-        return response.json().get("data", {})
+        return cast(Dict[str, Any], response.json().get("data", {}))
 
     @retry(
         stop=stop_after_attempt(5),
@@ -702,7 +708,7 @@ class PacificaClient:
         payload = {"limit": limit}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -738,7 +744,7 @@ class PacificaClient:
         # API may return list directly or dict with orders key
         if isinstance(response_data, list):
             return response_data
-        return response_data.get("orders", [])
+        return cast(List[Dict[str, Any]], response_data.get("orders", []))
 
     @retry(
         stop=stop_after_attempt(5),
@@ -768,10 +774,10 @@ class PacificaClient:
             "type": "get_orders",
         }
 
-        payload = {}
+        payload: Dict[str, Any] = {}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -804,7 +810,7 @@ class PacificaClient:
         # API may return list directly or dict with orders key
         if isinstance(response_data, list):
             return response_data
-        return response_data.get("orders", [])
+        return cast(List[Dict[str, Any]], response_data.get("orders", []))
 
     @retry(
         stop=stop_after_attempt(5),
@@ -834,10 +840,10 @@ class PacificaClient:
             "type": "get_positions",
         }
 
-        payload = {}
+        payload: Dict[str, Any] = {}
         message, signature = sign_message(signature_header, payload, self.agent_keypair)
 
-        params = {
+        params: Dict[str, Any] = {
             "account": self.account_public_key,
             "agent_wallet": self.agent_wallet_public_key,
             "signature": signature,
@@ -870,7 +876,7 @@ class PacificaClient:
         # API may return list directly or dict with positions key
         if isinstance(response_data, list):
             return response_data
-        return response_data.get("positions", [])
+        return cast(List[Dict[str, Any]], response_data.get("positions", []))
 
     def place_order(
         self,
@@ -902,7 +908,7 @@ class PacificaClient:
         """
         if side not in ("buy", "sell"):
             raise ValueError("Order side must be buy or sell")
-        payload = {
+        payload: Dict[str, Any] = {
             "symbol": symbol,
             "amount": str(quantity),
             "side": "bid" if side == "buy" else "ask",
@@ -1050,7 +1056,7 @@ class PacificaClient:
         Returns:
             Cancellation summary as dict.
         """
-        payload = {
+        payload: Dict[str, Any] = {
             "all_symbols": symbol is None,
             "exclude_reduce_only": not include_stops,
         }
@@ -1083,7 +1089,7 @@ class PacificaClient:
             List of market data.
         """
         response = self._make_get_request("/info")
-        return response.get("data", [])
+        return cast(List[Dict[str, Any]], response.get("data", []))
 
     def get_instrument_info(self, symbol: str) -> Dict[str, Any]:
         """
@@ -1169,7 +1175,7 @@ class PacificaClient:
             logger.warning("get_instrument_info failed for %s: %s", symbol, e)
             return _empty
 
-    def _safe_float_convert(self, value, default: float = 0.0) -> float:
+    def _safe_float_convert(self, value: Any, default: float = 0.0) -> float:
         """Safely convert value to float with validation."""
         if value is None:
             return default
@@ -1182,7 +1188,7 @@ class PacificaClient:
         except (TypeError, ValueError):
             return default
 
-    def _validate_candle_data(self, candle: Dict) -> bool:
+    def _validate_candle_data(self, candle: Dict[str, Any]) -> bool:
         """Validate that a candle dict has required numeric data."""
         if not isinstance(candle, dict):
             return False
@@ -1237,7 +1243,7 @@ class PacificaClient:
 
         clean_symbol = re.sub(r"-perp$", "", market, flags=re.IGNORECASE).upper()
 
-        params = {
+        params: Dict[str, Any] = {
             "symbol": clean_symbol,
             "interval": interval,
         }
