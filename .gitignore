@@ -27,6 +27,8 @@ trading_bot_v2/.kline_cache/
 # on purpose: backtesting/reports/html/backtest_report.html is a tracked
 # reference artefact and must keep showing up.
 /backtest_report.html
+# Default output of `run_harness.py` (JSON + text report per run).
+/backtesting/reports/harness/
 # Agent worktrees are disposable copies of the tree (currently ~1.5 GB).
 # Blanket rule replaces the six per-worktree entries that preceded it.
 .claude/worktrees/
