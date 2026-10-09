@@ -1602,7 +1602,7 @@ class TradingBot:
             if self._circuit_breaker_triggered:
                 reason = (
                     f"Circuit breaker triggered (portfolio loss "
-                    f">= {self._circuit_breaker_loss_pct:.1f}%)"
+                    f">= {self._circuit_breaker_loss_pct:.1%})"
                 )
                 logger.critical(
                     f"🛑 Signal blocked by circuit breaker for {signal.asset} "
@@ -3396,11 +3396,13 @@ class TradingBot:
                 unrealized_pnl = float(pos.get("unrealized_pnl", 0))
                 total_pnl += unrealized_pnl
 
-            # Calculate P&L percentage
+            # Calculate P&L percentage.  The configured threshold is a
+            # fraction (0.10 = 10%), so compare in the same unit.
             pnl_percentage = (total_pnl / balance) * 100
+            threshold_pct = self._circuit_breaker_loss_pct * 100
 
             # Check circuit breaker threshold
-            if pnl_percentage <= -self._circuit_breaker_loss_pct:
+            if pnl_percentage <= -threshold_pct:
                 self._circuit_breaker_triggered = True
                 logging.critical(
                     f"🚨 CIRCUIT BREAKER TRIGGERED: {pnl_percentage:.1f}% loss "
@@ -3423,10 +3425,10 @@ class TradingBot:
                     )
 
             # Warning at 80% of threshold
-            elif pnl_percentage <= -self._circuit_breaker_loss_pct * 0.8:
+            elif pnl_percentage <= -threshold_pct * 0.8:
                 logging.warning(
                     f"⚠️ Approaching circuit breaker threshold: {pnl_percentage:.1f}% loss "
-                    f"(threshold: {-self._circuit_breaker_loss_pct:.1f}%)"
+                    f"(threshold: {-threshold_pct:.1f}%)"
                 )
 
         except Exception as e:
