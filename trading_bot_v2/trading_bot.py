@@ -464,7 +464,10 @@ class TradingBot:
                 logger.error(f"WebSocket client stop failed: {e}")
 
         logging.info("Trading bot stopped")
-        if self.thread:
+        # The circuit breaker calls stop() from inside the loop thread; a
+        # thread cannot join itself (RuntimeError), and the loop exits on
+        # its own once the running flag is cleared.
+        if self.thread and self.thread is not threading.current_thread():
             self.thread.join(timeout=5)
 
     def _get_ticker_rest(self, symbol: str) -> Dict[str, Any]:
