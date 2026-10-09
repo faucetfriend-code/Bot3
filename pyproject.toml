@@ -27,6 +27,12 @@ typing = [
 test = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
+    # The suite needs these two but trading_bot_v2/requirements.txt does not
+    # list them: test_connection_manager_standalone.py marks its tests
+    # @pytest.mark.asyncio (pytest 9 fails unhandled coroutines outright),
+    # and test_performance.py / test_profiler_benchmark.py import psutil.
+    "pytest-asyncio==1.4.0",
+    "psutil==7.2.2",
 ]
 security = [
     "bandit==1.9.4",
