@@ -89,8 +89,8 @@ def calculate_rsi(prices: List[float], period: int = 14) -> float:
     if period <= 0:
         raise ValueError("Period must be positive")
 
-    gains = []
-    losses = []
+    gains: List[float] = []
+    losses: List[float] = []
 
     for i in range(1, len(prices)):
         change = prices[i] - prices[i - 1]

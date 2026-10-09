@@ -12,6 +12,7 @@ import subprocess
 import sys
 from datetime import datetime
 import os
+from typing import Any, cast
 
 # Email configuration - UPDATE THESE
 SMTP_SERVER = "smtp.gmail.com"
@@ -21,7 +22,7 @@ EMAIL_PASS = "your-app-password"
 TO_EMAIL = "alerts@your-domain.com"
 
 
-def send_alert(subject, body, severity="WARNING"):
+def send_alert(subject: str, body: str, severity: str = "WARNING") -> bool:
     """Send email alert."""
     try:
         msg = MIMEMultipart()
@@ -45,7 +46,7 @@ def send_alert(subject, body, severity="WARNING"):
         return False
 
 
-def run_monitor():
+def run_monitor() -> dict[str, Any]:
     """Run the monitoring script and return results."""
     try:
         result = subprocess.run(
@@ -56,7 +57,7 @@ def run_monitor():
         )
 
         if result.returncode == 0:
-            return json.loads(result.stdout)
+            return cast(dict[str, Any], json.loads(result.stdout))
         else:
             return {
                 "error": f"Monitor failed with code {result.returncode}: {result.stderr}"
@@ -65,7 +66,7 @@ def run_monitor():
         return {"error": str(e)}
 
 
-def analyze_results(data):
+def analyze_results(data: dict[str, Any]) -> None:
     """Analyze monitoring results and generate alerts."""
     if "error" in data:
         send_alert(
@@ -119,7 +120,7 @@ Please review within 1 hour.
             send_alert(subject, body, "WARNING")
 
 
-def main():
+def main() -> None:
     """Main monitoring function."""
     print(f"Running enhanced monitoring at {datetime.now()}")
 

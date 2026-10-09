@@ -110,7 +110,7 @@ class OrderBookImbalanceStrategy:
         )
 
     def _get_level_value(
-        self, level: Dict, keys: List[str], default: float = 0
+        self, level: Dict[str, Any], keys: List[str], default: float = 0
     ) -> float:
         """Extract value from orderbook level using fallback keys."""
         for key in keys:
@@ -145,7 +145,7 @@ class OrderBookImbalanceStrategy:
         elapsed = self._now() - self.last_analysis[symbol]
         return elapsed > timedelta(milliseconds=self.update_interval_ms)
 
-    def _detect_spoof(self, levels: List[Dict], side: str) -> bool:
+    def _detect_spoof(self, levels: List[Dict[str, Any]], side: str) -> bool:
         """
         Detect potential spoofing on order book.
 
@@ -174,7 +174,7 @@ class OrderBookImbalanceStrategy:
         return False
 
     def _calculate_weighted_imbalance(
-        self, bids: List[Dict], asks: List[Dict]
+        self, bids: List[Dict[str, Any]], asks: List[Dict[str, Any]]
     ) -> Dict[str, Any]:
         """
         Calculate imbalance with weighting and additional metrics.
@@ -287,7 +287,7 @@ class OrderBookImbalanceStrategy:
         multi_tf_data: Dict[str, Any],
         current_price: float,
         orderbook: Optional[Dict[str, Any]] = None,
-        **kwargs,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate order book imbalance signals.
@@ -298,7 +298,7 @@ class OrderBookImbalanceStrategy:
             current_price: Current market price
             orderbook: Dict with 'bids' and 'asks' lists (from kwargs or direct)
         """
-        signals = []
+        signals: List[Signal] = []
 
         # Get orderbook from kwargs if not passed directly
         if orderbook is None:
@@ -372,7 +372,7 @@ class OrderBookImbalanceStrategy:
             return signals
 
         # Calculate ATR for stops
-        atr_value = 0
+        atr_value: float = 0
         execution_tf = kwargs.get("execution_tf_data", {})
 
         # Try execution timeframes first (1m, 5m), then strategy timeframes

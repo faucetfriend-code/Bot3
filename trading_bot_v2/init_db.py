@@ -21,7 +21,7 @@ from .database import (  # noqa: E402 - load_dotenv() must run before this impor
 )
 
 
-def main():
+def main() -> int:
     """Initialize database and verify tables were created."""
     backend = get_backend()
 

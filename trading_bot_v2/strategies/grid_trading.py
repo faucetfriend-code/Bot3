@@ -20,13 +20,16 @@ Always use with regime detection and emergency stops.
 """
 
 import os
-from typing import Dict, List, Any, Optional
+from typing import TYPE_CHECKING, Dict, List, Any, Optional
 from datetime import datetime, timezone
 from loguru import logger
 
 from ..models import Signal, OrderSide
 from ..indicators import calculate_atr, calculate_adx
 from ..config import StrategyType, AssetClass, TradeQuality, MarketState
+
+if TYPE_CHECKING:
+    from ..risk_manager import RiskManager
 
 
 class GridTradingStrategy:
@@ -46,8 +49,8 @@ class GridTradingStrategy:
         atr_period: Optional[int] = None,
         adx_period: Optional[int] = None,
         min_confidence: Optional[float] = None,
-        risk_manager=None,
-    ):
+        risk_manager: Optional["RiskManager"] = None,
+    ) -> None:
         """
         Initialize Grid Trading Strategy.
 
@@ -148,7 +151,7 @@ class GridTradingStrategy:
         symbol: str,
         multi_tf_data: Dict[str, Dict[str, List[float]]],
         current_price: float,
-        execution_tf_data: Optional[Dict] = None,
+        execution_tf_data: Optional[Dict[str, Any]] = None,
         regime_adx: Optional[float] = None,
     ) -> List[Signal]:
         """
@@ -364,7 +367,7 @@ class GridTradingStrategy:
                 self._last_signal_time[symbol] = self._now()
                 logger.info(
                     f"{symbol}: Grid BUY+SELL pair created - "
-                    f"BUY@${buy_signal.entry_price:.4f} / SELL@${sell_signal.entry_price:.4f}, "
+                    f"BUY@${buy_signal.entry_price:.4f} / SELL@${sell_signal.entry_price:.4f}, "  # type: ignore[union-attr]  # either leg may be None here; reported, not fixed
                     f"Capital: ${grid_capital:.2f}, Spacing: ${grid_spacing:.4f}"
                 )
 

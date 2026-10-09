@@ -13,7 +13,7 @@ from loguru import logger
 class FeatureFlags:
     """Centralized feature flag management for architecture transitions."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         # Phase 1 Features
         self.enable_grid_lifecycle_manager = self._get_bool_env(
             "ENABLE_GRID_LIFECYCLE_MANAGER", True
@@ -56,7 +56,7 @@ class FeatureFlags:
         value = os.getenv(key, str(default)).lower()
         return value in ("true", "1", "yes", "on")
 
-    def _log_feature_status(self):
+    def _log_feature_status(self) -> None:
         """Log current feature flag status."""
         features = {
             "Phase 1 - Grid Lifecycle Manager": self.enable_grid_lifecycle_manager,

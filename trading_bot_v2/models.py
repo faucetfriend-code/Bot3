@@ -76,12 +76,12 @@ class Trade:
     rule_adherence_score: int = 10  # 0-10 scale
     notes: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Calculate derived fields after initialization."""
         self._calculate_pnl()
         self._calculate_rrr()
 
-    def _calculate_pnl(self):
+    def _calculate_pnl(self) -> None:
         """Calculate profit/loss."""
         if self.side == OrderSide.BUY:
             self.pnl_dollar = (self.exit_price - self.entry_price) * self.quantity
@@ -92,7 +92,7 @@ class Trade:
         position_value = self.entry_price * self.quantity
         self.pnl_percent = (self.pnl_dollar / position_value) * 100
 
-    def _calculate_rrr(self):
+    def _calculate_rrr(self) -> None:
         """Calculate actual reward-to-risk ratio."""
         risk = abs(self.entry_price - self.stop_loss)
         if risk == 0:
@@ -166,14 +166,14 @@ class Position:
     tick_size: Optional[float] = None  # Minimum price increment for this market
     lot_size: Optional[float] = None  # Minimum size increment for this market
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Calculate derived fields."""
         self._calculate_liquidation_price()
 
-    def _calculate_liquidation_price(self):
+    def _calculate_liquidation_price(self) -> None:
         """Calculate liquidation price based on leverage."""
         if self.leverage <= 1:
-            return 0
+            return 0  # type: ignore[return-value]  # returns 0, other path None
 
         liquidation_distance = 1.0 / self.leverage
 
@@ -211,7 +211,7 @@ class Position:
         loss_if_stopped = self.position_value * self.stop_distance_pct
         return loss_if_stopped / self.margin_used
 
-    def update_unrealized_pnl(self, current_price: float):
+    def update_unrealized_pnl(self, current_price: float) -> None:
         """Update unrealized P&L."""
         if self.side == OrderSide.BUY:
             self.unrealized_pnl = (current_price - self.entry_price) * self.quantity
@@ -222,7 +222,7 @@ class Position:
         """Check if position is at risk of liquidation."""
         return self.liquidation_buffer_pct < 0.015  # Less than 1.5% buffer
 
-    def apply_hourly_funding_payment(self, funding_rate: float):
+    def apply_hourly_funding_payment(self, funding_rate: float) -> None:
         """
         Apply hourly funding payment and update position state.
 
@@ -355,7 +355,7 @@ class Order:
         Returns:
             Tuple of (is_valid, list_of_errors)
         """
-        errors = []
+        errors: List[str] = []
 
         # Validate price (tick size)
         if self.price and self.tick_size:
@@ -593,7 +593,7 @@ class Account:
     consecutive_losses: int = 0
     last_update: datetime = field(default_factory=datetime.now)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Initialize peak balance."""
         if self.peak_balance == 0:
             self.peak_balance = self.balance
@@ -618,7 +618,7 @@ class Account:
             return 0
         return (self.peak_balance - self.total_value) / self.peak_balance
 
-    def update_metrics(self):
+    def update_metrics(self) -> None:
         """Update performance metrics."""
         if not self.trades:
             return
@@ -655,20 +655,20 @@ class Account:
         self.drawdown_pct = self.current_drawdown_pct
         self.peak_balance = max(self.peak_balance, self.total_value)
 
-    def add_trade(self, trade: Trade):
+    def add_trade(self, trade: Trade) -> None:
         """Add completed trade and update metrics."""
         self.trades.append(trade)
         self.balance += trade.pnl_dollar
         self.daily_pnl += trade.pnl_dollar
         self.update_metrics()
 
-    def add_position(self, position: Position):
+    def add_position(self, position: Position) -> None:
         """Add open position."""
         self.positions.append(position)
         self.total_margin_used += position.margin_used
         self.available_margin = self.balance - self.total_margin_used
 
-    def remove_position(self, position_id: str):
+    def remove_position(self, position_id: str) -> None:
         """Remove closed position."""
         for pos in self.positions:
             if pos.id == position_id:
@@ -707,12 +707,12 @@ class RiskValidation:
     errors: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
-    def add_error(self, error: str):
+    def add_error(self, error: str) -> None:
         """Add validation error."""
         self.errors.append(error)
         self.is_valid = False
 
-    def add_warning(self, warning: str):
+    def add_warning(self, warning: str) -> None:
         """Add validation warning."""
         self.warnings.append(warning)
 

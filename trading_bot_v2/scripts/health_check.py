@@ -10,21 +10,25 @@ import sys
 import os
 import time
 from datetime import datetime
-from typing import Dict, Any, List
+from typing import TYPE_CHECKING, Dict, Any, List
 
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trading_bot_v2.monitoring import get_monitoring_system
 from trading_bot_v2.component_registry import get_component_registry
-from trading_bot_v2.event_system import get_event_bus, EventType
+from trading_bot_v2.event_system import get_event_bus, Event, EventType
 from trading_bot_v2.feature_flags import get_feature_flags
+
+if TYPE_CHECKING:
+    import contextlib
+    import io
 
 
 class HealthChecker:
     """Comprehensive system health checker."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.monitoring = get_monitoring_system()
         self.registry = get_component_registry()
         self.event_bus = get_event_bus()
@@ -32,7 +36,7 @@ class HealthChecker:
 
         self.checks_passed = 0
         self.checks_failed = 0
-        self.warnings = []
+        self.warnings: List[str] = []
 
     def run_all_checks(self) -> Dict[str, Any]:
         """Run all health checks and return results."""
@@ -67,7 +71,7 @@ class HealthChecker:
             "websocket_only_prices": True,
         }
 
-        results = {}
+        results: Dict[str, Any] = {}
         all_enabled = True
 
         for feature, required in required_features.items():
@@ -121,9 +125,9 @@ class HealthChecker:
         print("📡 Checking event system...")
 
         # Test event publishing
-        test_events_received = []
+        test_events_received: List[Event] = []
 
-        def test_handler(event):
+        def test_handler(event: Event) -> None:
             test_events_received.append(event)
 
         # Subscribe to test event
@@ -191,7 +195,7 @@ class HealthChecker:
             ws_authority_working = False
             print(f"   ⚠️  Could not test WebSocket authority: {e}")
 
-        results = {
+        results: Dict[str, Any] = {
             "websocket_only_enabled": ws_only_enabled,
             "authority_working": ws_authority_working,
         }
@@ -261,7 +265,7 @@ class HealthChecker:
         print("⚡ Checking performance baselines...")
 
         # Simple performance tests
-        results = {}
+        results: Dict[str, Any] = {}
 
         # Event processing speed test
         start_time = time.time()
@@ -414,7 +418,7 @@ class HealthChecker:
 
         return recommendations
 
-    def suppressed_output(self):
+    def suppressed_output(self) -> "contextlib.redirect_stdout[io.StringIO]":
         """Context manager to suppress stdout/stderr during testing."""
         import contextlib
         import io
@@ -422,7 +426,7 @@ class HealthChecker:
         return contextlib.redirect_stdout(io.StringIO())
 
 
-def main():
+def main() -> None:
     """Run health check and display results."""
     checker = HealthChecker()
     results = checker.run_all_checks()

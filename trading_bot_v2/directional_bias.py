@@ -350,7 +350,7 @@ class DirectionalBiasEngine:
         return DirectionalBias(trend=trend, funding=funding, detail=detail)
 
 
-def resolve_gate_exempt() -> set:
+def resolve_gate_exempt() -> set[str]:
     """Strategy display names never gated (env DIRECTIONAL_GATE_EXEMPT)."""
     raw = os.getenv("DIRECTIONAL_GATE_EXEMPT", DEFAULT_GATE_EXEMPT)
     return {name.strip() for name in raw.split(",") if name.strip()}

@@ -37,7 +37,7 @@ class LoginRequest(BaseModel):
 
     @field_validator("private_key")
     @classmethod
-    def validate_private_key(cls, v):
+    def validate_private_key(cls, v: str) -> str:
         """Validate private key format."""
         try:
             # Try to create keypair to validate format
@@ -72,7 +72,7 @@ def sign_message(
     signature_header: Dict[str, Any],
     signature_payload: Dict[str, Any],
     keypair: Keypair,
-) -> tuple:
+) -> Tuple[str, str]:
     """Sign a message using the provided keypair."""
 
     # Back to original SDK format
@@ -160,7 +160,7 @@ def bind_agent_wallet(private_key: str, device_fingerprint: str) -> Dict[str, An
         return {"success": False, "error": f"Binding error: {str(e)}"}
 
 
-def create_access_token(data: dict) -> str:
+def create_access_token(data: Dict[str, Any]) -> str:
     """Create JWT access token."""
     to_encode = data.copy()
     expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
@@ -176,7 +176,7 @@ def verify_token(token: str) -> Optional[Dict[str, Any]]:
         return payload
     except jwt.ExpiredSignatureError:
         return None
-    except jwt.JWTError:
+    except jwt.JWTError:  # type: ignore[attr-defined]  # PyJWT has no JWTError
         return None
 
 
@@ -203,9 +203,11 @@ def get_account_from_api_key(api_key: str) -> str:
     return "sub_1"
 
 
-def get_account_config_from_api_key(api_key: str):
+def get_account_config_from_api_key(api_key: str) -> Any:
     """Get account configuration from API key."""
-    from config import get_account_config
+    from config import (  # type: ignore[attr-defined]  # no such symbol in config
+        get_account_config,
+    )
 
     account_id = get_account_from_api_key(api_key)
     return get_account_config(account_id)

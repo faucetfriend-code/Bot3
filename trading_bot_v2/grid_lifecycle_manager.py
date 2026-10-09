@@ -17,7 +17,7 @@ Sizing MUST come from RiskManager.
 """
 
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, Any, List, Optional, Set, Tuple, Union, cast
 import json
 import os
 import time
@@ -33,6 +33,12 @@ from .exit_sizing import (
     remaining_exchange_quantity,
 )
 from .order_result import OrderResult
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
+    from .market_regime import MarketRegime, MarketRegimeDetector
+    from .pacifica_client import PacificaClient
+    from .risk_manager import RiskManager
 
 
 def _send_telegram_error_alert(error_type: str, message: str, context: str) -> bool:
@@ -107,7 +113,11 @@ def is_protective_order(order: Any) -> bool:
     """
     if not isinstance(order, dict):
         return False
-    raw = order.get("raw") if isinstance(order.get("raw"), dict) else {}
+    raw: Dict[str, Any] = (
+        cast(Dict[str, Any], order.get("raw"))
+        if isinstance(order.get("raw"), dict)
+        else {}
+    )
     if order.get("tpsl_id") or order.get("tpslId") or raw.get("tpslId"):
         return True
     order_type = str(
@@ -182,7 +192,13 @@ class GridMetrics:
 
 
 class GridLifecycleManager:
-    def __init__(self, client, risk_manager, db=None, regime_detector=None):
+    def __init__(
+        self,
+        client: "PacificaClient",
+        risk_manager: "RiskManager",
+        db: Optional["DatabaseManager"] = None,
+        regime_detector: Optional["MarketRegimeDetector"] = None,
+    ) -> None:
         """
         Args:
             client: Exchange client (PacificaClient)
@@ -436,7 +452,12 @@ class GridLifecycleManager:
             if self.db:
                 self.delete_grid_state(symbol)
 
-            for data_dict in [self._fills, self._metrics, self._processed_trades]:
+            per_symbol_state: List[Dict[str, Any]] = [
+                self._fills,
+                self._metrics,
+                self._processed_trades,
+            ]
+            for data_dict in per_symbol_state:
                 if symbol in data_dict:
                     del data_dict[symbol]
 
@@ -546,7 +567,7 @@ class GridLifecycleManager:
             orders = self.client.get_orders()
             symbol_orders = [o for o in orders if o.get("symbol") == symbol]
 
-            total_value = 0
+            total_value: float = 0
             for order in symbol_orders:
                 price = float(order.get("price", 0))
                 quantity = float(
@@ -575,7 +596,7 @@ class GridLifecycleManager:
 
         try:
             orders = self.client.get_orders()
-            orders_by_symbol: Dict[str, list] = {}
+            orders_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
 
             for order in orders:
                 # Protective TP/SL rows (venue stops) are never grid
@@ -623,7 +644,10 @@ class GridLifecycleManager:
         return repaired_count
 
     def _readopt_orphaned_grid_from_exchange(
-        self, symbol: str, buy_orders: List[Dict], sell_orders: List[Dict]
+        self,
+        symbol: str,
+        buy_orders: List[Dict[str, Any]],
+        sell_orders: List[Dict[str, Any]],
     ) -> bool:
         """Re-adopt an orphaned grid detected from exchange orders."""
         try:
@@ -791,15 +815,15 @@ class GridLifecycleManager:
         grid = self._grids[symbol]
         if grid.get("state") != GridState.ACTIVE:
             return False
-        return grid.get("orders_placed", 0) == 0
+        return cast(bool, grid.get("orders_placed", 0) == 0)
 
     def get_orders_placed(self, symbol: str) -> int:
         """Get the number of orders placed for a grid."""
         if symbol not in self._grids:
             return 0
-        return self._grids[symbol].get("orders_placed", 0)
+        return cast(int, self._grids[symbol].get("orders_placed", 0))
 
-    def set_orders_placed(self, symbol: str, count: int):
+    def set_orders_placed(self, symbol: str, count: int) -> None:
         """Update the orders placed count for a grid."""
         if symbol not in self._grids:
             logger.warning(f"Cannot set orders_placed - no grid for {symbol}")
@@ -808,7 +832,7 @@ class GridLifecycleManager:
         logger.info(f"📊 Grid {symbol} orders_placed set to {count}")
 
     def get_grid_state(self, symbol: str) -> GridState:
-        return self._grids.get(symbol, {}).get("state", GridState.IDLE)
+        return cast(GridState, self._grids.get(symbol, {}).get("state", GridState.IDLE))
 
     def get_grid_center(self, symbol: str) -> Optional[float]:
         """Return the current reference center price of the active grid."""
@@ -817,7 +841,7 @@ class GridLifecycleManager:
         grid = self._grids[symbol]
         # Use stored center price if available
         if "center_price" in grid:
-            return grid["center_price"]
+            return cast(Optional[float], grid["center_price"])
         # Fallback to initial entry price from grid creation
         return grid.get("initial_center", None)
 
@@ -831,11 +855,11 @@ class GridLifecycleManager:
         """Get the current grid spacing for a symbol."""
         if symbol not in self._grids:
             return 0.0
-        return self._grids[symbol].get("grid_spacing", 0.0)
+        return cast(float, self._grids[symbol].get("grid_spacing", 0.0))
 
     def update_grid_spacing(
         self, symbol: str, new_spacing: float, reason: str = "dynamic"
-    ):
+    ) -> None:
         """Update the grid spacing (for dynamic spacing adjustments)."""
         if symbol not in self._grids:
             logger.warning(f"Cannot update spacing - no grid for {symbol}")
@@ -1082,7 +1106,10 @@ class GridLifecycleManager:
         # Optionally persist to database
         if self.db:
             try:
-                self.db.update_grid_state(symbol, "closed", reason)
+                # update_grid_state is not defined on DatabaseManager (see report).
+                self.db.update_grid_state(  # type: ignore[attr-defined]
+                    symbol, "closed", reason
+                )
             except Exception as e:
                 logger.warning(f"Could not persist grid close to DB: {e}")
 
@@ -1133,13 +1160,13 @@ class GridLifecycleManager:
         symbol: str,
         grid_capital: float,
         emergency_stop_price: float,
-        regime: str = None,
+        regime: Optional[str] = None,
         atr: float = 0,
         spacing: float = 0,
         num_levels: int = 10,
         center_price: float = 0,
         order_ids: Optional[List[str]] = None,
-    ):
+    ) -> None:
         """
         Register a grid AFTER emergency stop has been successfully placed.
         HARD FAIL if grid already exists.
@@ -1197,8 +1224,8 @@ class GridLifecycleManager:
     def handle_regime_change(
         self,
         symbol: str,
-        new_regime,
-        market_data: Dict[str, List] = None,
+        new_regime: Union["MarketRegime", str],
+        market_data: Optional[Dict[str, List[float]]] = None,
     ) -> bool:
         """
         Entry point for REGIME_CHANGED events (wired in trading_bot.py).
@@ -1231,7 +1258,9 @@ class GridLifecycleManager:
         self.on_regime_disallowed(symbol, market_data)
         return True
 
-    def on_regime_disallowed(self, symbol: str, market_data: Dict[str, List] = None):
+    def on_regime_disallowed(
+        self, symbol: str, market_data: Optional[Dict[str, List[float]]] = None
+    ) -> None:
         """
         Called when market regime transitions OUT of allowed grid regimes.
 
@@ -1302,7 +1331,7 @@ class GridLifecycleManager:
     # EMERGENCY EXIT
     # =========================
 
-    def on_emergency_stop_triggered(self, symbol: str):
+    def on_emergency_stop_triggered(self, symbol: str) -> None:
         """
         Called when emergency stop price is breached or stop order fills.
         """
@@ -1613,7 +1642,7 @@ class GridLifecycleManager:
         Returns:
             Dict with 'closed_positions', 'kept_positions', 'success' keys
         """
-        result = {
+        result: Dict[str, Any] = {
             "success": False,
             "closed_positions": [],
             "kept_positions": [],
@@ -1790,7 +1819,7 @@ class GridLifecycleManager:
 
     def _update_position_status(
         self, symbol: str, side: str, qty: float, status: str, exit_reason: str
-    ):
+    ) -> None:
         """
         Update position status in database.
 
@@ -1829,7 +1858,7 @@ class GridLifecycleManager:
     # HOUSEKEEPING
     # =========================
 
-    def clear_all(self):
+    def clear_all(self) -> None:
         """Force-clear ALL grids (shutdown safety)."""
         for symbol in list(self._grids.keys()):
             self._force_exit(symbol, reason="SYSTEM_SHUTDOWN")
@@ -1838,7 +1867,9 @@ class GridLifecycleManager:
     # ACTIVE MONITORING
     # =========================
 
-    def monitor_grids(self, current_prices: Dict[str, float] = None) -> Dict[str, Any]:
+    def monitor_grids(
+        self, current_prices: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
         """
         Main monitoring method - call this periodically from the trading loop.
 
@@ -1854,7 +1885,7 @@ class GridLifecycleManager:
         Returns:
             Dict with monitoring results
         """
-        results = {
+        results: Dict[str, Any] = {
             "grids_monitored": 0,
             "new_fills": 0,
             "completed_round_trips": 0,
@@ -1917,7 +1948,7 @@ class GridLifecycleManager:
 
         return results
 
-    def _process_trades(self, symbol: str, trades: List[Dict]) -> int:
+    def _process_trades(self, symbol: str, trades: List[Dict[str, Any]]) -> int:
         """
         Process trades from exchange and record new fills.
 
@@ -2072,7 +2103,7 @@ class GridLifecycleManager:
         return new_fills
 
     @staticmethod
-    def _round_decimals_for_price(price: float) -> tuple:
+    def _round_decimals_for_price(price: float) -> Tuple[int, int]:
         """
         Return (tick_decimals, lot_decimals) for a given price magnitude.
 
@@ -2094,7 +2125,7 @@ class GridLifecycleManager:
 
     def _replenish_order(
         self, symbol: str, filled_side: str, fill_price: float, fill_quantity: float
-    ):
+    ) -> None:
         """
         Place a counter order when a grid order is filled.
 
@@ -2273,7 +2304,7 @@ class GridLifecycleManager:
 
         return round_trips
 
-    def _check_emergency_stop(self, symbol: str, current_price: float):
+    def _check_emergency_stop(self, symbol: str, current_price: float) -> None:
         """Check if emergency stop price has been breached."""
         if symbol not in self._grids:
             return
@@ -2293,7 +2324,7 @@ class GridLifecycleManager:
             )
             self.on_emergency_stop_triggered(symbol)
 
-    def _update_unrealized_pnl(self, symbol: str, current_price: float):
+    def _update_unrealized_pnl(self, symbol: str, current_price: float) -> None:
         """Update unrealized P&L based on current price."""
         if symbol not in self._metrics:
             return
@@ -2330,7 +2361,10 @@ class GridLifecycleManager:
         """
         try:
             # Get open orders for symbol
-            orders = self.client.get_open_orders(market=symbol)
+            # get_open_orders is not defined on PacificaClient (see report).
+            orders = self.client.get_open_orders(  # type: ignore[attr-defined]
+                market=symbol
+            )
             limit_orders = [
                 o for o in orders if o.get("order_type", o.get("type", "")) == "limit"
             ]
@@ -2356,7 +2390,7 @@ class GridLifecycleManager:
                 return False
 
             # Calculate grid capital from order sizes
-            total_value = 0
+            total_value: float = 0
             for order in limit_orders:
                 price = float(order.get("price", 0))
                 qty = float(
@@ -2415,7 +2449,7 @@ class GridLifecycleManager:
 
         return False
 
-    def _sync_recent_fills(self, symbol: str):
+    def _sync_recent_fills(self, symbol: str) -> None:
         """Sync recent trade history for a newly detected grid."""
         try:
             trades = self.client.get_trades(limit=100)
@@ -2537,7 +2571,9 @@ class GridLifecycleManager:
         """Check if the grid manager is healthy."""
         return True
 
-    def update_grid_levels(self, symbol: str, buy_levels: int, sell_levels: int):
+    def update_grid_levels(
+        self, symbol: str, buy_levels: int, sell_levels: int
+    ) -> None:
         """Update grid level counts (for tracking)."""
         if symbol in self._grids:
             self._grids[symbol]["buy_levels"] = buy_levels
@@ -2548,8 +2584,12 @@ class GridLifecycleManager:
     # =========================
 
     def save_grid_state(
-        self, symbol: str, regime: str = None, atr: float = 0, spacing: float = 0
-    ):
+        self,
+        symbol: str,
+        regime: Optional[str] = None,
+        atr: float = 0,
+        spacing: float = 0,
+    ) -> None:
         """
         Save grid state to database for persistence across restarts.
 
@@ -2655,7 +2695,9 @@ class GridLifecycleManager:
         except Exception as e:
             logger.error(f"Failed to save grid state for {symbol}: {e}")
 
-    def load_grid_states(self, regime_detector=None) -> Dict[str, Dict]:
+    def load_grid_states(
+        self, regime_detector: Optional["MarketRegimeDetector"] = None
+    ) -> Dict[str, Dict[str, Any]]:
         """
         Load grid states from database on startup.
         Validates regime if detector provided - closes grids in wrong regime.
@@ -2669,7 +2711,7 @@ class GridLifecycleManager:
         if not self.db:
             return {}
 
-        loaded_grids = {}
+        loaded_grids: Dict[str, Dict[str, Any]] = {}
 
         try:
             from .database import get_db_connection
@@ -2765,7 +2807,7 @@ class GridLifecycleManager:
 
         return loaded_grids
 
-    def delete_grid_state(self, symbol: str):
+    def delete_grid_state(self, symbol: str) -> None:
         """Remove grid state from database when grid is closed."""
         if not self.db:
             return
@@ -2780,7 +2822,7 @@ class GridLifecycleManager:
         except Exception as e:
             logger.error(f"Failed to delete grid state for {symbol}: {e}")
 
-    def update_grid_metrics_in_db(self, symbol: str):
+    def update_grid_metrics_in_db(self, symbol: str) -> None:
         """Update grid metrics in database (call periodically)."""
         if not self.db or symbol not in self._grids:
             return

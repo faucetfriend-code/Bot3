@@ -11,9 +11,13 @@ import csv
 import threading
 import time
 from datetime import datetime, timezone
-from typing import Dict, List, Any, Optional, Set
+from typing import TYPE_CHECKING, Dict, List, Any, Optional, Set
 from pathlib import Path
 from loguru import logger
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
+    from .models import Signal
 
 
 class SignalLogger:
@@ -28,10 +32,10 @@ class SignalLogger:
 
     def __init__(
         self,
-        db_manager=None,
+        db_manager: Optional["DatabaseManager"] = None,
         csv_path: Optional[str] = None,
         max_memory_entries: int = 1000,
-    ):
+    ) -> None:
         """
         Initialize signal logger.
 
@@ -71,7 +75,7 @@ class SignalLogger:
             f"SignalLogger initialized - CSV path: {self.csv_path}, dedup window: {self._dedup_window_seconds}s"
         )
 
-    def _init_csv(self):
+    def _init_csv(self) -> None:
         """Initialize CSV file with headers if it doesn't exist."""
         if not self.csv_path.exists():
             with open(self.csv_path, "w", newline="", encoding="utf-8") as f:
@@ -102,7 +106,7 @@ class SignalLogger:
             "notes",
         ]
 
-    def _generate_signal_id(self, signal) -> str:
+    def _generate_signal_id(self, signal: "Signal") -> str:
         """Generate unique signal ID from key fields (excludes price for dedup)."""
         try:
             symbol = getattr(signal, "asset", str(signal))
@@ -148,7 +152,7 @@ class SignalLogger:
 
     def log_signal_generated(
         self,
-        signal,
+        signal: "Signal",
         regime: str = "",
         notes: str = "",
     ) -> Dict[str, Any]:
@@ -206,7 +210,7 @@ class SignalLogger:
         return entry
 
     def _finalize_signal(
-        self, signal, updates: Dict[str, Any]
+        self, signal: "Signal", updates: Dict[str, Any]
     ) -> Optional[Dict[str, Any]]:
         """
         Update a pending 'generated' entry in-place with outcome data.
@@ -228,7 +232,7 @@ class SignalLogger:
 
     def log_signal_rejected(
         self,
-        signal,
+        signal: "Signal",
         reason: str,
         regime: str = "",
         notes: str = "",
@@ -286,7 +290,7 @@ class SignalLogger:
 
     def log_signal_pending(
         self,
-        signal,
+        signal: "Signal",
         client_order_id: str = "",
         quantity: float = 0,
         order_id: str = "",
@@ -361,7 +365,7 @@ class SignalLogger:
 
     def log_signal_executed(
         self,
-        signal,
+        signal: "Signal",
         order_id: str = "",
         filled_price: float = 0,
         filled_quantity: float = 0,
@@ -438,7 +442,7 @@ class SignalLogger:
 
     def log_signal_failed(
         self,
-        signal,
+        signal: "Signal",
         error: str,
         regime: str = "",
         notes: str = "",
@@ -498,7 +502,7 @@ class SignalLogger:
         self._add_entry(entry)
         return entry
 
-    def _add_entry(self, entry: Dict[str, Any]):
+    def _add_entry(self, entry: Dict[str, Any]) -> None:
         """Add entry to all outputs (memory, database, CSV)."""
         with self._lock:
             # Add to memory
@@ -514,7 +518,7 @@ class SignalLogger:
             # Save to database
             self._save_to_database(entry)
 
-    def _append_to_csv(self, entry: Dict[str, Any]):
+    def _append_to_csv(self, entry: Dict[str, Any]) -> None:
         """Append entry to CSV file."""
         try:
             with open(self.csv_path, "a", newline="", encoding="utf-8") as f:
@@ -524,7 +528,7 @@ class SignalLogger:
         except Exception as e:
             logger.error(f"Failed to write signal to CSV: {e}")
 
-    def _save_to_database(self, entry: Dict[str, Any]):
+    def _save_to_database(self, entry: Dict[str, Any]) -> None:
         """Save signal to database."""
         if not self.db_manager:
             return
@@ -621,7 +625,7 @@ class SignalLogger:
                     "execution_rate": 0,
                 }
 
-            by_status = {}
+            by_status: Dict[str, int] = {}
             for entry in self._signal_log:
                 status = entry.get("status", "unknown")
                 by_status[status] = by_status.get(status, 0) + 1
@@ -640,7 +644,7 @@ class SignalLogger:
                 "by_status": by_status,
             }
 
-    def clear_memory(self):
+    def clear_memory(self) -> None:
         """Clear in-memory log (CSV and database are preserved)."""
         with self._lock:
             self._signal_log = []

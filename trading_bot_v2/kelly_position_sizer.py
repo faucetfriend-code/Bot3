@@ -318,7 +318,7 @@ class KellyPositionSizer:
 
         return quantity
 
-    def update_kelly_fraction(self, new_fraction: float):
+    def update_kelly_fraction(self, new_fraction: float) -> None:
         """
         Update Kelly fraction (for dynamic risk adjustment).
 

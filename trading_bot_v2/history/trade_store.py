@@ -17,10 +17,13 @@ Exchange tagging:
 
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence, Tuple
 
 from ..database import get_db_connection
 from . import metrics
+
+if TYPE_CHECKING:
+    from ..database import DatabaseManager
 
 DEFAULT_EXCHANGE = "pacifica"
 
@@ -89,7 +92,9 @@ class TradeStore:
     """
 
     def __init__(
-        self, db: Optional[Any] = None, default_exchange: Optional[str] = None
+        self,
+        db: Optional["DatabaseManager"] = None,
+        default_exchange: Optional[str] = None,
     ) -> None:
         self._db = db
         self._default_exchange = default_exchange
@@ -98,7 +103,7 @@ class TradeStore:
     # Recording
     # ------------------------------------------------------------------
     @property
-    def db(self) -> Any:
+    def db(self) -> "DatabaseManager":
         """Return the wired DatabaseManager, constructing one lazily."""
         if self._db is None:
             from ..database import DatabaseManager

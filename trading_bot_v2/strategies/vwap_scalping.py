@@ -71,7 +71,7 @@ RISK NOTES:
 """
 
 import os
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -541,7 +541,7 @@ class VWAPScalpingStrategy:
 
         return False
 
-    def _set_cooldown(self, symbol: str):
+    def _set_cooldown(self, symbol: str) -> None:
         """Set cooldown for symbol after trade signal."""
         self._last_trade_time[symbol] = self._now()
 
@@ -925,7 +925,7 @@ class VWAPScalpingStrategy:
 
     def get_vwap_status(
         self, symbol: str, data: Dict[str, List[float]]
-    ) -> Optional[Dict]:
+    ) -> Optional[Dict[str, Any]]:
         """
         Get current VWAP status for monitoring/display purposes.
 

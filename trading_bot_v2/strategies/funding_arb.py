@@ -51,9 +51,9 @@ class FundingArbStrategy:
         rebalance_threshold: float = 0.02,  # Rebalance if delta > 2%
         lookback_hours: int = 8,  # Hours of funding history to analyze
         min_confidence: float = 0.70,
-        client=None,  # Exchange client for API calls
+        client: Any = None,  # Exchange client for API calls
         funding_interval_hours: int = 1,  # Funding cycle (Pacifica=1, Blofin=8)
-    ):
+    ) -> None:
         self.strategy_type = StrategyType.FUNDING_ARB
         self.min_funding_rate = min_funding_rate
         self.max_allocation_pct = max_allocation_pct
@@ -72,11 +72,11 @@ class FundingArbStrategy:
         self.periods_per_day = 24.0 / float(funding_interval_hours)
 
         # Track active arb positions
-        self.active_positions: Dict[str, Dict] = {}
+        self.active_positions: Dict[str, Dict[str, Any]] = {}
         # {symbol: {"side": "long_funding", "size": 100, "entry_rate": 0.0003, "opened_at": datetime}}
 
         # Funding rate cache
-        self.funding_cache: Dict[str, Dict] = {}
+        self.funding_cache: Dict[str, Dict[str, Any]] = {}
         # {symbol: {"current_rate": 0.0003, "avg_rate_8h": 0.00025, "next_payment": datetime}}
 
         # Last cache update time
@@ -219,7 +219,7 @@ class FundingArbStrategy:
             f"FundingArb: Updated funding rates for {len(self.funding_cache)} symbols"
         )
 
-    def analyze_funding_opportunity(self, symbol: str) -> Optional[Dict]:
+    def analyze_funding_opportunity(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
         Analyze if a symbol presents a good funding arb opportunity.
 
@@ -286,7 +286,7 @@ class FundingArbStrategy:
         multi_tf_data: Dict[str, Any],
         current_price: float,
         account_balance: float = 0,
-        **kwargs,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate funding arb signals.
@@ -361,7 +361,7 @@ class FundingArbStrategy:
             asset_class=AssetClass.PERPETUAL,
             side=opportunity["perp_side"],
             entry_price=current_price,
-            stop_loss=None,  # Delta-neutral doesn't use traditional stops
+            stop_loss=None,  # type: ignore[arg-type]  # Signal.stop_loss is declared float; stopless by design, reported
             take_profit=None,
             confidence=opportunity["confidence"],
             quality=TradeQuality.STANDARD,
@@ -399,7 +399,10 @@ class FundingArbStrategy:
         return signals
 
     def _should_close_position(
-        self, symbol: str, existing: Dict, current_opportunity: Optional[Dict]
+        self,
+        symbol: str,
+        existing: Dict[str, Any],
+        current_opportunity: Optional[Dict[str, Any]],
     ) -> bool:
         """Check if existing position should be closed."""
         if not current_opportunity:
@@ -418,7 +421,7 @@ class FundingArbStrategy:
         return False
 
     def _create_close_signal(
-        self, symbol: str, existing: Dict, current_price: float
+        self, symbol: str, existing: Dict[str, Any], current_price: float
     ) -> Optional[Signal]:
         """Create signal to close existing arb position."""
         # Reverse the existing side
@@ -433,7 +436,7 @@ class FundingArbStrategy:
             asset_class=AssetClass.PERPETUAL,
             side=close_side,
             entry_price=current_price,
-            stop_loss=None,
+            stop_loss=None,  # type: ignore[arg-type]  # Signal.stop_loss is declared float; stopless by design, reported
             take_profit=None,
             confidence=0.90,
             quality=TradeQuality.STANDARD,
@@ -478,7 +481,7 @@ class FundingArbStrategy:
             del self.active_positions[symbol]
             logger.info(f"FundingArb: Closed {symbol} position")
 
-    def get_active_positions(self) -> Dict[str, Dict]:
+    def get_active_positions(self) -> Dict[str, Dict[str, Any]]:
         """Return currently active arb positions."""
         return self.active_positions.copy()
 

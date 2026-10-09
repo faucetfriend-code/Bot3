@@ -31,7 +31,18 @@ import os
 import threading
 import time
 from contextlib import contextmanager
-from typing import Generator, List, Dict, Any, Optional, Tuple, Union
+from typing import (
+    Generator,
+    List,
+    Dict,
+    Any,
+    Optional,
+    Set,
+    Tuple,
+    TypedDict,
+    Union,
+    cast,
+)
 from datetime import datetime, date, timedelta, timezone
 import logging
 
@@ -40,7 +51,7 @@ try:
 
     HAS_AIOSQLITE = True
 except ImportError:  # pragma: no cover - optional dependency
-    aiosqlite = None
+    aiosqlite = None  # type: ignore[assignment]  # optional-dependency sentinel
     HAS_AIOSQLITE = False
 
 # Break-even rules for stored parameter overlays. overlay_quality imports
@@ -176,10 +187,10 @@ def _translate_sql(sql: str, is_postgres: bool) -> str:
 
 def _split_statements(sql: str) -> List[str]:
     """Split a multi-statement SQL string into individual statements."""
-    statements = []
-    current = []
+    statements: List[str] = []
+    current: List[str] = []
     in_quote = False
-    quote_char = None
+    quote_char: Optional[str] = None
 
     for char in sql:
         if char in ("'", '"') and not in_quote:
@@ -238,14 +249,14 @@ class _CursorWrapper:
             return self._lastrowid
         # For SQLite, try the native attribute
         try:
-            return self._cursor.lastrowid
+            return cast(Optional[int], self._cursor.lastrowid)
         except AttributeError:
             return None
 
     @property
     def rowcount(self) -> int:
         """Return the number of rows affected."""
-        return self._cursor.rowcount
+        return cast(int, self._cursor.rowcount)
 
     @property
     def description(self) -> Any:
@@ -260,7 +271,7 @@ class _CursorWrapper:
         """Fetch all remaining rows."""
         return self._cursor.fetchall()
 
-    def fetchmany(self, size: int = None) -> Any:
+    def fetchmany(self, size: Optional[int] = None) -> Any:
         """Fetch the next size rows."""
         if size is not None:
             return self._cursor.fetchmany(size)
@@ -292,7 +303,7 @@ class _ConnectionWrapper:
         self._closed = False
 
     def execute(
-        self, sql: str, params: Optional[Union[tuple, list]] = None
+        self, sql: str, params: Optional[Union[Tuple[Any, ...], List[Any]]] = None
     ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor.
@@ -339,7 +350,9 @@ class _ConnectionWrapper:
                 cursor = self._conn.execute(translated_sql)
             return _CursorWrapper(cursor, is_postgres=False)
 
-    def executemany(self, sql: str, params_list: list) -> _CursorWrapper:
+    def executemany(
+        self, sql: str, params_list: List[Tuple[Any, ...]]
+    ) -> _CursorWrapper:
         """
         Execute a SQL statement against multiple parameter sets.
 
@@ -425,7 +438,7 @@ class _ConnectionWrapper:
             self._conn.row_factory = factory
 
     def execute_returning(
-        self, sql: str, params: Optional[tuple] = None
+        self, sql: str, params: Optional[Tuple[Any, ...]] = None
     ) -> _CursorWrapper:
         """
         Execute a SQL statement and return a wrapped cursor with RETURNING support.
@@ -518,9 +531,10 @@ class PostgreSQLPool:
             _ConnectionWrapper with PostgreSQL connection
         """
         self._ensure_pool()
+        pool = cast("psycopg2.pool.ThreadedConnectionPool", self._pool)
 
         try:
-            conn = self._pool.getconn()
+            conn = pool.getconn()
             # Set default isolation level
             conn.set_isolation_level(psycopg2.extensions.ISOLATION_LEVEL_READ_COMMITTED)
             return _ConnectionWrapper(conn, is_postgres=True)
@@ -537,12 +551,13 @@ class PostgreSQLPool:
         """
         if wrapper._closed:
             return
+        pool = cast("psycopg2.pool.ThreadedConnectionPool", self._pool)
 
         try:
             # Reset connection state
             if not wrapper._conn.closed:
                 wrapper._conn.reset()
-            self._pool.putconn(wrapper._conn)
+            pool.putconn(wrapper._conn)
             wrapper._closed = True
         except Exception as e:
             logger.warning(f"Error releasing PostgreSQL connection: {e}")
@@ -918,7 +933,7 @@ class DataCache:
                 del self.cache[key]
         return None
 
-    def set(self, key: str, value: Any, ttl: Optional[int] = None):
+    def set(self, key: str, value: Any, ttl: Optional[int] = None) -> None:
         """Set cached value with TTL."""
         if len(self.cache) >= self.max_size:
             # Simple LRU: remove oldest entries
@@ -931,11 +946,11 @@ class DataCache:
         expiry = time.time() + (ttl or self.default_ttl)
         self.cache[key] = (value, expiry)
 
-    def invalidate(self, key: str):
+    def invalidate(self, key: str) -> None:
         """Remove key from cache."""
         self.cache.pop(key, None)
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all cached data."""
         self.cache.clear()
 
@@ -946,13 +961,22 @@ _data_cache = DataCache()
 logger = logging.getLogger(__name__)
 
 
+class _PooledConnection(TypedDict):
+    """Bookkeeping entry for one SQLite connection held by ConnectionPool."""
+
+    connection: sqlite3.Connection
+    in_use: bool
+    created_at: float
+    last_used: float
+
+
 class ConnectionPool:
     """Simple connection pool for SQLite."""
 
     def __init__(self, max_connections: int = 10, max_idle_time: int = 300):
         self.max_connections = max_connections
         self.max_idle_time = max_idle_time
-        self._connections: List[Dict[str, Any]] = []
+        self._connections: List[_PooledConnection] = []
         self._lock = threading.Lock()
         self._local = threading.local()
 
@@ -971,7 +995,7 @@ class ConnectionPool:
         """
         # Check for thread-local connection first
         if hasattr(self._local, "connection"):
-            conn = self._local.connection
+            conn: sqlite3.Connection = self._local.connection
             if self._is_connection_valid(conn):
                 return conn
 
@@ -1020,7 +1044,7 @@ class ConnectionPool:
             f"({len(self._connections)}/{self.max_connections} connections in use)"
         )
 
-    def release_connection(self, conn: sqlite3.Connection):
+    def release_connection(self, conn: sqlite3.Connection) -> None:
         """Release a connection back to the pool."""
         with self._lock:
             for conn_info in self._connections:
@@ -1037,7 +1061,7 @@ class ConnectionPool:
         except sqlite3.Error:
             return False
 
-    def _cleanup_expired_connections(self):
+    def _cleanup_expired_connections(self) -> None:
         """Remove expired connections."""
         current_time = time.time()
         self._connections = [
@@ -1046,7 +1070,7 @@ class ConnectionPool:
             if current_time - conn_info["last_used"] < self.max_idle_time
         ]
 
-    def close_all(self):
+    def close_all(self) -> None:
         """Close all connections in the pool."""
         with self._lock:
             for conn_info in self._connections:
@@ -1103,7 +1127,7 @@ def get_db_connection() -> Generator[_ConnectionWrapper, None, None]:
             _connection_pool.release_connection(conn)
 
 
-def init_database():
+def init_database() -> None:
     """Initialize database with schema and performance indexes."""
     try:
         if _active_backend == "postgres":
@@ -1115,7 +1139,7 @@ def init_database():
         raise
 
 
-def _init_postgres_database():
+def _init_postgres_database() -> None:
     """Initialize PostgreSQL database from schema_timescaledb.sql."""
     with get_db_connection() as conn:
         _init_postgres_schema(conn)
@@ -1143,7 +1167,7 @@ def _row_field(row: Any, index: int, key: str) -> Any:
         return row[index]
 
 
-def _existing_columns(conn: Any, table: str) -> set:
+def _existing_columns(conn: Any, table: str) -> Set[str]:
     """Return the column names currently present on ``table``."""
     if _active_backend == "postgres":
         cursor = conn.execute(
@@ -1194,7 +1218,7 @@ def _ensure_position_stop_columns(conn: Any) -> List[str]:
     return added
 
 
-def _init_sqlite_database():
+def _init_sqlite_database() -> None:
     """Initialize SQLite database with schema and performance indexes."""
     # Ensure database directory exists
     db_dir = os.path.dirname(DATABASE_PATH)
@@ -1630,7 +1654,7 @@ class DatabaseManager:
     a _ConnectionWrapper that handles SQL translation automatically.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize database manager.
 
         Creates the database directory (SQLite only) and ensures all
@@ -1647,14 +1671,16 @@ class DatabaseManager:
         init_database()
 
         # Store a connection reference for execute/commit pattern
-        self._conn = None
+        self._conn: Optional[Union[_ConnectionWrapper, sqlite3.Connection]] = None
 
     @property
     def backend(self) -> str:
         """Return the active database backend name."""
         return _active_backend
 
-    def execute(self, sql: str, params: Optional[tuple] = None):
+    def execute(
+        self, sql: str, params: Optional[Tuple[Any, ...]] = None
+    ) -> Union[_CursorWrapper, sqlite3.Cursor]:
         """
         Execute SQL statement and return cursor.
 
@@ -1677,22 +1703,24 @@ class DatabaseManager:
         else:
             return self._conn.execute(sql)
 
-    def commit(self):
+    def commit(self) -> None:
         """Commit current transaction."""
         if self._conn:
             self._conn.commit()
 
-    def close(self):
+    def close(self) -> None:
         """Close the database connection."""
         if self._conn:
             if _active_backend == "postgres":
                 pool = _get_postgresql_pool()
-                pool.release_connection(self._conn)
+                pool.release_connection(cast(_ConnectionWrapper, self._conn))
             else:
-                _connection_pool.release_connection(self._conn)
+                _connection_pool.release_connection(
+                    cast(sqlite3.Connection, self._conn)
+                )
             self._conn = None
 
-    def get_connection(self):
+    def get_connection(self) -> "aiosqlite.Connection":
         """
         Get an async database connection context manager for aiosqlite.
 
@@ -1756,7 +1784,7 @@ class DatabaseManager:
             _data_cache.invalidate(f"trades_all_10_{account_id}")
             _data_cache.invalidate(f"trades_all_20_{account_id}")
 
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     def bulk_save_trades(
         self, trades_data: List[Dict[str, Any]], account_id: str = "sub_1"
@@ -1804,12 +1832,12 @@ class DatabaseManager:
 
             return len(trades_data)
 
-    def update_trade(self, trade_id: int, update_data: Dict[str, Any]):
+    def update_trade(self, trade_id: int, update_data: Dict[str, Any]) -> None:
         """Update an existing trade."""
         with get_db_connection() as conn:
             # Build dynamic update query
-            set_parts = []
-            values = []
+            set_parts: List[str] = []
+            values: List[Any] = []
             for key, value in update_data.items():
                 if key in ["exit_price", "exit_time", "pnl", "status"]:
                     set_parts.append(f"{key} = ?")
@@ -1872,7 +1900,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     def get_regime_history(
         self, symbol: Optional[str] = None, limit: int = 50
@@ -1968,7 +1996,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     def get_regime_shadow(
         self, symbol: Optional[str] = None, limit: int = 200
@@ -2207,7 +2235,7 @@ class DatabaseManager:
         except Exception as e:
             logger.warning(f"Regime overlay JSON export failed: {e}")
 
-        return row_id  # type: ignore
+        return row_id
 
     def deactivate_regime_param_overlay(
         self,
@@ -2479,7 +2507,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     def get_trial_registry(
         self,
@@ -2647,7 +2675,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     @staticmethod
     def _validation_run_row_to_dict(row: Any) -> Dict[str, Any]:
@@ -2813,7 +2841,7 @@ class DatabaseManager:
 
         # Try cache first for small requests
         if limit <= 20:
-            cached = _data_cache.get(cache_key)
+            cached: Optional[List[Dict[str, Any]]] = _data_cache.get(cache_key)
             if cached:
                 return cached
 
@@ -2909,7 +2937,7 @@ class DatabaseManager:
             # Invalidate positions cache
             _data_cache.invalidate("positions_all")
 
-            return cursor.lastrowid  # type: ignore
+            return cursor.lastrowid
 
     @staticmethod
     def _update_position_fields(
@@ -2928,7 +2956,7 @@ class DatabaseManager:
             "WHERE symbol = ? AND side = ?",
             params,
         )
-        return cursor.rowcount
+        return cast(int, cursor.rowcount)
 
     def record_position_protection(
         self,
@@ -3006,7 +3034,7 @@ class DatabaseManager:
         cache_key = "positions_all"
 
         # Try cache first
-        cached = _data_cache.get(cache_key)
+        cached: Optional[List[Dict[str, Any]]] = _data_cache.get(cache_key)
         if cached:
             logger.debug("get_positions: cache hit")
             return cached
@@ -3033,7 +3061,7 @@ class DatabaseManager:
 
     def close_position(
         self, symbol: str, side: str, exit_price: Optional[float] = None
-    ):
+    ) -> None:
         """Mark a position as closed with exit price and realized P&L calculation."""
         with get_db_connection() as conn:
             # First get the current position data
@@ -3068,7 +3096,7 @@ class DatabaseManager:
             else:
                 logging.warning(f"No open position found for {symbol} {side}")
 
-    def clear_positions(self):
+    def clear_positions(self) -> None:
         """Clear all positions from the database."""
         with get_db_connection() as conn:
             conn.execute("DELETE FROM positions")
@@ -3077,7 +3105,7 @@ class DatabaseManager:
             # Invalidate positions cache
             _data_cache.invalidate("positions_all")
 
-    def deduplicate_positions(self):
+    def deduplicate_positions(self) -> None:
         """Remove duplicate positions, keeping only the most recent for each symbol/side."""
         with get_db_connection() as conn:
             # Find duplicates and keep only the most recent
@@ -3126,7 +3154,7 @@ class DatabaseManager:
         source: str = "api",
         timestamp: Optional[str] = None,
         extra_data: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """Save market data point with optional OHLC data."""
         if timestamp is None:
             timestamp = datetime.now().isoformat()
@@ -3147,7 +3175,7 @@ class DatabaseManager:
             _data_cache.invalidate(f"market_data_{symbol}_5")
             _data_cache.invalidate(f"market_data_{symbol}_10")
 
-    def bulk_save_market_data(self, data_points: List[Dict[str, Any]]):
+    def bulk_save_market_data(self, data_points: List[Dict[str, Any]]) -> None:
         """Bulk save multiple market data points efficiently."""
         if not data_points:
             return
@@ -3185,7 +3213,7 @@ class DatabaseManager:
         volume: Optional[float] = None,
         source: str = "api",
         extra_data: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """Async version of save_market_data for compatibility."""
         # For now, just call the sync version
         # In a real implementation, this would use async database operations
@@ -3207,7 +3235,7 @@ class DatabaseManager:
         if (
             limit <= 10 and not start_date and not end_date
         ):  # Only cache small requests without date filters
-            cached = _data_cache.get(cache_key)
+            cached: Optional[List[Dict[str, Any]]] = _data_cache.get(cache_key)
             if cached:
                 return cached
 
@@ -3258,7 +3286,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cast(int, cursor.lastrowid)
 
     def bulk_save_signals(self, signals_data: List[Dict[str, Any]]) -> int:
         """Bulk save multiple signals efficiently."""
@@ -3322,7 +3350,7 @@ class DatabaseManager:
                 signals.append(signal)
             return signals
 
-    def update_performance_metrics(self, metrics_data: Dict[str, Any]):
+    def update_performance_metrics(self, metrics_data: Dict[str, Any]) -> None:
         """Update daily performance metrics."""
         with get_db_connection() as conn:
             today = date.today().isoformat()
@@ -3418,7 +3446,7 @@ class DatabaseManager:
 
     def validate_data_integrity(self) -> Dict[str, Any]:
         """Validate data integrity and return issues found."""
-        issues = {"critical": [], "warnings": [], "info": []}
+        issues: Dict[str, List[str]] = {"critical": [], "warnings": [], "info": []}
 
         with get_db_connection() as conn:
             # Check for orphaned records
@@ -3769,10 +3797,10 @@ class DatabaseManager:
     # Async methods for non-blocking database operations
     async def save_trade_async(self, trade_data: Dict[str, Any]) -> Optional[int]:
         """Async version of save_trade."""
-        if not HAS_AIOSQLITE:  # type: ignore
+        if not HAS_AIOSQLITE:
             return self.save_trade(trade_data)
 
-        async with aiosqlite.connect(DATABASE_PATH) as db:  # type: ignore
+        async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
                 """
                 INSERT INTO trades (symbol, side, quantity, entry_price,
@@ -3797,14 +3825,15 @@ class DatabaseManager:
                 ),
             )
             await db.commit()
-            return db.last_insert_rowid()  # type: ignore
+            # last_insert_rowid is not an aiosqlite.Connection API (see report).
+            return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
 
     async def save_signal_async(self, signal_data: Dict[str, Any]) -> int:
         """Async version of save_signal."""
-        if not HAS_AIOSQLITE:  # type: ignore
+        if not HAS_AIOSQLITE:
             return self.save_signal(signal_data)
 
-        async with aiosqlite.connect(DATABASE_PATH) as db:  # type: ignore
+        async with aiosqlite.connect(DATABASE_PATH) as db:
             await db.execute(
                 """
                 INSERT INTO signals (symbol, signal_type, strength, indicators, timestamp)
@@ -3819,15 +3848,16 @@ class DatabaseManager:
                 ),
             )
             await db.commit()
-            return db.last_insert_rowid()  # type: ignore
+            # last_insert_rowid is not an aiosqlite.Connection API (see report).
+            return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
 
     async def get_recent_trades_async(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Async version of get_trades."""
-        if not HAS_AIOSQLITE:  # type: ignore
+        if not HAS_AIOSQLITE:
             return self.get_trades(limit)
 
-        async with aiosqlite.connect(DATABASE_PATH) as db:  # type: ignore
-            db.row_factory = aiosqlite.Row  # type: ignore
+        async with aiosqlite.connect(DATABASE_PATH) as db:
+            db.row_factory = aiosqlite.Row
             async with db.execute(
                 """
                 SELECT * FROM trades
@@ -3873,7 +3903,7 @@ class DatabaseManager:
             )
             conn.commit()
             logger.info(f"Created profile '{name}' (ID: {cursor.lastrowid})")
-            return cursor.lastrowid  # type: ignore
+            return cast(int, cursor.lastrowid)
 
     def get_all_profiles(self) -> List[Dict[str, Any]]:
         """
@@ -3957,8 +3987,8 @@ class DatabaseManager:
             True if updated, False if not found
         """
         # Build dynamic update query
-        updates = []
-        params = []
+        updates: List[str] = []
+        params: List[Any] = []
 
         if name is not None:
             updates.append("name = ?")
@@ -4058,7 +4088,7 @@ class DatabaseManager:
     # PACIFICA FUNDING TRACKING
     # ===========================
 
-    def init_pacifica_tables(self):
+    def init_pacifica_tables(self) -> None:
         """
         Initialize Pacifica-specific tables for hourly funding tracking.
 
@@ -4308,7 +4338,7 @@ class DatabaseManager:
                 f"(Rate: {funding_rate * 100:.4f}% per hour) [Subaccount: {subaccount_id or 'default'}]"
             )
 
-            return cursor.lastrowid  # type: ignore
+            return cast(int, cursor.lastrowid)
 
     def bulk_save_funding_payments(
         self, payments: List[Dict[str, Any]], account_id: str = "sub_1"
@@ -4492,7 +4522,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cast(int, cursor.lastrowid)
 
     def get_funding_rate_history(
         self,
@@ -4582,7 +4612,7 @@ class DatabaseManager:
                 ),
             )
             conn.commit()
-            return cursor.lastrowid  # type: ignore
+            return cast(int, cursor.lastrowid)
 
     def update_pacifica_position_funding(
         self,
@@ -4590,7 +4620,7 @@ class DatabaseManager:
         cumulative_funding_paid: float,
         last_funding_timestamp: datetime,
         account_id: str = "sub_1",
-    ):
+    ) -> None:
         """
         Update position's cumulative funding after hourly payment.
 
@@ -4618,7 +4648,9 @@ class DatabaseManager:
             )
             conn.commit()
 
-    def close_pacifica_position(self, position_id: str, account_id: str = "sub_1"):
+    def close_pacifica_position(
+        self, position_id: str, account_id: str = "sub_1"
+    ) -> None:
         """
         Mark Pacifica position as closed.
 

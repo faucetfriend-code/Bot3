@@ -108,7 +108,7 @@ class SessionRangeBreakoutStrategy:
         self._session_trades: Dict[str, int] = {}
 
         # Symbols we already warned about missing timestamps (warn once each)
-        self._warned_no_timestamp: set = set()
+        self._warned_no_timestamp: set[str] = set()
 
         # Simulated time injected by backtest engine (None = use wall-clock)
         self._sim_time: Optional[datetime] = None
@@ -221,7 +221,7 @@ class SessionRangeBreakoutStrategy:
         symbol: str,
         multi_tf_data: Dict[str, Any],
         current_price: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate session range breakout signals.

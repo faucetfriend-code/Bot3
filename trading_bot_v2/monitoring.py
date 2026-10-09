@@ -27,7 +27,7 @@ class MonitoringSystem:
     - System status dashboard
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.component_registry = get_component_registry()
         self.event_bus = get_event_bus()
 
@@ -50,7 +50,7 @@ class MonitoringSystem:
 
         logger.info("MonitoringSystem initialized")
 
-    def _monitoring_loop(self):
+    def _monitoring_loop(self) -> None:
         """Background monitoring loop."""
         while True:
             try:
@@ -62,7 +62,7 @@ class MonitoringSystem:
 
             time.sleep(self._health_check_interval)
 
-    def _perform_health_checks(self):
+    def _perform_health_checks(self) -> None:
         """Perform health checks on all registered components."""
         component_health = self.component_registry.validate_dependencies()
 
@@ -100,7 +100,7 @@ class MonitoringSystem:
         if unknown:
             logger.debug(f"Components without health checks: {', '.join(unknown)}")
 
-    def _cleanup_old_metrics(self):
+    def _cleanup_old_metrics(self) -> None:
         """Clean up old performance metrics."""
         cutoff_time = datetime.now() - timedelta(hours=self._metrics_retention_hours)
 
@@ -111,7 +111,7 @@ class MonitoringSystem:
                 if metric["timestamp"] > cutoff_time
             ]
 
-    def _check_system_alerts(self):
+    def _check_system_alerts(self) -> None:
         """Check for system-level alerts."""
         # Only alert on actually unhealthy components (not unknown/missing health checks)
         unhealthy_count = sum(
@@ -145,7 +145,7 @@ class MonitoringSystem:
                 },
             )
 
-    def _add_alert(self, level: str, message: str, details: Dict[str, Any]):
+    def _add_alert(self, level: str, message: str, details: Dict[str, Any]) -> None:
         """Add an alert to the system."""
         alert = {
             "timestamp": datetime.now(),
@@ -170,7 +170,7 @@ class MonitoringSystem:
         metric_name: str,
         value: Any,
         tags: Optional[Dict[str, Any]] = None,
-    ):
+    ) -> None:
         """Record a performance metric."""
         if component_name not in self._performance_metrics:
             self._performance_metrics[component_name] = []
@@ -259,7 +259,7 @@ class MonitoringSystem:
         """Get event processing summary."""
         return self.event_bus.get_stats()
 
-    def trigger_emergency_shutdown(self, reason: str):
+    def trigger_emergency_shutdown(self, reason: str) -> None:
         """Trigger emergency system shutdown."""
         logger.critical(f"EMERGENCY SHUTDOWN triggered: {reason}")
 
@@ -309,7 +309,7 @@ class MonitoringSystem:
 
 
 # Global monitoring system instance
-_monitoring_system = None
+_monitoring_system: Optional[MonitoringSystem] = None
 
 
 def get_monitoring_system() -> MonitoringSystem:

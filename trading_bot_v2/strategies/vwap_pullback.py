@@ -164,7 +164,7 @@ class VWAPPullbackStrategy:
         # Simulated time injected by StrategyManager.set_sim_time()
         self._sim_time: Optional[datetime] = None
         # Symbols already warned about missing timestamps (warn once)
-        self._warned_no_timestamp: set = set()
+        self._warned_no_timestamp: set[str] = set()
 
         logger.info(
             f"VWAPPullbackStrategy initialized: 4h EMA {ema_fast}/{ema_slow}, "
@@ -246,7 +246,7 @@ class VWAPPullbackStrategy:
         symbol: str,
         multi_tf_data: Dict[str, Any],
         current_price: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate VWAP pullback-continuation signals.
@@ -393,6 +393,7 @@ class VWAPPullbackStrategy:
         else:
             entry_price = current_price
 
+        take_profit: Optional[float]
         if direction == "long":
             side = OrderSide.BUY
             stop_loss = lows[last_i] - self.atr_stop_buffer * atr_value

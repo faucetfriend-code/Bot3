@@ -40,7 +40,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger(__name__)
 
@@ -308,17 +308,18 @@ class DatabaseBenchmark:
             backend="sqlite",
             iterations=iterations,
         )
+        conn = cast(sqlite3.Connection, self._conn)
 
         # Warmup
         for _ in range(warmup):
-            self._conn.execute(
+            conn.execute(
                 "SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)
             ).fetchall()
 
         # Benchmark
         for _ in range(iterations):
             start = time.perf_counter()
-            self._conn.execute(
+            conn.execute(
                 "SELECT * FROM trades WHERE symbol = ?", ("BTC-USDC",)
             ).fetchall()
             elapsed = (time.perf_counter() - start) * 1000
@@ -337,10 +338,11 @@ class DatabaseBenchmark:
             backend="sqlite",
             iterations=iterations,
         )
+        conn = cast(sqlite3.Connection, self._conn)
 
         # Warmup
         for _ in range(warmup):
-            self._conn.execute(
+            conn.execute(
                 "SELECT * FROM candles WHERE symbol = ? AND timeframe = ? ORDER BY timestamp DESC LIMIT 100",
                 ("BTC-USDC", "1m"),
             ).fetchall()
@@ -348,7 +350,7 @@ class DatabaseBenchmark:
         # Benchmark
         for _ in range(iterations):
             start = time.perf_counter()
-            self._conn.execute(
+            conn.execute(
                 "SELECT * FROM candles WHERE symbol = ? AND timeframe = ? ORDER BY timestamp DESC LIMIT 100",
                 ("BTC-USDC", "1m"),
             ).fetchall()
@@ -368,23 +370,24 @@ class DatabaseBenchmark:
             backend="sqlite",
             iterations=iterations,
         )
+        conn = cast(sqlite3.Connection, self._conn)
 
         # Warmup
         for _ in range(warmup):
-            self._conn.execute(
+            conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, entry_price, strategy) VALUES (?, ?, ?, ?, ?)",
                 ("BTC-USDC", "long", 0.1, 50000.0, "test"),
             )
-            self._conn.commit()
+            conn.commit()
 
         # Benchmark
         for i in range(iterations):
             start = time.perf_counter()
-            self._conn.execute(
+            conn.execute(
                 "INSERT INTO trades (symbol, side, quantity, entry_price, strategy) VALUES (?, ?, ?, ?, ?)",
                 ("BTC-USDC", "long", 0.1, 50000.0 + i, "test"),
             )
-            self._conn.commit()
+            conn.commit()
             elapsed = (time.perf_counter() - start) * 1000
             result.times_ms.append(elapsed)
 
@@ -400,17 +403,18 @@ class DatabaseBenchmark:
             backend="sqlite",
             iterations=iterations,
         )
+        conn = cast(sqlite3.Connection, self._conn)
 
         # Warmup
         for _ in range(warmup):
-            self._conn.execute(
+            conn.execute(
                 "SELECT symbol, SUM(pnl) as total_pnl, COUNT(*) as trade_count FROM trades GROUP BY symbol"
             ).fetchall()
 
         # Benchmark
         for _ in range(iterations):
             start = time.perf_counter()
-            self._conn.execute(
+            conn.execute(
                 "SELECT symbol, SUM(pnl) as total_pnl, COUNT(*) as trade_count FROM trades GROUP BY symbol"
             ).fetchall()
             elapsed = (time.perf_counter() - start) * 1000
@@ -702,11 +706,12 @@ class PerformanceBenchmark:
         return self._results
 
     def benchmark_db_query(
-        self, query: str, params: Tuple = (), iterations: int = 100
+        self, query: str, params: Tuple[Any, ...] = (), iterations: int = 100
     ) -> BenchmarkResult:
         """Benchmark a specific database query."""
         db_bench = DatabaseBenchmark()
         db_bench.setup()
+        conn = cast(sqlite3.Connection, db_bench._conn)
         try:
             result = BenchmarkResult(
                 name="custom_query",
@@ -716,12 +721,12 @@ class PerformanceBenchmark:
 
             # Warmup
             for _ in range(5):
-                db_bench._conn.execute(query, params).fetchall()
+                conn.execute(query, params).fetchall()
 
             # Benchmark
             for _ in range(iterations):
                 start = time.perf_counter()
-                db_bench._conn.execute(query, params).fetchall()
+                conn.execute(query, params).fetchall()
                 elapsed = (time.perf_counter() - start) * 1000
                 result.times_ms.append(elapsed)
 

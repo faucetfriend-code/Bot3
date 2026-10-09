@@ -365,8 +365,8 @@ class AnomalyDetector:
     ) -> None:
         self.zscore_threshold = zscore_threshold
         self.window_size = window_size
-        self._price_history: Dict[str, deque] = {}
-        self._volume_history: Dict[str, deque] = {}
+        self._price_history: Dict[str, deque[float]] = {}
+        self._volume_history: Dict[str, deque[float]] = {}
 
     def detect_price_anomaly(
         self, symbol: str, price: float
@@ -546,7 +546,7 @@ class DataMonitor:
         self._alerts: Dict[str, DataAlert] = {}
         self._alert_counter: int = 0
         self._freshness_cache: Dict[str, FreshnessStatus] = {}
-        self._quality_history: deque = deque(
+        self._quality_history: deque[QualityMetrics] = deque(
             maxlen=METRICS_RETENTION_HOURS * 60
         )  # 1 per minute
 

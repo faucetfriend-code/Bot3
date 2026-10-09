@@ -20,11 +20,15 @@ Where confidence_multiplier is:
 """
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 # Use relative imports from trading_bot_v2 package
 from .models import Signal
 from .config import StrategyType
+
+if TYPE_CHECKING:
+    from .kelly_position_sizer import KellyPositionSizer
 
 
 @dataclass
@@ -64,7 +68,7 @@ class ConfidenceSizer:
     # Maximum multiplier (prevent over-sizing on high confidence)
     DEFAULT_CEILING = 1.0
 
-    def __init__(self, config=None):
+    def __init__(self, config: Any = None) -> None:
         """
         Initialize ConfidenceSizer.
 
@@ -173,7 +177,12 @@ class IntegratedPositionSizer:
     3. Final size = Kelly size * confidence multiplier
     """
 
-    def __init__(self, kelly_sizer, confidence_sizer: ConfidenceSizer, config=None):
+    def __init__(
+        self,
+        kelly_sizer: "KellyPositionSizer",
+        confidence_sizer: ConfidenceSizer,
+        config: Any = None,
+    ) -> None:
         """
         Initialize integrated sizer.
 
@@ -205,7 +214,7 @@ class IntegratedPositionSizer:
         """
         # Step 1: Kelly base size
         try:
-            kelly_result = self.kelly.calculate_position_size(
+            kelly_result = self.kelly.calculate_position_size(  # type: ignore[call-arg]  # KellyPositionSizer takes (signal, account_balance); reported, not fixed
                 strategy_type=signal.strategy,
                 entry_price=signal.entry_price,
                 stop_loss=signal.stop_loss,
@@ -239,7 +248,7 @@ class IntegratedPositionSizer:
         )
 
         logger.info(
-            f"Position sized: {signal.symbol} {signal.side.value} "
+            f"Position sized: {signal.symbol} {signal.side.value} "  # type: ignore[attr-defined]  # Signal has no 'symbol' (field is 'asset'); reported, not fixed
             f"kelly={base_size:.6f} * conf={sizing_result.multiplier:.2f} "
             f"= {sizing_result.effective_size:.6f} "
             f"(max={max_size:.6f})"

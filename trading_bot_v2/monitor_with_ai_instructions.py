@@ -9,9 +9,10 @@ import subprocess
 import sys
 from datetime import datetime
 import os
+from typing import Any, cast
 
 
-def run_monitor():
+def run_monitor() -> dict[str, Any]:
     """Run the monitoring script and return results."""
     try:
         result = subprocess.run(
@@ -22,14 +23,14 @@ def run_monitor():
         )
 
         if result.returncode == 0:
-            return json.loads(result.stdout)
+            return cast(dict[str, Any], json.loads(result.stdout))
         else:
             return {"error": f"Monitor failed: {result.stderr}"}
     except Exception as e:
         return {"error": str(e)}
 
 
-def generate_ai_instructions(results):
+def generate_ai_instructions(results: dict[str, Any]) -> list[str]:
     """Generate AI troubleshooting instructions based on monitoring results."""
     instructions = []
     timestamp = results.get("timestamp", datetime.now().isoformat())
@@ -53,7 +54,9 @@ def generate_ai_instructions(results):
     return instructions
 
 
-def create_critical_instruction(component, message, details, timestamp):
+def create_critical_instruction(
+    component: str, message: str, details: dict[str, Any], timestamp: str
+) -> str:
     """Create AI instruction for critical issues."""
 
     templates = {
@@ -125,7 +128,9 @@ Please investigate this critical issue immediately.""",
     )
 
 
-def create_warning_instruction(component, message, details, timestamp):
+def create_warning_instruction(
+    component: str, message: str, details: dict[str, Any], timestamp: str
+) -> str:
     """Create AI instruction for warning issues."""
 
     templates = {
@@ -176,7 +181,7 @@ Please review this warning condition.""",
     )
 
 
-def save_instructions(instructions, results):
+def save_instructions(instructions: list[str], results: dict[str, Any]) -> str | None:
     """Save AI instructions to file for later use."""
     if not instructions:
         return None
@@ -215,7 +220,7 @@ Generated: {datetime.now().isoformat()}
     return filename
 
 
-def main():
+def main() -> None:
     """Main monitoring function with AI instruction generation."""
     print(f"Running AI-enhanced monitoring at {datetime.now()}")
 

@@ -38,7 +38,7 @@ import os
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -82,7 +82,7 @@ class SupervisorControl:
     # Internal: read/write
     # ────────────────────────────────────────────────────────────────────
 
-    def _read_state(self) -> dict:
+    def _read_state(self) -> dict[str, Any]:
         """Read state, preserving missing-file defaults and failing closed on damage."""
         try:
             with _PAUSE_FILE.open("r", encoding="utf-8") as f:
@@ -106,7 +106,7 @@ class SupervisorControl:
                 "reason": "Pause state unreadable; operator recovery required",
             }
 
-    def _write_state(self, state: dict) -> None:
+    def _write_state(self, state: dict[str, Any]) -> None:
         """Atomic write: tmp file then rename."""
         tmp = _PAUSE_FILE.with_suffix(".json.tmp")
         with self._file_lock:
@@ -158,7 +158,7 @@ class SupervisorControl:
 
     def pause(
         self, reason: str = "no reason given", until_ts: Optional[str] = None
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         Pause new entries. Existing positions are unaffected.
 
@@ -183,7 +183,7 @@ class SupervisorControl:
         )
         return state
 
-    def resume(self) -> dict:
+    def resume(self) -> dict[str, Any]:
         """Clear the pause. Returns new state."""
         state = {
             "paused": False,
@@ -193,7 +193,7 @@ class SupervisorControl:
         logger.info("SupervisorControl: RESUMED — new entries allowed")
         return state
 
-    def status(self) -> dict:
+    def status(self) -> dict[str, Any]:
         """Return full state with computed `is_paused` boolean."""
         state = self._read_state()
         return {

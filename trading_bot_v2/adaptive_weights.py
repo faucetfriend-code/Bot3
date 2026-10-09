@@ -41,11 +41,15 @@ import os
 import threading
 import time
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 
 from loguru import logger
 
 from .history import metrics as history_metrics
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
+    from .history.trade_store import TradeStore
 
 
 def _env_float(name: str, default: float) -> float:
@@ -134,8 +138,8 @@ class AdaptiveWeightManager:
 
     def __init__(
         self,
-        db: Optional[Any] = None,
-        trade_store: Optional[Any] = None,
+        db: Optional["DatabaseManager"] = None,
+        trade_store: Optional["TradeStore"] = None,
         enabled: Optional[bool] = None,
         halflife_days: Optional[float] = None,
         min_trades: Optional[int] = None,
@@ -375,7 +379,9 @@ class AdaptiveWeightManager:
         """Fetch closed trades from the TradeStore (db legacy fallback)."""
         if self.trade_store is not None:
             return self.trade_store.get_closed_trades()
-        return self.db.get_closed_trades_for_weights()
+        # Callers guard on (db is None and trade_store is None) before
+        # reaching here, so db is wired on this path.
+        return cast("DatabaseManager", self.db).get_closed_trades_for_weights()
 
     def _score_to_multiplier(self, score: float) -> float:
         """Map a blended expectancy score (pnl-pct) to a clamped multiplier.

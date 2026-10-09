@@ -23,11 +23,18 @@ trading_bot.py next to the telegram REGIME_CHANGED subscription.
 """
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
 from .market_regime import MarketRegime
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
+    from .event_system import Event
+    from .market_regime import MarketRegimeDetector
+    from .migrated_position_manager import MigratedPositionManager
+    from .multi_timeframe_fetcher import MultiTimeframeFetcher
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -79,13 +86,13 @@ class RegimePositionReviewer:
 
     def __init__(
         self,
-        db,
-        client,
-        regime_detector,
-        migrated_position_manager,
-        multi_tf_fetcher=None,
+        db: "DatabaseManager",
+        client: Any,
+        regime_detector: "MarketRegimeDetector",
+        migrated_position_manager: "MigratedPositionManager",
+        multi_tf_fetcher: Optional["MultiTimeframeFetcher"] = None,
         enabled: Optional[bool] = None,
-    ):
+    ) -> None:
         self.db = db
         self.client = client
         self.regime_detector = regime_detector
@@ -103,7 +110,7 @@ class RegimePositionReviewer:
     # Event handler
     # ------------------------------------------------------------------
 
-    def handle_regime_changed(self, event) -> None:
+    def handle_regime_changed(self, event: "Event") -> None:
         """
         Handle a REGIME_CHANGED event (exception-safe, runs inline).
 
@@ -182,10 +189,10 @@ class RegimePositionReviewer:
         self,
         symbol: str,
         pos: Dict[str, Any],
-        active_strategies: set,
+        active_strategies: set[str],
         trend: str,
         current_price: Optional[float],
-        market_data: Optional[Dict[str, List]],
+        market_data: Optional[Dict[str, List[float]]],
     ) -> None:
         """Review a single open position after a regime flip."""
         strategy_key = _normalize_strategy(pos.get("strategy"))
@@ -313,7 +320,7 @@ class RegimePositionReviewer:
             and _normalize_strategy(t.get("strategy")) not in self.GRID_STRATEGIES
         ]
 
-    def _get_market_data(self, symbol: str) -> Optional[Dict[str, List]]:
+    def _get_market_data(self, symbol: str) -> Optional[Dict[str, List[float]]]:
         """Fetch 4h market data for trend detection (None on failure)."""
         if not self.multi_tf_fetcher:
             return None

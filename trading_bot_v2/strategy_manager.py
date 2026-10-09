@@ -18,12 +18,12 @@ Conflict Resolution Rules:
 """
 
 import os
-from typing import List, Dict, Any, Optional, Tuple
+from typing import TYPE_CHECKING, List, Dict, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from loguru import logger
 
-from .models import Signal, OrderSide, TradeQuality
-from .config import StrategyType
+from .models import Signal, OrderSide
+from .config import StrategyType, TradeQuality
 from .diagnostics.funnel import (
     NULL_FUNNEL,
     REASON_CONFIDENCE_GATE,
@@ -69,6 +69,13 @@ from .directional_bias import (
     validate_gate_mode,
 )
 from .strategies.calendar_flow import CalendarFlowStrategy
+
+if TYPE_CHECKING:
+    from .adaptive_weights import AdaptiveWeightManager
+    from .cooldown_manager import CooldownManager
+    from .database import DatabaseManager
+    from .pacifica_ws_client import PacificaWebSocketClient
+    from .risk_manager import RiskManager
 
 
 # VWAPScalping is a mean-reversion strategy, so it is gated away from the
@@ -172,11 +179,15 @@ class StrategyManager:
         enable_session_range_breakout: Optional[bool] = None,
         enable_calendar_flow: Optional[bool] = None,
         enable_vwap_pullback: Optional[bool] = None,
-        risk_manager=None,
-        client=None,  # Pacifica client for funding arb API calls
-        ws_client=None,  # WebSocket client for orderbook data
-        db=None,  # DatabaseManager for adaptive per-regime weights
-    ):
+        risk_manager: Optional["RiskManager"] = None,
+        # Pacifica client for funding arb API calls (duck-typed: PacificaClient
+        # live, SimulatedExchange in a backtest)
+        client: Any = None,
+        # WebSocket client for orderbook data
+        ws_client: Optional["PacificaWebSocketClient"] = None,
+        # DatabaseManager for adaptive per-regime weights
+        db: Optional["DatabaseManager"] = None,
+    ) -> None:
         """
         Initialize StrategyManager with enabled strategies.
 
@@ -362,9 +373,11 @@ class StrategyManager:
             from .adaptive_weights import AdaptiveWeightManager
             from .history import TradeStore
 
-            self.adaptive_weights = AdaptiveWeightManager(
-                db=db,
-                trade_store=TradeStore(db=db) if db is not None else None,
+            self.adaptive_weights: Optional["AdaptiveWeightManager"] = (
+                AdaptiveWeightManager(
+                    db=db,
+                    trade_store=TradeStore(db=db) if db is not None else None,
+                )
             )
         except Exception as e:
             logger.warning(f"AdaptiveWeightManager unavailable: {e}")
@@ -409,10 +422,14 @@ class StrategyManager:
         self._trade_cooldowns: Dict[
             Tuple[str, str], datetime
         ] = {}  # (symbol, strategy) -> cooldown_until
-        self._executed_trades: List[Dict] = []  # Track recent trades for feedback
+        # Track recent trades for feedback
+        self._executed_trades: List[Dict[str, Any]] = []
 
         # Initialize strategies based on flags
-        self.strategies = {}
+        # Heterogeneous, duck-typed: each strategy class has its own
+        # generate_signals keyword surface (orderbook=, regime_adx=, ...),
+        # so no shared Protocol describes the value precisely.
+        self.strategies: Dict[str, Any] = {}
 
         if self.enable_mean_reversion:
             self.strategies["MeanReversion"] = MeanReversionStrategy()
@@ -872,7 +889,9 @@ class StrategyManager:
 
         return False
 
-    def register_trade_execution(self, signal: Signal, order_result: Dict):
+    def register_trade_execution(
+        self, signal: Signal, order_result: Dict[str, Any]
+    ) -> None:
         """
         Register successful trade execution for feedback loop.
 
@@ -910,7 +929,7 @@ class StrategyManager:
 
         logger.info(f"Trade registered: {key} cooldown {cooldown_minutes}min")
 
-    def _get_strategy_cooldown(self, strategy_name: str) -> int:
+    def _get_strategy_cooldown(self, strategy_name: str) -> float:
         """
         Get cooldown period in minutes for strategy.
 
@@ -2137,7 +2156,7 @@ class StrategyManager:
 
         return result
 
-    def set_cooldown_manager(self, cooldown_manager):
+    def set_cooldown_manager(self, cooldown_manager: "CooldownManager") -> None:
         """
         Set the cooldown manager for per-strategy cooldowns.
 

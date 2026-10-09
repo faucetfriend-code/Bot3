@@ -265,7 +265,7 @@ class MACrossoverStrategy:
         # monotonic per-symbol bar counter for callers that supply no
         # timestamps.
         # {symbol: {"type": "golden"/"death", "bar_ts": Any, "bar_seq": int, ...}}
-        self.last_crossover = {}
+        self.last_crossover: Dict[str, Dict[str, Any]] = {}
 
         # {symbol: (last_bar_signature, bar_seq)} - see _observe_bar()
         self._bar_state: Dict[str, Tuple[Any, int]] = {}
@@ -619,7 +619,7 @@ class MACrossoverStrategy:
                     return offset
             return None  # crossover bar has scrolled out of the window
 
-        crossover_seq = crossover_info.get("bar_seq")
+        crossover_seq: Optional[int] = crossover_info.get("bar_seq")
         if crossover_seq is None:
             return None
         return current_bar_seq - crossover_seq
