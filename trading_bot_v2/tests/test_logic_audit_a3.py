@@ -64,7 +64,12 @@ def _breaker_bot(balance: float, unrealized_pnl: float) -> SimpleNamespace:
     """Stand-in with one open position carrying ``unrealized_pnl``."""
     client = MagicMock()
     client.get_positions.return_value = [
-        {"symbol": "BTC", "side": "long", "quantity": 1.0, "unrealized_pnl": unrealized_pnl}
+        {
+            "symbol": "BTC",
+            "side": "long",
+            "quantity": 1.0,
+            "unrealized_pnl": unrealized_pnl,
+        }
     ]
     bot = SimpleNamespace(
         client=client,
@@ -196,4 +201,7 @@ class TestSizingFloor:
     def test_invalid_entry_price_requests_nothing(self):
         rm = RiskManager()
         sig = _signal(entry_price=0.0, stop_loss=0.0)
-        assert rm.get_position_size(sig, account_balance=10_000.0, current_exposure=0.0) == 0.0
+        assert (
+            rm.get_position_size(sig, account_balance=10_000.0, current_exposure=0.0)
+            == 0.0
+        )
