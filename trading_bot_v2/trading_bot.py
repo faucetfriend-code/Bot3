@@ -772,9 +772,10 @@ class TradingBot:
                     continue
 
                 # Calculate unrealized P&L
-                # Pacifica API returns "long"/"short" or "bid"/"ask" (lowercase)
-                raw_side = pos.get("side", "long")
-                side = raw_side.upper() if raw_side else "LONG"
+                # Pacifica API returns "long"/"short" or "bid"/"ask" (lowercase).
+                # The positions table contract is LONG/SHORT, so the wire
+                # spelling is normalized before it is stored.
+                side = position_side_lower(pos.get("side", "long")).upper()
                 quantity = position_quantity(pos)
                 entry_price = float(pos.get("entry_price", 0))
                 current_price = current_prices.get(symbol, entry_price)
@@ -783,8 +784,7 @@ class TradingBot:
                 if quantity == 0:
                     continue
 
-                # "long" or "bid" = long position; "short" or "ask" = short
-                is_long = side in ("LONG", "BID")
+                is_long = side == "LONG"
                 if is_long:
                     unrealized_pnl = (current_price - entry_price) * quantity
                 else:
