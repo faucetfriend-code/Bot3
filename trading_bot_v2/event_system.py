@@ -97,11 +97,11 @@ class EventBus:
     Thread-safe for concurrent component operation.
     """
 
-    def __init__(self):
-        self._subscribers: Dict[EventType, List[Callable]] = {}
+    def __init__(self) -> None:
+        self._subscribers: Dict[EventType, List[Callable[[Event], None]]] = {}
         self._lock = threading.Lock()
         self._max_history = 1000  # Keep last 1000 events
-        self._event_history: deque = deque(maxlen=self._max_history)
+        self._event_history: deque[Event] = deque(maxlen=self._max_history)
         # Monotonically-increasing counter — never resets, never saturates.
         # Use this (not len(_event_history)) to measure published-event rate;
         # len() permanently returns max_history once the deque is full.

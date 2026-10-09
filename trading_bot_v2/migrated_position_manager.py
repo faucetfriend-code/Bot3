@@ -23,7 +23,7 @@ This module works in conjunction with:
 
 import os
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
 from loguru import logger
 
 from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
@@ -36,6 +36,11 @@ from .venue_stops import (
     stop_move_pct,
     venue_stops_supported,
 )
+
+if TYPE_CHECKING:
+    from .market_regime import MarketRegimeDetector
+    from .multi_timeframe_fetcher import MultiTimeframeFetcher
+    from .risk_manager import RiskManager
 
 
 def _config_value(name: str, default: Any) -> Any:
@@ -120,14 +125,14 @@ class MigratedPositionManager:
 
     def __init__(
         self,
-        client,
-        risk_manager,
-        regime_detector,
-        multi_tf_fetcher=None,
+        client: Any,
+        risk_manager: "RiskManager",
+        regime_detector: "MarketRegimeDetector",
+        multi_tf_fetcher: Optional["MultiTimeframeFetcher"] = None,
         reconcile_callback: Optional[Callable[[], Any]] = None,
         venue_exchange_resolver: Optional[Callable[[], Any]] = None,
         db: Any = None,
-    ):
+    ) -> None:
         """
         Initialize MigratedPositionManager.
 
@@ -167,7 +172,7 @@ class MigratedPositionManager:
         )
 
         # Take profit tracking: {symbol: {side: {'target': price, 'partial_taken': bool}}}
-        self._take_profits: Dict[str, Dict[str, Dict]] = {}
+        self._take_profits: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
         # Last known ATR per symbol (cached)
         self._atr_cache: Dict[str, Dict[str, Any]] = {}
@@ -201,7 +206,7 @@ class MigratedPositionManager:
         return self.risk_manager.has_migrated_positions()
 
     def manage_positions(
-        self, current_prices: Dict[str, float] = None
+        self, current_prices: Optional[Dict[str, float]] = None
     ) -> Dict[str, Any]:
         """
         Main management loop - call this periodically from TradingBot.
@@ -219,7 +224,7 @@ class MigratedPositionManager:
         Returns:
             Dict with management results
         """
-        results = {
+        results: Dict[str, Any] = {
             "positions_managed": 0,
             "stops_updated": 0,
             "positions_closed": 0,
@@ -309,7 +314,7 @@ class MigratedPositionManager:
             logger.warning(f"Could not get price for {symbol}: {e}")
         return None
 
-    def _get_market_data(self, symbol: str) -> Optional[Dict[str, List]]:
+    def _get_market_data(self, symbol: str) -> Optional[Dict[str, List[float]]]:
         """Get 4h market data for ATR and trend calculations."""
         if not self.multi_tf_fetcher:
             return None
@@ -323,7 +328,9 @@ class MigratedPositionManager:
             logger.warning(f"Could not get market data for {symbol}: {e}")
             return None
 
-    def _get_atr(self, symbol: str, market_data: Dict[str, List] = None) -> float:
+    def _get_atr(
+        self, symbol: str, market_data: Optional[Dict[str, List[float]]] = None
+    ) -> float:
         """
         Get ATR for symbol (with caching).
 
@@ -340,7 +347,7 @@ class MigratedPositionManager:
         if symbol in self._atr_cache:
             cache = self._atr_cache[symbol]
             if time.time() - cache["timestamp"] < self._atr_cache_ttl_seconds:
-                return cache["atr"]
+                return cast(float, cache["atr"])
 
         # Calculate ATR
         if not market_data:
@@ -370,7 +377,7 @@ class MigratedPositionManager:
             logger.warning(f"ATR calculation failed for {symbol}: {e}")
             return 0
 
-    def _check_time_exit(self, symbol: str, pos: Dict) -> bool:
+    def _check_time_exit(self, symbol: str, pos: Dict[str, Any]) -> bool:
         """
         Check if a position has exceeded its strategy's max hold time.
 
@@ -415,7 +422,10 @@ class MigratedPositionManager:
         return False
 
     def _check_trend_reversal(
-        self, symbol: str, pos: Dict, market_data: Dict = None
+        self,
+        symbol: str,
+        pos: Dict[str, Any],
+        market_data: Optional[Dict[str, List[float]]] = None,
     ) -> bool:
         """
         Check if trend has reversed against the position.
@@ -455,7 +465,9 @@ class MigratedPositionManager:
 
         return False
 
-    def _check_stop_hit(self, symbol: str, pos: Dict, current_price: float) -> bool:
+    def _check_stop_hit(
+        self, symbol: str, pos: Dict[str, Any], current_price: float
+    ) -> bool:
         """
         Check if trailing stop has been hit.
 
@@ -467,7 +479,7 @@ class MigratedPositionManager:
         Returns:
             True if stop was hit
         """
-        side = pos.get("side")
+        side = cast(str, pos.get("side"))
         stop_price = self._trailing_stops.get(symbol, {}).get(side)
 
         if not stop_price:
@@ -491,7 +503,11 @@ class MigratedPositionManager:
         return False
 
     def _update_trailing_stop(
-        self, symbol: str, pos: Dict, current_price: float, market_data: Dict = None
+        self,
+        symbol: str,
+        pos: Dict[str, Any],
+        current_price: float,
+        market_data: Optional[Dict[str, List[float]]] = None,
     ) -> bool:
         """
         Update trailing stop for position.
@@ -509,7 +525,7 @@ class MigratedPositionManager:
         Returns:
             True if stop was updated
         """
-        side = pos.get("side")
+        side = cast(str, pos.get("side"))
 
         # Get ATR for stop distance
         atr = self._get_atr(symbol, market_data)
@@ -570,9 +586,9 @@ class MigratedPositionManager:
     def arm_trailing_stop(
         self,
         symbol: str,
-        pos: Dict,
+        pos: Dict[str, Any],
         current_price: float,
-        market_data: Dict = None,
+        market_data: Optional[Dict[str, List[float]]] = None,
     ) -> bool:
         """
         Public wrapper to arm/tighten a trailing stop for a position.
@@ -593,7 +609,7 @@ class MigratedPositionManager:
         """
         return self._update_trailing_stop(symbol, pos, current_price, market_data)
 
-    def close_position(self, symbol: str, pos: Dict, reason: str) -> None:
+    def close_position(self, symbol: str, pos: Dict[str, Any], reason: str) -> None:
         """
         Public wrapper to close a position through the standard close path.
 
@@ -610,7 +626,11 @@ class MigratedPositionManager:
         self._close_position(symbol, pos, reason)
 
     def _check_take_profit(
-        self, symbol: str, pos: Dict, current_price: float, market_data: Dict = None
+        self,
+        symbol: str,
+        pos: Dict[str, Any],
+        current_price: float,
+        market_data: Optional[Dict[str, List[float]]] = None,
     ) -> bool:
         """
         Check and execute partial take profit.
@@ -626,7 +646,7 @@ class MigratedPositionManager:
         Returns:
             True if partial profit was taken
         """
-        side = pos.get("side")
+        side = cast(str, pos.get("side"))
         entry_price = pos.get("entry_price", 0)
         qty = pos.get("qty", 0)
 
@@ -674,7 +694,7 @@ class MigratedPositionManager:
         return False
 
     def _execute_partial_close(
-        self, symbol: str, side: str, partial_qty: float, pos: Dict
+        self, symbol: str, side: str, partial_qty: float, pos: Dict[str, Any]
     ) -> bool:
         """Send a reduce-only partial close; mark partial_taken only on fills.
 
@@ -735,7 +755,7 @@ class MigratedPositionManager:
         )
         return True
 
-    def _close_position(self, symbol: str, pos: Dict, reason: str):
+    def _close_position(self, symbol: str, pos: Dict[str, Any], reason: str) -> None:
         """
         Close a migrated position with a reduce-only order sized from the
         exchange's current position.
@@ -750,7 +770,7 @@ class MigratedPositionManager:
             pos: Position dict
             reason: Exit reason ('trailing_stop', 'trend_reversal', 'manual')
         """
-        side = pos.get("side")
+        side = cast(str, pos.get("side"))
         qty = float(pos.get("qty", 0) or 0)
         if qty <= 0:
             return
@@ -906,7 +926,7 @@ class MigratedPositionManager:
         except Exception as exc:  # noqa: BLE001 - reconciliation is best effort
             logger.warning(f"Reconcile after ambiguous close {key} failed: {exc}")
 
-    def _retry_pending_closes(self, positions: List[Dict]) -> int:
+    def _retry_pending_closes(self, positions: List[Dict[str, Any]]) -> int:
         """Retry pending closes up to MIGRATED_CLOSE_MAX_ATTEMPTS.
 
         Args:
@@ -1025,7 +1045,9 @@ class MigratedPositionManager:
             return None
         return exchange if venue_stops_supported(exchange) else None
 
-    def _venue_stop_state(self, symbol: str, side: str, pos: Dict) -> Dict[str, Any]:
+    def _venue_stop_state(
+        self, symbol: str, side: str, pos: Dict[str, Any]
+    ) -> Dict[str, Any]:
         """Mirror record for a position's venue stop (loaded on first use).
 
         Sources, in order: the in-memory mirror, keys on the position
@@ -1062,7 +1084,7 @@ class MigratedPositionManager:
         if not callable(getter):
             return None
         try:
-            return getter(symbol, str(side).upper())
+            return cast(Optional[Dict[str, Any]], getter(symbol, str(side).upper()))
         except Exception as exc:  # noqa: BLE001 - DB read failure -> unknown
             logger.debug(f"Could not load position row {symbol} {side}: {exc}")
             return None
@@ -1077,7 +1099,7 @@ class MigratedPositionManager:
         except Exception as exc:  # noqa: BLE001 - persistence must not break exits
             logger.warning(f"Could not write venue stop for {symbol} {side}: {exc}")
 
-    def _sync_venue_stop(self, symbol: str, pos: Dict) -> bool:
+    def _sync_venue_stop(self, symbol: str, pos: Dict[str, Any]) -> bool:
         """Mirror the current trailing level onto the venue's stop order.
 
         Skips moves smaller than VENUE_STOP_MIN_MOVE_PCT (so the venue is
@@ -1093,7 +1115,7 @@ class MigratedPositionManager:
         Returns:
             True when the venue stop was moved this call.
         """
-        side = pos.get("side")
+        side = cast(str, pos.get("side"))
         new_stop = self._trailing_stops.get(symbol, {}).get(side)
         if not new_stop:
             return False
@@ -1188,7 +1210,9 @@ class MigratedPositionManager:
         )
         self._write_venue_stop(symbol, side, {"venue_stop_state": STOP_STATE_MISSING})
 
-    def _update_db_position(self, symbol: str, side: str, qty: float, exit_reason: str):
+    def _update_db_position(
+        self, symbol: str, side: str, qty: float, exit_reason: str
+    ) -> None:
         """Update position status in database."""
         try:
             from .database import get_db_connection
@@ -1222,7 +1246,7 @@ class MigratedPositionManager:
             },
         }
 
-    def force_close_all(self, reason: str = "manual"):
+    def force_close_all(self, reason: str = "manual") -> None:
         """Force close all migrated positions."""
         positions = self.risk_manager.get_migrated_positions()
 

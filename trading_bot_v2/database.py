@@ -3825,7 +3825,7 @@ class DatabaseManager:
                 ),
             )
             await db.commit()
-            # last_insert_rowid is not an aiosqlite.Connection API (see report).
+            # last_insert_rowid is not an aiosqlite.Connection API (see PR #7).
             return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
 
     async def save_signal_async(self, signal_data: Dict[str, Any]) -> int:
@@ -3848,7 +3848,7 @@ class DatabaseManager:
                 ),
             )
             await db.commit()
-            # last_insert_rowid is not an aiosqlite.Connection API (see report).
+            # last_insert_rowid is not an aiosqlite.Connection API (see PR #7).
             return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
 
     async def get_recent_trades_async(self, limit: int = 50) -> List[Dict[str, Any]]:

@@ -231,7 +231,7 @@ class FundingSchedule:
             return None
         return observed * self._factor
 
-    def venue_history(self, dt: datetime, limit: int = 8) -> List[Dict]:
+    def venue_history(self, dt: datetime, limit: int = 8) -> List[Dict[str, Any]]:
         """The last ``limit`` VENUE settlements at or before ``dt``.
 
         Built on the venue's own grid, so an hourly venue reports one
@@ -253,7 +253,7 @@ class FundingSchedule:
         step = timedelta(hours=self.venue_interval_hours)
         anchor = dt.replace(minute=0, second=0, microsecond=0)
         anchor -= timedelta(hours=anchor.hour % self.venue_interval_hours)
-        out: List[Dict] = []
+        out: List[Dict[str, Any]] = []
         for k in range(limit - 1, -1, -1):
             t = anchor - step * k
             rate = self.venue_rate_at(t)

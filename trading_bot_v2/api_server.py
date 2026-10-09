@@ -851,7 +851,7 @@ class BotIntegration:
             if self.grid_manager:
                 active_grids = self.grid_manager.get_all_active_grids()
                 if active_grids:
-                    for symbol, grid_data in active_grids.items():  # type: ignore[attr-defined]  # list has no items(); see report
+                    for symbol, grid_data in active_grids.items():  # type: ignore[attr-defined]  # list has no items(); see PR #7
                         grids.append(
                             {
                                 "symbol": symbol,
@@ -1019,7 +1019,7 @@ class BotIntegration:
                         symbol = mapped["symbol"]
                         active_symbols.add(symbol)
 
-                        self.database.upsert_position(mapped)  # type: ignore[attr-defined]  # no such method; see report
+                        self.database.upsert_position(mapped)  # type: ignore[attr-defined]  # no such method; see PR #7
 
                         if symbol in existing_positions:
                             result["updated_count"] += 1
@@ -1036,7 +1036,7 @@ class BotIntegration:
             for symbol in existing_positions:
                 if symbol not in active_symbols:
                     try:
-                        self.database.close_position(symbol)  # type: ignore[call-arg, arg-type]  # side missing; see report
+                        self.database.close_position(symbol)  # type: ignore[call-arg, arg-type]  # side missing; see PR #7
                         result["closed_count"] += 1
                     except Exception as e:
                         result["errors"].append(f"Error closing {symbol}: {e}")
@@ -1415,7 +1415,7 @@ async def get_root() -> HTMLResponse:
         )
 
 
-@app.get("/api/status")
+@app.get("/api/status", response_model=None)
 async def get_status() -> Dict[str, Any]:
     """Get bot status and statistics."""
     try:
@@ -1434,7 +1434,7 @@ async def metrics_endpoint() -> Response:
     )
 
 
-@app.get("/health")
+@app.get("/health", response_model=None)
 async def health_endpoint() -> Dict[str, Any]:
     """Lightweight liveness check for container/orchestrator healthchecks.
 
@@ -1448,7 +1448,7 @@ async def health_endpoint() -> Dict[str, Any]:
     }
 
 
-@app.get("/api/trades")
+@app.get("/api/trades", response_model=None)
 async def get_trades(
     limit: int = 100, exchange: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -1461,7 +1461,7 @@ async def get_trades(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/positions")
+@app.get("/api/positions", response_model=None)
 async def get_positions() -> Dict[str, Any]:
     """Get current positions."""
     try:
@@ -1472,7 +1472,7 @@ async def get_positions() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/orders")
+@app.get("/api/orders", response_model=None)
 async def get_orders() -> Dict[str, Any]:
     """Get open orders (excluding grid orders)."""
     try:
@@ -1507,7 +1507,7 @@ def _cancel_all_orders_compat(
     return client.cancel_all_orders(symbol)
 
 
-@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS)
+@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS, response_model=None)
 async def cancel_all_orders_endpoint(
     symbol: Optional[str] = None, include_stops: bool = False
 ) -> Dict[str, Any]:
@@ -1577,7 +1577,7 @@ async def cancel_all_orders_endpoint(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/grids")
+@app.get("/api/grids", response_model=None)
 async def get_grids() -> Dict[str, Any]:
     """Get active grid trading configurations."""
     try:
@@ -1588,7 +1588,7 @@ async def get_grids() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/activity")
+@app.get("/api/activity", response_model=None)
 async def get_activity(limit: int = 50) -> Dict[str, Any]:
     """Get market activity with regime detection and indicators."""
     try:
@@ -1599,7 +1599,7 @@ async def get_activity(limit: int = 50) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/strategy-health")
+@app.get("/api/strategy-health", response_model=None)
 async def strategy_health() -> Dict[str, Any]:
     """
     Get strategy health report.
@@ -1621,7 +1621,7 @@ async def strategy_health() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/history")
+@app.get("/api/regimes/history", response_model=None)
 async def regime_history(
     symbol: Optional[str] = None, limit: int = 50
 ) -> Dict[str, Any]:
@@ -1638,7 +1638,7 @@ async def regime_history(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/current")
+@app.get("/api/regimes/current", response_model=None)
 async def regimes_current() -> Dict[str, Any]:
     """Get the current confirmed regime per symbol with time-in-regime."""
     try:
@@ -1658,7 +1658,7 @@ async def regimes_current() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/shadow")
+@app.get("/api/regimes/shadow", response_model=None)
 async def regimes_shadow(
     symbol: Optional[str] = None, limit: int = 200
 ) -> Dict[str, Any]:
@@ -1692,7 +1692,7 @@ async def regimes_shadow(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/strategies/regime-attribution")
+@app.get("/api/strategies/regime-attribution", response_model=None)
 async def strategies_regime_attribution(
     exchange: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -1717,7 +1717,7 @@ async def strategies_regime_attribution(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/weights/adaptive")
+@app.get("/api/weights/adaptive", response_model=None)
 async def adaptive_weights_status() -> Dict[str, Any]:
     """Get current adaptive strategy weight multipliers and evidence counts."""
     try:
@@ -1737,7 +1737,7 @@ async def adaptive_weights_status() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/overlays/regime-params")
+@app.get("/api/overlays/regime-params", response_model=None)
 async def regime_param_overlays_status() -> Dict[str, Any]:
     """Get stored per-regime parameter overlays and runtime application state.
 
@@ -1773,7 +1773,7 @@ async def regime_param_overlays_status() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/backup", dependencies=AUTH_DEPS)
+@app.post("/api/backup", dependencies=AUTH_DEPS, response_model=None)
 async def trigger_backup() -> Dict[str, Any]:
     """Trigger an immediate database backup (H5 automated backup)."""
     try:
@@ -1798,7 +1798,7 @@ async def trigger_backup() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/positions/sync", dependencies=AUTH_DEPS)
+@app.post("/api/positions/sync", dependencies=AUTH_DEPS, response_model=None)
 async def sync_positions() -> Dict[str, Any]:
     """Sync positions from exchange to database."""
     try:
@@ -1823,7 +1823,7 @@ async def sync_positions() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/start", dependencies=AUTH_DEPS)
+@app.post("/api/bot/start", dependencies=AUTH_DEPS, response_model=None)
 async def start_bot() -> Dict[str, Any]:
     """Start the trading bot."""
     try:
@@ -1837,7 +1837,7 @@ async def start_bot() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/stop", dependencies=AUTH_DEPS)
+@app.post("/api/bot/stop", dependencies=AUTH_DEPS, response_model=None)
 async def stop_bot() -> Dict[str, Any]:
     """Stop the trading bot."""
     try:
@@ -1856,7 +1856,7 @@ async def stop_bot() -> Dict[str, Any]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/supervisor/status")
+@app.get("/api/supervisor/status", response_model=None)
 async def supervisor_status() -> Dict[str, Any]:
     """
     Return current supervisor pause state.
@@ -1875,7 +1875,7 @@ async def supervisor_status() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS)
+@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS, response_model=None)
 async def supervisor_pause(
     payload: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
@@ -1905,7 +1905,7 @@ async def supervisor_pause(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS)
+@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS, response_model=None)
 async def supervisor_resume() -> Dict[str, Any]:
     """
     Clear the supervisor pause. New entries are immediately allowed again.
@@ -1923,7 +1923,7 @@ async def supervisor_resume() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS)
+@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS, response_model=None)
 async def clear_grid(symbol: str) -> Dict[str, Any]:
     """Clear a grid registration for a symbol (allows new grid creation)."""
     try:
@@ -1978,7 +1978,7 @@ def _recent_signal_events(bot: TradingBot, limit: int = 50) -> List["Event"]:
     return bot.event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=limit)
 
 
-@app.get("/api/signals")
+@app.get("/api/signals", response_model=None)
 async def get_signals() -> Dict[str, Any]:
     """Get recent signals from the event bus (read-only)."""
     try:
@@ -2034,7 +2034,7 @@ async def get_signals() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS)
+@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS, response_model=None)
 async def get_kline_cache_debug() -> Dict[str, Any]:
     """Debug endpoint to check kline cache state."""
     try:
@@ -2082,7 +2082,9 @@ async def get_kline_cache_debug() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS)
+@app.get(
+    "/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS, response_model=None
+)
 async def test_signal_generation(symbol: str) -> Dict[str, Any]:
     """Debug endpoint to test signal generation for a symbol."""
     try:
@@ -2266,7 +2268,7 @@ async def test_signal_generation(symbol: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS)
+@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS, response_model=None)
 async def get_signal_processing_log() -> Dict[str, Any]:
     """Debug endpoint to check signal processing stages - now uses SignalLogger."""
     try:
@@ -2296,7 +2298,7 @@ async def get_signal_processing_log() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/stats")
+@app.get("/api/signals/stats", response_model=None)
 async def get_signal_statistics() -> Dict[str, Any]:
     """Get signal generation and execution statistics."""
     try:
@@ -2310,7 +2312,7 @@ async def get_signal_statistics() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/recent")
+@app.get("/api/signals/recent", response_model=None)
 async def get_recent_signals(count: int = 50) -> Dict[str, Any]:
     """Get recent signals from the signal logger."""
     try:
@@ -2324,7 +2326,7 @@ async def get_recent_signals(count: int = 50) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/by-status/{status}")
+@app.get("/api/signals/by-status/{status}", response_model=None)
 async def get_signals_by_status(status: str) -> Dict[str, Any]:
     """Get signals filtered by status (generated, executed, rejected, failed)."""
     try:
@@ -2341,7 +2343,7 @@ async def get_signals_by_status(status: str) -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/csv-path")
+@app.get("/api/signals/csv-path", response_model=None)
 async def get_signals_csv_path() -> Dict[str, Any]:
     """Get the path to the signals CSV file for easy access."""
     try:
@@ -2362,7 +2364,7 @@ async def get_signals_csv_path() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/gate-policy")
+@app.get("/api/validation/gate-policy", response_model=None)
 async def get_validation_gate_policy() -> Dict[str, Any]:
     """Return the standing P5 validation gate policy parameters.
 
@@ -2390,7 +2392,7 @@ async def get_validation_gate_policy() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/runs")
+@app.get("/api/validation/runs", response_model=None)
 async def get_validation_runs(
     strategy: Optional[str] = None, limit: int = 20
 ) -> Dict[str, Any]:
@@ -2409,7 +2411,7 @@ async def get_validation_runs(
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/latest")
+@app.get("/api/validation/latest", response_model=None)
 async def get_validation_latest() -> Dict[str, Any]:
     """Newest stored validation verdict per strategy (read-only)."""
     try:
@@ -2420,7 +2422,7 @@ async def get_validation_latest() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/key-config", dependencies=AUTH_DEPS)
+@app.get("/api/debug/key-config", dependencies=AUTH_DEPS, response_model=None)
 async def check_key_configuration() -> Dict[str, Any]:
     """Debug endpoint to check the active exchange's key configuration.
 
@@ -2468,7 +2470,7 @@ async def check_key_configuration() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/exchange/select", dependencies=AUTH_DEPS)
+@app.post("/api/exchange/select", dependencies=AUTH_DEPS, response_model=None)
 async def select_exchange(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Switch the configured exchange (dashboard selector).
 
@@ -2540,7 +2542,7 @@ async def select_exchange(payload: Dict[str, Any]) -> Dict[str, Any]:
 # (T1). It placed a real order from an unauthenticated GET. Do not restore it.
 
 
-@app.get("/api/debug/event-history", dependencies=AUTH_DEPS)
+@app.get("/api/debug/event-history", dependencies=AUTH_DEPS, response_model=None)
 async def get_event_history() -> Dict[str, Any]:
     """Debug endpoint to check recent events from the event bus."""
     try:
@@ -2550,7 +2552,7 @@ async def get_event_history() -> Dict[str, Any]:
 
         event_bus = bot.event_bus
         recent_events = []
-        for event in event_bus._event_history[-20:]:  # type: ignore[index, attr-defined]  # deque slice; see report
+        for event in event_bus._event_history[-20:]:  # type: ignore[index, attr-defined]  # deque slice; see PR #7
             recent_events.append(
                 {
                     "id": event.id,
@@ -2581,7 +2583,9 @@ async def get_event_history() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS)
+@app.post(
+    "/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS, response_model=None
+)
 async def trigger_signal_generation() -> Dict[str, Any]:
     """
     Debug endpoint that manually triggers the trading loop's signal generation.
@@ -2793,7 +2797,11 @@ async def trigger_signal_generation() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/test-signal-handler", dependencies=DEBUG_MUTATING_DEPS)
+@app.post(
+    "/api/debug/test-signal-handler",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
 async def test_signal_handler() -> Dict[str, Any]:
     """Debug: manually invoke _handle_signal_generated and trace every step."""
     import traceback
@@ -2891,7 +2899,7 @@ async def test_signal_handler() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS)
+@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS, response_model=None)
 async def get_bot_internals() -> Dict[str, Any]:
     """Debug endpoint to check trading bot internal state."""
     try:
@@ -2946,7 +2954,7 @@ async def get_bot_internals() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS)
+@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS, response_model=None)
 async def get_grid_state() -> Dict[str, Any]:
     """Debug: Check grid lifecycle manager state."""
     try:
@@ -2977,7 +2985,7 @@ async def get_grid_state() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS)
+@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS, response_model=None)
 async def get_balance_raw() -> Dict[str, Any]:
     """Get raw balance data from Pacifica API for debugging."""
     try:
@@ -2998,7 +3006,7 @@ async def get_balance_raw() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS)
+@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS, response_model=None)
 async def get_loop_status() -> Dict[str, Any]:
     """Check trading loop iteration status."""
     try:
@@ -3034,7 +3042,11 @@ async def get_loop_status() -> Dict[str, Any]:
         return {"success": False, "error": str(e)}
 
 
-@app.post("/api/debug/call-actual-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
+@app.post(
+    "/api/debug/call-actual-generate-signals",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
 async def call_actual_generate_signals() -> Dict[str, Any]:
     """Test signal generation with inline implementation to avoid module reload issues."""
     try:
@@ -3145,7 +3157,11 @@ async def call_actual_generate_signals() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/call-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
+@app.post(
+    "/api/debug/call-generate-signals",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
 async def call_generate_signals() -> Dict[str, Any]:
     """Directly call the bot's _generate_and_publish_signals method with tracing."""
     try:
@@ -3289,7 +3305,11 @@ async def call_generate_signals() -> Dict[str, Any]:
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/clear-regime-cache", dependencies=DEBUG_MUTATING_DEPS)
+@app.post(
+    "/api/debug/clear-regime-cache",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
 async def clear_regime_cache(symbol: Optional[str] = None) -> Dict[str, Any]:
     """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
     Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.

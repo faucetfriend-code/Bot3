@@ -21,7 +21,7 @@ Phase 3: Execution Filtering (Safety)
 - Timing (market hours, etc.)
 """
 
-from typing import Dict, Any, List, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, cast
 from enum import Enum
 from dataclasses import dataclass, field
 from loguru import logger
@@ -29,6 +29,10 @@ from loguru import logger
 # Use relative imports from trading_bot_v2 package
 from .models import Signal
 from .config import StrategyType
+
+if TYPE_CHECKING:
+    from .confidence_sizer import ConfidenceSizer
+    from .cooldown_manager import CooldownManager
 
 
 class PhaseResult(Enum):
@@ -65,14 +69,20 @@ class Phase1RegimePermission:
     - Signal confidence (that's Phase 2's output)
     """
 
-    def __init__(self, regime_detector, risk_manager, config, cooldown_manager=None):
+    def __init__(
+        self,
+        regime_detector: Any,
+        risk_manager: Any,
+        config: Any,
+        cooldown_manager: Optional["CooldownManager"] = None,
+    ) -> None:
         self.regime_detector = regime_detector
         self.risk_manager = risk_manager
         self.config = config
         self.cooldown_manager = cooldown_manager
 
         # Regime-to-strategy mapping
-        self.regime_strategy_map = {
+        self.regime_strategy_map: Dict[str, List[StrategyType]] = {
             "TRENDING_STRONG": [
                 StrategyType.TREND_FOLLOWING,
                 StrategyType.MA_CROSSOVER,
@@ -158,12 +168,12 @@ class Phase1RegimePermission:
             details={"current_regime": current_regime},
         )
 
-    def _get_regime_name(self, market_data: Dict) -> str:
+    def _get_regime_name(self, market_data: Dict[str, Any]) -> str:
         """Get regime name from market data."""
         try:
             regime = self.regime_detector.get_regime(market_data)
             if hasattr(regime, "name"):
-                return regime.name
+                return cast(str, regime.name)
             return str(regime)
         except Exception as e:
             logger.warning(f"Could not get regime: {e}")
@@ -209,7 +219,7 @@ class Phase3ExecutionFilter:
     - Signal confidence (handled by sizing, not blocking)
     """
 
-    def __init__(self, risk_manager, client, config):
+    def __init__(self, risk_manager: Any, client: Any, config: Any) -> None:
         self.risk_manager = risk_manager
         self.client = client
         self.config = config
@@ -243,7 +253,9 @@ class Phase3ExecutionFilter:
         # Get current exposure
         current_exposure = 0
         if hasattr(self.risk_manager, "get_total_exposure"):
-            exp_data = self.risk_manager.get_total_exposure(signal.symbol)
+            exp_data = self.risk_manager.get_total_exposure(
+                signal.symbol  # type: ignore[attr-defined]  # bug: no Signal.symbol
+            )
             current_exposure = (
                 exp_data.get("total_exposure", 0) if isinstance(exp_data, dict) else 0
             )
@@ -309,9 +321,9 @@ class SignalPipeline:
         phase1: Phase1RegimePermission,
         strategies: Dict[StrategyType, Any],
         phase3: Phase3ExecutionFilter,
-        position_sizer,
-        confidence_sizer=None,
-    ):
+        position_sizer: Any,
+        confidence_sizer: Optional["ConfidenceSizer"] = None,
+    ) -> None:
         self.phase1 = phase1
         self.strategies = strategies  # {StrategyType: strategy_instance}
         self.phase3 = phase3
@@ -323,7 +335,7 @@ class SignalPipeline:
         symbol: str,
         market_data: Dict[str, Any],
         current_price: float,
-        account_balance: float = None,
+        account_balance: Optional[float] = None,
     ) -> List[Tuple[Signal, float, PhaseDecision]]:
         """
         Process symbol through all phases.
@@ -337,7 +349,7 @@ class SignalPipeline:
         Returns:
             List of (Signal, size, final_decision) tuples for signals that passed
         """
-        results = []
+        results: List[Tuple[Signal, float, PhaseDecision]] = []
         account_balance = account_balance or 10000
 
         for strategy_type, strategy in self.strategies.items():
@@ -411,8 +423,8 @@ class SignalPipeline:
                     account_balance=account_balance,
                 )
                 if isinstance(result, dict):
-                    return result.get("position_size", 0)
-                return result
+                    return cast(float, result.get("position_size", 0))
+                return cast(float, result)
         except Exception as e:
             logger.warning(f"Position sizer error: {e}")
 

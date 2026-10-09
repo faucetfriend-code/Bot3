@@ -6,7 +6,7 @@ Used by both the API server and trading bot components.
 """
 
 import time
-from typing import Dict, List
+from typing import Any, Callable, Dict, List
 from datetime import datetime
 from .database import get_db_connection
 from loguru import logger
@@ -15,8 +15,10 @@ from loguru import logger
 class BalanceHistoryManager:
     """Manage balance history data for bot decision making and UI."""
 
-    def __init__(self, db_connection_func=None):
-        self.get_db_connection = db_connection_func or get_db_connection
+    def __init__(self, db_connection_func: Callable[[], Any] | None = None) -> None:
+        self.get_db_connection: Callable[[], Any] = (
+            db_connection_func or get_db_connection
+        )
 
     def get_current_balance(self, account_id: str) -> Dict[str, float]:
         """Get latest balance information."""
@@ -52,7 +54,9 @@ class BalanceHistoryManager:
             logger.error(f"Failed to get current balance: {e}")
             return {}
 
-    def get_balance_history(self, account_id: str, days: int = 30) -> List[Dict]:
+    def get_balance_history(
+        self, account_id: str, days: int = 30
+    ) -> List[Dict[str, Any]]:
         """Get balance history for analysis."""
         try:
             conn = self.get_db_connection()
@@ -89,7 +93,9 @@ class BalanceHistoryManager:
             logger.error(f"Failed to get balance history: {e}")
             return []
 
-    def calculate_daily_pnl(self, account_id: str, days: int = 30) -> List[Dict]:
+    def calculate_daily_pnl(
+        self, account_id: str, days: int = 30
+    ) -> List[Dict[str, Any]]:
         """Calculate daily P&L from balance changes."""
         balance_history = self.get_balance_history(account_id, days)
 

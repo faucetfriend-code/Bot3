@@ -17,7 +17,7 @@ configurable mapping, and a confidence score governs fallback behaviour.
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 from loguru import logger
@@ -25,6 +25,9 @@ from loguru import logger
 from ..market_regime import MarketRegime
 from .feature_engineering import FeatureExtractor
 from .model_manager import ModelManager
+
+if TYPE_CHECKING:
+    from ..market_regime import MarketRegimeDetector
 
 
 # ---------------------------------------------------------------------------
@@ -204,15 +207,15 @@ class GMMRegimeDetector:
         self._feature_extractor = FeatureExtractor()
         self._model_manager = ModelManager()
 
-        # Lazily loaded trained model
-        self._gmm_model = None
+        # Lazily loaded trained model (sklearn GaussianMixture, untyped)
+        self._gmm_model: Any = None
         self._cluster_to_latent: Dict[int, _LatentRegime] = {}
         self._model_version: Optional[str] = None
         self._feature_means: Optional[np.ndarray] = None
         self._feature_stds: Optional[np.ndarray] = None
 
         # ADX fallback detector (imported lazily to avoid circular deps)
-        self._adx_detector = None
+        self._adx_detector: Optional["MarketRegimeDetector"] = None
 
         logger.info(
             f"GMMRegimeDetector initialised: n_regimes={self.config.n_regimes}, "

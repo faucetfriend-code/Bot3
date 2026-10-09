@@ -835,7 +835,7 @@ class StrategyManager:
             f"{list(self.strategies.keys())}"
         )
 
-    def set_sim_time(self, dt: datetime) -> None:
+    def set_sim_time(self, dt: Optional[datetime]) -> None:
         """
         Set simulated current time for backtesting.
 

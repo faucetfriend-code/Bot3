@@ -20,7 +20,7 @@ Usage:
 
 import math
 from datetime import datetime
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, cast
 
 from .engine import BacktestEngine
 from .performance import BacktestResult
@@ -433,4 +433,4 @@ class OptimizationAdapter:
         if study.best_trial is None:
             return {}
 
-        return study.best_trial.params
+        return cast(Dict[str, Any], study.best_trial.params)

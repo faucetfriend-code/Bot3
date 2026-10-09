@@ -53,7 +53,10 @@ import hashlib
 import json
 import os
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
+
+if TYPE_CHECKING:
+    from ..database import DatabaseManager
 
 #: Prefix marking a row as reconstructed from an artifact rather than
 #: written by the run itself. Greppable, and it keeps backfilled rows
@@ -142,9 +145,12 @@ def fold_sources(payload: Dict[str, Any], path: str) -> List[str]:
     return out
 
 
-def _existing_sources(db) -> set:
+def _existing_sources(db: "DatabaseManager") -> set[str]:
     """Every source string already in the registry."""
-    return {row.get("source") for row in db.get_trial_registry() if row.get("source")}
+    return cast(
+        set[str],
+        {row.get("source") for row in db.get_trial_registry() if row.get("source")},
+    )
 
 
 def is_intermediate(path: str) -> bool:

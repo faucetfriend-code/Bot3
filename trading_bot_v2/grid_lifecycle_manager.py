@@ -1106,7 +1106,7 @@ class GridLifecycleManager:
         # Optionally persist to database
         if self.db:
             try:
-                # update_grid_state is not defined on DatabaseManager (see report).
+                # update_grid_state is not defined on DatabaseManager (see PR #7).
                 self.db.update_grid_state(  # type: ignore[attr-defined]
                     symbol, "closed", reason
                 )
@@ -2361,7 +2361,7 @@ class GridLifecycleManager:
         """
         try:
             # Get open orders for symbol
-            # get_open_orders is not defined on PacificaClient (see report).
+            # get_open_orders is not defined on PacificaClient (see PR #7).
             orders = self.client.get_open_orders(  # type: ignore[attr-defined]
                 market=symbol
             )

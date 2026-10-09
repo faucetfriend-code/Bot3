@@ -924,7 +924,7 @@ def _histogram(ordered: List[float]) -> Dict[str, List[float]]:
             "counts": [len(ordered)],
         }
     width = (high - low) / HISTOGRAM_BINS
-    counts = [0] * HISTOGRAM_BINS
+    counts: List[float] = [0] * HISTOGRAM_BINS
     for value in ordered:
         index = int((value - low) / width)
         if index >= HISTOGRAM_BINS:

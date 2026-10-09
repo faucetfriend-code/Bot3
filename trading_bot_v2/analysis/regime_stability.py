@@ -19,7 +19,7 @@ import argparse
 import os
 import statistics
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, cast
 
 from trading_bot_v2.backtesting.data_loader import BacktestDataLoader
 from trading_bot_v2.market_regime import MarketRegimeDetector
@@ -94,7 +94,7 @@ def run_analysis(symbol: str, start: str, end: str, data_dir: str) -> Dict[str, 
             "volume": candles["volume"][lo : i + 1],
         }
         bar_time = timestamps[i]
-        detector._clock = lambda t=bar_time: t
+        detector._clock = cast(Callable[[], datetime], lambda t=bar_time: t)
         regime = detector.detect_regime_cached(symbol, window)
 
         bar_regimes.append(regime.value)

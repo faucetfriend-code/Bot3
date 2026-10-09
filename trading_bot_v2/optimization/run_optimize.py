@@ -40,7 +40,7 @@ Usage:
 import argparse
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
@@ -53,6 +53,9 @@ from .optuna_runner import (
     OBJECTIVE_ALIASES,
 )
 from .search_spaces import list_strategies
+
+if TYPE_CHECKING:
+    import optuna
 
 
 def parse_args() -> argparse.Namespace:
@@ -348,7 +351,9 @@ def setup_logging(verbose: bool = False, quiet: bool = False) -> None:
         logger.add(sys.stderr, level="INFO")
 
 
-def get_best_trial_or_none(study):
+def get_best_trial_or_none(
+    study: "optuna.Study",
+) -> Optional["optuna.trial.FrozenTrial"]:
     """Return study.best_trial, or None when no trial completed.
 
     Optuna raises ValueError from best_trial when every trial was
@@ -361,7 +366,7 @@ def get_best_trial_or_none(study):
 
 
 def save_overlay_from_study(
-    study,
+    study: "optuna.Study",
     strategy: str,
     regime: str,
     objective: str,
@@ -387,7 +392,8 @@ def save_overlay_from_study(
         True when an overlay was saved, False when the study had no
         valid best trial or the overlay was refused as losing.
     """
-    from ..database import DatabaseManager, LosingOverlayRefused
+    from ..database import DatabaseManager
+    from ..overlay_quality import LosingOverlayRefused
     from ..regime_param_overlay import normalize_regime_value
 
     best_trial = get_best_trial_or_none(study)
@@ -424,7 +430,7 @@ def save_overlay_from_study(
     return True
 
 
-def deepest_trial(study):
+def deepest_trial(study: "optuna.Study") -> Optional["optuna.trial.FrozenTrial"]:
     """Return the trial that got furthest down the signal funnel.
 
     Used to explain a study where nothing traded: the trial with the
@@ -437,7 +443,7 @@ def deepest_trial(study):
     Returns:
         The deepest trial, or None when no trial recorded a funnel.
     """
-    best = None
+    best: Optional["optuna.trial.FrozenTrial"] = None
     best_progress = -1.0
     for trial in getattr(study, "trials", []) or []:
         attrs = getattr(trial, "user_attrs", None) or {}
@@ -453,7 +459,7 @@ def deepest_trial(study):
     return best
 
 
-def trial_funnel_payload(trial) -> dict:
+def trial_funnel_payload(trial: "optuna.trial.FrozenTrial") -> Dict[str, Any]:
     """Rebuild a funnel report payload from a trial's user_attrs.
 
     Args:
@@ -482,7 +488,7 @@ def trial_funnel_payload(trial) -> dict:
     }
 
 
-def print_per_symbol_table(trial) -> None:
+def print_per_symbol_table(trial: "optuna.trial.FrozenTrial") -> None:
     """Print a trial's per-symbol breakdown, when it has one.
 
     Aggregating a sweep to a single number hides the failure mode this
@@ -534,7 +540,9 @@ def print_per_symbol_table(trial) -> None:
         )
 
 
-def print_results_summary(study, strategy: str, top_n: int = 10) -> None:
+def print_results_summary(
+    study: "optuna.Study", strategy: str, top_n: int = 10
+) -> None:
     """Print a summary of optimization results."""
     from ..diagnostics.report import print_funnel_report
 
@@ -607,7 +615,7 @@ def print_results_summary(study, strategy: str, top_n: int = 10) -> None:
     print(f"{'=' * 60}\n")
 
 
-def print_studies_list(studies: list) -> None:
+def print_studies_list(studies: List[Dict[str, Any]]) -> None:
     """Print list of completed studies."""
     print(f"\n{'=' * 60}")
     print("COMPLETED OPTIMIZATION STUDIES")
@@ -735,7 +743,9 @@ def run_single_strategy(args: argparse.Namespace, strategy: str) -> Optional[obj
             )
             print_results_summary(study, strategy, args.top)
             if save_overlay:
-                save_overlay_from_study(study, strategy, regime, args.objective)
+                save_overlay_from_study(
+                    study, strategy, cast(str, regime), args.objective
+                )
             if args.export:
                 export_path = args.export
                 if not export_path.endswith(".csv"):
@@ -766,7 +776,7 @@ def run_single_strategy(args: argparse.Namespace, strategy: str) -> Optional[obj
 
         # Persist best params as the active overlay for (strategy, regime)
         if save_overlay:
-            save_overlay_from_study(study, strategy, regime, args.objective)
+            save_overlay_from_study(study, strategy, cast(str, regime), args.objective)
 
         # Export if requested
         if args.export:
@@ -788,9 +798,9 @@ def run_single_strategy(args: argparse.Namespace, strategy: str) -> Optional[obj
         return None
 
 
-def run_all_strategies(args: argparse.Namespace) -> dict:
+def run_all_strategies(args: argparse.Namespace) -> Dict[str, Optional[object]]:
     """Run optimization for all strategies."""
-    results = {}
+    results: Dict[str, Optional[object]] = {}
     strategies = list_strategies()
 
     print(f"\nOptimizing {len(strategies)} strategies...")
@@ -813,8 +823,13 @@ def run_all_strategies(args: argparse.Namespace) -> dict:
             gap = getattr(study, "overfit_gap", None)
             gap_s = "n/a" if gap is None else f"{gap:.4f}"
             print(f"  {strategy:<25} OOS: {oos:.4f}  (IS-OOS gap {gap_s})")
-        elif study is not None and get_best_trial_or_none(study) is not None:
-            print(f"  {strategy:<25} Best: {study.best_value:.4f}")
+        elif (
+            study is not None
+            and get_best_trial_or_none(cast("optuna.Study", study)) is not None
+        ):
+            print(
+                f"  {strategy:<25} Best: {cast('optuna.Study', study).best_value:.4f}"
+            )
         else:
             print(f"  {strategy:<25} Failed")
 

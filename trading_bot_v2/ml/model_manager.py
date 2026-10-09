@@ -268,7 +268,9 @@ class ModelManager:
     # Load
     # ------------------------------------------------------------------
 
-    def load_model(self, version: Optional[str] = None) -> Optional[Tuple]:
+    def load_model(
+        self, version: Optional[str] = None
+    ) -> Optional[Tuple[Any, Any, Dict[int, Any], Any, Any, str]]:
         """Load a persisted GMM model.
 
         Args:

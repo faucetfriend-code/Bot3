@@ -63,12 +63,15 @@ import signal
 import sys
 import time
 from datetime import date, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
 from .gate import GateVerdict, evaluate_strategy_gate
 from .statistics import closed_trade_returns
+
+if TYPE_CHECKING:
+    from ..database import DatabaseManager
 
 # Static snake_case-strategy -> (ENABLE_* env var, default) map.
 # Mirrors StrategyManager's constructor flags WITHOUT constructing the
@@ -1007,7 +1010,7 @@ def _checks_payload(verdict: Optional[GateVerdict]) -> List[Dict[str, Any]]:
     ]
 
 
-def persist_result(db: Any, result: Dict[str, Any]) -> Optional[int]:
+def persist_result(db: "DatabaseManager", result: Dict[str, Any]) -> Optional[int]:
     """Store one strategy validation result in validation_runs.
 
     Args:

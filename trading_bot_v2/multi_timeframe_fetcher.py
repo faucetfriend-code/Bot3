@@ -27,6 +27,9 @@ from .data_validation import DataValidator
 class KlineDataSource(Protocol):
     # Typing-only view of the WebSocket client surface this fetcher reads
     # (PacificaWebSocketClient and BlofinWebSocketClient both provide it).
+    # The cache attribute is read by the api_server debug routes.
+    _kline_cache: Dict[str, List[Dict[str, Any]]]
+
     def get_kline_data(
         self, symbol: str, interval: str
     ) -> Optional[List[Dict[str, Any]]]: ...

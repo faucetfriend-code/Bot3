@@ -25,7 +25,8 @@ Usage:
 import argparse
 import os
 import statistics
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, cast
 
 import numpy as np
 
@@ -42,7 +43,9 @@ from trading_bot_v2.ml.hmm_regime import HMMRegimeDetector
 from trading_bot_v2.ml.model_manager import read_latest_model_type
 
 
-def _load_ml_detector(model: Optional[str]):
+def _load_ml_detector(
+    model: Optional[str],
+) -> tuple[HMMRegimeDetector | GMMRegimeDetector, str]:
     """Load the requested (or latest) trained ML detector.
 
     Args:
@@ -177,7 +180,7 @@ def run_shadow_report(
             "volume": candles["volume"][lo : i + 1],
         }
         bar_time = timestamps[i]
-        adx_detector._clock = lambda t=bar_time: t
+        adx_detector._clock = cast(Callable[[], datetime], lambda t=bar_time: t)
         adx_regime = adx_detector.detect_regime_cached(symbol, window)
 
         # ML classification from the precomputed feature prefix
