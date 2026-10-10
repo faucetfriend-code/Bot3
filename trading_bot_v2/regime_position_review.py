@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from loguru import logger
 
 from .market_regime import MarketRegime
+from .price_lookup import PriceLookup, fetch_current_price
 
 if TYPE_CHECKING:
     from .database import DatabaseManager
@@ -69,6 +70,9 @@ class RegimePositionReviewer:
         multi_tf_fetcher: Optional MultiTimeframeFetcher for 4h trend data.
         enabled: Override for ENABLE_REGIME_POSITION_REVIEW (default
             env/true).
+        price_lookup: Optional ticker source (symbol -> ticker dict).
+            TradingBot injects its WebSocket-with-REST-fallback lookup;
+            without it the client itself is asked (see price_lookup.py).
     """
 
     # Overlay / time-gated strategies run in ALL regimes and are never
@@ -92,9 +96,11 @@ class RegimePositionReviewer:
         migrated_position_manager: "MigratedPositionManager",
         multi_tf_fetcher: Optional["MultiTimeframeFetcher"] = None,
         enabled: Optional[bool] = None,
+        price_lookup: Optional[PriceLookup] = None,
     ) -> None:
         self.db = db
         self.client = client
+        self._price_lookup = price_lookup
         self.regime_detector = regime_detector
         self.migrated_position_manager = migrated_position_manager
         self.multi_tf_fetcher = multi_tf_fetcher
@@ -336,14 +342,7 @@ class RegimePositionReviewer:
     def _get_current_price(self, symbol: str) -> Optional[float]:
         """Fetch the current price for a symbol (None on failure)."""
         try:
-            ticker = self.client.get_ticker(symbol)
-            if ticker:
-                price = float(
-                    ticker.get("last")
-                    or ticker.get("price")
-                    or ticker.get("mark_price", 0)
-                )
-                return price if price > 0 else None
+            return fetch_current_price(self.client, symbol, self._price_lookup)
         except Exception as e:
             logger.warning(f"Regime review: could not get price for {symbol}: {e}")
         return None
