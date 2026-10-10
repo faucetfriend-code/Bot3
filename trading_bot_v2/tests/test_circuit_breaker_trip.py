@@ -15,6 +15,9 @@ Covered:
 * reduce-only closes, stop installs and inventory-closing grid legs stay
   allowed;
 * a trip is idempotent (one log / event / persisted record per trip);
+* a trip cancels resting entry orders (grid levels) on every venue shape,
+  keeps protective and inventory-closing orders, retries failed cancels on
+  later iterations and stops calling the venue once nothing is left;
 * the manual reset clears it and entries resume;
 * neither a loop restart, a process restart nor a supervisor resume
   clears it;
@@ -533,3 +536,319 @@ class TestResetControl:
             response = client.post("/api/bot/start", headers={"X-Api-Token": TOKEN})
         assert response.status_code == 200
         assert integration.trading_bot._circuit_breaker_triggered is True
+
+
+# ----------------------------------------------------------------------
+# Resting entry orders are cancelled on a trip
+# ----------------------------------------------------------------------
+
+#: Pacifica open-order rows: wire sides bid/ask, integer ids, string amounts.
+PACIFICA_ORDERS = [
+    {"order_id": 1, "symbol": "BTC", "side": "bid", "price": "990", "amount": "0.5"},
+    {"order_id": 2, "symbol": "BTC", "side": "ask", "price": "1010", "amount": "0.5"},
+    {"order_id": 3, "symbol": "BTC", "side": "ask", "price": "1020", "amount": "0.5"},
+    {
+        "order_id": 9,
+        "symbol": "BTC",
+        "side": "ask",
+        "order_type": "stop_market",
+        "reduce_only": True,
+        "stop_price": "900",
+    },
+]
+
+#: Blofin open-order rows: buy/sell, string ids, float quantity, raw payload.
+BLOFIN_ORDERS = [
+    {
+        "order_id": "b1",
+        "symbol": "ETH",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 1990.0,
+        "quantity": 0.2,
+        "raw": {"reduceOnly": "false"},
+    },
+    {
+        "order_id": "b2",
+        "symbol": "ETH",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 1980.0,
+        "quantity": 0.2,
+        "raw": {"reduceOnly": "false"},
+    },
+    {
+        "order_id": "s1",
+        "symbol": "ETH",
+        "side": "sell",
+        "order_type": "limit",
+        "price": 2010.0,
+        "quantity": 0.2,
+        "raw": {"reduceOnly": "false"},
+    },
+    {
+        "order_id": "tp",
+        "symbol": "ETH",
+        "side": "buy",
+        "order_type": "limit",
+        "price": 1900.0,
+        "quantity": 0.2,
+        "raw": {"reduceOnly": "true"},
+    },
+]
+
+
+def _sweep_manager(orders, positions=None) -> GridLifecycleManager:
+    """A grid manager over a mocked client reporting ``orders`` / ``positions``."""
+    manager = GridLifecycleManager(client=MagicMock(), risk_manager=MagicMock())
+    manager.client.get_orders.return_value = orders
+    manager.client.get_positions.return_value = positions or []
+    manager.client.cancel_order.return_value = {"success": True}
+    return manager
+
+
+def _cancelled_ids(manager: GridLifecycleManager) -> list:
+    """Order ids passed to cancel_order, in call order."""
+    return [call.args[1] for call in manager.client.cancel_order.call_args_list]
+
+
+class TestEntryOrderCancellation:
+    """GridLifecycleManager.cancel_entry_orders: what goes and what stays."""
+
+    def test_flat_pacifica_book_loses_every_grid_level_but_not_the_stop(self):
+        manager = _sweep_manager(PACIFICA_ORDERS)
+        result = manager.cancel_entry_orders()
+        assert sorted(_cancelled_ids(manager)) == ["1", "2", "3"]
+        assert result == {"cancelled": 3, "failed": 0, "kept": 0}
+
+    def test_long_inventory_keeps_the_nearest_sell_that_closes_it(self):
+        long_btc = [{"symbol": "BTC", "side": "bid", "amount": "0.5"}]
+        manager = _sweep_manager(PACIFICA_ORDERS, long_btc)
+        result = manager.cancel_entry_orders()
+        # Buy 1 adds to the long; sell 3 would open a short once sell 2
+        # has sold the 0.5 held.  Sell 2 only closes inventory: kept.
+        assert sorted(_cancelled_ids(manager)) == ["1", "3"]
+        assert result == {"cancelled": 2, "failed": 0, "kept": 1}
+
+    def test_short_inventory_on_blofin_keeps_the_nearest_buy(self):
+        short_eth = [{"symbol": "ETH", "side": "short", "quantity": 0.2}]
+        manager = _sweep_manager(BLOFIN_ORDERS, short_eth)
+        result = manager.cancel_entry_orders()
+        # b1 (nearest buy) closes the 0.2 short; b2 would flip long; s1
+        # adds to the short; "tp" is reduce-only and never touched.
+        assert sorted(_cancelled_ids(manager)) == ["b2", "s1"]
+        assert result == {"cancelled": 2, "failed": 0, "kept": 1}
+
+    def test_flat_blofin_book_keeps_only_the_reduce_only_order(self):
+        manager = _sweep_manager(BLOFIN_ORDERS)
+        manager.cancel_entry_orders()
+        assert sorted(_cancelled_ids(manager)) == ["b1", "b2", "s1"]
+
+    def test_closing_order_larger_than_the_inventory_is_cancelled(self):
+        long_btc = [{"symbol": "BTC", "side": "long", "quantity": 0.3}]
+        manager = _sweep_manager(PACIFICA_ORDERS, long_btc)
+        manager.cancel_entry_orders()
+        assert sorted(_cancelled_ids(manager)) == ["1", "2", "3"]
+
+    def test_cancel_is_sent_per_symbol_across_venues_shapes(self):
+        manager = _sweep_manager(PACIFICA_ORDERS + BLOFIN_ORDERS)
+        manager.cancel_entry_orders()
+        symbols = {c.args[0] for c in manager.client.cancel_order.call_args_list}
+        assert symbols == {"BTC", "ETH"}
+        assert manager.client.cancel_order.call_count == 6
+
+    def test_one_failing_cancel_does_not_stop_the_others(self):
+        manager = _sweep_manager(PACIFICA_ORDERS)
+
+        def cancel(symbol, order_id):
+            if order_id == "1":
+                raise RuntimeError("venue timeout")
+            if order_id == "2":
+                return {"success": False, "error": "rejected"}
+            return {"success": True}
+
+        manager.client.cancel_order.side_effect = cancel
+        result = manager.cancel_entry_orders()
+        assert sorted(_cancelled_ids(manager)) == ["1", "2", "3"]
+        assert result == {"cancelled": 1, "failed": 2, "kept": 0}
+
+    def test_unreadable_order_book_counts_as_failing_and_cancels_nothing(self):
+        manager = _sweep_manager(PACIFICA_ORDERS)
+        manager.client.get_orders.side_effect = RuntimeError("down")
+        assert manager.cancel_entry_orders() == {"cancelled": 0, "failed": 1, "kept": 0}
+        manager.client.cancel_order.assert_not_called()
+
+    def test_unreadable_positions_cancel_nothing_rather_than_guess(self):
+        manager = _sweep_manager(PACIFICA_ORDERS)
+        manager.client.get_positions.side_effect = RuntimeError("down")
+        assert manager.cancel_entry_orders()["failed"] == 1
+        manager.client.cancel_order.assert_not_called()
+
+    def test_cancelled_levels_leave_the_grid_bookkeeping(self):
+        manager = _sweep_manager(PACIFICA_ORDERS)
+        manager._grids["BTC"] = {
+            "state": GridState.ACTIVE,
+            "grid_spacing": 10.0,
+            "order_ids": {"1", "2", "3"},
+        }
+        manager.client.cancel_order.side_effect = lambda s, oid: {"success": oid != "3"}
+        manager.cancel_entry_orders()
+        assert manager._grids["BTC"]["order_ids"] == {"3"}
+        # The grid stays ACTIVE: its emergency stop still guards inventory
+        # and it keeps blocking a duplicate grid until it is cleared.
+        assert manager.has_active_grid("BTC") is True
+
+    def test_empty_book_makes_no_cancel_calls(self):
+        manager = _sweep_manager([])
+        assert manager.cancel_entry_orders() == {"cancelled": 0, "failed": 0, "kept": 0}
+        manager.client.cancel_order.assert_not_called()
+
+
+def _sweep_bot(*results) -> TradingBot:
+    """A shell whose grid manager returns ``results`` from successive sweeps."""
+    bot = _bot(positions=[LOSING_LONG])
+    bot.grid_lifecycle = MagicMock()
+    bot.grid_lifecycle.cancel_entry_orders.side_effect = list(results)
+    return bot
+
+
+CLEAN = {"cancelled": 0, "failed": 0, "kept": 0}
+
+
+class TestTripCancelsRestingEntries:
+    """The bot sweeps on a trip and keeps sweeping until nothing is left."""
+
+    def test_trip_sweeps_immediately_and_reports_the_count(self):
+        bot = _sweep_bot({"cancelled": 4, "failed": 0, "kept": 0})
+        bot._monitor_risk()
+        bot.grid_lifecycle.cancel_entry_orders.assert_called_once()
+        status = bot.get_status()
+        assert status["circuit_breaker_orders_cancelled"] == 4
+        assert status["circuit_breaker_cancels_failing"] == 0
+
+    def test_failed_cancel_is_retried_until_clean_then_calls_stop(self):
+        bot = _sweep_bot(
+            {"cancelled": 3, "failed": 1, "kept": 0},
+            {"cancelled": 0, "failed": 1, "kept": 0},
+            {"cancelled": 1, "failed": 0, "kept": 0},
+        )
+        bot._monitor_risk()
+        assert bot.get_status()["circuit_breaker_cancels_failing"] == 1
+        bot._sweep_breaker_entry_orders()
+        assert bot.get_status()["circuit_breaker_cancels_failing"] == 1
+        bot._sweep_breaker_entry_orders()
+        status = bot.get_status()
+        assert status["circuit_breaker_orders_cancelled"] == 4
+        assert status["circuit_breaker_cancels_failing"] == 0
+        for _ in range(5):
+            bot._sweep_breaker_entry_orders()
+            bot._monitor_risk()
+        assert bot.grid_lifecycle.cancel_entry_orders.call_count == 3
+
+    def test_kept_closing_orders_are_rechecked_each_iteration(self):
+        """A kept sell becomes an entry if a stop closes the inventory."""
+        bot = _sweep_bot({"cancelled": 2, "failed": 0, "kept": 1}, CLEAN)
+        bot._monitor_risk()
+        bot._sweep_breaker_entry_orders()
+        bot._sweep_breaker_entry_orders()
+        assert bot.grid_lifecycle.cancel_entry_orders.call_count == 2
+
+    def test_sweep_error_does_not_escape_the_trip_or_lose_the_event(self):
+        bot = _sweep_bot(RuntimeError("boom"), CLEAN)
+        events = []
+        bot.hub_publish_func = events.append
+        bot._monitor_risk()
+        assert bot._circuit_breaker_triggered is True
+        assert [e["type"] for e in events] == ["circuit_breaker"]
+        assert bot.get_status()["circuit_breaker_cancels_failing"] == 1
+        bot._sweep_breaker_entry_orders()
+        assert bot.get_status()["circuit_breaker_cancels_failing"] == 0
+
+    def test_loop_keeps_running_and_retries_while_cancels_fail(self, monkeypatch):
+        bot = TestLoopKeepsRunning()._loop_bot(monkeypatch, iterations=3)
+        bot.grid_lifecycle = MagicMock()
+        bot.grid_lifecycle.cancel_entry_orders.side_effect = RuntimeError("boom")
+        bot._trading_loop()
+        assert bot._loop_iteration == 3
+        assert bot._enforce_local_stops.call_count == 3
+        # once from the trip (end of iteration 1), then iterations 2 and 3
+        assert bot.grid_lifecycle.cancel_entry_orders.call_count == 3
+
+    def test_no_sweep_while_not_tripped(self):
+        bot = _sweep_bot(CLEAN)
+        bot.client.get_positions.return_value = []
+        bot._monitor_risk()
+        bot._sweep_breaker_entry_orders()
+        bot.grid_lifecycle.cancel_entry_orders.assert_not_called()
+
+    def test_restored_trip_sweeps_on_the_first_iteration_after_restart(self):
+        _tripped_bot()
+        restarted = _sweep_bot({"cancelled": 2, "failed": 0, "kept": 0})
+        restarted._load_circuit_breaker_state()
+        restarted.grid_lifecycle.cancel_entry_orders.assert_not_called()
+        restarted._sweep_breaker_entry_orders()
+        restarted._sweep_breaker_entry_orders()
+        restarted.grid_lifecycle.cancel_entry_orders.assert_called_once()
+        assert restarted.get_status()["circuit_breaker_orders_cancelled"] == 2
+
+    def test_reset_stops_the_sweep_and_clears_the_counters(self):
+        bot = _sweep_bot({"cancelled": 3, "failed": 1, "kept": 0})
+        bot._monitor_risk()
+        bot.client.get_positions.return_value = []
+        previous = bot.reset_circuit_breaker()
+        assert previous["orders_cancelled"] == 3
+        bot._sweep_breaker_entry_orders()
+        bot.grid_lifecycle.cancel_entry_orders.assert_called_once()
+        status = bot.get_status()
+        assert status["circuit_breaker_orders_cancelled"] == 0
+        assert status["circuit_breaker_cancels_failing"] == 0
+
+    def test_dashboard_status_carries_the_cancel_counters(self):
+        integration = api_server.BotIntegration()
+        integration._initialized = True
+        integration.trading_bot = _sweep_bot({"cancelled": 3, "failed": 2, "kept": 0})
+        integration.trading_bot._monitor_risk()
+        status = integration.get_status()
+        assert status["circuit_breaker_orders_cancelled"] == 3
+        assert status["circuit_breaker_cancels_failing"] == 2
+
+
+class TestGridAfterSweepAndReset:
+    """A stripped grid is not re-armed while tripped and resumes normally."""
+
+    def _stripped_manager(self, gate) -> GridLifecycleManager:
+        manager = _sweep_manager(PACIFICA_ORDERS)
+        manager._grids["BTC"] = {
+            "state": GridState.ACTIVE,
+            "grid_spacing": 10.0,
+            "order_ids": {"1", "2", "3"},
+        }
+        manager._metrics["BTC"] = GridMetrics()
+        manager.entry_gate = gate
+        manager.cancel_entry_orders()
+        manager.client.place_order.return_value = {"id": "c-1"}
+        return manager
+
+    def test_cancelled_levels_are_not_replenished_while_tripped(self):
+        manager = self._stripped_manager(lambda: "tripped")
+        assert manager._grids["BTC"]["order_ids"] == set()
+        manager._replenish_order("BTC", "SELL", 1_000.0, 0.5)
+        manager.client.place_order.assert_not_called()
+
+    def test_replenish_works_again_after_reset(self):
+        manager = self._stripped_manager(lambda: None)
+        manager._replenish_order("BTC", "SELL", 1_000.0, 0.5)
+        manager.client.place_order.assert_called_once()
+
+    def test_new_grid_signal_is_refused_until_the_stripped_grid_is_cleared(self):
+        manager = self._stripped_manager(lambda: None)
+        bot = _bot()
+        bot.grid_lifecycle = manager
+        bot._place_grid_orders = MagicMock()
+        signal = _signal(StrategyType.GRID_TRADING)
+        bot._execute_grid_signal_coordinated(signal, {"allocated_amount": 100.0})
+        bot._place_grid_orders.assert_not_called()
+        manager.clear_grid("BTC")
+        bot._place_grid_orders.return_value = {"success": False, "error": "x"}
+        bot._execute_grid_signal_coordinated(signal, {"allocated_amount": 100.0})
+        bot._place_grid_orders.assert_called_once()
