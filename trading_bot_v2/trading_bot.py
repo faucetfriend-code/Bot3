@@ -257,6 +257,11 @@ class TradingBot:
         self._breaker_sweep_pending = False
         self._breaker_orders_cancelled = 0
         self._breaker_cancel_failures = 0
+        # Set when the trip was restored from the state file (the grids'
+        # in-memory sweep marks are gone); last reset's grid clear report.
+        self._breaker_restored = False
+        self._breaker_grids_cleared: List[str] = []
+        self._breaker_grids_not_cleared: Dict[str, str] = {}
         self._circuit_breaker_loss_pct = (
             config.circuit_breaker_loss_pct
         )  # From config (default 10%)
@@ -3579,6 +3584,7 @@ class TradingBot:
         # Entry orders may still be resting from before the restart; the
         # first loop iteration sweeps them.
         self._breaker_sweep_pending = True
+        self._breaker_restored = True
         logging.critical(
             f"CIRCUIT BREAKER still tripped from {self._circuit_breaker_tripped_at} "
             f"({self._circuit_breaker_reason}) - new entries blocked until "
@@ -3603,6 +3609,8 @@ class TradingBot:
         self._circuit_breaker_triggered = True
         self._circuit_breaker_tripped_at = datetime.now(timezone.utc).isoformat()
         self._circuit_breaker_reason = reason
+        self._breaker_grids_cleared = []
+        self._breaker_grids_not_cleared = {}
         logging.critical(
             f"CIRCUIT BREAKER TRIGGERED: {reason} - new entries blocked "
             f"until manual reset; open positions are still managed"
@@ -3669,6 +3677,46 @@ class TradingBot:
                 f"{failed} failing (retried next loop), {kept} closing kept"
             )
 
+    def _clear_breaker_stripped_grids(self, restored: bool) -> Dict[str, Any]:
+        """Clear the grid state the breaker sweep stripped; never raises.
+
+        Delegates to ``GridLifecycleManager.clear_breaker_stripped_grids``
+        (which reuses ``clear_grid``) and stores the outcome for status.
+
+        Args:
+            restored: True when the trip came from the state file after a
+                restart, so no grid carries an in-memory sweep mark.
+
+        Returns:
+            Dict with ``grids_cleared`` (symbols), ``grids_not_cleared``
+            (symbol -> reason) and ``grid_clear_errors`` (messages).
+        """
+        cleared: List[str] = []
+        not_cleared: Dict[str, str] = {}
+        errors: List[str] = []
+        manager = getattr(self, "grid_lifecycle", None)
+        clearer = getattr(manager, "clear_breaker_stripped_grids", None)
+        if callable(clearer):
+            try:
+                result = clearer(include_unmarked=restored)
+            except Exception as e:  # noqa: BLE001 - reset must complete
+                logging.error(f"Stripped grid clear failed on reset: {e}")
+                errors.append(str(e))
+                result = None
+            if isinstance(result, dict):
+                cleared = [str(s) for s in result.get("cleared") or []]
+                not_cleared = {
+                    str(s): str(r) for s, r in (result.get("not_cleared") or {}).items()
+                }
+                errors.extend(str(m) for m in result.get("errors") or [])
+        self._breaker_grids_cleared = cleared
+        self._breaker_grids_not_cleared = not_cleared
+        return {
+            "grids_cleared": cleared,
+            "grids_not_cleared": not_cleared,
+            "grid_clear_errors": errors,
+        }
+
     def reset_circuit_breaker(self) -> Dict[str, Any]:
         """Manually clear a tripped breaker so new entries may resume.
 
@@ -3676,20 +3724,25 @@ class TradingBot:
         not a process restart, not a supervisor resume).  If the loss is
         still at the limit the next risk check trips it again.
 
-        Cancelled grid levels are not re-placed: a stripped grid stays
-        ACTIVE (its emergency stop keeps guarding inventory) until it is
-        cleared, after which the normal grid signal path places a new one.
+        Sends no order and no cancel.  Each grid the sweep stripped has
+        its state cleared (``clear_grid``) when the venue shows no position
+        and no resting grid order on its symbol, so the normal signal path
+        can place a new one.  Otherwise it stays ACTIVE (its emergency
+        stop keeps guarding the position) and is reported; a later reset
+        clears it once flat.  After a restart the sweep marks are gone,
+        so every ACTIVE grid is checked against the venue the same way.
 
         Returns:
-            Dict with ``was_tripped``, the cleared ``tripped_at`` /
-            ``reason`` and the trip's ``orders_cancelled`` /
-            ``cancels_failing`` counters.
+            Dict with ``was_tripped``, ``tripped_at``, ``reason``,
+            ``orders_cancelled``, ``cancels_failing``, ``grids_cleared``,
+            ``grids_not_cleared`` and ``grid_clear_errors``.
 
         Raises:
             OSError: When the persisted record cannot be cleared; the
-                breaker then stays tripped.
+                breaker then stays tripped and no grid is cleared.
         """
-        previous = {
+        restored = getattr(self, "_breaker_restored", False)
+        previous: Dict[str, Any] = {
             "was_tripped": self._circuit_breaker_triggered,
             "tripped_at": self._circuit_breaker_tripped_at,
             "reason": self._circuit_breaker_reason,
@@ -3703,6 +3756,8 @@ class TradingBot:
         self._breaker_sweep_pending = False
         self._breaker_orders_cancelled = 0
         self._breaker_cancel_failures = 0
+        self._breaker_restored = False
+        previous.update(self._clear_breaker_stripped_grids(restored))
         logging.warning(f"Circuit breaker manually RESET (was: {previous})")
         if self.hub_publish_func:
             self.hub_publish_func(
@@ -4060,6 +4115,12 @@ class TradingBot:
                 ),
                 "circuit_breaker_cancels_failing": getattr(
                     self, "_breaker_cancel_failures", 0
+                ),
+                "circuit_breaker_grids_cleared": list(
+                    getattr(self, "_breaker_grids_cleared", [])
+                ),
+                "circuit_breaker_grids_not_cleared": dict(
+                    getattr(self, "_breaker_grids_not_cleared", {})
                 ),
                 "account_balance": balance,
                 "total_positions": len(positions),
