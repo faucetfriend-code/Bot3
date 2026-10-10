@@ -445,15 +445,6 @@ class TestBuildContext:
         assert ctx.price_1m == short["close"][-1]
         assert ctx.momentum_5m == "aligned"
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "_build_context gates RSI/ATR on len >= 14 but calculate_rsi and "
-            "calculate_atr need period + 1 = 15 points.  With exactly 14 "
-            "candles the ValueError aborts the whole context build, so even "
-            "price_1m is left None (off-by-one)."
-        ),
-    )
     def test_exactly_fourteen_candles_still_builds_a_context(self) -> None:
         frame = candles(walk([1.0], count=13))
         assert len(frame["close"]) == 14
@@ -612,6 +603,16 @@ class TestStandardExecution:
         bot._execute_standard_signal_coordinated(make_signal(), ALLOC)
         assert exchange.orders == []
         assert bot.signal_logger.rejected[0]["reason"] == "ExecutionLayer timing skip"
+
+    def test_missing_execution_layer_sends_signal_unrefined(self) -> None:
+        exchange = FakeExchange(supports_venue_stops=True, stops=[])
+        bot = make_bot(exchange)
+        bot.execution_layer = None
+        signal = make_signal(stop_loss=95.0)
+        bot._execute_standard_signal_coordinated(signal, ALLOC)
+        assert exchange.orders[0]["stop_loss"] == 95.0
+        assert bot.signal_logger.pending[0]["signal"] is signal
+        assert bot.signal_logger.rejected == []
 
     def test_refined_signal_is_the_one_sent(self) -> None:
         exchange = FakeExchange(supports_venue_stops=True, stops=[])
