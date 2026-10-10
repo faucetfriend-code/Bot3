@@ -171,6 +171,12 @@ def _positive_float(value: Any) -> Optional[float]:
     return number if number > 0 else None
 
 
+#: Strategies whose max hold differs per signal and is therefore read from
+#: the positions row (``max_hold_hours`` / ``max_hold_from``), never from
+#: configuration.
+PER_SIGNAL_MAX_HOLD_STRATEGIES: Tuple[str, ...] = ("calendar_flow",)
+
+
 class MigratedPositionManager:
     """
     Manages positions migrated from grid to trend-following.
@@ -277,13 +283,29 @@ class MigratedPositionManager:
         # positions row, so this covers bot-opened positions whether or
         # not they are in the RiskManager migrated registry.  A strategy
         # that is not listed here has no time exit.
+        #
+        # These are the strategies whose signals carry
+        # indicators["time_exit_hours"], the only max hold the backtest
+        # engine enforces.  Two have a fixed configured value, read from
+        # the same environment variables StrategyManager builds the
+        # strategies from, and are measured from the row's opened_at.
         try:
             orb_time_exit_hours = float(os.getenv("ORB_TIME_EXIT_HOURS", "4"))
         except ValueError:
             orb_time_exit_hours = 4.0
+        try:
+            vwap_pb_time_exit_hours = float(os.getenv("VWAP_PB_TIME_EXIT_HOURS", "24"))
+        except ValueError:
+            vwap_pb_time_exit_hours = 24.0
         self._max_hold_hours: Dict[str, float] = {
             "session_range_breakout": orb_time_exit_hours,
+            "vwap_pullback": vwap_pb_time_exit_hours,
         }
+        # The third (calendar_flow) has a different hold on every signal:
+        # the hours left in its calendar window.  That value is stored on
+        # the positions row at entry (max_hold_hours, measured from
+        # max_hold_from).  A row without it has no time exit.
+        self._per_signal_hold_strategies: Set[str] = set(PER_SIGNAL_MAX_HOLD_STRATEGIES)
         # Time-exit conditions already reported (log once per position).
         self._time_exit_notes: Set[Tuple[str, str, str]] = set()
 
@@ -474,16 +496,19 @@ class MigratedPositionManager:
         Check if a position has exceeded its strategy's max hold time.
 
         Only positions owned by a strategy in self._max_hold_hours
-        (currently session_range_breakout) are affected.  The owner is the
-        position dict's "strategy" or, when the dict has none (the
-        RiskManager registry does not keep it), the ``strategy`` tag on
-        the positions row.  Tags ``unknown`` / ``migrated`` and strategies
-        without a configured max hold never match.
+        (session_range_breakout, vwap_pullback) or in
+        self._per_signal_hold_strategies (calendar_flow) are affected.
+        The owner is the position dict's "strategy" or, when the dict has
+        none (the RiskManager registry does not keep it), the ``strategy``
+        tag on the positions row.  Tags ``unknown`` / ``migrated`` and
+        strategies without a max hold never match.
 
-        Position age is measured from, in order: the dict's "entry_time"
-        (epoch seconds), the positions row ``opened_at``, the dict's
-        "migrated_at" (registration time).  An age that cannot be read is
-        never treated as expired.
+        For a configured max hold, position age is measured from, in
+        order: the dict's "entry_time" (epoch seconds), the positions row
+        ``opened_at``, the dict's "migrated_at" (registration time).  A
+        per-signal max hold is read from the positions row together with
+        the time it runs from (see _per_signal_time_exit_facts).  An age
+        or a hold that cannot be read is never treated as expired.
 
         Args:
             symbol: Trading symbol.
@@ -500,7 +525,7 @@ class MigratedPositionManager:
 
     def _time_exit_facts(self, symbol: str, pos: Dict[str, Any]) -> Optional[str]:
         """Facts behind a due time exit, or None when it is not due."""
-        if not self._max_hold_hours:
+        if not self._max_hold_hours and not self._per_signal_hold_strategies:
             return None
         side = str(pos.get("side") or "")
         row = self._load_db_position(symbol, side) if self._db is not None else None
@@ -508,6 +533,8 @@ class MigratedPositionManager:
             row = {}
         owner = pos.get("strategy") or row.get("strategy")
         strategy = canonical_strategy_tag(owner)
+        if strategy in self._per_signal_hold_strategies:
+            return self._per_signal_time_exit_facts(symbol, side, strategy, row)
         max_hold = self._max_hold_hours.get(strategy)
         if not max_hold:
             return None
@@ -531,6 +558,54 @@ class MigratedPositionManager:
             )
             return None
 
+        return self._due_time_exit_facts(symbol, side, strategy, held_since, max_hold)
+
+    def _per_signal_time_exit_facts(
+        self, symbol: str, side: str, strategy: str, row: Dict[str, Any]
+    ) -> Optional[str]:
+        """Facts behind a due time exit whose hold was stored at entry.
+
+        The hold and the time it runs from are read from the positions
+        row only (``max_hold_hours`` / ``max_hold_from``, written by
+        ``DatabaseManager.tag_position_owner`` at the entry fill).  A row
+        without both - one opened before the columns existed, or tagged by
+        a signal that carried no hold - has no time exit; no deadline is
+        guessed from opened_at or from configuration.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side.
+            strategy: Canonical tag of the owning strategy.
+            row: The positions row ({} when unreadable).
+
+        Returns:
+            The decision facts when the exit is due, else None.
+        """
+        max_hold = _positive_float(row.get("max_hold_hours"))
+        held_since = _epoch_seconds(row.get("max_hold_from"))
+        if max_hold is None or max_hold == float("inf") or held_since is None:
+            self._note_once(
+                symbol,
+                side,
+                "hold_unknown",
+                f"TIME EXIT inactive for {symbol} {side} ({strategy}): no max "
+                f"hold stored on the positions row "
+                f"(max_hold_hours={row.get('max_hold_hours')!r}, "
+                f"max_hold_from={row.get('max_hold_from')!r})",
+            )
+            return None
+        return self._due_time_exit_facts(symbol, side, strategy, held_since, max_hold)
+
+    @staticmethod
+    def _due_time_exit_facts(
+        symbol: str, side: str, strategy: str, held_since: float, max_hold: float
+    ) -> Optional[str]:
+        """Decision facts when ``max_hold`` hours have passed, else None.
+
+        Same comparison as BacktestEngine._apply_time_exits: the position
+        stays open while its age is below the limit and is closed from the
+        first check at or past it.
+        """
         hours_held = (time.time() - held_since) / 3600.0
         if hours_held >= max_hold:
             since = datetime.fromtimestamp(held_since, tz=timezone.utc).isoformat()
@@ -624,7 +699,8 @@ class MigratedPositionManager:
             positions table cannot be read.
         """
         getter = getattr(self._db, "get_positions", None)
-        if not self._max_hold_hours or not callable(getter):
+        time_limited = set(self._max_hold_hours) | self._per_signal_hold_strategies
+        if not time_limited or not callable(getter):
             return []
         try:
             rows = getter()
@@ -638,7 +714,7 @@ class MigratedPositionManager:
             if not isinstance(row, dict) or not row.get("symbol"):
                 continue
             strategy = canonical_strategy_tag(row.get("strategy"))
-            if strategy not in self._max_hold_hours:
+            if strategy not in time_limited:
                 continue
             symbol = str(row["symbol"])
             side = normalize_position_side(row.get("side"))

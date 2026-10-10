@@ -1236,7 +1236,91 @@ TRADE_CLOSE_COLUMNS: Tuple[Tuple[str, str], ...] = (
 POSITION_OWNER_COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("strategy", "TEXT"),
     ("entry_regime", "TEXT"),
+    # Per-signal max hold captured at entry (hours) and the UTC ISO time
+    # it is measured from.  NULL on rows opened before the columns
+    # existed: such a row never gets a per-signal time exit.
+    ("max_hold_hours", "REAL"),
+    ("max_hold_from", "TEXT"),
 )
+
+#: Venue timestamps before this are treated as unreadable (a mis-scaled or
+#: zero epoch would otherwise make a position look decades old).
+_MIN_PLAUSIBLE_OPEN_EPOCH = 1577836800.0  # 2020-01-01T00:00:00Z
+
+
+def _parse_open_time(value: Any) -> Optional[datetime]:
+    """Parse a stored or venue-supplied open time (None if unreadable).
+
+    Accepts a datetime, epoch seconds or milliseconds (number or numeric
+    string) or an ISO-8601 string.  A naive value is read as UTC.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        stamp = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            try:
+                stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            if not 0 < number < float("inf"):
+                return None
+            seconds = number / 1000.0 if number > 1e12 else number
+            try:
+                stamp = datetime.fromtimestamp(seconds, tz=timezone.utc)
+            except (OverflowError, OSError, ValueError):
+                return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.astimezone(timezone.utc)
+
+
+def normalize_opened_at(value: Any = None, now: Optional[datetime] = None) -> str:
+    """Return the ``positions.opened_at`` value to store for a NEW row.
+
+    A readable open time supplied by the caller (the venue's own
+    timestamp, or the fill time) is kept.  Anything else - missing, the
+    literal ``now``, garbage, implausibly old, or in the future - becomes
+    the current time, i.e. the moment the bot first saw the position.
+    First-seen time is never earlier than the real entry, so a max-hold
+    exit measured from it can be late but not early.
+
+    Args:
+        value: Candidate open time (datetime, epoch s/ms, ISO string).
+        now: Clock override for tests.
+
+    Returns:
+        Timezone-aware UTC ISO-8601 timestamp.
+    """
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    stamp = _parse_open_time(value)
+    if (
+        stamp is None
+        or stamp > current
+        or stamp.timestamp() < _MIN_PLAUSIBLE_OPEN_EPOCH
+    ):
+        stamp = current
+    return stamp.isoformat()
+
+
+def _valid_max_hold_hours(value: Any) -> Optional[float]:
+    """Return ``value`` as finite hours greater than zero, else None."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        hours = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not 0 < hours < float("inf"):
+        return None
+    return hours
 
 
 def _add_missing_columns(
@@ -2029,7 +2113,12 @@ class DatabaseManager:
         return int(row_id or 0)
 
     def tag_position_owner(
-        self, symbol: str, side: str, strategy: str, regime: Optional[str] = None
+        self,
+        symbol: str,
+        side: str,
+        strategy: str,
+        regime: Optional[str] = None,
+        max_hold_hours: Optional[float] = None,
     ) -> bool:
         """Stamp the owning strategy (and entry regime) on a positions row.
 
@@ -2038,22 +2127,39 @@ class DatabaseManager:
         owned by a DIFFERENT strategy becomes 'unknown': the venue nets
         both entries into one position and the result cannot be split.
 
+        ``max_hold_hours`` is the entry signal's own max hold.  It is
+        stored, together with the current UTC time it is measured from,
+        only by the entry that gives the row its first owner.  A later
+        entry never changes it (the backtest engine likewise keeps the
+        first entry's time exit), and a row that already had an owner but
+        no stored hold keeps none.
+
         Args:
             symbol: Trading symbol.
             side: Position side as stored ("LONG"/"SHORT").
             strategy: Canonical strategy tag.
             regime: Regime at entry, kept only if none is stored yet.
+            max_hold_hours: Max hold carried by the entry signal (hours);
+                ignored unless finite and greater than zero.
 
         Returns:
             True when a row was updated.
         """
+        hold = _valid_max_hold_hours(max_hold_hours)
+        hold_from = datetime.now(timezone.utc).isoformat() if hold else None
         with get_db_connection() as conn:
+            # Every CASE reads the row as it was BEFORE this statement
+            # (standard SQL; true on SQLite and Postgres).
             cursor = conn.execute(
                 "UPDATE positions SET strategy = CASE WHEN strategy IS NULL "
                 "OR strategy = ? THEN ? ELSE 'unknown' END, "
                 "entry_regime = COALESCE(entry_regime, ?), "
+                "max_hold_hours = CASE WHEN strategy IS NULL THEN ? "
+                "ELSE max_hold_hours END, "
+                "max_hold_from = CASE WHEN strategy IS NULL THEN ? "
+                "ELSE max_hold_from END, "
                 "updated_at = CURRENT_TIMESTAMP WHERE symbol = ? AND side = ?",
-                (strategy, strategy, regime, symbol, side),
+                (strategy, strategy, regime, hold, hold_from, symbol, side),
             )
             conn.commit()
             updated = cursor.rowcount
@@ -3134,7 +3240,9 @@ class DatabaseManager:
                         position_data["current_price"],
                         position_data.get("unrealized_pnl", 0),
                         funding_value,
-                        position_data["opened_at"],
+                        # Set once, when the row is created; the UPDATE
+                        # above never touches opened_at.
+                        normalize_opened_at(position_data.get("opened_at")),
                         position_data.get("entry_order_id"),
                         position_data.get("venue_stop_id"),
                         position_data.get("venue_stop_price"),

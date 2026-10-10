@@ -47,7 +47,7 @@ from .venue_stops import (
 from .exchanges import ExchangeClient, get_exchange_client
 
 # Import other modules
-from .database import DatabaseManager
+from .database import DatabaseManager, normalize_opened_at
 from .history import TradeStore
 from .pacifica_client import PacificaClient
 from .strategy_manager import StrategyManager
@@ -977,7 +977,12 @@ class TradingBot:
                         "unrealized_pnl": unrealized_pnl,
                         "leverage": float(pos.get("leverage", 1)),
                         "asset_class": "perpetual",
-                        "opened_at": pos.get("opened_at", pos.get("created_at", "now")),
+                        # Used only when this call creates the row: the
+                        # venue's own open time when the payload has one,
+                        # else the time the bot first saw the position.
+                        "opened_at": normalize_opened_at(
+                            pos.get("opened_at") or pos.get("created_at")
+                        ),
                         "funding_pnl": float(pos.get("funding_pnl", 0)),
                     }
                 )
@@ -1049,6 +1054,10 @@ class TradingBot:
         ``record_closed_trade`` reads when the position closes.  While a
         grid is active on the symbol the venue nets grid inventory and
         this entry into one position, so the owner is stored as unknown.
+
+        A max hold carried by the signal (``indicators["time_exit_hours"]``,
+        the field the backtest engine reads) is stored with the tag so the
+        live time exit can honour it after a restart.
         """
         try:
             side = position_side_lower(signal.side).upper()
@@ -1059,9 +1068,14 @@ class TradingBot:
             detector = getattr(self, "market_regime", None)
             regime = detector.get_current_regime(symbol) if detector else None
             regime_tag = getattr(regime, "value", None)
-            self.db.tag_position_owner(
-                symbol, side, tag, regime_tag if isinstance(regime_tag, str) else None
-            )
+            regime_name = regime_tag if isinstance(regime_tag, str) else None
+            hold = (signal.indicators or {}).get("time_exit_hours")
+            if hold and tag != UNKNOWN_STRATEGY_TAG:
+                self.db.tag_position_owner(
+                    symbol, side, tag, regime_name, max_hold_hours=hold
+                )
+            else:
+                self.db.tag_position_owner(symbol, side, tag, regime_name)
         except Exception as exc:  # noqa: BLE001 - never raise into the entry path
             logger.error(f"Could not tag position owner for {symbol}: {exc}")
 

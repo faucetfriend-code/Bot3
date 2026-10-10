@@ -82,6 +82,20 @@ def dbm() -> Iterator[Any]:
         pass
 
 
+def set_position_column(symbol: str, side: str, column: str, value: Any) -> None:
+    """Write one positions column directly (to plant a pre-upgrade value)."""
+    import trading_bot_v2.database as module
+
+    assert column in ("opened_at", "max_hold_hours", "max_hold_from", "strategy")
+    with module.get_db_connection() as conn:
+        conn.execute(
+            f"UPDATE positions SET {column} = ? WHERE symbol = ? AND side = ?",
+            (value, symbol, side),
+        )
+        conn.commit()
+    module._data_cache.invalidate("positions_all")
+
+
 @pytest.fixture
 def log_lines() -> Iterator[List[str]]:
     """Every loguru message emitted during the test."""
@@ -705,9 +719,18 @@ class TestTimeExit:
 
         assert rig.rows()[0]["close_reason"] == "time_exit"
 
-    def test_only_session_range_breakout_has_a_max_hold(self, rig: Rig) -> None:
-        assert rig.manager._max_hold_hours == {"session_range_breakout": 4.0}
+    def test_configured_max_holds_are_the_backtest_time_limited_strategies(
+        self, rig: Rig
+    ) -> None:
+        assert rig.manager._max_hold_hours == {
+            "session_range_breakout": 4.0,
+            "vwap_pullback": 24.0,
+        }
+        assert rig.manager._per_signal_hold_strategies == {"calendar_flow"}
 
+    # calendar_flow stays in this list: rig.open stores no per-signal hold,
+    # and a calendar_flow row without one has no time exit.  vwap_pullback
+    # left it (24h max hold; see test_time_exit_entry_time_and_holds.py).
     @pytest.mark.parametrize(
         "strategy",
         [
@@ -715,7 +738,6 @@ class TestTimeExit:
             "ma_crossover",
             "momentum_scalping",
             "liquidation_capture",
-            "vwap_pullback",
             "calendar_flow",
         ],
     )
@@ -751,7 +773,11 @@ class TestTimeExit:
     def test_unreadable_entry_time_never_expires(
         self, rig: Rig, log_lines: List[str], opened_at: str
     ) -> None:
-        rig.open(strategy="session_range_breakout", opened_at=opened_at or " ")
+        # save_position now stores a real UTC time for every new row, so a
+        # legacy value (written before that) is planted directly.
+        rig.open(strategy="session_range_breakout", age_hours=500.0)
+        set_position_column(SYMBOL, "LONG", "opened_at", opened_at or " ")
+        assert rig.dbm.get_position(SYMBOL, "LONG")["opened_at"] == (opened_at or " ")
 
         rig.manage()
         rig.manage()
