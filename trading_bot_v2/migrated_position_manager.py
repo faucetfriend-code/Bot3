@@ -22,14 +22,32 @@ This module works in conjunction with:
 """
 
 import os
+import threading
 import time
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, cast
+from datetime import datetime, timezone
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    cast,
+)
 from loguru import logger
 
-from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
+from .exit_sizing import (
+    ClosePlan,
+    normalize_position_side,
+    plan_close_quantity,
+    remaining_exchange_quantity,
+)
 from .history.closed_trades import (
     MIGRATED_STRATEGY_TAG,
     REASON_TAKE_PROFIT_PARTIAL,
+    canonical_strategy_tag,
     record_closed_trade,
 )
 from .order_result import OrderResult
@@ -112,6 +130,47 @@ def _send_telegram_error_alert(error_type: str, message: str, context: str) -> b
     )
 
 
+def _epoch_seconds(value: Any) -> Optional[float]:
+    """Convert a stored timestamp to epoch seconds (None if unusable).
+
+    Accepts epoch seconds or milliseconds (number or numeric string), a
+    datetime, or an ISO-8601 / SQLite timestamp string.  A naive value is
+    read as UTC.  Anything else (for example the literal ``now``) is None:
+    an unknown age never triggers a time exit.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, datetime):
+        stamp = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            number = float(text)
+        except ValueError:
+            try:
+                stamp = datetime.fromisoformat(text.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            if not 0 < number < float("inf"):
+                return None
+            return number / 1000.0 if number > 1e12 else number
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp.timestamp()
+
+
+def _positive_float(value: Any) -> Optional[float]:
+    """Return ``value`` as a float greater than zero, else None."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
 class MigratedPositionManager:
     """
     Manages positions migrated from grid to trend-following.
@@ -139,6 +198,7 @@ class MigratedPositionManager:
         venue_exchange_resolver: Optional[Callable[[], Any]] = None,
         db: Any = None,
         price_lookup: Optional[PriceLookup] = None,
+        grid_symbol_checker: Optional[Callable[[str], bool]] = None,
     ) -> None:
         """
         Initialize MigratedPositionManager.
@@ -162,8 +222,17 @@ class MigratedPositionManager:
                 symbol.  TradingBot injects its WebSocket-with-REST-
                 fallback lookup; without it the client itself is asked
                 (see price_lookup.py).
+            grid_symbol_checker: Optional symbol -> bool; True means a
+                grid is tracked on the symbol, and the max-hold time exit
+                leaves bot-opened positions on it alone.
         """
         self.client = client
+        self._grid_symbol_checker = grid_symbol_checker
+        # Serializes every operation that can decide or send a close.
+        # manage_positions runs on the trading loop; the regime review
+        # runs on whichever thread published REGIME_CHANGED (the loop, or
+        # an API request that triggered regime detection).
+        self.operation_lock = threading.RLock()
         self._price_lookup = price_lookup
         self.risk_manager = risk_manager
         self.regime_detector = regime_detector
@@ -201,9 +270,13 @@ class MigratedPositionManager:
         self._max_close_attempts = _max_close_attempts()
         self._reconcile_callback = reconcile_callback
 
-        # Max hold time (hours) per strategy for time-based exits.
-        # Positions tagged with one of these strategies are force-closed
-        # once their age exceeds the limit (reason: "time_exit").
+        # Max hold time (hours) per strategy for time-based exits, keyed
+        # by canonical strategy tag.  Positions owned by one of these
+        # strategies are force-closed once their age exceeds the limit
+        # (reason: "time_exit").  The owner is the ``strategy`` tag on the
+        # positions row, so this covers bot-opened positions whether or
+        # not they are in the RiskManager migrated registry.  A strategy
+        # that is not listed here has no time exit.
         try:
             orb_time_exit_hours = float(os.getenv("ORB_TIME_EXIT_HOURS", "4"))
         except ValueError:
@@ -211,6 +284,8 @@ class MigratedPositionManager:
         self._max_hold_hours: Dict[str, float] = {
             "session_range_breakout": orb_time_exit_hours,
         }
+        # Time-exit conditions already reported (log once per position).
+        self._time_exit_notes: Set[Tuple[str, str, str]] = set()
 
         logger.info("MigratedPositionManager initialized")
 
@@ -237,6 +312,13 @@ class MigratedPositionManager:
         Returns:
             Dict with management results
         """
+        with self.operation_lock:
+            return self._manage_positions_locked(current_prices)
+
+    def _manage_positions_locked(
+        self, current_prices: Optional[Dict[str, float]] = None
+    ) -> Dict[str, Any]:
+        """Body of manage_positions; the caller holds operation_lock."""
         results: Dict[str, Any] = {
             "positions_managed": 0,
             "stops_updated": 0,
@@ -254,6 +336,10 @@ class MigratedPositionManager:
         if self._pending_closes:
             positions = self.risk_manager.get_migrated_positions()
 
+        # Max-hold time exit for bot-opened positions that are not in the
+        # migrated registry (read from the positions table).
+        self._manage_owned_time_exits(positions, current_prices, results)
+
         if not positions:
             return results
 
@@ -268,9 +354,8 @@ class MigratedPositionManager:
             results["positions_managed"] += 1
 
             try:
-                # 0. Check time-based exit (strategy max-hold, needs no price)
-                if self._check_time_exit(symbol, pos):
-                    self._close_position(symbol, pos, "time_exit")
+                # 0. Check time-based exit (strategy max-hold)
+                if self._try_time_exit(symbol, pos, current_prices):
                     results["positions_closed"] += 1
                     continue
 
@@ -388,45 +473,220 @@ class MigratedPositionManager:
         """
         Check if a position has exceeded its strategy's max hold time.
 
-        Only positions tagged with a strategy in self._max_hold_hours
-        (currently session_range_breakout) are affected. Position age is
-        derived from the epoch-seconds timestamp the position dict carries
-        ("entry_time" preferred, "migrated_at" fallback - the key written
-        by RiskManager.register_migrated_position). Mirrors the
-        Position.hours_since_entry age calculation in models.py.
+        Only positions owned by a strategy in self._max_hold_hours
+        (currently session_range_breakout) are affected.  The owner is the
+        position dict's "strategy" or, when the dict has none (the
+        RiskManager registry does not keep it), the ``strategy`` tag on
+        the positions row.  Tags ``unknown`` / ``migrated`` and strategies
+        without a configured max hold never match.
+
+        Position age is measured from, in order: the dict's "entry_time"
+        (epoch seconds), the positions row ``opened_at``, the dict's
+        "migrated_at" (registration time).  An age that cannot be read is
+        never treated as expired.
 
         Args:
             symbol: Trading symbol.
-            pos: Position dict from RiskManager.get_migrated_positions().
+            pos: Position dict (side, optional strategy / entry_time).
 
         Returns:
             True if the position should be closed with reason "time_exit".
         """
-        strategy = pos.get("strategy")
-        if not strategy:
+        facts = self._time_exit_facts(symbol, pos)
+        if facts is None:
             return False
+        logger.warning(f"TIME EXIT decision: {facts} action=close")
+        return True
 
-        max_hold = self._max_hold_hours.get(str(strategy))
+    def _time_exit_facts(self, symbol: str, pos: Dict[str, Any]) -> Optional[str]:
+        """Facts behind a due time exit, or None when it is not due."""
+        if not self._max_hold_hours:
+            return None
+        side = str(pos.get("side") or "")
+        row = self._load_db_position(symbol, side) if self._db is not None else None
+        if not isinstance(row, dict):
+            row = {}
+        owner = pos.get("strategy") or row.get("strategy")
+        strategy = canonical_strategy_tag(owner)
+        max_hold = self._max_hold_hours.get(strategy)
         if not max_hold:
-            return False
+            return None
 
-        entry_ts = pos.get("entry_time", pos.get("migrated_at"))
-        if entry_ts is None:
-            return False
-
-        try:
-            hours_held = (time.time() - float(entry_ts)) / 3600.0
-        except (TypeError, ValueError):
-            return False
-
-        if hours_held >= max_hold:
-            logger.warning(
-                f"TIME EXIT for {symbol} {pos.get('side')}: held "
-                f"{hours_held:.1f}h >= {max_hold}h max ({strategy}) - closing"
+        held_since = None
+        for candidate in (
+            pos.get("entry_time"),
+            row.get("opened_at"),
+            pos.get("migrated_at"),
+        ):
+            held_since = _epoch_seconds(candidate)
+            if held_since is not None:
+                break
+        if held_since is None:
+            self._note_once(
+                symbol,
+                side,
+                "age_unknown",
+                f"TIME EXIT inactive for {symbol} {side} ({strategy}): entry "
+                f"time unreadable (opened_at={row.get('opened_at')!r})",
             )
-            return True
+            return None
 
-        return False
+        hours_held = (time.time() - held_since) / 3600.0
+        if hours_held >= max_hold:
+            since = datetime.fromtimestamp(held_since, tz=timezone.utc).isoformat()
+            return (
+                f"symbol={symbol} side={side} strategy={strategy} "
+                f"reason=time_exit held={hours_held:.2f}h max_hold={max_hold}h "
+                f"held_since={since}"
+            )
+        return None
+
+    def _try_time_exit(
+        self,
+        symbol: str,
+        pos: Dict[str, Any],
+        current_prices: Optional[Dict[str, float]],
+    ) -> bool:
+        """Close a position that is past its max hold.
+
+        Nothing is sent on missing data: without a current price or a
+        readable venue position the exit is deferred to the next cycle.
+
+        Args:
+            symbol: Trading symbol.
+            pos: Position dict; "time_exit_only" marks a bot-opened
+                position that is not in the migrated registry.
+            current_prices: Prices handed to manage_positions.
+
+        Returns:
+            True when the close path was entered.
+        """
+        if not self._check_time_exit(symbol, pos):
+            return False
+        side = str(pos.get("side") or "")
+        blocker = None
+        price = (current_prices or {}).get(symbol) or self._get_current_price(symbol)
+        if not price:
+            blocker = "price unavailable"
+        else:
+            remaining = remaining_exchange_quantity(self.client, symbol, side)
+            if remaining is None:
+                blocker = "venue unreadable"
+            elif remaining <= 0 and pos.get("time_exit_only"):
+                blocker = "venue flat (left to the position sync)"
+        if blocker is not None:
+            logger.warning(
+                f"TIME EXIT deferred for {symbol} {side}: {blocker} - no "
+                f"action this cycle"
+            )
+            return False
+        self._close_position(symbol, pos, "time_exit")
+        if pos.get("time_exit_only"):
+            self._flag_unregistered_pending(symbol, side)
+        return True
+
+    def _manage_owned_time_exits(
+        self,
+        registered: List[Dict[str, Any]],
+        current_prices: Optional[Dict[str, float]],
+        results: Dict[str, Any],
+    ) -> None:
+        """Run the max-hold time exit for bot-opened, unregistered positions.
+
+        Args:
+            registered: Current RiskManager migrated positions (these are
+                handled by the main loop and skipped here).
+            current_prices: Prices handed to manage_positions.
+            results: manage_positions result dict (updated in place).
+        """
+        tracked = {(p.get("symbol"), p.get("side")) for p in registered}
+        for pos in self._owned_time_exit_positions(tracked):
+            symbol = str(pos["symbol"])
+            if (symbol, pos["side"]) in self._pending_closes:
+                continue  # a close is already in flight; never stack orders
+            try:
+                if self._try_time_exit(symbol, pos, current_prices):
+                    results["positions_closed"] += 1
+            except Exception as e:
+                logger.error(f"Error in time exit for {symbol}: {e}")
+                results["errors"].append(f"{symbol}: {e}")
+
+    def _owned_time_exit_positions(
+        self, tracked: Set[Tuple[Any, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Open positions rows owned by a strategy with a max hold time.
+
+        Args:
+            tracked: (symbol, side) keys already in the migrated registry.
+
+        Returns:
+            Position dicts flagged "time_exit_only"; empty when the
+            positions table cannot be read.
+        """
+        getter = getattr(self._db, "get_positions", None)
+        if not self._max_hold_hours or not callable(getter):
+            return []
+        try:
+            rows = getter()
+        except Exception as exc:  # noqa: BLE001 - unreadable -> no time exits
+            logger.warning(f"Time exit: could not read positions: {exc}")
+            return []
+        if not isinstance(rows, list):
+            return []
+        owned: List[Dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, dict) or not row.get("symbol"):
+                continue
+            strategy = canonical_strategy_tag(row.get("strategy"))
+            if strategy not in self._max_hold_hours:
+                continue
+            symbol = str(row["symbol"])
+            side = normalize_position_side(row.get("side"))
+            quantity = _positive_float(row.get("quantity"))
+            entry_price = _positive_float(row.get("entry_price"))
+            if side is None or quantity is None or entry_price is None:
+                continue
+            if (symbol, side) in tracked or self._grid_tracked(symbol, side):
+                continue
+            owned.append(
+                {
+                    "symbol": symbol,
+                    "side": side,
+                    "qty": quantity,
+                    "entry_price": entry_price,
+                    "strategy": strategy,
+                    "entry_time": _epoch_seconds(row.get("opened_at")),
+                    "time_exit_only": True,
+                }
+            )
+        return owned
+
+    def _grid_tracked(self, symbol: str, side: str) -> bool:
+        """True when a grid is tracked on the symbol (or that is unknown)."""
+        if self._grid_symbol_checker is None:
+            return False
+        try:
+            owned = bool(self._grid_symbol_checker(symbol))
+        except Exception as exc:  # noqa: BLE001 - unknown -> leave it alone
+            logger.warning(f"Time exit: grid state unreadable for {symbol}: {exc}")
+            return True
+        if owned:
+            self._note_once(
+                symbol,
+                side,
+                "grid_tracked",
+                f"TIME EXIT inactive for {symbol} {side}: a grid is tracked "
+                f"on the symbol",
+            )
+        return owned
+
+    def _note_once(self, symbol: str, side: str, kind: str, message: str) -> None:
+        """Log a time-exit condition once per position and kind."""
+        key = (symbol, side, kind)
+        if key in self._time_exit_notes:
+            return
+        self._time_exit_notes.add(key)
+        logger.warning(message)
 
     def _check_trend_reversal(
         self,
@@ -596,6 +856,7 @@ class MigratedPositionManager:
         pos: Dict[str, Any],
         current_price: float,
         market_data: Optional[Dict[str, List[float]]] = None,
+        floor_stop: Optional[float] = None,
     ) -> bool:
         """
         Public wrapper to arm/tighten a trailing stop for a position.
@@ -610,11 +871,30 @@ class MigratedPositionManager:
                 'entry_price'.
             current_price: Current market price.
             market_data: Optional 4h market data for ATR calculation.
+            floor_stop: The stop the position already has.  When no
+                trailing stop exists yet it seeds the trailing level, so
+                the only-moves-favorably rule keeps the armed stop at
+                least as protective as the existing one.  Ignored when it
+                is not on the protective side of the current price.
 
         Returns:
-            True if the stop was set or tightened.
+            True if the stop was set or tightened by the 2x ATR rule.
         """
-        return self._update_trailing_stop(symbol, pos, current_price, market_data)
+        side = str(pos.get("side"))
+        floor = _positive_float(floor_stop)
+        with self.operation_lock:
+            if floor is not None and self.get_trailing_stop(symbol, side) is None:
+                protective = (
+                    floor < current_price if side == "long" else floor > current_price
+                )
+                if protective and side in ("long", "short"):
+                    self._trailing_stops.setdefault(symbol, {})[side] = floor
+                    self.risk_manager.update_migrated_stop(symbol, side, floor)
+            return self._update_trailing_stop(symbol, pos, current_price, market_data)
+
+    def get_trailing_stop(self, symbol: str, side: str) -> Optional[float]:
+        """Return the armed trailing stop for a position (None if none)."""
+        return self._trailing_stops.get(symbol, {}).get(side)
 
     def close_position(self, symbol: str, pos: Dict[str, Any], reason: str) -> None:
         """
@@ -630,7 +910,9 @@ class MigratedPositionManager:
             pos: Position dict with 'side' and 'qty'.
             reason: Exit reason recorded with the close.
         """
-        self._close_position(symbol, pos, reason)
+        with self.operation_lock:
+            self._close_position(symbol, pos, reason)
+            self._flag_unregistered_pending(symbol, str(pos.get("side")))
 
     def _check_take_profit(
         self,
@@ -1015,6 +1297,8 @@ class MigratedPositionManager:
         for key in list(self._pending_closes):
             marker = self._pending_closes[key]
             pos = by_key.get(key)
+            if pos is None and marker.get("unregistered"):
+                pos = self._position_from_row(key)
             if pos is None:
                 logger.warning(
                     f"Pending close {key} no longer registered - dropping marker"
@@ -1033,6 +1317,45 @@ class MigratedPositionManager:
             else:
                 self._close_position(key[0], pos, str(marker.get("reason", "retry")))
         return retried
+
+    def _flag_unregistered_pending(self, symbol: str, side: str) -> None:
+        """Keep a pending close retryable for a position not in the registry.
+
+        A regime exit or a max-hold time exit can close a bot-opened
+        position that RiskManager does not track.  Its pending-close
+        marker is flagged so the retry reads the position from the
+        positions table instead of dropping the marker.
+        """
+        marker = self._pending_closes.get((symbol, side))
+        if marker is None:
+            return
+        try:
+            tracked = any(
+                p.get("side") == side
+                for p in self.risk_manager.get_migrated_positions(symbol)
+            )
+        except Exception:  # noqa: BLE001 - unknown -> keep the default path
+            return
+        if not tracked:
+            marker["unregistered"] = True
+
+    def _position_from_row(self, key: Tuple[str, str]) -> Optional[Dict[str, Any]]:
+        """Position dict for a pending close, read from the positions row."""
+        symbol, side = key
+        row = self._load_db_position(symbol, side)
+        if not isinstance(row, dict):
+            return None
+        quantity = _positive_float(row.get("quantity"))
+        entry_price = _positive_float(row.get("entry_price"))
+        if quantity is None or entry_price is None:
+            return None
+        return {
+            "symbol": symbol,
+            "side": side,
+            "qty": quantity,
+            "entry_price": entry_price,
+            "strategy": row.get("strategy"),
+        }
 
     def _escalate_pending_close(
         self, key: Tuple[str, str], marker: Dict[str, Any]
