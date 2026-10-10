@@ -246,8 +246,8 @@ class TestSlowStrategyIsJudgedFairly:
         verdict = evaluate_strategy_gate(
             strategy="ma_crossover",
             symbol_returns={
-                "BTC-USDC": [0.05] * 6,
-                "ETH-USDC": [0.05] * 6,
+                "BTC-USDC": [0.05, 0.06] * 3,
+                "ETH-USDC": [0.05, 0.06] * 3,
             },
         )
         quality = [c for c in verdict.checks if c.name != "sample_adequacy"]
