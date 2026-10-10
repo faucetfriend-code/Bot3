@@ -52,6 +52,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r trading_bot_v2/requirements.txt
           pip install "mypy==2.4.0" pandas-stubs types-requests types-psycopg2 types-psutil scipy-stubs
+          # encryption.py imports cryptography, which requirements.txt does not list.
+          pip install cryptography
 
       # Strict configuration lives in pyproject.toml ([tool.mypy]); the
       # --strict flag here keeps the command identical to the local check.
