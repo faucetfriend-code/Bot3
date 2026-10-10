@@ -285,11 +285,26 @@ class BacktestEngine:
     Every 60 candles (5h) an equity snapshot is recorded.
     """
 
-    def __init__(self, override_config=None):
+    def __init__(self, override_config=None, loader_factory=None):
+        """Build an engine.
+
+        Args:
+            override_config: Config proxy to read knobs from instead of the
+                live ``config`` (the optimization adapter and tests use it).
+            loader_factory: Callable ``(symbol, data_dir) -> BacktestDataLoader``
+                used to build the candle loader in :meth:`run`. Defaults to
+                ``BacktestDataLoader`` itself; the offline harness passes a
+                factory that validates files and never downloads.
+        """
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
 
         self.cfg = override_config or live_config
+        self._loader_factory = loader_factory or (
+            lambda symbol, data_dir: BacktestDataLoader(
+                symbol=symbol, data_dir=data_dir
+            )
+        )
         # Signal funnel for this run (replaced in run(); NullFunnel until
         # then so _execute_signal is safe to call standalone in tests).
         self._funnel = NULL_FUNNEL
@@ -714,6 +729,65 @@ class BacktestEngine:
         )
         return schedule
 
+    @staticmethod
+    def _resolve_strategy_filter(strategy_filter: str) -> set:
+        """Resolve a strategy filter to the set of display names to enable.
+
+        Accepts display ("MeanReversion") and snake_case ("mean_reversion")
+        identifiers, and a comma-separated list of either. Unknown names
+        warn and match nothing, as the single-name form always did.
+
+        Args:
+            strategy_filter: One name or a comma-separated list.
+
+        Returns:
+            Display names to enable (possibly empty).
+        """
+        wanted = set()
+        for raw in str(strategy_filter).split(","):
+            raw = raw.strip()
+            if not raw:
+                continue
+            resolved = resolve_strategy_display_name(raw)
+            if resolved is None:
+                logger.warning(
+                    f"Unknown strategy_filter '{raw}' - no strategy will match it"
+                )
+                continue
+            wanted.add(resolved)
+        return wanted
+
+    def begin_run(self, label: str) -> SignalFunnel:
+        """Reset per-run state and open a fresh signal funnel.
+
+        Factored out of :meth:`run` so a replay that supplies its own
+        signals (the direct strategy harness) starts from the same clean
+        slate and the same resolved execution policy as a full run, and
+        can then reuse :meth:`_execute_signal` and the bookkeeping helpers.
+
+        Args:
+            label: Funnel label (strategy/symbol/window).
+
+        Returns:
+            The run's funnel, already annotated with the execution policy.
+        """
+        self._resolve_execution_policy()
+        self._position_open_candle = {}
+        self._position_entry_count = {}
+        self._position_last_entry_candle = {}
+        self._position_time_exit = {}
+        self._pending_entry_ttl = {}
+        self._pending_entry_order_ids = {}
+        self._position_trailing = {}
+        self._sim_dt = None
+        # Signal funnel: a backtest always wants diagnostics (the cost is
+        # a handful of dict increments per bar - see the <3% benchmark in
+        # tests/test_diagnostics.py). The live bot keeps NullFunnel.
+        funnel = SignalFunnel(label=label)
+        self._funnel = funnel
+        funnel.note("execution_policy", self.execution_policy())
+        return funnel
+
     def run(
         self,
         start: str,
@@ -728,24 +802,7 @@ class BacktestEngine:
             strategy_filter or getattr(self.cfg, "backtest_strategy", "") or None
         )
 
-        # Initialise per-run state
-        self._resolve_execution_policy()
-        self._position_open_candle = {}
-        self._position_entry_count = {}
-        self._position_last_entry_candle = {}
-        self._position_time_exit = {}
-        self._pending_entry_ttl = {}
-        self._pending_entry_order_ids = {}
-        self._position_trailing = {}
-        self._sim_dt = None
-        # Signal funnel: a backtest always wants diagnostics (the cost is
-        # a handful of dict increments per bar - see the <3% benchmark in
-        # tests/test_diagnostics.py). The live bot keeps NullFunnel.
-        funnel = SignalFunnel(
-            label=f"{strategy_filter or 'all'}/{symbol} {start}..{end}"
-        )
-        self._funnel = funnel
-        funnel.note("execution_policy", self.execution_policy())
+        funnel = self.begin_run(f"{strategy_filter or 'all'}/{symbol} {start}..{end}")
 
         policy = self.execution_policy()
         logger.info(
@@ -770,25 +827,16 @@ class BacktestEngine:
             funding_schedule=funding_schedule,
             funding_interval_hours=self._venue_funding_interval_hours(),
         )
-        loader = BacktestDataLoader(symbol=symbol, data_dir=self.cfg.backtest_data_dir)
+        loader = self._loader_factory(symbol, self.cfg.backtest_data_dir)
         risk_manager = RiskManager(client=exchange)
 
         # Build strategy enable kwargs for single-strategy mode
         strategy_kwargs: Dict = {}
         if strategy_filter:
-            # Accept both display ("MeanReversion") and optimization
-            # snake_case ("mean_reversion") strategy identifiers.
-            resolved_filter = resolve_strategy_display_name(strategy_filter)
-            if resolved_filter is not None:
-                strategy_filter = resolved_filter
-            else:
-                logger.warning(
-                    f"Unknown strategy_filter '{strategy_filter}' - "
-                    f"no strategy will match"
-                )
+            wanted = self._resolve_strategy_filter(strategy_filter)
             for name, flag in STRATEGY_ENABLE_FLAGS.items():
-                strategy_kwargs[flag] = name == strategy_filter
-            logger.info(f"Single-strategy mode: only {strategy_filter} enabled")
+                strategy_kwargs[flag] = name in wanted
+            logger.info(f"Filtered-strategy mode: only {sorted(wanted)} enabled")
 
         # Force-disable strategies that can never work against the
         # simulated exchange (see NON_BACKTESTABLE_STRATEGIES).
