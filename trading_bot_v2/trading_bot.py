@@ -343,6 +343,7 @@ class TradingBot:
             reconcile_callback=self._reconcile_after_ambiguous_close,
             venue_exchange_resolver=lambda: self.exchange,
             db=self.db,
+            price_lookup=lambda symbol: self._get_ticker_ws(symbol),
         )
 
         # Initialize regime param overlay manager (P4). Loads active
@@ -362,6 +363,7 @@ class TradingBot:
             regime_detector=self.market_regime,
             migrated_position_manager=self.migrated_position_manager,
             multi_tf_fetcher=self.multi_tf_fetcher,
+            price_lookup=lambda symbol: self._get_ticker_ws(symbol),
         )
 
         # Initialize execution layer for precise 1m/5m entry timing

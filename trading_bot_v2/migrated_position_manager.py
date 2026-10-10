@@ -28,6 +28,7 @@ from loguru import logger
 
 from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
 from .order_result import OrderResult
+from .price_lookup import PriceLookup, fetch_current_price
 from .venue_stops import (
     PROTECTED_STATES,
     STOP_STATE_ATTACHED,
@@ -132,6 +133,7 @@ class MigratedPositionManager:
         reconcile_callback: Optional[Callable[[], Any]] = None,
         venue_exchange_resolver: Optional[Callable[[], Any]] = None,
         db: Any = None,
+        price_lookup: Optional[PriceLookup] = None,
     ) -> None:
         """
         Initialize MigratedPositionManager.
@@ -150,8 +152,14 @@ class MigratedPositionManager:
                 stops) the trailing stop stays local-only.
             db: Optional DatabaseManager used to write the venue stop
                 id/price/state back to the positions table.
+            price_lookup: Optional ticker source (symbol -> ticker dict)
+                used when manage_positions is not handed a price for a
+                symbol.  TradingBot injects its WebSocket-with-REST-
+                fallback lookup; without it the client itself is asked
+                (see price_lookup.py).
         """
         self.client = client
+        self._price_lookup = price_lookup
         self.risk_manager = risk_manager
         self.regime_detector = regime_detector
         self.multi_tf_fetcher = multi_tf_fetcher
@@ -303,13 +311,7 @@ class MigratedPositionManager:
     def _get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price for symbol."""
         try:
-            ticker = self.client.get_ticker(symbol)
-            if ticker:
-                return float(
-                    ticker.get("last")
-                    or ticker.get("price")
-                    or ticker.get("mark_price", 0)
-                )
+            return fetch_current_price(self.client, symbol, self._price_lookup)
         except Exception as e:
             logger.warning(f"Could not get price for {symbol}: {e}")
         return None
