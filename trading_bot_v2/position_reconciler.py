@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from loguru import logger
 
 from .event_system import EventBus, EventType, get_event_bus
+from .history.closed_trades import record_position_gone
 from .metrics import metrics
 
 if TYPE_CHECKING:
@@ -221,6 +222,14 @@ class PositionReconciler:
 
                 if exchange_pos is None and db_pos is not None:
                     # In DB but not on exchange -> close locally (exchange wins)
+                    # Record the round trip first (estimated exit price).
+                    record_position_gone(
+                        self.db,
+                        db_pos["symbol"],
+                        db_pos["side"],
+                        quantity=db_pos.get("quantity"),
+                        entry_price=db_pos.get("entry_price"),
+                    )
                     self.db.close_position(db_pos["symbol"], db_pos["side"])
                     report.closed_locally += 1
                     logger.info(

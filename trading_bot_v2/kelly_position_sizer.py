@@ -16,7 +16,7 @@ from loguru import logger
 from .models import Signal
 from .config import StrategyType
 from .database import DatabaseManager
-from .history import TradeStore
+from .history import TradeStore, current_network
 
 # Outcomes of KellyPositionSizer.evaluate().  Only KELLY_OK carries a
 # quantity; every other status means "Kelly has no opinion" and the
@@ -263,9 +263,15 @@ class KellyPositionSizer:
             Dict with win_rate, avg_win, avg_loss, total_trades
         """
         try:
-            # Query last 50 closed trades for this strategy via TradeStore
+            # Query last 50 closed trades for this strategy via TradeStore.
+            # The store matches the tag case-insensitively (legacy rows
+            # used the enum name) and the network filter keeps testnet
+            # and mainnet history apart (untagged legacy rows still count).
             trades = self.trade_store.get_closed_trades(
-                strategy=strategy.value, account_id=account_id, limit=50
+                strategy=strategy.value,
+                account_id=account_id,
+                limit=50,
+                network=current_network(),
             )
 
             if not trades:

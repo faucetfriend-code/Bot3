@@ -27,6 +27,11 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, ca
 from loguru import logger
 
 from .exit_sizing import plan_close_quantity, remaining_exchange_quantity, ClosePlan
+from .history.closed_trades import (
+    MIGRATED_STRATEGY_TAG,
+    REASON_TAKE_PROFIT_PARTIAL,
+    record_closed_trade,
+)
 from .order_result import OrderResult
 from .price_lookup import PriceLookup, fetch_current_price
 from .venue_stops import (
@@ -749,6 +754,9 @@ class MigratedPositionManager:
             )
             return False
         self._pending_closes.pop(key, None)
+        self._record_close(
+            symbol, pos, REASON_TAKE_PROFIT_PARTIAL, executed, result, partial=True
+        )
         if tp_info is not None:
             tp_info["partial_taken"] = True
         logger.info(
@@ -784,6 +792,9 @@ class MigratedPositionManager:
                 f"Close {symbol} {side} ({reason}): exchange already flat - "
                 f"no order sent, reconciling local state"
             )
+            # Closed on the venue, not by this order: quantity and price
+            # come from the positions row (estimate).
+            self._record_close(symbol, pos, f"{reason}:already_flat", None, None)
             self._finalize_close(symbol, side, qty, f"{reason}:already_flat")
             return
         if plan.clamped:
@@ -810,6 +821,10 @@ class MigratedPositionManager:
             )
             return
         if executed + 1e-9 < plan.quantity:
+            if executed > 0:
+                # The executed part is closed for good; the retry closes
+                # (and records) only the remainder.
+                self._record_close(symbol, pos, reason, executed, result, partial=True)
             self._mark_pending_close(
                 key,
                 "full",
@@ -819,7 +834,63 @@ class MigratedPositionManager:
                 accepted=True,
             )
             return
+        self._record_close(symbol, pos, reason, executed, result)
         self._finalize_close(symbol, side, qty, reason)
+
+    def _record_close(
+        self,
+        symbol: str,
+        pos: Dict[str, Any],
+        reason: str,
+        quantity: Optional[float],
+        result: Optional[OrderResult],
+        partial: bool = False,
+    ) -> None:
+        """Record a CONFIRMED close through the single closed-trade writer.
+
+        Bookkeeping only; never raises and never touches an order.
+
+        Args:
+            symbol: Trading symbol.
+            pos: Local position dict (side, entry_price, strategy).
+            reason: Exit reason.
+            quantity: Quantity this close executed; None reads the
+                positions row (the venue closed it, not this order).
+            result: The closing order's result; its average fill price
+                is used when it carries fills, else the current price is
+                stored as an estimate.
+            partial: True when part of the position stays open.
+        """
+        if self._db is None:
+            return
+        try:
+            side = str(pos.get("side"))
+            row = self._load_db_position(symbol, side)
+            fill_price = None
+            if result is not None and result.has_fills:
+                fill_price = result.avg_fill_price
+            price = fill_price or self._get_current_price(symbol)
+            local = None if row else pos
+            if quantity is None and local is not None:
+                quantity = local.get("qty")
+            record_closed_trade(
+                self._db,
+                symbol=symbol,
+                side=side,
+                close_reason=reason,
+                quantity=quantity,
+                exit_price=price,
+                exit_price_is_fill=bool(fill_price),
+                position=row,
+                entry_price=local.get("entry_price") if local else None,
+                entry_time=local.get("migrated_at") if local else None,
+                strategy=(row or {}).get("strategy") or pos.get("strategy"),
+                default_tag=MIGRATED_STRATEGY_TAG,
+                partial=partial,
+                close_ref=(result.order_id if partial and result else None),
+            )
+        except Exception as exc:  # noqa: BLE001 - recording must not stop a close
+            logger.error(f"Closed trade NOT recorded for {symbol} ({reason}): {exc}")
 
     def _send_reduce_only(
         self,

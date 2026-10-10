@@ -33,7 +33,8 @@ _TRADE_COLUMNS = (
     "id, account_id, symbol, side, quantity, entry_price, exit_price, "
     "pnl, commission, strategy, regime, "
     f"COALESCE(exchange, '{DEFAULT_EXCHANGE}') AS exchange, "
-    "entry_time, exit_time, status"
+    "entry_time, exit_time, status, "
+    "funding_pnl, close_reason, exit_price_source, network"
 )
 
 _TRADE_KEYS = (
@@ -52,6 +53,10 @@ _TRADE_KEYS = (
     "entry_time",
     "exit_time",
     "status",
+    "funding_pnl",
+    "close_reason",
+    "exit_price_source",
+    "network",
 )
 
 
@@ -142,11 +147,16 @@ class TradeStore:
         since: Optional[Any] = None,
         limit: Optional[int] = None,
         account_id: Optional[str] = None,
+        network: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Fetch closed trades, newest first, with optional filters.
 
         Args:
-            strategy: Exact strategy tag filter (e.g. "MEAN_REVERSION").
+            strategy: Strategy filter in any spelling ("mean_reversion",
+                "MEAN_REVERSION", a StrategyType member).  It is
+                normalised to the canonical tag and compared without
+                regard to case, so rows written before the tag format
+                was fixed still match.
             regime: Exact regime tag filter (e.g. "ranging_calm").
             exchange: Exchange filter; legacy NULL rows match 'pacifica'.
             symbol: Exact symbol filter.
@@ -154,6 +164,8 @@ class TradeStore:
                 ISO string).
             limit: Max rows (most recent by exit_time).
             account_id: Owning account filter.
+            network: 'testnet' or 'mainnet'.  Rows with no network tag
+                (written before the column existed) also match.
 
         Returns:
             List of trade dicts (see ``_TRADE_KEYS``) ordered by
@@ -169,6 +181,7 @@ class TradeStore:
             limit=limit,
             account_id=account_id,
             order_by="exit_time DESC",
+            network=network,
         )
 
     def get_open_trades(
@@ -366,13 +379,21 @@ class TradeStore:
         limit: Optional[int],
         account_id: Optional[str],
         order_by: str,
+        network: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """Build and run a filtered trades query, returning dicts."""
+        from .closed_trades import canonical_strategy_tag
+
         query = f"SELECT {_TRADE_COLUMNS} FROM trades WHERE status = ?"
         params: List[Any] = [status]
         if strategy:
-            query += " AND strategy = ?"
-            params.append(strategy)
+            # Case-insensitive on the canonical tag: legacy rows tagged
+            # with the enum NAME ("MEAN_REVERSION") still match.
+            query += " AND LOWER(strategy) = ?"
+            params.append(canonical_strategy_tag(strategy))
+        if network:
+            query += " AND (network = ? OR network IS NULL)"
+            params.append(str(network).strip().lower())
         if regime:
             query += " AND regime = ?"
             params.append(regime)

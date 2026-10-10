@@ -16,6 +16,14 @@ own SQL against the trades table.
 """
 
 from . import metrics
+from .closed_trades import (
+    MIGRATED_STRATEGY_TAG,
+    UNKNOWN_STRATEGY_TAG,
+    canonical_strategy_tag,
+    current_network,
+    record_closed_trade,
+    record_position_gone,
+)
 from .trade_store import DEFAULT_EXCHANGE, TradeStore, get_active_exchange_name
 
 __all__ = [
@@ -23,4 +31,10 @@ __all__ = [
     "TradeStore",
     "DEFAULT_EXCHANGE",
     "get_active_exchange_name",
+    "record_closed_trade",
+    "record_position_gone",
+    "canonical_strategy_tag",
+    "current_network",
+    "UNKNOWN_STRATEGY_TAG",
+    "MIGRATED_STRATEGY_TAG",
 ]

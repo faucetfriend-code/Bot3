@@ -90,6 +90,15 @@ from .entry_gates import (
 # Import SignalLogger for comprehensive signal tracking
 from .signal_logger import SignalLogger
 
+# Single writer of closed-trade records (bookkeeping only, never raises)
+from .history.closed_trades import (
+    REASON_LOCAL_STOP,
+    UNKNOWN_STRATEGY_TAG,
+    canonical_strategy_tag,
+    record_closed_trade,
+    record_position_gone,
+)
+
 # Import Phase 2 component system
 from .event_system import get_event_bus, EventType
 from .component_registry import get_component_registry
@@ -172,6 +181,18 @@ def _breaker_block_reason(bot: Any) -> Optional[str]:
 # Allowed range for the configured TOTAL grid level count (inclusive).
 GRID_MIN_LEVELS = 5
 GRID_MAX_LEVELS = 20
+
+
+def _estimated_close_price(bot: Any, symbol: str) -> Optional[float]:
+    """Latest price for a closed-trade estimate (None when unknown)."""
+    lookup = getattr(bot, "_current_price_for", None)
+    if not callable(lookup):
+        return None
+    try:
+        price = lookup(symbol)
+    except Exception:  # noqa: BLE001 - an estimate is optional
+        return None
+    return float(price) if isinstance(price, (int, float)) else None
 
 
 class GridPreTradeError(ValueError):
@@ -998,6 +1019,18 @@ class TradingBot:
 
             for key, db_pos in db_map.items():
                 if key not in exchange_map:
+                    # Record the round trip BEFORE the row is deleted; the
+                    # exit price is an estimate (the venue closed it).
+                    record_position_gone(
+                        self.db,
+                        db_pos["symbol"],
+                        db_pos["side"],
+                        quantity=db_pos.get("quantity"),
+                        entry_price=db_pos.get("entry_price"),
+                        estimated_exit_price=_estimated_close_price(
+                            self, db_pos["symbol"]
+                        ),
+                    )
                     self.db.close_position(db_pos["symbol"], db_pos["side"])
                     logger.warning(
                         f"Closed stale local position {db_pos['symbol']} "
@@ -1005,6 +1038,29 @@ class TradingBot:
                     )
         except Exception as e:
             logger.error(f"Error closing stale local positions: {e}")
+
+    def _tag_position_owner(self, signal: Signal, symbol: str) -> None:
+        """Stamp the entry's strategy on the positions row; never raises.
+
+        Bookkeeping only (no order is touched).  The tag is what
+        ``record_closed_trade`` reads when the position closes.  While a
+        grid is active on the symbol the venue nets grid inventory and
+        this entry into one position, so the owner is stored as unknown.
+        """
+        try:
+            side = position_side_lower(signal.side).upper()
+            tag = canonical_strategy_tag(signal.strategy)
+            grid = getattr(self, "grid_lifecycle", None)
+            if grid is not None and grid.has_active_grid(symbol) is True:
+                tag = UNKNOWN_STRATEGY_TAG
+            detector = getattr(self, "market_regime", None)
+            regime = detector.get_current_regime(symbol) if detector else None
+            regime_tag = getattr(regime, "value", None)
+            self.db.tag_position_owner(
+                symbol, side, tag, regime_tag if isinstance(regime_tag, str) else None
+            )
+        except Exception as exc:  # noqa: BLE001 - never raise into the entry path
+            logger.error(f"Could not tag position owner for {symbol}: {exc}")
 
     def _maybe_run_full_reconciliation(
         self, exchange_positions: List[Dict[str, Any]]
@@ -2554,6 +2610,10 @@ class TradingBot:
                 f"UNPROTECTED {symbol}: stop verification raised "
                 f"{type(exc).__name__}: {exc}"
             )
+        # Remember which strategy owns the position (closed-trade records).
+        tagger = getattr(self, "_tag_position_owner", None)
+        if callable(tagger):
+            tagger(signal, symbol)
         self.event_bus.publish_event(
             event_type=EventType.ORDER_PLACED,
             data={
@@ -2899,6 +2959,17 @@ class TradingBot:
                 quantity = self._exchange_quantity_for(symbol, side)
             if self._emergency_close_position(symbol, side, quantity):
                 closed += 1
+                # ``price`` is the trigger price, not the market fill.
+                record_closed_trade(
+                    getattr(self, "db", None),
+                    symbol=symbol,
+                    side=side,
+                    close_reason=REASON_LOCAL_STOP,
+                    quantity=quantity if quantity > 0 else None,
+                    exit_price=price,
+                    exit_price_is_fill=False,
+                    entry_price=row.get("entry_price"),
+                )
                 self._mark_position_closed(symbol, side, price)
         return closed
 

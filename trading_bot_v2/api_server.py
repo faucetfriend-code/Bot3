@@ -30,6 +30,7 @@ from fastapi import (
 )
 from fastapi.responses import HTMLResponse, Response
 from trading_bot_v2.metrics import metrics
+from trading_bot_v2.history import record_position_gone
 from contextlib import asynccontextmanager
 import uvicorn
 
@@ -1118,6 +1119,10 @@ class BotIntegration:
                 if key not in active_keys:
                     symbol = key[0]
                     try:
+                        # Record the round trip first (estimated exit price).
+                        record_position_gone(
+                            self.database, symbol, key[1], position=db_pos
+                        )
                         self.database.close_position(symbol, str(db_pos.get("side")))
                         result["closed_count"] += 1
                     except Exception as e:
