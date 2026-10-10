@@ -75,11 +75,16 @@ class Phase1RegimePermission:
         risk_manager: Any,
         config: Any,
         cooldown_manager: Optional["CooldownManager"] = None,
+        enforce_regime: bool = True,
     ) -> None:
         self.regime_detector = regime_detector
         self.risk_manager = risk_manager
         self.config = config
         self.cooldown_manager = cooldown_manager
+        # False when the caller already owns regime-to-strategy activation
+        # (the live path: StrategyManager).  The map below is narrower than
+        # the live one, so enforcing both would contradict it.
+        self.enforce_regime = enforce_regime
 
         # Regime-to-strategy mapping
         self.regime_strategy_map: Dict[str, List[StrategyType]] = {
@@ -108,7 +113,8 @@ class Phase1RegimePermission:
         Args:
             symbol: Trading symbol
             strategy_type: Type of strategy wanting to trade
-            market_data: Market data dict with 'close', 'high', 'low', 'volume'
+            market_data: Unused; kept for call compatibility.  The regime
+                is read from the detector's confirmed regime for the symbol.
             timeframe: Signal timeframe for cooldown check
 
         Returns:
@@ -147,8 +153,15 @@ class Phase1RegimePermission:
                 details={"bypass_regime": True},
             )
 
+        if not self.enforce_regime:
+            return PhaseDecision(
+                result=PhaseResult.PASS,
+                reason=f"{strategy_type.value} permitted (regime check not enforced)",
+                details={"regime_enforced": False},
+            )
+
         # Check 5: Regime allows this strategy?
-        current_regime = self._get_regime_name(market_data)
+        current_regime = self._get_regime_name(symbol)
         allowed_strategies = self.regime_strategy_map.get(current_regime, [])
 
         if strategy_type not in allowed_strategies:
@@ -168,16 +181,19 @@ class Phase1RegimePermission:
             details={"current_regime": current_regime},
         )
 
-    def _get_regime_name(self, market_data: Dict[str, Any]) -> str:
-        """Get regime name from market data."""
-        try:
-            regime = self.regime_detector.get_regime(market_data)
-            if hasattr(regime, "name"):
-                return cast(str, regime.name)
-            return str(regime)
-        except Exception as e:
-            logger.warning(f"Could not get regime: {e}")
+    def _get_regime_name(self, symbol: str) -> str:
+        """Get the confirmed regime name for a symbol.
+
+        Reads get_current_regime(symbol), the accessor the regime detectors
+        actually provide.  No confirmed regime yet (None) maps to
+        "INDECISIVE", which permits nothing but the always-active set.
+        """
+        regime = self.regime_detector.get_current_regime(symbol)
+        if regime is None:
             return "INDECISIVE"
+        if hasattr(regime, "name"):
+            return cast(str, regime.name)
+        return str(regime)
 
     def _is_strategy_enabled(self, strategy_type: StrategyType) -> bool:
         """Check if strategy is enabled in config."""
@@ -224,13 +240,21 @@ class Phase3ExecutionFilter:
         self.client = client
         self.config = config
 
-    def check(self, signal: Signal, proposed_size: float) -> PhaseDecision:
+    def check(
+        self,
+        signal: Signal,
+        proposed_size: float,
+        account_balance: Optional[float] = None,
+    ) -> PhaseDecision:
         """
         Check if signal execution is safe.
 
         Args:
             signal: Signal from Phase 2
             proposed_size: Position size after Kelly/sizing calculation
+            account_balance: Balance to measure exposure against.  When
+                None the balance is read from the client (see
+                _get_account_balance for its fallback).
 
         Returns:
             PhaseDecision with PASS or BLOCK
@@ -248,14 +272,13 @@ class Phase3ExecutionFilter:
         max_exposure = getattr(
             self.config, "max_exposure_per_symbol", 0.25
         )  # 25% of portfolio
-        account_balance = self._get_account_balance()
+        if account_balance is None:
+            account_balance = self._get_account_balance()
 
         # Get current exposure
         current_exposure = 0
         if hasattr(self.risk_manager, "get_total_exposure"):
-            exp_data = self.risk_manager.get_total_exposure(
-                signal.symbol  # type: ignore[attr-defined]  # bug: no Signal.symbol
-            )
+            exp_data = self.risk_manager.get_total_exposure(signal.asset)
             current_exposure = (
                 exp_data.get("total_exposure", 0) if isinstance(exp_data, dict) else 0
             )
@@ -302,7 +325,8 @@ class Phase3ExecutionFilter:
                         balance.get("total", 0) or balance.get("equity", 0) or 10000
                     )
                 return float(balance) if balance else 10000
-        except Exception as e:
+        except (OSError, ValueError) as e:
+            # Transport / parse failures only; a programming error raises.
             logger.warning(f"Could not get balance: {e}")
         return 10000  # Fallback
 
@@ -329,6 +353,33 @@ class SignalPipeline:
         self.phase3 = phase3
         self.position_sizer = position_sizer
         self.confidence_sizer = confidence_sizer
+
+    def review_entry(
+        self, signal: Signal, proposed_size: float, account_balance: float
+    ) -> PhaseDecision:
+        """
+        Run the permission and execution phases on an existing signal.
+
+        Read-only: the signal is never modified and no size is computed, so
+        the result can only be PASS or BLOCK.  This is the entry point the
+        live path uses behind ENABLE_SIGNAL_PIPELINE; process() additionally
+        generates and sizes signals itself, which the live path already does
+        elsewhere.
+
+        Args:
+            signal: Signal produced by the strategy layer.
+            proposed_size: Quantity the caller intends to send.
+            account_balance: Balance to measure exposure against.
+
+        Returns:
+            The first BLOCK decision, or Phase 3's PASS decision.
+        """
+        p1_decision = self.phase1.check(
+            signal.asset, signal.strategy, {}, timeframe=signal.timeframe
+        )
+        if p1_decision.result == PhaseResult.BLOCK:
+            return p1_decision
+        return self.phase3.check(signal, proposed_size, account_balance=account_balance)
 
     def process(
         self,
@@ -411,24 +462,23 @@ class SignalPipeline:
         return results
 
     def _calculate_base_size(self, signal: Signal, account_balance: float) -> float:
-        """Calculate base position size from Kelly or fixed percentage."""
-        try:
-            if self.position_sizer and hasattr(
-                self.position_sizer, "calculate_position_size"
-            ):
-                result = self.position_sizer.calculate_position_size(
-                    strategy_type=signal.strategy,
-                    entry_price=signal.entry_price,
-                    stop_loss=signal.stop_loss,
-                    account_balance=account_balance,
-                )
-                if isinstance(result, dict):
-                    return cast(float, result.get("position_size", 0))
-                return cast(float, result)
-        except Exception as e:
-            logger.warning(f"Position sizer error: {e}")
+        """Calculate base position size from Kelly or fixed percentage.
 
-        # Fallback: 2% of account / entry price
+        A configured sizer is called with the KellyPositionSizer signature
+        (signal, account_balance) and its errors propagate.  The 2% figure
+        below applies only when no sizer is configured.
+        """
+        if self.position_sizer and hasattr(
+            self.position_sizer, "calculate_position_size"
+        ):
+            result = self.position_sizer.calculate_position_size(
+                signal, account_balance
+            )
+            if isinstance(result, dict):
+                return cast(float, result.get("position_size", 0))
+            return cast(float, result)
+
+        # No sizer configured: 2% of account / entry price
         return (
             (account_balance * 0.02) / signal.entry_price
             if signal.entry_price > 0

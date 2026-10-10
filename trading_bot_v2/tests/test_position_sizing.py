@@ -6,8 +6,9 @@ quantities (the existing suite only asserts ``>= 1.0``),
 ``exit_sizing`` (how much is actually left to close) and the sizing
 arithmetic on ``models.Signal`` / ``models.Position``.
 
-Tests marked ``xfail(strict=True)`` document real defects; a separate
-change owns the fixes.
+The two former ``xfail(strict=True)`` tests for ``IntegratedPositionSizer``
+(wrong Kelly call signature, ``signal.symbol``) are ordinary passing tests
+now that the defects are fixed.
 """
 
 from types import SimpleNamespace
@@ -277,9 +278,8 @@ class TestConfidenceSizer:
 
 
 def int_signal(**overrides: Any) -> SimpleNamespace:
-    """Signal-like object with the ``symbol`` field the integrated sizer logs."""
+    """Signal-like object carrying the fields the integrated sizer reads."""
     fields = dict(
-        symbol="BTC",
         asset="BTC",
         strategy=StrategyType.MA_CROSSOVER,
         entry_price=100.0,
@@ -292,12 +292,14 @@ def int_signal(**overrides: Any) -> SimpleNamespace:
 
 
 class StubKelly:
-    """Kelly stand-in matching the signature the integrated sizer calls."""
+    """Kelly stand-in with the real ``calculate_position_size`` signature."""
 
     def __init__(self, result: Any) -> None:
         self.result = result
 
-    def calculate_position_size(self, **kw: Any) -> Any:
+    def calculate_position_size(
+        self, signal: Any, account_balance: float, account_id: str = "sub_1"
+    ) -> Any:
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -313,18 +315,11 @@ class TestIntegratedPositionSizer:
         out = self._sizer(4.0).calculate_position_size(int_signal(), 10_000.0)
         assert out.effective_size == pytest.approx(2.0)
 
-    def test_dict_kelly_result(self) -> None:
-        out = self._sizer({"position_size": 6.0}).calculate_position_size(
-            int_signal(confidence=1.0), 10_000.0
-        )
-        assert out.effective_size == pytest.approx(6.0)
-
-    def test_kelly_error_falls_back_to_two_percent(self) -> None:
-        # 2% of 10_000 = 200 / 100 = 2 contracts * 0.5 confidence = 1.0
-        out = self._sizer(RuntimeError("x")).calculate_position_size(
-            int_signal(), 10_000.0
-        )
-        assert out.effective_size == pytest.approx(1.0)
+    @pytest.mark.parametrize("exc", [RuntimeError("x"), TypeError("bad call")])
+    def test_kelly_error_propagates(self, exc: Exception) -> None:
+        # No invented 2% size: the caller decides what a failure means.
+        with pytest.raises(type(exc)):
+            self._sizer(exc).calculate_position_size(int_signal(), 10_000.0)
 
     def test_hard_cap_at_ten_percent_of_account(self) -> None:
         # 10% of 10_000 = 1_000 / 100 = 10 contracts
@@ -353,32 +348,19 @@ class TestIntegratedPositionSizer:
         )
         assert out.effective_size == 0.001
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "IntegratedPositionSizer calls kelly.calculate_position_size("
-            "strategy_type=, entry_price=, stop_loss=, account_balance=) but "
-            "KellyPositionSizer takes (signal, account_balance, account_id).  "
-            "The TypeError is swallowed and every size silently comes from the "
-            "2% fallback, never from Kelly."
-        ),
-    )
     def test_real_kelly_sizer_is_actually_consulted(self) -> None:
-        real = kelly([100.0] * 40 + [-50.0] * 10)  # capped 10% -> 20 contracts
+        # raw Kelly (0.8 * 100 - 0.2 * 50) / 100 = 0.70, half = 0.35, capped
+        # to 10% of 10_000 = 1_000 at risk / 5% stop = 20_000 notional = 200
+        real = kelly([100.0] * 40 + [-50.0] * 10)
         sizer = IntegratedPositionSizer(real, ConfidenceSizer(), SimpleNamespace())
-        out = sizer.calculate_position_size(int_signal(confidence=1.0), 10_000.0)
-        # Kelly base = 20 contracts; hard cap 10% -> 10, not the 2% fallback 2
-        assert out.base_size == pytest.approx(20.0)
+        out = sizer.calculate_position_size(sig(confidence=1.0), 10_000.0)
+        # (The xfail this replaces expected a base of 20; that figure was a
+        # tenth of what the Kelly sizer returns for these inputs.)
+        assert out.base_size == pytest.approx(200.0)
+        # hard cap 10% of 10_000 / 100 = 10 contracts, not the old 2% -> 2
         assert out.effective_size == pytest.approx(10.0)
+        assert real.trade_store.queries[0]["strategy"] == "ma_crossover"
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason=(
-            "IntegratedPositionSizer logs signal.symbol, but models.Signal names "
-            "the field 'asset', so sizing a real Signal raises AttributeError."
-        ),
-    )
     def test_accepts_a_real_signal(self) -> None:
         out = self._sizer(4.0).calculate_position_size(sig(confidence=0.5), 10_000.0)
         assert out.effective_size == pytest.approx(2.0)

@@ -10,12 +10,44 @@ Implements Kelly Criterion-based position sizing with safety features:
 Formula: Position size = (Win rate × Avg win - Loss rate × Avg loss) ÷ Avg win
 """
 
+from dataclasses import dataclass
 from typing import Dict, Optional
 from loguru import logger
 from .models import Signal
 from .config import StrategyType
 from .database import DatabaseManager
 from .history import TradeStore
+
+# Outcomes of KellyPositionSizer.evaluate().  Only KELLY_OK carries a
+# quantity; every other status means "Kelly has no opinion" and the
+# caller must decide what to do (the live path keeps RiskManager's size).
+KELLY_OK = "ok"
+KELLY_INSUFFICIENT_HISTORY = "insufficient_history"
+KELLY_NON_POSITIVE = "non_positive_kelly"
+KELLY_INVALID_STOP = "invalid_stop"
+KELLY_INVALID_INPUT = "invalid_input"
+
+
+@dataclass(frozen=True)
+class KellyEvaluation:
+    """Result of a strict Kelly evaluation (no fallbacks, no floors).
+
+    Attributes:
+        status: One of the KELLY_* constants.
+        quantity: Kelly quantity in contracts; 0.0 unless status is KELLY_OK.
+        total_trades: Closed trades found for the strategy (max 50).
+        raw_kelly_pct: Unscaled Kelly fraction (may be negative).
+        applied_pct: Fraction of the balance risked to the stop after the
+            kelly_fraction scaling and the max_position_pct cap.
+        detail: Human-readable explanation for logs.
+    """
+
+    status: str
+    quantity: float
+    total_trades: int
+    raw_kelly_pct: float
+    applied_pct: float
+    detail: str
 
 
 class KellyPositionSizer:
@@ -162,6 +194,60 @@ class KellyPositionSizer:
         )
 
         return quantity
+
+    def evaluate(
+        self, signal: Signal, account_balance: float, account_id: str = "sub_1"
+    ) -> KellyEvaluation:
+        """
+        Evaluate the Kelly size strictly, reporting why when there is none.
+
+        Unlike calculate_position_size() this never substitutes a fixed
+        fallback percentage and never rounds a small quantity up to one
+        contract: with too little history, a non-positive Kelly fraction,
+        or an unusable stop it returns a non-OK status and quantity 0.0.
+
+        Args:
+            signal: Trading signal with strategy, entry price and stop loss.
+            account_balance: Current account balance.
+            account_id: Account whose trade history is read.
+
+        Returns:
+            KellyEvaluation; quantity is meaningful only when status is
+            KELLY_OK.
+        """
+        name = signal.strategy.value
+        if account_balance <= 0 or signal.entry_price <= 0:
+            detail = f"balance={account_balance}, entry={signal.entry_price}"
+            return KellyEvaluation(KELLY_INVALID_INPUT, 0.0, 0, 0.0, 0.0, detail)
+        stop_distance_pct = signal.stop_distance_pct
+        if stop_distance_pct <= 0:
+            detail = f"missing or zero stop distance ({stop_distance_pct})"
+            return KellyEvaluation(KELLY_INVALID_STOP, 0.0, 0, 0.0, 0.0, detail)
+
+        performance = self._get_strategy_performance(signal.strategy, account_id)
+        total = int(performance["total_trades"])
+        if total < self.min_trades:
+            detail = f"{name}: {total} closed trades < {self.min_trades} required"
+            return KellyEvaluation(
+                KELLY_INSUFFICIENT_HISTORY, 0.0, total, 0.0, 0.0, detail
+            )
+
+        raw_pct = self._calculate_kelly_pct(
+            performance["win_rate"], performance["avg_win"], performance["avg_loss"]
+        )
+        scaled_pct = raw_pct * self.kelly_fraction
+        if not scaled_pct > 0:
+            detail = f"{name}: Kelly fraction {raw_pct:.4f} is not positive"
+            return KellyEvaluation(KELLY_NON_POSITIVE, 0.0, total, raw_pct, 0.0, detail)
+
+        applied_pct = min(scaled_pct, self.max_position_pct)
+        position_value = account_balance * applied_pct / stop_distance_pct
+        quantity = position_value / signal.entry_price
+        detail = (
+            f"{name}: {total} trades, raw Kelly {raw_pct:.4f}, "
+            f"risk {applied_pct:.4f} of balance, stop {stop_distance_pct:.4f}"
+        )
+        return KellyEvaluation(KELLY_OK, quantity, total, raw_pct, applied_pct, detail)
 
     def _get_strategy_performance(
         self, strategy: StrategyType, account_id: str = "sub_1"
