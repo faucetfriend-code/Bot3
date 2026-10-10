@@ -233,7 +233,7 @@ CREATE INDEX IF NOT EXISTS idx_funding_payments_position
 -- funding_rate_history: Historical funding rates
 -- -------------------------
 -- Hourly snapshots of funding rates for all tracked symbols.
--- Used for funding arbitrage strategy analysis.
+-- Used for funding-rate analysis.
 -- Chunk interval: 1 day
 CREATE TABLE IF NOT EXISTS funding_rate_history (
     id              BIGSERIAL,

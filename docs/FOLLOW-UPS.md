@@ -425,8 +425,8 @@ zero search budget, so unlike tuning it deflates nothing:
 **c. CLAUDE.md's regime-to-strategy table does not match the code.**
 `market_regime.py` maps GridTrading into RANGING_CALM and MACrossover into
 TRENDING_MODERATE, and `strategy_manager.py` adds VWAPScalping in three
-regimes and LiquidationCapture/FundingArb in all of them. None of that is in
-the CLAUDE.md table.
+regimes and LiquidationCapture in all of them (FundingArb too, until it was
+removed on 2026-10-10 as never tested). None of that is in the CLAUDE.md table.
 
 **d. The roster is aimed at the wrong fifth of the tape.** trending_strong is
 59.9% of bars and produced 360 trades in eight years; ranging_calm is 21.6%

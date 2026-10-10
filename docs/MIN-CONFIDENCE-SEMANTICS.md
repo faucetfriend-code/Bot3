@@ -24,6 +24,9 @@ confidence value:
 | `mean_reversion` | no | no | **inert** | ~~yes~~ removed 2026-08-02 |
 | `grid_trading` | no | no | **inert** | **yes — still tuned** |
 
+(Update 2026-10-10: `funding_arb` was removed from the codebase as never tested; its
+row above is kept as part of the original finding.)
+
 Three distinct semantics:
 
 **Gate.** `if confidence < self.min_confidence: return None`. A higher value

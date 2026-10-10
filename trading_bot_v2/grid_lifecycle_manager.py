@@ -2162,7 +2162,7 @@ class GridLifecycleManager:
         Fill attribution: when the grid tracks order IDs (grid["order_ids"]
         is a set), only trades whose order_id is in that set are treated as
         grid fills; everything else on the symbol (overlay strategies such
-        as LiquidationCapture / FundingArb / OrderBookImbalance) is ignored.
+        as LiquidationCapture / OrderBookImbalance) is ignored.
         Legacy grids without tracked IDs keep the old attribute-everything
         behavior, with a one-time WARNING per grid.
 

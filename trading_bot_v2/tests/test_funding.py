@@ -496,15 +496,14 @@ class TestStrategyFacingSurfaces:
 
 
 class TestEngineContract:
-    def test_funding_arb_is_backtestable(self):
+    def test_only_the_l2_overlay_is_non_backtestable(self):
         from trading_bot_v2.backtesting.engine import NON_BACKTESTABLE_STRATEGIES
 
-        assert "funding_arb" not in NON_BACKTESTABLE_STRATEGIES
-        assert "orderbook_imbalance" in NON_BACKTESTABLE_STRATEGIES
+        assert NON_BACKTESTABLE_STRATEGIES == frozenset({"orderbook_imbalance"})
 
     def test_stopless_signal_has_zero_rrr_instead_of_raising(self):
         sig = Signal(
-            strategy=StrategyType.FUNDING_ARB,
+            strategy=StrategyType.MEAN_REVERSION,
             asset="BTC-USDC",
             asset_class=AssetClass.PERPETUAL,
             side=OrderSide.SELL,
@@ -528,7 +527,7 @@ class TestEngineContract:
         assert "BTC-USDC" in ex._positions
 
         close = Signal(
-            strategy=StrategyType.FUNDING_ARB,
+            strategy=StrategyType.MEAN_REVERSION,
             asset="BTC-USDC",
             asset_class=AssetClass.PERPETUAL,
             side=OrderSide.BUY,

@@ -2,7 +2,7 @@
 Grid order-ID fill-attribution tests.
 
 GridLifecycleManager._process_trades used to attribute EVERY account trade
-on a symbol to the grid. Overlay strategies (LiquidationCapture, FundingArb,
+on a symbol to the grid. Overlay strategies (LiquidationCapture,
 OrderBookImbalance) trade the same symbols, so their fills triggered
 spurious grid ladder replenishment and corrupted FIFO round-trip PnL.
 

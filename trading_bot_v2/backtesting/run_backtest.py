@@ -10,7 +10,7 @@ Usage:
 
 Strategies (--strategy):
     MeanReversion, MACrossover, GridTrading, LiquidationCapture,
-    VWAPScalping, MomentumScalping, FundingArb, OrderBookImbalance
+    VWAPScalping, MomentumScalping, OrderBookImbalance
 """
 
 import argparse

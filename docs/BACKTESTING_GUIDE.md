@@ -310,8 +310,13 @@ python -m trading_bot_v2.backtesting.run_backtest \
 | `--walk-forward` | off | Rolling train/test; writes `backtest_wf_NN.html` per window |
 
 Strategy display names: `MeanReversion`, `MACrossover`, `GridTrading`,
-`LiquidationCapture`, `VWAPScalping`, `MomentumScalping`, `FundingArb`,
+`LiquidationCapture`, `VWAPScalping`, `MomentumScalping`,
 `OrderBookImbalance`, `SessionRangeBreakout`, `CalendarFlow`.
+
+> **Removed 2026-10-10:** the funding arbitrage strategy (`FundingArb` / `funding_arb`)
+> was deleted as never tested or used. Mentions of it further down this guide are kept
+> as a historical record of measurements taken while it existed; its commands no longer
+> run. The funding *model* described below still applies to every other strategy.
 
 ### One strategy cannot be backtested at all
 
@@ -328,10 +333,11 @@ SimulatedExchange cannot provide)
 The sweep reports it as `N/A (not backtestable)` rather than a zero row. **Do not spend
 time chasing its zeros, and do not include it in optimization runs.**
 
-`FundingArb` was excluded alongside it until 2026-07-29. It is now backtestable against
-real ingested funding history — see [Funding](#funding-the-one-structural-cost-in-the-model)
-below, and read that section before believing any FundingArb number, because the rates
-come from a **different venue on a different settlement clock**.
+`FundingArb` was excluded alongside it until 2026-07-29, became backtestable against
+real ingested funding history, and was then removed from the codebase on 2026-10-10 as
+never tested. See [Funding](#funding-the-one-structural-cost-in-the-model) below for the
+funding model itself, whose rates come from a **different venue on a different settlement
+clock**.
 
 ### The 1m coverage guard
 
@@ -410,8 +416,8 @@ closed-trade counts and profit factors were **identical to three decimal places 
 six chart strategies**; total return moved by at most 0.02 percentage points. The reason
 is sizing, not luck — the engine risks 2% of balance per trade and holds for hours, so
 funding on a $200 notional is cents either way. The overcharge only bites a strategy that
-holds a large position for a long time, which is exactly `funding_arb`: under the flat
-model it lost 1.25-2.20% per 2-month window purely to carry.
+holds a large position for a long time, which was exactly `funding_arb` (removed
+2026-10-10): under the flat model it lost 1.25-2.20% per 2-month window purely to carry.
 
 ### The interval mismatch (read this before trusting any funding number)
 
@@ -434,7 +440,7 @@ venue_rate = observed_8h_rate * BACKTEST_FUNDING_SCALE * factor(conversion)
 `BACKTEST_FUNDING_SCALE` (default 1.0) is the knob for the cross-venue basis. **It is 1.0
 because nobody has measured it, not because it is known to be 1.0.** Using Binance rates
 to price Pacifica funding is a MODELLING ASSUMPTION with an unmeasured error term. Every
-`funding_arb` result carries that caveat.
+funding-sensitive result carries that caveat.
 
 The venue interval itself is read from the selected exchange adapter's capabilities, not
 hardcoded, so switching `EXCHANGE=blofin` moves settlement to 8h and the pro-rata factor
@@ -459,11 +465,10 @@ bar is lookahead, and a funding strategy that only works with lookahead is not a
 
 **The default is `flat` only because every published number in this repo was produced
 under it**, and changing the default silently would invalidate the campaign without anyone
-noticing. It is not the better model. `historical` is, and `funding_arb` is meaningless
-without it.
+noticing. It is not the better model. `historical` is.
 
 A run under `historical` whose window predates 2019-09-10 logs an ERROR naming the
-uncovered range. Nothing is charged there and `FundingArb` sees no rate — those bars are
+uncovered range. Nothing is charged there — those bars are
 silently funding-free, which is a hole, not a zero.
 
 `BacktestResult.total_funding_paid` is now populated (positive = paid out) and printed in
@@ -882,6 +887,10 @@ PF of 1.5 needs several hundred trades before its 95% lower bound clears 1.3.
 
 ### The first honest measurement of `funding_arb`
 
+> **Historical record.** `funding_arb` was removed on 2026-10-10 as never tested; the
+> command below no longer runs. The section is kept because the measurement is the
+> evidence behind that decision.
+
 Run 2026-07-29, shipped parameters, nothing tuned:
 
 ```bash
@@ -959,8 +968,8 @@ python -m trading_bot_v2.optimization --list
 > `RuntimeWarning` about double-importing the package.
 
 Optimizable strategies: `mean_reversion`, `ma_crossover`, `grid_trading`,
-`liquidation_capture`, `vwap_scalping`, `funding_arb`, `momentum_scalping`,
-`orderbook_imbalance`. In practice skip the last two overlays — they cannot be
+`liquidation_capture`, `vwap_scalping`, `vwap_pullback`, `momentum_scalping`,
+`orderbook_imbalance`. In practice skip `orderbook_imbalance` — it cannot be
 backtested, so every trial scores identically.
 
 Useful flags: `--sampler tpe|random`, `--objective` (default `sharpe_ratio`),

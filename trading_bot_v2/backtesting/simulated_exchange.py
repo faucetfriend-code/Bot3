@@ -316,8 +316,8 @@ class SimulatedExchange:
     def get_market_data(self, symbol: str) -> Dict[str, Any]:
         """PacificaClient-shaped market snapshot.
 
-        FundingArbStrategy reads ``funding_rate`` and
-        ``next_funding_time`` from here. The rate is the one PER VENUE
+        Carries ``funding_rate`` and ``next_funding_time`` like the
+        live client does. The rate is the one PER VENUE
         SETTLEMENT INTERVAL that was last SETTLED at or before the
         current bar - never a future one.
 
