@@ -7,7 +7,10 @@ Reference values were computed independently with numpy/scipy
 REF_RETURNS below.
 """
 
+import functools
 import math
+import operator
+import statistics
 
 import pytest
 
@@ -46,6 +49,42 @@ class TestSharpeRatio:
 
     def test_zero_variance_returns_zero(self):
         assert sharpe_ratio([0.01] * 10) == 0.0
+
+    @pytest.mark.parametrize(
+        "series",
+        [
+            [0.01] * 10,
+            [0.007] * 13,
+            [0.1] * 3,
+            [-0.003] * 50,
+            [1e-9] * 20,
+        ],
+    )
+    def test_constant_series_is_zero_on_any_python(self, series):
+        assert sharpe_ratio(series) == 0.0
+        assert probabilistic_sharpe_ratio(series).value is None
+        assert min_track_record_length(series, 0.0) is None
+
+    def test_naive_summation_noise_is_treated_as_zero(self):
+        # Emulates Python 3.11 sum(): left-to-right float addition leaves
+        # a mean that is not exactly the constant on some inputs.
+        series = [0.007] * 13
+        naive_mean = functools.reduce(operator.add, series) / len(series)
+        noisy = [naive_mean] * 6 + [naive_mean + 1e-18] * 7
+        assert sharpe_ratio(noisy) == 0.0
+
+    @pytest.mark.parametrize(
+        "series",
+        [
+            REF_RETURNS,
+            [0.004, -0.002, 0.0031, 0.0005, -0.0012, 0.0022, 0.001],
+        ],
+    )
+    def test_ordinary_series_unchanged(self, series):
+        n = len(series)
+        mean = statistics.fmean(series)
+        std = math.sqrt(sum((r - mean) ** 2 for r in series) / n)
+        assert sharpe_ratio(series) == pytest.approx(mean / std, abs=1e-12)
 
     def test_too_short_returns_zero(self):
         assert sharpe_ratio([0.01]) == 0.0
