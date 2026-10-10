@@ -98,13 +98,35 @@ class BacktestDataLoader:
         symbol: str,
         data_dir: str = "backtesting/data",
         download_manager: Optional["CandleDownloadManager"] = None,
+        offline: bool = False,
+        validate: bool = False,
     ):
+        """Build a loader for one symbol's store.
+
+        Args:
+            symbol: Trading pair, e.g. "BTC-USDC".
+            data_dir: Store directory holding ``{symbol}_{tf}.parquet``,
+                ``.csv`` or ``.csv.gz`` files.
+            download_manager: Optional CandleDownloadManager (tests inject
+                a fake). Ignored when ``offline`` is set.
+            offline: Never touch the network: no auto-download, no API
+                fetch. A missing file raises FileNotFoundError instead of
+                being fetched. This is what the harness uses.
+            validate: Run :mod:`backtesting.ohlcv` validation on every
+                file read (ordering, duplicates, gaps, timezone, values).
+                Duplicates and ordering are repaired, gaps are reported,
+                anything else fatal raises CandleDataError. Reports are
+                kept in :attr:`validations` keyed by timeframe.
+        """
         self.symbol = symbol
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._cache: Dict[str, pd.DataFrame] = {}
         self._download_manager = download_manager
         self._ensure_attempted: set[tuple[str, str, str]] = set()
+        self.offline = offline
+        self.validate = validate
+        self.validations: Dict[str, Any] = {}
 
     def get_candles(
         self,
@@ -320,13 +342,25 @@ class BacktestDataLoader:
         base = self.symbol.replace("/", "_")
         parquet_path = self.data_dir / f"{base}_{timeframe}.parquet"
         csv_path = self.data_dir / f"{base}_{timeframe}.csv"
+        gz_path = self.data_dir / f"{base}_{timeframe}.csv.gz"
 
-        if parquet_path.exists():
+        if self.validate:
+            df = self._load_validated(timeframe, parquet_path, csv_path, gz_path)
+        elif parquet_path.exists():
             df = pd.read_parquet(parquet_path)
             logger.info(f"Loaded {len(df)} {timeframe} candles from {parquet_path}")
         elif csv_path.exists():
             df = pd.read_csv(csv_path, dtype={"timestamp": str})
             logger.info(f"Loaded {len(df)} {timeframe} candles from {csv_path}")
+        elif gz_path.exists():
+            df = pd.read_csv(gz_path, dtype={"timestamp": str})
+            logger.info(f"Loaded {len(df)} {timeframe} candles from {gz_path}")
+        elif self.offline:
+            raise FileNotFoundError(
+                f"No {timeframe} candles for {self.symbol} in {self.data_dir} "
+                f"(looked for {parquet_path.name}, {csv_path.name}, "
+                f"{gz_path.name}) and the loader is offline"
+            )
         elif self._maybe_autodownload(timeframe, start, end) and parquet_path.exists():
             df = pd.read_parquet(parquet_path)
             logger.info(
@@ -341,6 +375,36 @@ class BacktestDataLoader:
 
         self._cache[cache_key] = df
         return df
+
+    def _load_validated(
+        self, timeframe: str, parquet_path: Path, csv_path: Path, gz_path: Path
+    ) -> pd.DataFrame:
+        """Read the first existing store file through the validator.
+
+        Args:
+            timeframe: Candle timeframe being loaded.
+            parquet_path: Preferred store file.
+            csv_path: Plain CSV fallback.
+            gz_path: Gzipped CSV fallback.
+
+        Returns:
+            Canonical, validated frame.
+
+        Raises:
+            FileNotFoundError: When none of the three files exists.
+            CandleDataError: When the file fails validation.
+        """
+        from .ohlcv import load_validated_candles
+
+        for path in (parquet_path, csv_path, gz_path):
+            if path.exists():
+                df, report = load_validated_candles(path, timeframe, strict=True)
+                self.validations[timeframe] = report
+                return df
+        raise FileNotFoundError(
+            f"No {timeframe} candles for {self.symbol} in {self.data_dir} "
+            f"(looked for {parquet_path.name}, {csv_path.name}, {gz_path.name})"
+        )
 
     @staticmethod
     def _covers_range(df: pd.DataFrame, timeframe: str, start: str, end: str) -> bool:
@@ -375,6 +439,12 @@ class BacktestDataLoader:
         Returns:
             True if a download attempt added candles to the store.
         """
+        if self.offline:
+            logger.debug(
+                f"Offline loader: not downloading {self.symbol} {timeframe} "
+                f"{start}..{end}"
+            )
+            return False
         if not _autodownload_enabled():
             return False
         if timeframe not in _autodownload_timeframes():

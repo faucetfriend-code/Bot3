@@ -80,11 +80,22 @@ class DSRResult:
     reason: Optional[str] = None
 
 
+# A series is treated as zero-variance when its population std is at most
+# this fraction of max(1, |mean|). Rounding noise in the moments of a
+# constant series is ~1e-16 relative (std error ~1e-17..1e-9 depending on
+# the summation order), far below 1e-12; real return series have std many
+# orders of magnitude above it (1e-12 is 1e-10 percent per trade).
+_ZERO_STD_REL_TOL = 1e-12
+
+
 def _moments(returns: Sequence[float]) -> Tuple[float, float, float, float]:
     """Return (mean, std, skew, kurt) population moments of a series.
 
-    Kurtosis is non-excess (normal -> 3.0). Skew/kurt are 0.0/3.0 when
-    the variance is zero (they are undefined; callers guard on std).
+    Kurtosis is non-excess (normal -> 3.0). Sums use math.fsum so the
+    result does not depend on the Python version's sum() accuracy. A
+    negligible std (<= _ZERO_STD_REL_TOL * max(1, |mean|)) is treated
+    as zero: std is returned as 0.0 and skew/kurt as 0.0/3.0 (they are
+    undefined; callers guard on std).
 
     Args:
         returns: Return observations.
@@ -93,13 +104,13 @@ def _moments(returns: Sequence[float]) -> Tuple[float, float, float, float]:
         Tuple (mean, std, skewness, kurtosis).
     """
     n = len(returns)
-    mean = sum(returns) / n
-    m2 = sum((r - mean) ** 2 for r in returns) / n
+    mean = math.fsum(returns) / n
+    m2 = math.fsum((r - mean) ** 2 for r in returns) / n
     std = math.sqrt(m2)
-    if m2 <= 0:
+    if m2 <= 0 or std <= _ZERO_STD_REL_TOL * max(1.0, abs(mean)):
         return mean, 0.0, 0.0, 3.0
-    m3 = sum((r - mean) ** 3 for r in returns) / n
-    m4 = sum((r - mean) ** 4 for r in returns) / n
+    m3 = math.fsum((r - mean) ** 3 for r in returns) / n
+    m4 = math.fsum((r - mean) ** 4 for r in returns) / n
     skew = m3 / m2**1.5
     kurt = m4 / m2**2
     return mean, std, skew, kurt

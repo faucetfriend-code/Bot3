@@ -17,7 +17,18 @@ Sizing MUST come from RiskManager.
 """
 
 from enum import Enum
-from typing import TYPE_CHECKING, Dict, Any, List, Optional, Set, Tuple, Union, cast
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    Any,
+    List,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 import json
 import os
 import time
@@ -28,7 +39,9 @@ from dataclasses import dataclass
 from .config import config
 from .exit_sizing import (
     ClosePlan,
+    _extract_position,
     normalize_position_side,
+    normalize_symbol,
     plan_close_quantity,
     remaining_exchange_quantity,
 )
@@ -235,6 +248,39 @@ class GridLifecycleManager:
         self._pending_flattens: Dict[str, Dict[str, Any]] = {}
         self._max_flatten_attempts = _max_flatten_attempts()
 
+        # Optional callable returning a reason string while new entries are
+        # blocked (TradingBot wires the circuit breaker in), else None.
+        self.entry_gate: Optional[Callable[[], Optional[str]]] = None
+
+    def _entry_block_reason(self) -> Optional[str]:
+        """Return why exposure-adding grid orders are blocked, else None."""
+        gate = getattr(self, "entry_gate", None)
+        return gate() if callable(gate) else None
+
+    def _counter_closes_inventory(
+        self, symbol: str, filled_side: str, fill_quantity: float
+    ) -> bool:
+        """Tell whether a fill's counter order only sells down grid inventory.
+
+        ``net_position`` already includes the fill.  A BUY fill's counter
+        SELL closes inventory when the grid is long by at least the fill;
+        a SELL fill's counter BUY when it is short by at least the fill.
+        Anything else would re-arm an entry.
+
+        Args:
+            symbol: Trading symbol.
+            filled_side: "BUY" or "SELL" (the side that just filled).
+            fill_quantity: Quantity of that fill.
+
+        Returns:
+            True when the counter order reduces the grid's net position.
+        """
+        metrics = self._metrics.get(symbol)
+        net = metrics.net_position if metrics is not None else 0.0
+        if filled_side == "BUY":
+            return net >= fill_quantity - 1e-9
+        return net <= -(fill_quantity - 1e-9)
+
     # =========================
     # ORDER-ID TRACKING HELPERS
     # =========================
@@ -294,6 +340,161 @@ class GridLifecycleManager:
         if grid is None:
             return None
         return grid.get("order_ids")
+
+    # =========================
+    # ENTRY ORDER CANCELLATION (circuit breaker)
+    # =========================
+
+    @staticmethod
+    def _resting_order_side(order: Dict[str, Any]) -> Optional[str]:
+        """Return "buy" / "sell" for an open-order row (None if unknown)."""
+        side = str(order.get("side") or "").strip().lower()
+        if side in ("buy", "bid"):
+            return "buy"
+        if side in ("sell", "ask"):
+            return "sell"
+        return None
+
+    @staticmethod
+    def _resting_order_value(order: Dict[str, Any], keys: tuple) -> float:
+        """Return the first parseable positive number under ``keys`` (else 0)."""
+        for key in keys:
+            try:
+                value = float(order.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return 0.0
+
+    def _net_positions(self) -> Dict[str, float]:
+        """Return signed exchange position per symbol (long positive)."""
+        net: Dict[str, float] = {}
+        for pos in self.client.get_positions() or []:
+            symbol, side, quantity = _extract_position(pos)
+            if not symbol or side is None or quantity <= 0:
+                continue
+            signed = quantity if side == "long" else -quantity
+            net[symbol] = net.get(symbol, 0.0) + signed
+        return net
+
+    def _select_entry_orders(
+        self, orders: List[Dict[str, Any]], net: Dict[str, float]
+    ) -> tuple:
+        """Split resting orders into entries to cancel and orders to keep.
+
+        Protective rows (TP/SL, stop types, reduce-only) and rows without
+        an id or a readable side are never selected.  For each symbol the
+        orders on the side that reduces the exchange position are kept,
+        nearest price first, while their summed size fits inside that
+        position: they only close inventory.  Everything else would open
+        or add exposure if it filled.
+
+        Args:
+            orders: Open-order rows from ``client.get_orders()``.
+            net: Signed exchange position per normalized symbol.
+
+        Returns:
+            Tuple ``(entries, kept)``: order rows to cancel, and the count
+            of inventory-closing orders left resting.
+        """
+        closing: Dict[str, List[Dict[str, Any]]] = {}
+        entries: List[Dict[str, Any]] = []
+        for order in orders:
+            side = self._resting_order_side(order)
+            if is_protective_order(order) or side is None:
+                continue
+            if not self._extract_order_id_from_order(order):
+                continue
+            symbol = normalize_symbol(order.get("symbol"))
+            position = net.get(symbol, 0.0)
+            reduces = (position > 0 and side == "sell") or (
+                position < 0 and side == "buy"
+            )
+            (closing.setdefault(symbol, []) if reduces else entries).append(order)
+        kept = 0
+        for symbol, rows in closing.items():
+            room = abs(net.get(symbol, 0.0))
+            rows.sort(
+                key=lambda o: self._resting_order_value(o, ("price",)),
+                reverse=net.get(symbol, 0.0) < 0,
+            )
+            for order in rows:
+                size = self._resting_order_value(
+                    order, ("quantity", "amount", "size", "initial_amount")
+                )
+                # An unreadable size is kept (closing side) but uses up
+                # the remaining room, so nothing behind it is kept blind.
+                if room > 1e-9 and size <= room + 1e-9:
+                    room = room - size if size > 0 else 0.0
+                    kept += 1
+                else:
+                    entries.append(order)
+        return entries, kept
+
+    def _cancel_entry_order(self, order: Dict[str, Any]) -> bool:
+        """Cancel one resting order and drop it from the grid's tracked ids.
+
+        Args:
+            order: Open-order row selected by ``_select_entry_orders``.
+
+        Returns:
+            True when the venue accepted the cancel, False when it
+            rejected it or the call raised (logged; the caller retries).
+        """
+        symbol = str(order.get("symbol") or "")
+        order_id = self._extract_order_id_from_order(order)
+        try:
+            ack = self.client.cancel_order(symbol, order_id)
+        except Exception as exc:  # noqa: BLE001 - one failure must not stop the rest
+            logger.error(f"Entry order cancel RAISED for {symbol} {order_id}: {exc}")
+            return False
+        if isinstance(ack, dict) and ack.get("success") is False:
+            logger.error(
+                f"Entry order cancel REJECTED for {symbol} {order_id}: "
+                f"{ack.get('error')}"
+            )
+            return False
+        for grid_symbol, grid in self._grids.items():
+            tracked = grid.get("order_ids")
+            if tracked is not None and normalize_symbol(grid_symbol) == (
+                normalize_symbol(symbol)
+            ):
+                tracked.discard(str(order_id))
+        logger.warning(
+            f"Cancelled resting entry order {order_id} for {symbol} "
+            f"({order.get('side')} @ {order.get('price')})"
+        )
+        return True
+
+    def cancel_entry_orders(self) -> Dict[str, int]:
+        """Cancel every resting order that would open or add exposure.
+
+        Called by the circuit breaker.  Each order is attempted even if
+        another cancel fails; nothing raises.  When the order book or the
+        positions cannot be read nothing is cancelled (the classification
+        needs both) and the sweep is reported as failing so it is retried.
+
+        Returns:
+            Dict with ``cancelled`` (accepted cancels), ``failed`` (cancels
+            or reads that failed and need a retry) and ``kept`` (orders
+            left resting because they only close held inventory).
+        """
+        result = {"cancelled": 0, "failed": 0, "kept": 0}
+        try:
+            orders = self.client.get_orders() or []
+            entries, kept = self._select_entry_orders(orders, self._net_positions())
+        except Exception as exc:  # noqa: BLE001 - never raise into the breaker
+            logger.error(f"Entry order sweep could not read the venue: {exc}")
+            result["failed"] = 1
+            return result
+        result["kept"] = kept
+        for order in entries:
+            if self._cancel_entry_order(order):
+                result["cancelled"] += 1
+            else:
+                result["failed"] += 1
+        return result
 
     # =========================
     # ORPHAN DETECTION & REPAIR
@@ -888,6 +1089,11 @@ class GridLifecycleManager:
         """
         if not self.has_active_grid(symbol):
             logger.warning(f"Cannot recenter - no active grid for {symbol}")
+            return False
+
+        block_reason = self._entry_block_reason()
+        if block_reason:
+            logger.warning(f"Recenter skipped for {symbol}: {block_reason}")
             return False
 
         grid = self._grids[symbol]
@@ -2141,6 +2347,18 @@ class GridLifecycleManager:
         grid = self._grids[symbol]
         if grid["state"] != GridState.ACTIVE:
             logger.debug(f"Grid not active for {symbol}, skipping replenishment")
+            return
+
+        # While new entries are blocked only a counter order that sells
+        # down inventory the grid already holds may be placed.
+        block_reason = self._entry_block_reason()
+        if block_reason and not self._counter_closes_inventory(
+            symbol, filled_side, fill_quantity
+        ):
+            logger.warning(
+                f"Grid replenish skipped for {symbol} after {filled_side} fill: "
+                f"{block_reason}"
+            )
             return
 
         spacing = grid.get("grid_spacing", 0)

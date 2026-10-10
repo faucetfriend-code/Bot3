@@ -240,5 +240,65 @@ class PerformanceTracker:
             if t.get("net_pnl", t.get("pnl", 0)) > 0:
                 cell["wins"] += 1
         result.by_regime = by_regime
+        # Per-strategy breakdown: declared on BacktestResult since the
+        # first version and read by the e2e tests, but never populated.
+        result.by_strategy = per_strategy_breakdown(trade_log, closed_trades)
 
         return result
+
+
+def per_strategy_breakdown(
+    trade_log: List[Dict], closed_trades: List[Dict]
+) -> Dict[str, Dict]:
+    """Aggregate fills and closed-trade outcomes per strategy.
+
+    Args:
+        trade_log: Every fill recorded by the exchange (carries ``strategy``).
+        closed_trades: The subset that closed quantity (see ``finalise``).
+
+    Returns:
+        ``{strategy: {fills, closed_trades, wins, losses, net_pnl, fees,
+        win_rate_pct, profit_factor}}``. ``profit_factor`` is None when
+        there were no losing trades (undefined, not infinite, so the
+        value stays JSON-safe).
+    """
+    cells: Dict[str, Dict] = {}
+
+    def cell(name: str) -> Dict:
+        return cells.setdefault(
+            name or "unknown",
+            {
+                "fills": 0,
+                "closed_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "net_pnl": 0.0,
+                "fees": 0.0,
+                "gross_profit": 0.0,
+                "gross_loss": 0.0,
+            },
+        )
+
+    for fill in trade_log:
+        c = cell(fill.get("strategy", ""))
+        c["fills"] += 1
+        c["fees"] += float(fill.get("fee", 0) or 0)
+    for trade in closed_trades:
+        c = cell(trade.get("strategy", ""))
+        pnl = float(trade.get("net_pnl", trade.get("pnl", 0)) or 0)
+        c["closed_trades"] += 1
+        c["net_pnl"] += pnl
+        if pnl > 0:
+            c["wins"] += 1
+            c["gross_profit"] += pnl
+        elif pnl < 0:
+            c["losses"] += 1
+            c["gross_loss"] += -pnl
+    for c in cells.values():
+        c["win_rate_pct"] = c["wins"] / max(1, c["closed_trades"]) * 100
+        c["profit_factor"] = (
+            c["gross_profit"] / c["gross_loss"] if c["gross_loss"] > 0 else None
+        )
+        c["net_pnl"] = round(c["net_pnl"], 6)
+        c["fees"] = round(c["fees"], 6)
+    return cells

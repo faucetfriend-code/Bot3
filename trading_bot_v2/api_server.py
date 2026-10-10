@@ -571,6 +571,10 @@ class BotIntegration:
                     "active_grids": 0,
                     "current_regime": "unknown",
                     "circuit_breaker_triggered": False,
+                    "circuit_breaker_tripped_at": None,
+                    "circuit_breaker_reason": None,
+                    "circuit_breaker_orders_cancelled": 0,
+                    "circuit_breaker_cancels_failing": 0,
                     "exchange": _exchange,
                     "exchange_mode": _mode,
                 }
@@ -625,6 +629,18 @@ class BotIntegration:
                 if self.trading_bot:
                     status["circuit_breaker_triggered"] = getattr(
                         self.trading_bot, "_circuit_breaker_triggered", False
+                    )
+                    status["circuit_breaker_tripped_at"] = getattr(
+                        self.trading_bot, "_circuit_breaker_tripped_at", None
+                    )
+                    status["circuit_breaker_reason"] = getattr(
+                        self.trading_bot, "_circuit_breaker_reason", None
+                    )
+                    status["circuit_breaker_orders_cancelled"] = getattr(
+                        self.trading_bot, "_breaker_orders_cancelled", 0
+                    )
+                    status["circuit_breaker_cancels_failing"] = getattr(
+                        self.trading_bot, "_breaker_cancel_failures", 0
                     )
 
                 # Get current regime (use BTC as reference)
@@ -1848,6 +1864,32 @@ async def stop_bot() -> Dict[str, Any]:
         return {"success": True, "message": "Bot stopped successfully"}
     except Exception as e:
         logger.error(f"Error stopping bot: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/bot/circuit-breaker/reset", dependencies=AUTH_DEPS)
+async def reset_circuit_breaker():
+    """Manually reset a tripped circuit breaker so new entries may resume.
+
+    The only way to clear a trip: starting or restarting the bot does not.
+    If the portfolio loss is still at the limit, the next risk check trips
+    the breaker again.
+
+    Response:
+      { "success": true,
+        "state": { "was_tripped": bool, "tripped_at": str|null,
+                   "reason": str|null } }
+    """
+    bot = bot_integration.trading_bot
+    if bot is None:
+        raise HTTPException(status_code=503, detail="Trading bot not initialized")
+    try:
+        previous = bot.reset_circuit_breaker()
+        logger.warning(f"Circuit breaker RESET by operator (was: {previous})")
+        await broadcast_update("bot_status", bot_integration.get_status())
+        return {"success": True, "state": previous}
+    except Exception as e:
+        logger.error(f"Error resetting circuit breaker: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

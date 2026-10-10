@@ -94,6 +94,31 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# Keys a raw position dict may carry its size under.  Local DB rows use
+# ``quantity``; raw Pacifica positions use ``amount`` (a string); Blofin's
+# bot-native dicts carry both.  Checked in order; the first parseable wins.
+_QUANTITY_KEYS = ("quantity", "amount", "size")
+
+
+def position_quantity(pos: Dict[str, Any]) -> float:
+    """Return a position dict's size, whichever key the source used.
+
+    Args:
+        pos: Raw exchange or local DB position dict.
+
+    Returns:
+        The size as a float, or 0.0 when no key carries a parseable value.
+    """
+    for key in _QUANTITY_KEYS:
+        value = pos.get(key)
+        if value in (None, ""):
+            continue
+        parsed = _safe_float(value, default=0.0)
+        if parsed != 0.0:
+            return parsed
+    return 0.0
+
+
 def _filter_real_positions(
     positions: Optional[List[Dict[str, Any]]],
 ) -> Dict[str, Dict[str, Any]]:
@@ -114,7 +139,7 @@ def _filter_real_positions(
                 continue
             symbol = str(symbol).upper()
 
-            quantity = _safe_float(pos.get("quantity", 0))
+            quantity = position_quantity(pos)
             if quantity == 0:
                 continue
 

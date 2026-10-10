@@ -175,12 +175,14 @@ class RiskManager:
             Position quantity (number of contracts/shares)
         """
 
-        # Validate entry price
+        # Validate entry price.  Nothing can be sized without one; a
+        # positive fallback here would request a whole contract of an
+        # asset whose price is unknown.
         if not hasattr(signal, "entry_price") or signal.entry_price <= 0:
             logger.error(
                 f"Invalid entry price for {signal.asset}: {getattr(signal, 'entry_price', 'missing')}"
             )
-            return 1.0  # Minimum safe quantity
+            return 0.0
 
         # Get base risk amount
         base_risk_amount = account_balance * self.max_portfolio_risk_pct
@@ -229,19 +231,17 @@ class RiskManager:
         notional_size = min(notional_size, available_exposure)
 
         # Convert notional to quantity using entry price
-        quantity: float
-        if signal.entry_price > 0:
-            quantity = notional_size / signal.entry_price
-        else:
-            quantity = 1.0  # Fallback minimum
+        quantity: float = notional_size / signal.entry_price
 
-        # Regime-conditional scaling (applied after all other sizing math,
-        # before the hard minimum quantity floor)
+        # Regime-conditional scaling (applied after all other sizing math)
         regime_multiplier = self.get_regime_size_multiplier(regime)
         quantity *= regime_multiplier
 
-        # Ensure minimum quantity
-        quantity = max(quantity, 1.0)
+        # Never negative: an exhausted exposure budget yields no request.
+        # There is deliberately no 1.0-contract floor - on a high-priced
+        # perpetual it overrode the stop-distance, risk-profile and regime
+        # sizing with a whole-contract request.
+        quantity = max(quantity, 0.0)
 
         logger.debug(
             f"Position sizing: notional=${notional_size:.2f}, quantity={quantity:.4f} "
