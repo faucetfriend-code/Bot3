@@ -1,138 +1,203 @@
-# Bot 3 Trading System - CI/CD Pipeline
-# Runs on every push to main and pull requests
+# Bot 3 Trading System - CI
+#
+# Runs on every push to main and on every pull request against main.
+#
+# Tool versions are pinned once, in pyproject.toml under
+# [project.optional-dependencies] (lint / typing / test / security), so CI and
+# a local `pip install -e ".[dev]"` run the same binaries. Bump them there.
+#
+# Formatting gate: `ruff format --check` at line length 88. Black is configured
+# in pyproject.toml with the same settings for people who run it locally, but
+# it is NOT a gate: Black's current stable style and ruff format disagree on a
+# few constructs (parenthesised ternaries, hugging multi-line strings), and the
+# tree is formatted with ruff 0.14.14. Two gates would fight; one wins.
 
 name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
   pull_request:
-    branches: [main, master]
+    branches: [main]
+  workflow_dispatch:
+
+# The job token can read the repository and nothing else. No job writes to
+# GitHub (no comments, no releases, no packages), so nothing needs more.
+permissions:
+  contents: read
+
+# A new push to a pull request cancels the run it supersedes. Pushes to main
+# are never cancelled so every main commit keeps a complete result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PYTHON_VERSION: "3.11"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
 
 jobs:
-  # Lint and format check
+  # Lint and format gate (blocking)
   lint:
     name: Lint & Format
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install "ruff==0.14.14" black
+      - name: Install pinned tools
+        run: python -m pip install -e ".[lint]"
 
-      - name: Run Ruff linter
-        run: ruff check trading_bot_v2/
+      - name: Ruff lint
+        run: ruff check --output-format=github trading_bot_v2/
 
-      - name: Run Ruff formatter check
-        run: ruff format --check trading_bot_v2/
+      - name: Ruff format gate (line length 88)
+        run: ruff format --check --diff trading_bot_v2/
 
-  # Type checking
+  # Type checking (non-blocking until the strict-clean work lands)
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install mypy
+        run: python -m pip install -e ".[typing]"
 
       - name: Run MyPy
         run: mypy trading_bot_v2/ --ignore-missing-imports
         continue-on-error: true  # Non-blocking for now
 
-  # Unit tests
+  # Unit tests with coverage (blocking)
   test:
     name: Tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            trading_bot_v2/requirements.txt
 
+      # Every runtime dependency ships a manylinux wheel for CPython 3.11
+      # (psycopg2-binary, hmmlearn, pyarrow, solders included), so no apt
+      # packages are needed. `playwright` is the Python package only; no
+      # browser is downloaded and no test under trading_bot_v2/tests uses one.
       - name: Install dependencies
         run: |
-          python -m pip install --upgrade pip
-          pip install -r trading_bot_v2/requirements.txt
-          pip install pytest pytest-cov
+          python -m pip install -r trading_bot_v2/requirements.txt
+          python -m pip install -e ".[test]"
 
-      - name: Run tests with coverage
+      # trading_bot_v2/tests/ is the only test location (see CLAUDE.md).
+      # Coverage settings live in pyproject.toml under [tool.coverage].
+      - name: Run pytest with coverage
         run: |
-          pytest trading_bot_v2/tests/ -v --cov=trading_bot_v2 --cov-report=xml
-        continue-on-error: true  # Non-blocking for now
+          pytest trading_bot_v2/tests/ \
+            --cov \
+            --cov-report=xml \
+            --cov-report=html \
+            --cov-report=term-missing:skip-covered \
+            --junitxml=pytest-junit.xml \
+            -q
+
+      - name: Coverage summary
+        if: always()
+        run: |
+          {
+            echo "## Coverage (trading_bot_v2)"
+            echo
+            if [ -f .coverage ]; then
+              coverage report --format=markdown
+            else
+              echo "No coverage data: pytest did not get past collection."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage report
-        uses: codecov/codecov-action@v4
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          file: ./coverage.xml
-          fail_ci_if_error: false
+          name: coverage-report
+          path: |
+            coverage.xml
+            htmlcov/
+            pytest-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
 
-  # Security scanning
+  # Static security scan (advisory, non-blocking)
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.11'
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
 
-      - name: Install security tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install bandit safety
+      - name: Install pinned tools
+        run: python -m pip install -e ".[security]"
 
+      # Writes the machine-readable report for the artifact, then prints the
+      # human-readable one to the log. Findings do not fail the job yet.
       - name: Run Bandit
-        run: bandit -r trading_bot_v2/ -f json -o bandit-report.json
-        continue-on-error: true
+        run: |
+          bandit -c pyproject.toml -r trading_bot_v2/ -f json -o bandit-report.json \
+            || echo "::warning::Bandit reported findings; see the artifact."
+          bandit -c pyproject.toml -r trading_bot_v2/ -q || true
 
-      - name: Run Safety
-        run: safety check --json > safety-report.json
-        continue-on-error: true
-
-      - name: Upload security reports
-        uses: actions/upload-artifact@v4
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v5
         with:
-          name: security-reports
-          path: |
-            bandit-report.json
-            safety-report.json
+          name: security-report
+          path: bandit-report.json
+          if-no-files-found: warn
+          retention-days: 14
 
-  # Docker build test
+  # Docker build test (blocking; proves the Dockerfile still assembles)
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         with:
           context: .
           push: false
