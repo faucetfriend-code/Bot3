@@ -499,12 +499,11 @@ class TestConflictProbe:
 
 class TestStrategySelection:
     def test_non_backtestable_are_filtered_out(self):
-        # funding_arb left the exclusion list once real funding history
-        # was ingested; orderbook_imbalance still needs L2 depth.
-        keys = ["mean_reversion", "funding_arb", "orderbook_imbalance", "grid_trading"]
+        # orderbook_imbalance needs L2 depth the candle store does not have.
+        keys = ["mean_reversion", "ma_crossover", "orderbook_imbalance", "grid_trading"]
         assert backtestable_strategies(keys) == [
             "mean_reversion",
-            "funding_arb",
+            "ma_crossover",
             "grid_trading",
         ]
 

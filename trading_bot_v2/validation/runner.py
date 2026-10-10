@@ -82,7 +82,6 @@ STRATEGY_ENV_FLAGS: Dict[str, Tuple[str, bool]] = {
     "grid_trading": ("ENABLE_GRID_TRADING", True),
     "liquidation_capture": ("ENABLE_LIQUIDATION_CAPTURE", True),
     "vwap_scalping": ("ENABLE_VWAP_SCALPING", True),
-    "funding_arb": ("ENABLE_FUNDING_ARB", False),
     "momentum_scalping": ("ENABLE_MOMENTUM_SCALPING", True),
     "orderbook_imbalance": ("ENABLE_ORDERBOOK_IMBALANCE", True),
     "session_range_breakout": ("ENABLE_SESSION_RANGE_BREAKOUT", False),

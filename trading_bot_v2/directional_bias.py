@@ -42,8 +42,8 @@ GATE MODES (env ``DIRECTIONAL_GATE``)
 Strategies in ``DIRECTIONAL_GATE_EXEMPT`` are never gated. The default
 exempts the strategies whose designs are direction-neutral or
 deliberately contrarian at a faster timescale: GridTrading (quotes both
-sides by construction), FundingArb (carry, not direction),
-LiquidationCapture (fades forced flow inside minutes).
+sides by construction) and LiquidationCapture (fades forced flow inside
+minutes).
 
 The gate is a HYPOTHESIS, not a finding. It ships default-off; the
 fresh campaign measures it (off vs enforce) before anything is claimed.
@@ -90,7 +90,7 @@ DEFAULT_FUNDING_MIN_OBS = 100
 DEFAULT_FUNDING_HIGH_PCT = 0.90
 DEFAULT_FUNDING_LOW_PCT = 0.10
 
-DEFAULT_GATE_EXEMPT = "GridTrading,FundingArb,LiquidationCapture"
+DEFAULT_GATE_EXEMPT = "GridTrading,LiquidationCapture"
 
 
 def validate_gate_mode(value: Any) -> str:

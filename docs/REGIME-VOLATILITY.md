@@ -330,7 +330,7 @@ the deflated Sharpe never sees that search.
 | `VOL_HIGH` | MomentumScalping, MACrossover | Expansion, gaps and liquidation cascades. Reversion gets stopped out and a grid gets run over; strategies whose payoff needs a large move are the ones whose shape matches. |
 | `VOL_WARMUP` | (none) | No trailing reference distribution yet. Stay flat rather than guess. |
 
-Overlays (LiquidationCapture, FundingArb, OrderBookImbalance,
+Overlays (LiquidationCapture, OrderBookImbalance,
 SessionRangeBreakout, CalendarFlow) keep running in all regimes, exactly
 as today - `strategy_manager` adds them independently of the map.
 

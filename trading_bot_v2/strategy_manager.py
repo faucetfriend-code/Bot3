@@ -54,9 +54,7 @@ from .strategies.vwap_scalping import (
     VWAPScalpingStrategy,
     DEFAULT_SD_ENTRY_THRESHOLD as VWAP_DEFAULT_SD_ENTRY_THRESHOLD,
 )
-from .exchanges import get_exchange_capabilities
 from .regime_param_overlay import DISPLAY_TO_STRATEGY_KEY
-from .strategies.funding_arb import FundingArbStrategy
 from .strategies.momentum_scalping import MomentumScalpingStrategy
 from .strategies.orderbook_imbalance import OrderBookImbalanceStrategy
 from .strategies.session_range_breakout import SessionRangeBreakoutStrategy
@@ -173,15 +171,14 @@ class StrategyManager:
         enable_grid_trading: Optional[bool] = None,
         enable_liquidation_capture: Optional[bool] = None,
         enable_vwap_scalping: Optional[bool] = None,
-        enable_funding_arb: Optional[bool] = None,
         enable_momentum_scalping: Optional[bool] = None,
         enable_orderbook_imbalance: Optional[bool] = None,
         enable_session_range_breakout: Optional[bool] = None,
         enable_calendar_flow: Optional[bool] = None,
         enable_vwap_pullback: Optional[bool] = None,
         risk_manager: Optional["RiskManager"] = None,
-        # Pacifica client for funding arb API calls (duck-typed: PacificaClient
-        # live, SimulatedExchange in a backtest)
+        # Exchange client (duck-typed: PacificaClient live, SimulatedExchange
+        # in a backtest). Stored only; no strategy currently reads it.
         client: Any = None,
         # WebSocket client for orderbook data
         ws_client: Optional["PacificaWebSocketClient"] = None,
@@ -261,13 +258,6 @@ class StrategyManager:
         )
         # Which regimes VWAPScalping is admitted to (VWAP_ACTIVE_REGIMES).
         self.vwap_active_regimes = resolve_vwap_active_regimes()
-        self.enable_funding_arb = (
-            enable_funding_arb
-            if enable_funding_arb is not None
-            else _get_env_bool(
-                "ENABLE_FUNDING_ARB", False
-            )  # Default to False - passive strategy
-        )
         self.enable_momentum_scalping = (
             enable_momentum_scalping
             if enable_momentum_scalping is not None
@@ -304,7 +294,7 @@ class StrategyManager:
             )  # Default to False - ships disabled until validated
         )
         self.risk_manager = risk_manager
-        self.client = client  # Store client for funding arb
+        self.client = client  # Exchange client (currently unused by strategies)
         self.ws_client = ws_client  # Store websocket client for orderbook
 
         # Directional bias gate (HTF trend stack + funding extremes).
@@ -411,7 +401,7 @@ class StrategyManager:
             f"Strategy enable flags: MeanReversion={self.enable_mean_reversion}, "
             f"MACrossover={self.enable_ma_crossover}, GridTrading={self.enable_grid_trading}, "
             f"LiquidationCapture={self.enable_liquidation_capture}, TrendFollowing={self.enable_trend_following}, "
-            f"VWAPScalping={self.enable_vwap_scalping}, FundingArb={self.enable_funding_arb}, "
+            f"VWAPScalping={self.enable_vwap_scalping}, "
             f"MomentumScalping={self.enable_momentum_scalping}, OrderBookImbalance={self.enable_orderbook_imbalance}, "
             f"SessionRangeBreakout={self.enable_session_range_breakout}, "
             f"CalendarFlow={self.enable_calendar_flow}, "
@@ -553,42 +543,6 @@ class StrategyManager:
                 f"{effective_sd_threshold} (configured {vwap_sd_threshold}), "
                 f"ATR stop={vwap_atr_stop_mult}x, min_confidence={vwap_min_confidence:.0%}, "
                 f"regimes={[r.value for r in self.vwap_active_regimes]}"
-            )
-
-        if self.enable_funding_arb:
-            # Load Funding Arb parameters from environment
-            funding_min_rate = float(
-                os.getenv("FUNDING_ARB_MIN_RATE", "0.0001")
-            )  # 0.01% min
-            funding_max_alloc = float(
-                os.getenv("FUNDING_ARB_MAX_ALLOCATION", "0.20")
-            )  # 20% max
-            funding_rebalance = float(
-                os.getenv("FUNDING_ARB_REBALANCE_THRESHOLD", "0.02")
-            )  # 2%
-            funding_lookback = int(os.getenv("FUNDING_ARB_LOOKBACK_HOURS", "8"))
-            funding_min_confidence = float(
-                os.getenv("FUNDING_ARB_MIN_CONFIDENCE", "0.70")
-            )
-
-            # Funding interval comes from the selected exchange's
-            # capabilities (Pacifica: 1h, Blofin: 8h) so the strategy's
-            # rate math scales correctly per exchange.
-            funding_interval_hours = get_exchange_capabilities().funding_interval_hours
-
-            self.strategies["FundingArb"] = FundingArbStrategy(
-                min_funding_rate=funding_min_rate,
-                max_allocation_pct=funding_max_alloc,
-                rebalance_threshold=funding_rebalance,
-                lookback_hours=funding_lookback,
-                min_confidence=funding_min_confidence,
-                client=self.client,  # Pass exchange client for API calls
-                funding_interval_hours=funding_interval_hours,
-            )
-            logger.info(
-                f"Funding Arb strategy enabled: min_rate={funding_min_rate:.4%}, "
-                f"max_alloc={funding_max_alloc:.0%}, rebalance={funding_rebalance:.1%}, "
-                f"funding_interval={funding_interval_hours}h"
             )
 
         if self.enable_momentum_scalping:
@@ -947,7 +901,6 @@ class StrategyManager:
             "liquidation_capture": 5,  # Was 10 - 5 min for liquidation plays
             "trend_following": 30,  # Was 60 - 30 min for major trend changes
             "vwap_scalping": 8,  # 8 min cooldown for VWAP scalping
-            "funding_arb": 60,  # 60 min - funding positions held for hours
             "momentum_scalping": 5,  # 5 min cooldown for fast momentum scalping
             "orderbook_imbalance": 0.5,  # 30 sec cooldown - handled internally in seconds
             "session_range_breakout": 60,  # 60 min - per-session dedup is the real limit
@@ -1143,16 +1096,6 @@ class StrategyManager:
                 active_strategy_names = list(active_strategy_names) + ["VWAPScalping"]
                 logger.debug(
                     f"{symbol}: Added VWAPScalping (ranging/indecisive regime)"
-                )
-
-            # Step 2.7: Always add FundingArb if enabled (passive strategy, runs in ALL regimes)
-            if (
-                "FundingArb" in self.strategies
-                and "FundingArb" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + ["FundingArb"]
-                logger.debug(
-                    f"{symbol}: Added FundingArb (passive funding rate strategy, runs in all regimes)"
                 )
 
             # Step 2.8: Add MomentumScalping if enabled and in TRENDING regimes
@@ -2108,7 +2051,6 @@ class StrategyManager:
             StrategyType.GRID_TRADING: "GridTrading",
             StrategyType.LIQUIDATION_CAPTURE: "LiquidationCapture",
             StrategyType.VWAP_SCALPING: "VWAPScalping",
-            StrategyType.FUNDING_ARB: "FundingArb",
             StrategyType.MOMENTUM_SCALPING: "MomentumScalping",
             StrategyType.ORDERBOOK_IMBALANCE: "OrderBookImbalance",
             StrategyType.SESSION_RANGE_BREAKOUT: "SessionRangeBreakout",
@@ -2140,7 +2082,6 @@ class StrategyManager:
             "GridTrading": StrategyType.GRID_TRADING,
             "LiquidationCapture": StrategyType.LIQUIDATION_CAPTURE,
             "VWAPScalping": StrategyType.VWAP_SCALPING,
-            "FundingArb": StrategyType.FUNDING_ARB,
             "MomentumScalping": StrategyType.MOMENTUM_SCALPING,
             "OrderBookImbalance": StrategyType.ORDERBOOK_IMBALANCE,
             "SessionRangeBreakout": StrategyType.SESSION_RANGE_BREAKOUT,

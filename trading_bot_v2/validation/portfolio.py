@@ -765,8 +765,8 @@ def backtestable_strategies(keys: Iterable[str]) -> List[str]:
         keys: Snake_case strategy keys.
 
     Returns:
-        The subset excluding ``NON_BACKTESTABLE_STRATEGIES`` (FundingArb
-        and OrderBookImbalance depend on live-only data surfaces and are
+        The subset excluding ``NON_BACKTESTABLE_STRATEGIES``
+        (OrderBookImbalance depends on live-only data surfaces and is
         force-disabled by the engine anyway), order preserved.
     """
     from ..backtesting.engine import NON_BACKTESTABLE_STRATEGIES

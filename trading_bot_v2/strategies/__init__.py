@@ -5,7 +5,6 @@ from .ma_crossover import MACrossoverStrategy
 from .grid_trading import GridTradingStrategy
 from .liquidation_capture import LiquidationCaptureStrategy
 from .vwap_scalping import VWAPScalpingStrategy
-from .funding_arb import FundingArbStrategy
 from .momentum_scalping import MomentumScalpingStrategy
 from .orderbook_imbalance import OrderBookImbalanceStrategy
 from .session_range_breakout import SessionRangeBreakoutStrategy
@@ -18,7 +17,6 @@ __all__ = [
     "GridTradingStrategy",
     "LiquidationCaptureStrategy",
     "VWAPScalpingStrategy",
-    "FundingArbStrategy",
     "MomentumScalpingStrategy",
     "OrderBookImbalanceStrategy",
     "SessionRangeBreakoutStrategy",

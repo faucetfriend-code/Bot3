@@ -2,9 +2,9 @@
 End-to-end smoke tests for the backtest engine on real parquet data.
 
 Covers: a full BacktestEngine.run() over real BTC-USDC candles, the
-exclusion of non-backtestable overlay strategies (orderbook_imbalance,
-funding_arb), and the 1m execution-coverage guard for windows outside
-the local 1m store.
+exclusion of non-backtestable overlay strategies (orderbook_imbalance),
+and the 1m execution-coverage guard for windows outside the local 1m
+store.
 
 Uses the real parquet store in trading_bot_v2/backtesting/data (no
 network: DATA_AUTODOWNLOAD is forced off for every test).
@@ -116,11 +116,7 @@ class TestNonBacktestableExclusion:
         assert "not backtestable" in joined
 
     def test_all_strategy_run_emits_exclusion_warnings(self, warning_log):
-        """A no-filter run force-disables the L2 overlay and says so.
-
-        FundingArb was excluded alongside it until real funding history
-        was ingested; it is no longer on the list.
-        """
+        """A no-filter run force-disables the L2 overlay and says so."""
         engine = BacktestEngine()
         result = engine.run(
             start="2024-03-01",

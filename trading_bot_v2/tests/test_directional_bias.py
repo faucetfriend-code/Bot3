@@ -87,7 +87,6 @@ def _manager(monkeypatch, mode, client=None):
         enable_grid_trading=False,
         enable_liquidation_capture=False,
         enable_vwap_scalping=False,
-        enable_funding_arb=False,
         enable_momentum_scalping=False,
         enable_orderbook_imbalance=False,
         enable_session_range_breakout=False,
@@ -321,7 +320,6 @@ class TestGateWiring:
     def test_default_exempt_set(self):
         assert resolve_gate_exempt() == {
             "GridTrading",
-            "FundingArb",
             "LiquidationCapture",
         }
 

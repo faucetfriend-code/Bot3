@@ -44,7 +44,6 @@ class StrategyType(str, Enum):
     MA_CROSSOVER = "ma_crossover"
     GRID_TRADING = "grid_trading"
     VWAP_SCALPING = "vwap_scalping"
-    FUNDING_ARB = "funding_arb"
     MOMENTUM_SCALPING = "momentum_scalping"
     ORDERBOOK_IMBALANCE = "orderbook_imbalance"
     SESSION_RANGE_BREAKOUT = "session_range_breakout"

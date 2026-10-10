@@ -68,10 +68,17 @@ def tmp_db(monkeypatch, tmp_path):
 class TestStrategyDiscovery:
     def test_env_flags_respected(self, monkeypatch):
         monkeypatch.setenv("ENABLE_MEAN_REVERSION", "false")
-        monkeypatch.setenv("ENABLE_FUNDING_ARB", "true")
+        monkeypatch.setenv("ENABLE_SESSION_RANGE_BREAKOUT", "true")
         enabled = discover_enabled_strategies()
         assert "mean_reversion" not in enabled
-        assert "funding_arb" in enabled
+        assert "session_range_breakout" in enabled
+
+    def test_leftover_flag_of_removed_strategy_is_ignored(self, monkeypatch):
+        """ENABLE_FUNDING_ARB may linger in an environment; it is inert."""
+        monkeypatch.setenv("ENABLE_FUNDING_ARB", "true")
+        enabled = discover_enabled_strategies()
+        assert "funding_arb" not in enabled
+        assert "funding_arb" not in STRATEGY_ENV_FLAGS
 
     def test_defaults_when_unset(self, monkeypatch):
         for env_var, _default in STRATEGY_ENV_FLAGS.values():
@@ -81,7 +88,7 @@ class TestStrategyDiscovery:
         for name in ("mean_reversion", "momentum_scalping", "grid_trading"):
             assert name in enabled
         # ...and these are off by default.
-        for name in ("funding_arb", "session_range_breakout"):
+        for name in ("calendar_flow", "session_range_breakout"):
             assert name not in enabled
 
     def test_map_covers_known_strategies(self):

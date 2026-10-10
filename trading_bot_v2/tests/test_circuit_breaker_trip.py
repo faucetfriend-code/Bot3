@@ -192,7 +192,7 @@ class TestEntriesBlockedWhileTripped:
         bot.exchange.place_order.assert_not_called()
 
     @pytest.mark.parametrize(
-        "strategy", [StrategyType.GRID_TRADING, StrategyType.FUNDING_ARB]
+        "strategy", [StrategyType.GRID_TRADING, StrategyType.LIQUIDATION_CAPTURE]
     )
     def test_coordination_without_validation_sends_no_order(self, strategy):
         """The debug route calls _coordinate_signal_execution directly."""

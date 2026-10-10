@@ -305,7 +305,7 @@ class TradingBot:
         self.strategy_manager = StrategyManager(
             regime_detector=self.market_regime,
             risk_manager=self.risk_manager,
-            client=self.client,  # Pass client for FundingArb API calls
+            client=self.client,  # Exchange client (stored, not read by strategies)
             ws_client=self.ws_client,  # Pass WS client for OrderBookImbalance
             db=self.db,  # Pass db for adaptive per-regime strategy weights
         )
@@ -348,6 +348,7 @@ class TradingBot:
             reconcile_callback=self._reconcile_after_ambiguous_close,
             venue_exchange_resolver=lambda: self.exchange,
             db=self.db,
+            price_lookup=lambda symbol: self._get_ticker_ws(symbol),
         )
 
         # Initialize regime param overlay manager (P4). Loads active
@@ -367,6 +368,7 @@ class TradingBot:
             regime_detector=self.market_regime,
             migrated_position_manager=self.migrated_position_manager,
             multi_tf_fetcher=self.multi_tf_fetcher,
+            price_lookup=lambda symbol: self._get_ticker_ws(symbol),
         )
 
         # Initialize execution layer for precise 1m/5m entry timing
@@ -2183,23 +2185,25 @@ class TradingBot:
                 )
                 return
 
-            # Refine signal through ExecutionLayer before execution
-            refined_signal = self.execution_layer.refine_entry(  # type: ignore[union-attr]  # bug: may be None
-                signal, symbol
-            )
-            if refined_signal is None:
-                logger.info(
-                    f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable"
-                )
-                self.signal_logger.log_signal_rejected(
-                    signal=signal,
-                    reason="ExecutionLayer timing skip",
-                    notes="1m/5m timing conditions not met",
-                )
-                return
+            # Refine signal through ExecutionLayer before execution.  The
+            # layer is None when its constructor failed at startup; in that
+            # case the signal goes through unrefined.
+            if self.execution_layer is not None:
+                refined_signal = self.execution_layer.refine_entry(signal, symbol)
+                if refined_signal is None:
+                    logger.info(
+                        f"ExecutionLayer skipped entry for {symbol} "
+                        "- timing not favorable"
+                    )
+                    self.signal_logger.log_signal_rejected(
+                        signal=signal,
+                        reason="ExecutionLayer timing skip",
+                        notes="1m/5m timing conditions not met",
+                    )
+                    return
 
-            # Use refined signal for execution
-            signal = refined_signal
+                # Use refined signal for execution
+                signal = refined_signal
 
             # Generate + persist the client order id BEFORE transmission so
             # an ambiguous response (timeout, bare ack) can be looked up.
@@ -3776,7 +3780,6 @@ class TradingBot:
         "MeanReversion": "MEAN_REVERSION",
         "MomentumScalping": "MOMENTUM_SCALPING",
         "VWAPScalping": "VWAP_SCALPING",
-        "FundingArb": "FUNDING_ARB",
         "LiquidationCapture": "LIQUIDATION_CAPTURE",
         "OrderBookImbalance": "ORDERBOOK_IMBALANCE",
     }

@@ -119,7 +119,7 @@ class MeanReversionStrategy:
                 config/overlay compatibility only (env:
                 MEAN_REVERSION_MIN_CONFIDENCE, default: 0.45). Nothing in
                 this strategy compares confidence against it - contrast
-                ma_crossover and funding_arb, which do enforce theirs. By
+                ma_crossover, which does enforce its own. By
                 design (Prompt 058) confidence affects SIZE, not
                 permission: live position size scales with it through
                 ConfidenceSizer, and the backtest engine ignores it
