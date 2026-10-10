@@ -23,7 +23,7 @@ do not cross them. Neither bot reads `Agent OS/.env` at runtime.
 
 ## Project Overview
 
-Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures (testnet). 7 strategies (the former eighth, funding arbitrage, was removed on 2026-10-10 as never tested) with ADX-based regime detection, Kelly Criterion position sizing, and circuit breaker risk management. Python 3.14, FastAPI, SQLite, WebSocket.
+Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures (testnet). 7 strategies (the former eighth, funding arbitrage, was removed on 2026-10-10 as never tested) with ADX-based regime detection, RiskManager position sizing (a Kelly Criterion size cap is available behind `ENABLE_KELLY_SIZING`, default off), and circuit breaker risk management. Python 3.14, FastAPI, SQLite, WebSocket.
 
 ## Quick Start
 
@@ -103,7 +103,8 @@ Bot3/
     data_manager.py          # Candle + perpetual-funding store manager (CLI: --coverage,
                              # --funding, --funding-only, --data-dir)
     backtesting/funding.py   # Binance 8h -> venue 1h funding mapping (the assumption)
-    kelly_position_sizer.py  # Kelly Criterion (activates at 50+ trades)
+    kelly_position_sizer.py  # Kelly Criterion (needs 50+ closed trades); only used behind
+                             # ENABLE_KELLY_SIZING (default off), via entry_gates.py
     database.py              # SQLite (trading_bot.db, auto-created)
     config.py                # .env loader (override=True), all enums
     models.py                # Signal, OrderSide, Trade dataclasses
@@ -258,7 +259,18 @@ Key variables:
   PF 0.81. **VWAP has no edge under any mapping** - see `docs/VWAP-LEVERS.md` before
   spending time here.
 - `CIRCUIT_BREAKER_LOSS_PCT=0.10` - 10% portfolio loss stop
-- `KELLY_FRACTION=0.5` / `KELLY_MIN_TRADES=50`
+- `ENABLE_KELLY_SIZING=false` - Kelly sizing is NOT active by default; live entries are
+  sized by `RiskManager.get_position_size`. When true, a standard (non-grid) entry is sized
+  `min(Kelly x confidence capped at 10% of balance, RiskManager size)`, so Kelly can only
+  reduce a position. With fewer than 50 closed trades for the strategy, a non-positive
+  Kelly fraction, a missing stop or any error, the RiskManager size is used. The Kelly
+  fraction (0.5) and minimum history (50) are constructor defaults in
+  `kelly_position_sizer.py`; `KELLY_FRACTION` / `KELLY_MIN_TRADES` are not read from the
+  environment. Nothing in the live path writes closed trades to the `trades` table yet,
+  so until something does the flag changes no order size.
+- `ENABLE_SIGNAL_PIPELINE=false` - When true, `signal_phases` Phase 1 (without its regime
+  map, which contradicts `StrategyManager`) and Phase 3 run as an extra reject-only gate
+  on standard entries. See `entry_gates.py`.
 - `LOG_LEVEL=INFO`
 - `BACKTEST_FUNDING_MODEL=flat` - How the backtest charges perpetual funding.
   `flat` (default, shipped) charges the constant `BACKTEST_FUNDING_HOURLY_PCT=0.0001`

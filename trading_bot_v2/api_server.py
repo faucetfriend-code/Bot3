@@ -650,6 +650,15 @@ class BotIntegration:
                     status["circuit_breaker_grids_not_cleared"] = dict(
                         getattr(self.trading_bot, "_breaker_grids_not_cleared", {})
                     )
+                    # "kelly_capped" only while ENABLE_KELLY_SIZING is active
+                    status["sizing_mode"] = (
+                        "kelly_capped"
+                        if getattr(self.trading_bot, "_kelly_sizer", None) is not None
+                        else "risk_manager"
+                    )
+                    status["signal_pipeline_enabled"] = (
+                        getattr(self.trading_bot, "_signal_pipeline", None) is not None
+                    )
 
                 # Get current regime (use BTC as reference)
                 if self.regime_detector and self.ws_client:

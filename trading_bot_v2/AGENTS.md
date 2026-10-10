@@ -68,7 +68,8 @@
 
 ### Risk Management (PRODUCTION-READY ✅)
 
-**Kelly Criterion Position Sizing**:
+**Kelly Criterion Position Sizing** (available behind `ENABLE_KELLY_SIZING`, default off;
+live sizing is `RiskManager.get_position_size`, and with the flag on Kelly can only reduce it):
 - Fractional Kelly (0.5x) with 10% maximum position cap
 - 50-trade minimum history requirement
 - Strategy-specific fallback percentages

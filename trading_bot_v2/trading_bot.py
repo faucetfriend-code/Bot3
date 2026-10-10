@@ -77,6 +77,16 @@ from .regime_param_overlay import RegimeParamOverlayManager
 # Import ExecutionLayer for precise 1m/5m entry timing
 from .execution_layer import ExecutionLayer
 
+# Flag-gated (default OFF) Kelly size cap and signal-pipeline gate for
+# standard entries: ENABLE_KELLY_SIZING / ENABLE_SIGNAL_PIPELINE
+from .entry_gates import (
+    kelly_capped_quantity,
+    kelly_sizer_from_config,
+    pipeline_block_reason,
+    signal_pipeline_from_config,
+    sizing_mode,
+)
+
 # Import SignalLogger for comprehensive signal tracking
 from .signal_logger import SignalLogger
 
@@ -381,6 +391,13 @@ class TradingBot:
             logger.error(f"Failed to initialize ExecutionLayer: {e}")
             self.execution_layer = None
             logger.warning("Trading will continue without ExecutionLayer refinement")
+
+        # Both None unless their flag is set (ENABLE_KELLY_SIZING /
+        # ENABLE_SIGNAL_PIPELINE, default false); see entry_gates.py.
+        self._kelly_sizer = kelly_sizer_from_config(config, self.db, self.trade_store)
+        self._signal_pipeline = signal_pipeline_from_config(
+            config, self.risk_manager, self.client
+        )
 
         # Thread control
         self._running_event = threading.Event()
@@ -1787,6 +1804,13 @@ class TradingBot:
                 current_exposure=current_exposure,
                 regime=current_regime,
             )
+            # ENABLE_KELLY_SIZING (default off -> sizer is None): Kelly may
+            # only reduce a standard entry.  Grid sizing is never touched.
+            kelly_sizer = getattr(self, "_kelly_sizer", None)
+            if kelly_sizer is not None and signal.strategy != StrategyType.GRID_TRADING:
+                position_size = kelly_capped_quantity(
+                    kelly_sizer, signal, position_size, account_balance
+                )
             requested_amount = position_size * signal.entry_price
 
             # Request capital allocation
@@ -2184,6 +2208,21 @@ class TradingBot:
                     notes=f"Capital: ${capital_allocated:.2f}, Price: ${signal.entry_price:.4f}",
                 )
                 return
+
+            # ENABLE_SIGNAL_PIPELINE (default off -> pipeline is None): an
+            # extra reject-only gate.  It runs after every existing check
+            # above and cannot change the signal or the quantity.
+            pipeline = getattr(self, "_signal_pipeline", None)
+            if pipeline is not None:
+                pipeline_reason = pipeline_block_reason(
+                    pipeline, signal, quantity, self._get_account_balance()
+                )
+                if pipeline_reason:
+                    logger.warning(f"Entry blocked for {symbol}: {pipeline_reason}")
+                    self.signal_logger.log_signal_rejected(
+                        signal=signal, reason=pipeline_reason
+                    )
+                    return
 
             # Refine signal through ExecutionLayer before execution.  The
             # layer is None when its constructor failed at startup; in that
@@ -3765,6 +3804,10 @@ class TradingBot:
                 "total_exposure": exposure,
                 "risk_percentage": risk_pct,
                 "circuit_breaker_threshold": self._circuit_breaker_loss_pct,
+                "sizing_mode": sizing_mode(self),
+                "signal_pipeline_enabled": (
+                    getattr(self, "_signal_pipeline", None) is not None
+                ),
                 "positions": [
                     {
                         "symbol": pos.get("symbol"),

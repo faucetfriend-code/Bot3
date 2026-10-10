@@ -147,6 +147,21 @@ class Config:
         websocket_env = os.getenv("ENABLE_WEBSOCKET", "true").lower()
         self.enable_websocket: bool = websocket_env in ("true", "1", "yes")
 
+        # Kelly/confidence size cap for standard (non-grid) entries.  Off:
+        # RiskManager.get_position_size alone sizes the entry.  On: the
+        # request is min(Kelly size, RiskManager size) - see entry_gates.py.
+        kelly_sizing_env = os.getenv("ENABLE_KELLY_SIZING", "false").lower()
+        self.enable_kelly_sizing: bool = kelly_sizing_env in ("true", "1", "yes")
+
+        # signal_phases permission/execution checks as an extra reject-only
+        # gate on standard entries.  Off: the gate is not built.
+        signal_pipeline_env = os.getenv("ENABLE_SIGNAL_PIPELINE", "false").lower()
+        self.enable_signal_pipeline: bool = signal_pipeline_env in (
+            "true",
+            "1",
+            "yes",
+        )
+
         # Parse integer values with error handling
         try:
             self.max_positions: int = int(os.getenv("MAX_POSITIONS", "15"))

@@ -26,6 +26,7 @@ from loguru import logger
 # Use relative imports from trading_bot_v2 package
 from .models import Signal
 from .config import StrategyType
+from .kelly_position_sizer import KELLY_OK
 
 if TYPE_CHECKING:
     from .kelly_position_sizer import KellyPositionSizer
@@ -40,6 +41,9 @@ class SizingResult:
     multiplier: float
     effective_size: float
     reason: str
+    # "ok" unless IntegratedPositionSizer.calculate_kelly_bounded_size found
+    # no usable Kelly edge (see the KELLY_* constants in kelly_position_sizer).
+    kelly_status: str = "ok"
 
 
 class ConfidenceSizer:
@@ -200,55 +204,89 @@ class IntegratedPositionSizer:
         self.min_position_size = getattr(config, "min_position_size", 0.001)
 
     def calculate_position_size(
-        self, signal: Signal, account_balance: float
+        self, signal: Signal, account_balance: float, account_id: str = "sub_1"
     ) -> SizingResult:
         """
         Calculate final position size integrating Kelly and confidence.
 
+        Uses KellyPositionSizer.calculate_position_size, i.e. including
+        Kelly's own fixed-percentage fallbacks, and floors the result at
+        min_position_size.  A failure inside the Kelly sizer propagates:
+        this class does not know a safe substitute size, so it does not
+        invent one.
+
         Args:
             signal: Signal to size
             account_balance: Current account balance
+            account_id: Account whose trade history Kelly reads
 
         Returns:
             SizingResult with final effective_size
         """
-        # Step 1: Kelly base size
-        try:
-            kelly_result = self.kelly.calculate_position_size(  # type: ignore[call-arg]  # KellyPositionSizer takes (signal, account_balance); reported, not fixed
-                strategy_type=signal.strategy,
-                entry_price=signal.entry_price,
-                stop_loss=signal.stop_loss,
-                account_balance=account_balance,
-            )
-            if isinstance(kelly_result, dict):
-                base_size = kelly_result.get("position_size", 0)
-            else:
-                base_size = kelly_result
-        except Exception as e:
-            logger.warning(f"Kelly calculation failed: {e}, using fallback")
-            # Fallback: 2% of account
-            base_size = (
-                (account_balance * 0.02) / signal.entry_price
-                if signal.entry_price > 0
-                else 0
-            )
+        base_size = self.kelly.calculate_position_size(
+            signal, account_balance, account_id
+        )
+        return self._finalize(signal, base_size, account_balance, apply_floor=True)
 
-        # Step 2: Apply confidence multiplier
+    def calculate_kelly_bounded_size(
+        self, signal: Signal, account_balance: float, account_id: str = "sub_1"
+    ) -> SizingResult:
+        """
+        Size from a real Kelly edge only, or report that there is none.
+
+        Used by the live path behind ENABLE_KELLY_SIZING.  Differs from
+        calculate_position_size in that it never substitutes a fallback
+        percentage and never floors a size upwards: without sufficient
+        history, a positive Kelly fraction and a usable stop the result has
+        effective_size 0.0 and a non-"ok" kelly_status, and the caller keeps
+        its own size.
+
+        Args:
+            signal: Signal to size
+            account_balance: Current account balance
+            account_id: Account whose trade history Kelly reads
+
+        Returns:
+            SizingResult; effective_size is usable only when kelly_status
+            is "ok".
+        """
+        evaluation = self.kelly.evaluate(signal, account_balance, account_id)
+        if evaluation.status != KELLY_OK:
+            return SizingResult(
+                base_size=0.0,
+                confidence=signal.confidence,
+                multiplier=0.0,
+                effective_size=0.0,
+                reason=evaluation.detail,
+                kelly_status=evaluation.status,
+            )
+        return self._finalize(
+            signal, evaluation.quantity, account_balance, apply_floor=False
+        )
+
+    def _finalize(
+        self,
+        signal: Signal,
+        base_size: float,
+        account_balance: float,
+        apply_floor: bool,
+    ) -> SizingResult:
+        """Apply the confidence multiplier and the hard limits to a base size."""
         sizing_result = self.confidence.apply_to_size(base_size, signal)
 
-        # Step 3: Apply hard limits
         max_size = (
             account_balance * self.max_position_pct / signal.entry_price
             if signal.entry_price > 0
             else 0
         )
         sizing_result.effective_size = min(sizing_result.effective_size, max_size)
-        sizing_result.effective_size = max(
-            sizing_result.effective_size, self.min_position_size
-        )
+        if apply_floor:
+            sizing_result.effective_size = max(
+                sizing_result.effective_size, self.min_position_size
+            )
 
         logger.info(
-            f"Position sized: {signal.symbol} {signal.side.value} "  # type: ignore[attr-defined]  # Signal has no 'symbol' (field is 'asset'); reported, not fixed
+            f"Position sized: {signal.asset} {signal.side.value} "
             f"kelly={base_size:.6f} * conf={sizing_result.multiplier:.2f} "
             f"= {sizing_result.effective_size:.6f} "
             f"(max={max_size:.6f})"

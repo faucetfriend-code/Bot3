@@ -7,9 +7,8 @@ coordinator ``_coordinate_signal_execution``, the circuit breaker in
 ``signal_phases.Phase3ExecutionFilter``.
 
 The numbers are chosen so every assertion is an exact value derived in
-a comment, not a ``>= 1.0`` smoke check.  Tests marked
-``xfail(strict=True)`` document real defects; a separate change owns
-the fixes.  The defects fixed by the A3 logic audit (sizing floor,
+a comment, not a ``>= 1.0`` smoke check.  The defects fixed by the
+A3 logic audit (sizing floor,
 exposure read failure, breaker units, breaker trip behaviour) are
 asserted here as ordinary passing tests of the fixed behaviour.
 """
@@ -860,8 +859,8 @@ def phase3(balance: Any = "default", **config: Any) -> Phase3ExecutionFilter:
 
 
 def p3_signal(**overrides: Any) -> SimpleNamespace:
-    """Signal-like object with the ``symbol`` attribute Phase 3 reads."""
-    fields = dict(symbol="BTC", entry_price=100.0, stop_loss=95.0, side=OrderSide.BUY)
+    """Signal-like object with the ``asset`` attribute Phase 3 reads."""
+    fields = dict(asset="BTC", entry_price=100.0, stop_loss=95.0, side=OrderSide.BUY)
     fields.update(overrides)
     return SimpleNamespace(**fields)
 
@@ -920,15 +919,18 @@ class TestPhase3ExecutionFilter:
         flt = Phase3ExecutionFilter(RiskManager(), client, SimpleNamespace())
         assert flt._get_account_balance() == 10_000.0
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AttributeError,
-        reason=(
-            "Phase3ExecutionFilter.check reads signal.symbol, but models.Signal "
-            "names the field 'asset'.  A real Signal through a real RiskManager "
-            "raises AttributeError before any limit is checked."
-        ),
-    )
     def test_accepts_a_real_signal(self) -> None:
         out = phase3().check(make_signal(), 5.0)
         assert out.result == PhaseResult.PASS
+
+    def test_explicit_balance_replaces_the_client_read(self) -> None:
+        # 5 contracts * 100 = 500 against a passed-in 1_000 balance = 50%
+        flt = phase3(balance={"total": BALANCE})
+        out = flt.check(make_signal(), 5.0, account_balance=1_000.0)
+        assert out.result == PhaseResult.BLOCK and "Exposure" in out.reason
+
+    def test_balance_programming_error_is_not_swallowed(self) -> None:
+        client = SimpleNamespace(get_balance=raiser(TypeError("bad call")))
+        flt = Phase3ExecutionFilter(RiskManager(), client, SimpleNamespace())
+        with pytest.raises(TypeError):
+            flt._get_account_balance()
