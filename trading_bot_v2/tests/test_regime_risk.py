@@ -10,12 +10,13 @@ Covers:
 """
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
 from trading_bot_v2.event_system import Event, EventType
 from trading_bot_v2.market_regime import MarketRegime
+from trading_bot_v2.pacifica_client import PacificaClient
 from trading_bot_v2.regime_position_review import RegimePositionReviewer
 from trading_bot_v2.risk_manager import RiskManager
 
@@ -201,16 +202,30 @@ class TestRegimeConfidenceGate:
 # ============================================================
 
 
-def _make_reviewer(open_trades, trend="none", price=None, enabled=True):
-    """Build a RegimePositionReviewer with fully mocked collaborators."""
-    db = MagicMock()
-    db.get_open_trades.return_value = open_trades
+def _make_reviewer(rows, trend="none", price=None, enabled=True):
+    """Build a RegimePositionReviewer over positions rows and a live-shaped client.
 
-    client = MagicMock()
-    if price is None:
-        client.get_ticker.return_value = None
-    else:
-        client.get_ticker.return_value = {"last": price}
+    The db double exposes ONLY ``get_position`` (the positions table): a
+    read of ``trades`` (``get_open_trades``, the old dead source) raises.
+    The client is spec'd on the real PacificaClient and reports the same
+    positions the rows describe.
+    """
+    by_side = {row["side"]: row for row in rows}
+    db = MagicMock(spec=["get_position"])
+    db.get_position.side_effect = lambda symbol, side: (
+        by_side.get(side) if by_side.get(side, {}).get("symbol") == symbol else None
+    )
+
+    client = create_autospec(PacificaClient, instance=True)
+    client.get_market_data.return_value = {} if price is None else {"price": price}
+    client.get_positions.return_value = [
+        {
+            "symbol": row["symbol"],
+            "side": row["side"].lower(),
+            "amount": row["quantity"],
+        }
+        for row in rows
+    ]
 
     detector = MagicMock()
     detector.get_active_strategies.return_value = ["MeanReversion", "GridTrading"]
@@ -218,6 +233,7 @@ def _make_reviewer(open_trades, trend="none", price=None, enabled=True):
 
     mpm = MagicMock()
     mpm.risk_manager.get_migrated_positions.return_value = []
+    mpm.get_pending_closes.return_value = {}
 
     fetcher = MagicMock()
     fetcher.get_candles_multi_tf.return_value = {
@@ -247,7 +263,8 @@ def _regime_event(symbol="SUI-PERP", new_regime="ranging_calm"):
     )
 
 
-def _open_trade(strategy="MOMENTUM_SCALPING", side="BUY", entry=1.0, qty=2.0):
+def _position_row(strategy="momentum_scalping", side="LONG", entry=1.0, qty=2.0):
+    """An open ``positions`` row as the live path leaves it (tagged)."""
     return {
         "id": 1,
         "symbol": "SUI-PERP",
@@ -255,8 +272,8 @@ def _open_trade(strategy="MOMENTUM_SCALPING", side="BUY", entry=1.0, qty=2.0):
         "quantity": qty,
         "entry_price": entry,
         "strategy": strategy,
-        "regime": "trending_strong",
-        "entry_time": "2026-07-01T00:00:00",
+        "entry_regime": "trending_strong",
+        "opened_at": "2026-07-01T00:00:00+00:00",
     }
 
 
@@ -266,7 +283,7 @@ class TestRegimePositionReview:
     def test_profitable_misaligned_position_arms_trailing_not_closed(self):
         # Long from 1.0, price 1.2 (profit), trend up (not against)
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(side="BUY", entry=1.0)], trend="up", price=1.2
+            [_position_row(side="LONG", entry=1.0)], trend="up", price=1.2
         )
         reviewer.handle_regime_changed(_regime_event())
 
@@ -281,7 +298,7 @@ class TestRegimePositionReview:
     def test_against_trend_position_closed_with_regime_exit(self):
         # Long from 1.0, price 0.9 (loss), trend down -> against trend
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(side="BUY", entry=1.0)], trend="down", price=0.9
+            [_position_row(side="LONG", entry=1.0)], trend="down", price=0.9
         )
         reviewer.handle_regime_changed(_regime_event())
 
@@ -294,7 +311,7 @@ class TestRegimePositionReview:
 
     def test_short_against_up_trend_closed(self):
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(side="SELL", entry=1.0)], trend="up", price=1.1
+            [_position_row(side="SHORT", entry=1.0)], trend="up", price=1.1
         )
         reviewer.handle_regime_changed(_regime_event())
         assert mpm.close_position.call_count == 1
@@ -303,7 +320,7 @@ class TestRegimePositionReview:
     def test_not_profit_not_against_trend_logs_only(self):
         # Long losing, trend none -> log only
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(side="BUY", entry=1.0)], trend="none", price=0.95
+            [_position_row(side="LONG", entry=1.0)], trend="none", price=0.95
         )
         reviewer.handle_regime_changed(_regime_event())
         mpm.arm_trailing_stop.assert_not_called()
@@ -312,7 +329,7 @@ class TestRegimePositionReview:
     def test_active_strategy_position_untouched(self):
         # MeanReversion is active in the new regime -> skip
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(strategy="MEAN_REVERSION")], trend="down", price=0.9
+            [_position_row(strategy="mean_reversion")], trend="down", price=0.9
         )
         reviewer.handle_regime_changed(_regime_event())
         mpm.arm_trailing_stop.assert_not_called()
@@ -320,14 +337,14 @@ class TestRegimePositionReview:
 
     def test_overlay_strategy_position_untouched(self):
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(strategy="LIQUIDATION_CAPTURE")], trend="down", price=0.9
+            [_position_row(strategy="liquidation_capture")], trend="down", price=0.9
         )
         reviewer.handle_regime_changed(_regime_event())
         mpm.close_position.assert_not_called()
 
     def test_grid_positions_skipped(self):
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade(strategy="GRID_TRADING", side="GRID")],
+            [_position_row(strategy="grid_trading")],
             trend="down",
             price=0.9,
         )
@@ -338,8 +355,8 @@ class TestRegimePositionReview:
     def test_handler_survives_raising_position(self):
         # Two closable positions; the first close raises. The handler must
         # not propagate and must still process the second position.
-        first = _open_trade(side="BUY", entry=1.0)
-        second = dict(_open_trade(side="SELL", entry=1.0), id=2)
+        first = _position_row(side="LONG", entry=1.0)
+        second = dict(_position_row(side="SHORT", entry=1.0), id=2)
         reviewer, db, mpm = _make_reviewer([first, second], trend="up", price=1.5)
         # First reviewed position is profitable long -> arm raises
         mpm.arm_trailing_stop.side_effect = [RuntimeError("boom"), True]
@@ -353,10 +370,10 @@ class TestRegimePositionReview:
 
     def test_disabled_flag_no_ops(self):
         reviewer, db, mpm = _make_reviewer(
-            [_open_trade()], trend="down", price=0.9, enabled=False
+            [_position_row()], trend="down", price=0.9, enabled=False
         )
         reviewer.handle_regime_changed(_regime_event())
-        db.get_open_trades.assert_not_called()
+        db.get_position.assert_not_called()
         mpm.close_position.assert_not_called()
 
     def test_malformed_event_is_safe(self):

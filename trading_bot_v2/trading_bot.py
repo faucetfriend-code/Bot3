@@ -454,6 +454,7 @@ class TradingBot:
             venue_exchange_resolver=lambda: self.exchange,
             db=self.db,
             price_lookup=lambda symbol: self._get_ticker_ws(symbol),
+            grid_symbol_checker=self._symbol_has_grid,
         )
 
         # Initialize regime param overlay manager (P4). Loads active
@@ -474,6 +475,8 @@ class TradingBot:
             migrated_position_manager=self.migrated_position_manager,
             multi_tf_fetcher=self.multi_tf_fetcher,
             price_lookup=lambda symbol: self._get_ticker_ws(symbol),
+            active_strategy_resolver=self.strategy_manager.get_active_strategy_names,
+            grid_symbol_checker=self._symbol_has_grid,
         )
 
         # Initialize execution layer for precise 1m/5m entry timing
@@ -1061,6 +1064,25 @@ class TradingBot:
             )
         except Exception as exc:  # noqa: BLE001 - never raise into the entry path
             logger.error(f"Could not tag position owner for {symbol}: {exc}")
+
+    def _symbol_has_grid(self, symbol: str) -> bool:
+        """True when the grid lifecycle tracks a live grid on ``symbol``.
+
+        Any tracked state except idle / closed counts (active, emergency
+        exit, disabled by regime): the venue nets grid inventory into the
+        symbol's position, so the regime review and the max-hold time exit
+        leave such a symbol to the grid lifecycle.
+        """
+        grid = getattr(self, "grid_lifecycle", None)
+        if grid is None:
+            return False
+        status = grid.get_grid_status(symbol)
+        if not status:
+            return False
+        return status.get("state") not in (
+            GridState.IDLE.value,
+            GridState.CLOSED.value,
+        )
 
     def _maybe_run_full_reconciliation(
         self, exchange_positions: List[Dict[str, Any]]

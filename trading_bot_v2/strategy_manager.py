@@ -974,6 +974,119 @@ class StrategyManager:
 
         return True
 
+    def get_active_strategy_names(
+        self, regime: MarketRegime, symbol: str = ""
+    ) -> List[str]:
+        """Strategies allowed to trade ``symbol`` in ``regime``.
+
+        Single source of truth for regime activation: the detector's
+        regime map, the grid regime constraint and the always-on /
+        regime-gated additions for enabled strategies.  Used by signal
+        generation and by the regime-flip position review.
+
+        Args:
+            regime: Confirmed market regime.
+            symbol: Trading symbol (log context only).
+
+        Returns:
+            Display names of the active strategies (may be empty).
+        """
+        # Step 2: Get active strategies for current regime
+        active_strategy_names = self.regime_detector.get_active_strategies(regime)
+
+        # Step 2.25: ENFORCE GRID REGIME CONSTRAINTS (MANDATORY per Grid Trading Brief)
+        # Delegated to the detector so the rule follows the active
+        # taxonomy. For the ADX detector is_grid_allowed() is True for
+        # exactly RANGING_CALM / RANGING_VOLATILE / INDECISIVE, i.e. the
+        # hard disable still fires on TRENDING_STRONG / TRENDING_MODERATE
+        # and nothing about ADX-mode behaviour changes.
+        if not self.regime_detector.is_grid_allowed(regime):
+            if "GridTrading" in active_strategy_names:
+                active_strategy_names = [
+                    name for name in active_strategy_names if name != "GridTrading"
+                ]
+                logger.info(
+                    f"Grid trading HARD DISABLED in {regime.value} regime for {symbol}"
+                )
+
+        # Step 2.5: Always add LiquidationCapture if enabled (runs in ALL regimes)
+        if (
+            "LiquidationCapture" in self.strategies
+            and "LiquidationCapture" not in active_strategy_names
+        ):
+            active_strategy_names = list(active_strategy_names) + ["LiquidationCapture"]
+            logger.debug(f"{symbol}: Added LiquidationCapture (runs in all regimes)")
+
+        # Step 2.6: Add VWAPScalping only in the regimes it is mapped to.
+        # VWAP is a mean-reversion strategy - SELL signals fight the trend in
+        # TRENDING_STRONG / TRENDING_MODERATE and consistently hit SL, dragging PF below 1.
+        # The remaining set is configurable (VWAP_ACTIVE_REGIMES); see
+        # resolve_vwap_active_regimes and docs/REGIME-CENSUS.md.
+        _vwap_regimes = self.vwap_active_regimes
+        if (
+            "VWAPScalping" in self.strategies
+            and "VWAPScalping" not in active_strategy_names
+            and regime in _vwap_regimes
+        ):
+            active_strategy_names = list(active_strategy_names) + ["VWAPScalping"]
+            logger.debug(f"{symbol}: Added VWAPScalping (ranging/indecisive regime)")
+
+        # Step 2.8: Add MomentumScalping if enabled and in TRENDING regimes
+        if (
+            "MomentumScalping" in self.strategies
+            and "MomentumScalping" not in active_strategy_names
+            and regime in [MarketRegime.TRENDING_STRONG, MarketRegime.TRENDING_MODERATE]
+        ):
+            active_strategy_names = list(active_strategy_names) + ["MomentumScalping"]
+            logger.debug(
+                f"{symbol}: Added MomentumScalping (fast EMA crossover strategy for trending markets)"
+            )
+
+        # Step 2.9: Always add OrderBookImbalance if enabled (overlay strategy, runs in ALL regimes)
+        if (
+            "OrderBookImbalance" in self.strategies
+            and "OrderBookImbalance" not in active_strategy_names
+        ):
+            active_strategy_names = list(active_strategy_names) + ["OrderBookImbalance"]
+            logger.debug(
+                f"{symbol}: Added OrderBookImbalance (flow-based overlay strategy, runs in all regimes)"
+            )
+
+        # Step 2.10: Always add SessionRangeBreakout if enabled (time-gated, runs in ALL regimes)
+        if (
+            "SessionRangeBreakout" in self.strategies
+            and "SessionRangeBreakout" not in active_strategy_names
+        ):
+            active_strategy_names = list(active_strategy_names) + [
+                "SessionRangeBreakout"
+            ]
+            logger.debug(
+                f"{symbol}: Added SessionRangeBreakout (time-gated ORB overlay, runs in all regimes)"
+            )
+
+        # Step 2.11: Always add CalendarFlow if enabled (calendar-gated, runs in ALL regimes)
+        if (
+            "CalendarFlow" in self.strategies
+            and "CalendarFlow" not in active_strategy_names
+        ):
+            active_strategy_names = list(active_strategy_names) + ["CalendarFlow"]
+            logger.debug(
+                f"{symbol}: Added CalendarFlow (calendar-gated overlay, runs in all regimes)"
+            )
+
+        # Step 2.12: Always add VWAPPullback if enabled (self-gated by
+        # its own 4h EMA stack, so regime admission is redundant)
+        if (
+            "VWAPPullback" in self.strategies
+            and "VWAPPullback" not in active_strategy_names
+        ):
+            active_strategy_names = list(active_strategy_names) + ["VWAPPullback"]
+            logger.debug(
+                f"{symbol}: Added VWAPPullback (trend-gated overlay, runs in all regimes)"
+            )
+
+        return list(active_strategy_names)
+
     def generate_signals_for_market(
         self,
         symbol: str,
@@ -1052,110 +1165,9 @@ class StrategyManager:
             regime_adx = self.regime_detector.get_last_adx(symbol)
             funnel.record_regime(getattr(regime, "value", str(regime)))
 
-            # Step 2: Get active strategies for current regime
-            active_strategy_names = self.regime_detector.get_active_strategies(regime)
-
-            # Step 2.25: ENFORCE GRID REGIME CONSTRAINTS (MANDATORY per Grid Trading Brief)
-            # Delegated to the detector so the rule follows the active
-            # taxonomy. For the ADX detector is_grid_allowed() is True for
-            # exactly RANGING_CALM / RANGING_VOLATILE / INDECISIVE, i.e. the
-            # hard disable still fires on TRENDING_STRONG / TRENDING_MODERATE
-            # and nothing about ADX-mode behaviour changes.
-            if not self.regime_detector.is_grid_allowed(regime):
-                if "GridTrading" in active_strategy_names:
-                    active_strategy_names = [
-                        name for name in active_strategy_names if name != "GridTrading"
-                    ]
-                    logger.info(
-                        f"Grid trading HARD DISABLED in {regime.value} regime for {symbol}"
-                    )
-
-            # Step 2.5: Always add LiquidationCapture if enabled (runs in ALL regimes)
-            if (
-                "LiquidationCapture" in self.strategies
-                and "LiquidationCapture" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "LiquidationCapture"
-                ]
-                logger.debug(
-                    f"{symbol}: Added LiquidationCapture (runs in all regimes)"
-                )
-
-            # Step 2.6: Add VWAPScalping only in the regimes it is mapped to.
-            # VWAP is a mean-reversion strategy - SELL signals fight the trend in
-            # TRENDING_STRONG / TRENDING_MODERATE and consistently hit SL, dragging PF below 1.
-            # The remaining set is configurable (VWAP_ACTIVE_REGIMES); see
-            # resolve_vwap_active_regimes and docs/REGIME-CENSUS.md.
-            _vwap_regimes = self.vwap_active_regimes
-            if (
-                "VWAPScalping" in self.strategies
-                and "VWAPScalping" not in active_strategy_names
-                and regime in _vwap_regimes
-            ):
-                active_strategy_names = list(active_strategy_names) + ["VWAPScalping"]
-                logger.debug(
-                    f"{symbol}: Added VWAPScalping (ranging/indecisive regime)"
-                )
-
-            # Step 2.8: Add MomentumScalping if enabled and in TRENDING regimes
-            if (
-                "MomentumScalping" in self.strategies
-                and "MomentumScalping" not in active_strategy_names
-                and regime
-                in [MarketRegime.TRENDING_STRONG, MarketRegime.TRENDING_MODERATE]
-            ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "MomentumScalping"
-                ]
-                logger.debug(
-                    f"{symbol}: Added MomentumScalping (fast EMA crossover strategy for trending markets)"
-                )
-
-            # Step 2.9: Always add OrderBookImbalance if enabled (overlay strategy, runs in ALL regimes)
-            if (
-                "OrderBookImbalance" in self.strategies
-                and "OrderBookImbalance" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "OrderBookImbalance"
-                ]
-                logger.debug(
-                    f"{symbol}: Added OrderBookImbalance (flow-based overlay strategy, runs in all regimes)"
-                )
-
-            # Step 2.10: Always add SessionRangeBreakout if enabled (time-gated, runs in ALL regimes)
-            if (
-                "SessionRangeBreakout" in self.strategies
-                and "SessionRangeBreakout" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + [
-                    "SessionRangeBreakout"
-                ]
-                logger.debug(
-                    f"{symbol}: Added SessionRangeBreakout (time-gated ORB overlay, runs in all regimes)"
-                )
-
-            # Step 2.11: Always add CalendarFlow if enabled (calendar-gated, runs in ALL regimes)
-            if (
-                "CalendarFlow" in self.strategies
-                and "CalendarFlow" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + ["CalendarFlow"]
-                logger.debug(
-                    f"{symbol}: Added CalendarFlow (calendar-gated overlay, runs in all regimes)"
-                )
-
-            # Step 2.12: Always add VWAPPullback if enabled (self-gated by
-            # its own 4h EMA stack, so regime admission is redundant)
-            if (
-                "VWAPPullback" in self.strategies
-                and "VWAPPullback" not in active_strategy_names
-            ):
-                active_strategy_names = list(active_strategy_names) + ["VWAPPullback"]
-                logger.debug(
-                    f"{symbol}: Added VWAPPullback (trend-gated overlay, runs in all regimes)"
-                )
+            # Step 2: Get active strategies for current regime (regime map,
+            # grid constraint and overlay additions)
+            active_strategy_names = self.get_active_strategy_names(regime, symbol)
 
             if not active_strategy_names:
                 funnel.count(STAGE_REGIME_BLOCKED)

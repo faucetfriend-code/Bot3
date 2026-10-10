@@ -97,23 +97,34 @@ class TestFetchCurrentPrice:
 
 
 def _reviewer(client: Any, trend: str, price_lookup: Any = None):
-    """Reviewer whose active strategies exclude the position's owner."""
-    db = MagicMock()
-    db.get_open_trades.return_value = [
-        {
-            "id": 1,
-            "symbol": SYMBOL,
-            "side": "BUY",
-            "quantity": 2.0,
-            "entry_price": 1.0,
-            "strategy": "MOMENTUM_SCALPING",
-        }
+    """Reviewer whose active strategies exclude the position's owner.
+
+    The open position is a tagged ``positions`` row (the db double has no
+    ``get_open_trades``: the ``trades`` table is not a position source)
+    and the spec'd client reports the same position on the venue.
+    """
+    row = {
+        "id": 1,
+        "symbol": SYMBOL,
+        "side": "LONG",
+        "quantity": 2.0,
+        "entry_price": 1.0,
+        "strategy": "momentum_scalping",
+        "opened_at": "2026-07-01T00:00:00+00:00",
+    }
+    db = MagicMock(spec=["get_position"])
+    db.get_position.side_effect = lambda symbol, side: (
+        row if (symbol, side) == (SYMBOL, "LONG") else None
+    )
+    client.get_positions.return_value = [
+        {"symbol": SYMBOL, "side": "long", "amount": "2.0"}
     ]
     detector = MagicMock()
     detector.get_active_strategies.return_value = ["MeanReversion", "GridTrading"]
     detector.get_trend_direction.return_value = trend
     mpm = MagicMock()
     mpm.risk_manager.get_migrated_positions.return_value = []
+    mpm.get_pending_closes.return_value = {}
     fetcher = MagicMock()
     fetcher.get_candles_multi_tf.return_value = {"4h": {"close": [1.0] * 200}}
     reviewer = RegimePositionReviewer(
@@ -154,6 +165,7 @@ class TestRegimeReviewPriceSource:
 
         mpm.arm_trailing_stop.assert_called_once()
         symbol, pos, price, _market_data = mpm.arm_trailing_stop.call_args.args
+        assert mpm.arm_trailing_stop.call_args.kwargs == {"floor_stop": None}
         assert (symbol, pos["side"], price) == (SYMBOL, "long", 1.2)
         mpm.close_position.assert_not_called()
 
@@ -192,7 +204,11 @@ class TestRegimeReviewPriceSource:
         assert mpm.close_position.call_args.args[2] == "regime_exit"
 
     def test_price_source_failure_degrades_to_no_price(self):
-        """Unchanged behaviour when no price exists: handler does not raise."""
+        """No price: the handler does not raise and nothing is decided.
+
+        This used to assert a ``regime_exit`` close (no price meant "not
+        in profit").  A close is never decided on missing data.
+        """
 
         def failing(symbol: str) -> Dict[str, Any]:
             raise RuntimeError("Both WebSocket and REST API failed")
@@ -202,7 +218,7 @@ class TestRegimeReviewPriceSource:
         reviewer.handle_regime_changed(_regime_event())
 
         mpm.arm_trailing_stop.assert_not_called()
-        mpm.close_position.assert_called_once()
+        mpm.close_position.assert_not_called()
 
 
 # ----------------------------------------------------------------------
