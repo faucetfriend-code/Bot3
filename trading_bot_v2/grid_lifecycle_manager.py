@@ -17,7 +17,7 @@ Sizing MUST come from RiskManager.
 """
 
 from enum import Enum
-from typing import Dict, Any, List, Optional, Set
+from typing import Callable, Dict, Any, List, Optional, Set
 import json
 import os
 import time
@@ -218,6 +218,39 @@ class GridLifecycleManager:
         # to GRID_FLATTEN_MAX_ATTEMPTS.  In-memory only (lost on restart).
         self._pending_flattens: Dict[str, Dict[str, Any]] = {}
         self._max_flatten_attempts = _max_flatten_attempts()
+
+        # Optional callable returning a reason string while new entries are
+        # blocked (TradingBot wires the circuit breaker in), else None.
+        self.entry_gate: Optional[Callable[[], Optional[str]]] = None
+
+    def _entry_block_reason(self) -> Optional[str]:
+        """Return why exposure-adding grid orders are blocked, else None."""
+        gate = getattr(self, "entry_gate", None)
+        return gate() if callable(gate) else None
+
+    def _counter_closes_inventory(
+        self, symbol: str, filled_side: str, fill_quantity: float
+    ) -> bool:
+        """Tell whether a fill's counter order only sells down grid inventory.
+
+        ``net_position`` already includes the fill.  A BUY fill's counter
+        SELL closes inventory when the grid is long by at least the fill;
+        a SELL fill's counter BUY when it is short by at least the fill.
+        Anything else would re-arm an entry.
+
+        Args:
+            symbol: Trading symbol.
+            filled_side: "BUY" or "SELL" (the side that just filled).
+            fill_quantity: Quantity of that fill.
+
+        Returns:
+            True when the counter order reduces the grid's net position.
+        """
+        metrics = self._metrics.get(symbol)
+        net = metrics.net_position if metrics is not None else 0.0
+        if filled_side == "BUY":
+            return net >= fill_quantity - 1e-9
+        return net <= -(fill_quantity - 1e-9)
 
     # =========================
     # ORDER-ID TRACKING HELPERS
@@ -864,6 +897,11 @@ class GridLifecycleManager:
         """
         if not self.has_active_grid(symbol):
             logger.warning(f"Cannot recenter - no active grid for {symbol}")
+            return False
+
+        block_reason = self._entry_block_reason()
+        if block_reason:
+            logger.warning(f"Recenter skipped for {symbol}: {block_reason}")
             return False
 
         grid = self._grids[symbol]
@@ -2110,6 +2148,18 @@ class GridLifecycleManager:
         grid = self._grids[symbol]
         if grid["state"] != GridState.ACTIVE:
             logger.debug(f"Grid not active for {symbol}, skipping replenishment")
+            return
+
+        # While new entries are blocked only a counter order that sells
+        # down inventory the grid already holds may be placed.
+        block_reason = self._entry_block_reason()
+        if block_reason and not self._counter_closes_inventory(
+            symbol, filled_side, fill_quantity
+        ):
+            logger.warning(
+                f"Grid replenish skipped for {symbol} after {filled_side} fill: "
+                f"{block_reason}"
+            )
             return
 
         spacing = grid.get("grid_spacing", 0)
