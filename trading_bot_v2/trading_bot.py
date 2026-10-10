@@ -159,6 +159,75 @@ def _breaker_block_reason(bot: Any) -> Optional[str]:
     return f"Circuit breaker tripped ({reason}) - manual reset required"
 
 
+class GridPreTradeError(ValueError):
+    """A grid failed a pre-trade check and must not be sent to the exchange."""
+
+
+# ExchangeCapabilities.min_order_size_source values whose ``min_order_size``
+# is a USD NOTIONAL per order rather than a base-asset quantity.  Pacifica's
+# /info reports min_order_size "10" (and max_order_size "5000000") for every
+# symbol from BTC to DOGE, i.e. a $10 minimum order value.  Blofin
+# ("instruments_endpoint") is converted to base units by its client.
+_NOTIONAL_MIN_ORDER_SOURCES = frozenset({"info_endpoint"})
+
+
+def _grid_emergency_stop_price(lowest_buy_price: float, center_price: float) -> float:
+    """Emergency stop of a live (neutral) grid.
+
+    Single source for the stop the live grid path registers and the stop
+    the pre-trade check validates, so the two can never disagree.
+    Convention matches re-adoption: lowest_buy * (1 - stop_pct), falling
+    back to the center price when no buy level exists.
+
+    Args:
+        lowest_buy_price: Lowest BUY level price of the ladder (0 if none).
+        center_price: Market price the ladder was built around.
+
+    Returns:
+        The emergency stop price.
+    """
+    emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+    if lowest_buy_price > 0:
+        return lowest_buy_price * (1.0 - emergency_stop_pct)
+    return center_price * (1.0 - emergency_stop_pct)
+
+
+def _grid_min_order_constraint(exchange: Any, symbol: str) -> "tuple[float, bool]":
+    """Exchange minimum order size for a symbol and the unit it is in.
+
+    Reads the same instrument info the order path uses (the exchange
+    adapter delegates to the native client).  Clients return 0.0 when the
+    value is unavailable; anything unparseable is treated the same way.
+
+    Args:
+        exchange: Exchange adapter (or duck-typed stand-in).
+        symbol: Trading symbol.
+
+    Returns:
+        ``(min_order_size, is_notional)``.  ``min_order_size`` is 0.0 when
+        unknown; ``is_notional`` is True when it is a USD order value and
+        False when it is a base-asset quantity.
+    """
+    min_order_size = 0.0
+    try:
+        info = exchange.get_instrument_info(symbol)
+        raw = info.get("min_order_size") if isinstance(info, dict) else None
+        # Only real numbers / numeric strings count (never a mock or a bool).
+        if isinstance(raw, (int, float, str)) and not isinstance(raw, bool):
+            min_order_size = float(raw)
+    except (AttributeError, TypeError, ValueError):
+        min_order_size = 0.0
+
+    source = ""
+    caps_fn = getattr(exchange, "capabilities", None)
+    if callable(caps_fn):
+        try:
+            source = str(getattr(caps_fn(), "min_order_size_source", ""))
+        except (AttributeError, TypeError):
+            source = ""
+    return min_order_size, source in _NOTIONAL_MIN_ORDER_SOURCES
+
+
 class TradingBot:
     """
     Trading bot class for automated trading on Pacifica exchange.
@@ -1922,13 +1991,14 @@ class TradingBot:
                 # value (signal.stop_loss = entry - 2*ATR) landed INSIDE the
                 # grid and force-exited healthy grids on normal oscillation.
                 # Convention matches re-adoption: lowest_buy * (1 - stop_pct).
-                emergency_stop_pct = float(os.getenv("GRID_EMERGENCY_STOP_PCT", "0.05"))
+                # The same helper feeds the pre-trade check in
+                # _place_grid_orders, so the validated and registered stops
+                # are one value.
                 center_price = result.get("center_price") or signal.entry_price
                 lowest_buy_price = result.get("lowest_buy_price") or 0
-                if lowest_buy_price > 0:
-                    emergency_stop_price = lowest_buy_price * (1.0 - emergency_stop_pct)
-                else:
-                    emergency_stop_price = center_price * (1.0 - emergency_stop_pct)
+                emergency_stop_price = _grid_emergency_stop_price(
+                    lowest_buy_price, center_price
+                )
 
                 # Record the actual market regime (not signal.market_state,
                 # which is always "RANGE" for grid signals).
@@ -2047,10 +2117,45 @@ class TradingBot:
                 f"{len(grid_levels['buy_levels'])} BUY, {len(grid_levels['sell_levels'])} SELL"
             )
 
+            exchange = _resolve_exchange(self)
+
+            # Pre-trade check: every input is known here and nothing has been
+            # sent yet, so a failing grid leaves no orders and no grid state.
+            # Called through the class because duck-typed stand-ins (tests)
+            # bind only some TradingBot methods.
+            lowest_buy_price = min(
+                (level["price"] for level in grid_levels["buy_levels"]), default=0
+            )
+            current_price = grid_levels.get("current_price", 0)
+            min_order_size, min_order_is_notional = _grid_min_order_constraint(
+                exchange, symbol
+            )
+            # Size is read from the orders about to be sent (smallest
+            # quantity, cheapest level), not from a separate summary field.
+            all_levels = grid_levels["buy_levels"] + grid_levels["sell_levels"]
+            try:
+                TradingBot._assert_grid_pre_trade(
+                    symbol=symbol,
+                    grid_spacing=grid_levels.get("grid_spacing", 0),
+                    num_levels=len(all_levels),
+                    quantity_per_level=min(level["quantity"] for level in all_levels),
+                    current_price=current_price,
+                    emergency_stop_price=_grid_emergency_stop_price(
+                        lowest_buy_price, current_price
+                    ),
+                    min_order_size=min_order_size,
+                    min_order_is_notional=min_order_is_notional,
+                    lowest_level_price=min(level["price"] for level in all_levels),
+                )
+            except GridPreTradeError as check_error:
+                return {
+                    "success": False,
+                    "error": f"Grid pre-trade check failed: {check_error}",
+                }
+
             # Place grid orders
             buy_order_ids = []
             sell_order_ids = []
-            exchange = _resolve_exchange(self)
 
             # Place BUY orders (normalized vocabulary via exchange adapter)
             for level in grid_levels["buy_levels"]:
@@ -2116,9 +2221,6 @@ class TradingBot:
             # caller can register the grid with real values (spacing drives
             # fill replenishment; lowest buy drives the emergency stop).
             success = len(buy_order_ids) > 0 or len(sell_order_ids) > 0
-            lowest_buy_price = min(
-                (level["price"] for level in grid_levels["buy_levels"]), default=0
-            )
             return {
                 "success": success,
                 "buy_orders": len(buy_order_ids),
@@ -3654,70 +3756,103 @@ class TradingBot:
         except Exception as e:
             logging.error(f"Error monitoring emergency stops: {e}")
 
+    @staticmethod
     def _assert_grid_pre_trade(
-        self,
         symbol: str,
         grid_spacing: float,
         num_levels: int,
         quantity_per_level: float,
-        signal: Optional[Signal] = None,
+        current_price: float,
+        emergency_stop_price: float,
+        min_order_size: float = 0.0,
+        min_order_is_notional: bool = False,
+        lowest_level_price: float = 0.0,
     ) -> None:
         """
-        Assert pre-trade conditions for grid trading (per Grid Trading Brief).
+        Check pre-trade conditions for a live grid (per Grid Trading Brief).
 
-        Validates:
-        1. Grid spacing > 0
-        2. Number of levels between 5-20
-        3. Quantity per level > minimum order size (fetched live from exchange)
-        4. Emergency stop price > 0 and < current price (when signal is provided)
-        5. Total capital allocation within risk limits
+        Called by _place_grid_orders with the ladder it is about to send,
+        before the first order.  Uses explicit checks (not ``assert``) so
+        it still runs under ``python -O``.
+
+        Enforced (raise):
+        1. Grid spacing > 0.
+        2. Every level meets the exchange minimum order size, compared in
+           the unit the exchange reports: order value (quantity * price of
+           the cheapest level) when ``min_order_is_notional``, otherwise
+           base quantity.  Skipped with a warning when the minimum is
+           unknown (0.0), matching the clients' degrade contract.
+        3. Emergency stop > 0 and below the current price.  Live grids are
+           always neutral (buys below, sells above) with one downside
+           stop, so "below price" holds for every grid this path creates.
+
+        Warning only (not enforced):
+        4. Total level count outside 5-20.  GRID_TRADING_LEVELS values
+           below 5 are documented as tuned configurations, so this range
+           cannot be shown to be a hard requirement.
 
         Args:
-            symbol: Trading symbol
-            grid_spacing: Grid spacing in price units
-            num_levels: Number of grid levels
-            quantity_per_level: Quantity at each grid level
-            signal: Optional originating Signal for emergency-stop validation
+            symbol: Trading symbol.
+            grid_spacing: Grid spacing in price units.
+            num_levels: Total orders in the ladder (BUY + SELL levels).
+            quantity_per_level: Smallest base-asset quantity of any level.
+            current_price: Market price the ladder was built around.
+            emergency_stop_price: Stop the grid will be registered with.
+            min_order_size: Exchange minimum order size, 0.0 if unknown.
+            min_order_is_notional: True when ``min_order_size`` is a USD
+                order value, False when it is a base-asset quantity.
+            lowest_level_price: Price of the cheapest level; used for the
+                order-value comparison.
 
         Raises:
-            AssertionError: If any pre-trade condition fails
+            GridPreTradeError: If an enforced pre-trade condition fails.
         """
-        # Validate grid spacing
-        assert grid_spacing > 0, f"Grid spacing must be positive, got {grid_spacing}"
+        # Validate grid spacing ("not >" also rejects NaN)
+        if not grid_spacing > 0:
+            raise GridPreTradeError(
+                f"grid spacing must be positive, got {grid_spacing}"
+            )
 
-        # Validate number of levels
-        assert 5 <= num_levels <= 20, f"Number of levels must be 5-20, got {num_levels}"
+        # Level count: warning only, see docstring.
+        if not 5 <= num_levels <= 20:
+            logger.warning(
+                f"Grid pre-trade: {symbol} ladder has {num_levels} levels, "
+                f"outside the 5-20 range of the Grid Trading Brief (not enforced)"
+            )
 
-        # Validate quantity per level against exchange minimum
-        # Fetch live instrument info so we respect per-token minimums.
-        # Falls back to 0.0 (no constraint) if the API call fails.
-        instrument_info = self.client.get_instrument_info(symbol)
-        min_order_size = instrument_info.get("min_order_size", 0.0)
+        # Validate per-level size against the exchange minimum
         if min_order_size > 0:
-            assert quantity_per_level >= min_order_size, (
-                f"Quantity per level {quantity_per_level} below exchange minimum "
-                f"{min_order_size} for {symbol}"
-            )
+            if min_order_is_notional:
+                level_value = quantity_per_level * lowest_level_price
+                if level_value < min_order_size:
+                    raise GridPreTradeError(
+                        f"order value per level ${level_value:.4f} "
+                        f"({quantity_per_level} @ {lowest_level_price}) below "
+                        f"exchange minimum ${min_order_size} for {symbol}"
+                    )
+            elif quantity_per_level < min_order_size:
+                raise GridPreTradeError(
+                    f"quantity per level {quantity_per_level} below exchange "
+                    f"minimum {min_order_size} for {symbol}"
+                )
         else:
-            logging.debug(
-                f"{symbol}: min_order_size not available from exchange info — "
-                "skipping minimum quantity check"
+            logger.warning(
+                f"Grid pre-trade: min_order_size not available for {symbol} - "
+                f"skipping minimum order size check"
             )
 
-        # Validate emergency stop price (only when a signal is provided)
-        if signal:
-            emergency_stop_price = self._calculate_emergency_stop(signal)
-            assert emergency_stop_price > 0, "Emergency stop price must be positive"
-
-            current_price: Any = self._get_ticker_ws(symbol)
-            if isinstance(current_price, dict):
-                current_price = current_price.get("price", current_price.get("last", 0))
-            assert emergency_stop_price < current_price, (
-                f"Emergency stop {emergency_stop_price} must be below "
+        # Validate emergency stop price
+        if not emergency_stop_price > 0:
+            raise GridPreTradeError(
+                f"emergency stop price must be positive, got {emergency_stop_price}"
+            )
+        if not emergency_stop_price < current_price:
+            raise GridPreTradeError(
+                f"emergency stop {emergency_stop_price} must be below "
                 f"current price {current_price}"
             )
 
-        logging.info(f"✅ Grid pre-trade assertions passed for {symbol}")
+        logger.info(f"Grid pre-trade checks passed for {symbol}")
 
     def get_status(self) -> Dict[str, Any]:
         """
