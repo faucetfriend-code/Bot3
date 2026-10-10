@@ -457,10 +457,14 @@ class GridLifecycleManager:
             )
             return False
         for grid_symbol, grid in self._grids.items():
+            if normalize_symbol(grid_symbol) != normalize_symbol(symbol):
+                continue
             tracked = grid.get("order_ids")
-            if tracked is not None and normalize_symbol(grid_symbol) == (
-                normalize_symbol(symbol)
-            ):
+            # Remember the grid lost an entry level to the breaker so a
+            # manual reset can clear it (clear_breaker_stripped_grids).
+            if tracked is None or str(order_id) in tracked:
+                grid["breaker_stripped"] = True
+            if tracked is not None:
                 tracked.discard(str(order_id))
         logger.warning(
             f"Cancelled resting entry order {order_id} for {symbol} "
@@ -495,6 +499,85 @@ class GridLifecycleManager:
                 result["cancelled"] += 1
             else:
                 result["failed"] += 1
+        return result
+
+    def _breaker_clear_blocker(
+        self, symbol: str, orders: List[Dict[str, Any]], net: Dict[str, float]
+    ) -> Optional[str]:
+        """Return why a stripped grid must keep its state, else None.
+
+        Args:
+            symbol: Grid symbol.
+            orders: Open-order rows from ``client.get_orders()``.
+            net: Signed exchange position per normalized symbol.
+
+        Returns:
+            A reason while the venue shows an open position (the grid's
+            emergency stop is a software check on this state) or a resting
+            non-protective order (it would be left untracked); else None.
+        """
+        key = normalize_symbol(symbol)
+        position = net.get(key, 0.0)
+        if abs(position) > 1e-9:
+            return f"open position {position:g}: grid emergency stop kept"
+        resting = sum(
+            1
+            for order in orders
+            if normalize_symbol(order.get("symbol")) == key
+            and not is_protective_order(order)
+        )
+        if resting:
+            return f"{resting} resting grid order(s) on the venue"
+        return None
+
+    def clear_breaker_stripped_grids(
+        self, include_unmarked: bool = False
+    ) -> Dict[str, Any]:
+        """Clear ACTIVE grids whose entry orders the breaker sweep cancelled.
+
+        Called by the manual breaker reset.  Reads the venue and calls
+        ``clear_grid``; places nothing, cancels nothing, never raises.  A
+        grid with a position, a resting order or a pending flatten is kept.
+
+        Args:
+            include_unmarked: Also consider ACTIVE grids without a sweep
+                mark (after a restart the in-memory mark is lost).
+
+        Returns:
+            Dict with ``cleared`` (symbols), ``not_cleared`` (symbol ->
+            reason) and ``errors`` (venue reads or clears that failed).
+        """
+        result: Dict[str, Any] = {"cleared": [], "not_cleared": {}, "errors": []}
+        candidates = [
+            symbol
+            for symbol, grid in self._grids.items()
+            if grid.get("state") == GridState.ACTIVE
+            and symbol not in self._pending_flattens
+            and (include_unmarked or grid.get("breaker_stripped"))
+        ]
+        if not candidates:
+            return result
+        try:
+            orders = list(self.client.get_orders() or [])
+            net = self._net_positions()
+        except Exception as exc:  # noqa: BLE001 - never raise into the reset
+            logger.error(f"Stripped grid clear could not read the venue: {exc}")
+            result["errors"].append(f"venue read failed: {exc}")
+            for symbol in candidates:
+                result["not_cleared"][symbol] = "venue state unreadable"
+            return result
+        for symbol in candidates:
+            reason = self._breaker_clear_blocker(symbol, orders, net)
+            if reason is None:
+                try:
+                    self.clear_grid(symbol)
+                    result["cleared"].append(symbol)
+                    continue
+                except Exception as exc:  # noqa: BLE001 - report, keep going
+                    result["errors"].append(f"{symbol}: clear failed: {exc}")
+                    reason = f"clear failed: {exc}"
+            logger.warning(f"Stripped grid kept for {symbol} on reset: {reason}")
+            result["not_cleared"][symbol] = reason
         return result
 
     # =========================

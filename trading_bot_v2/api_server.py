@@ -575,6 +575,8 @@ class BotIntegration:
                     "circuit_breaker_reason": None,
                     "circuit_breaker_orders_cancelled": 0,
                     "circuit_breaker_cancels_failing": 0,
+                    "circuit_breaker_grids_cleared": [],
+                    "circuit_breaker_grids_not_cleared": {},
                     "exchange": _exchange,
                     "exchange_mode": _mode,
                 }
@@ -641,6 +643,12 @@ class BotIntegration:
                     )
                     status["circuit_breaker_cancels_failing"] = getattr(
                         self.trading_bot, "_breaker_cancel_failures", 0
+                    )
+                    status["circuit_breaker_grids_cleared"] = list(
+                        getattr(self.trading_bot, "_breaker_grids_cleared", [])
+                    )
+                    status["circuit_breaker_grids_not_cleared"] = dict(
+                        getattr(self.trading_bot, "_breaker_grids_not_cleared", {})
                     )
 
                 # Get current regime (use BTC as reference)
@@ -1875,10 +1883,17 @@ async def reset_circuit_breaker() -> Dict[str, Any]:
     If the portfolio loss is still at the limit, the next risk check trips
     the breaker again.
 
+    Reset also clears the state of grids whose entry orders the trip
+    cancelled (same call as /api/grids/{symbol}/clear) when the venue shows
+    no position and no resting grid order for the symbol.  It sends no
+    order and no cancel.  Grids it leaves in place are listed with a reason.
+
     Response:
       { "success": true,
         "state": { "was_tripped": bool, "tripped_at": str|null,
-                   "reason": str|null } }
+                   "reason": str|null, "grids_cleared": [symbol],
+                   "grids_not_cleared": {symbol: reason},
+                   "grid_clear_errors": [str] } }
     """
     bot = bot_integration.trading_bot
     if bot is None:
