@@ -999,13 +999,11 @@ class BotIntegration:
 
         side = self._normalize_position_side(pos.get("side"))
 
-        opened_at = None
-        for key in ("created_at", "opened_at", "timestamp", "open_time"):
-            if key in pos and pos[key] is not None:
-                opened_at = pos[key]
-                break
-        if not opened_at:
-            opened_at = datetime.now(timezone.utc).isoformat()
+        # Used only when the sync creates the row: the time the bot first
+        # saw the position.  Timestamps in the venue payload (created_at,
+        # opened_at, ...) are ignored; save_position never moves the
+        # stored value on an update.
+        opened_at = datetime.now(timezone.utc).isoformat()
 
         unrealized_pnl = 0.0
         for key in ("unrealized_pnl", "upnl", "floating_pnl"):
