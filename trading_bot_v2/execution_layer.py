@@ -198,9 +198,9 @@ class ExecutionLayer:
             highs_5m = data_5m.get("high", [])
             lows_5m = data_5m.get("low", [])
 
-            if len(closes_5m) >= 14:
+            if len(closes_5m) >= 15:
                 context.rsi_5m = calculate_rsi(closes_5m, period=14)
-            if len(closes_5m) >= 14 and len(highs_5m) >= 14 and len(lows_5m) >= 14:
+            if len(closes_5m) >= 15 and len(highs_5m) >= 15 and len(lows_5m) >= 15:
                 context.atr_5m = calculate_atr(highs_5m, lows_5m, closes_5m, period=14)
 
             # Calculate 5m momentum (last N candles direction)
@@ -219,9 +219,9 @@ class ExecutionLayer:
             lows_1m = data_1m.get("low", [])
             volumes_1m = data_1m.get("volume", [])
 
-            if len(closes_1m) >= 14:
+            if len(closes_1m) >= 15:
                 context.rsi_1m = calculate_rsi(closes_1m, period=14)
-            if len(closes_1m) >= 14 and len(highs_1m) >= 14 and len(lows_1m) >= 14:
+            if len(closes_1m) >= 15 and len(highs_1m) >= 15 and len(lows_1m) >= 15:
                 context.atr_1m = calculate_atr(highs_1m, lows_1m, closes_1m, period=14)
 
             # Current price from 1m
