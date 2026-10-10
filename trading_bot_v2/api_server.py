@@ -860,27 +860,57 @@ class BotIntegration:
         return orders
 
     def get_grids(self) -> List[Dict[str, Any]]:
-        """Get active grid trading configurations."""
+        """Get active grid trading configurations.
+
+        ``GridLifecycleManager.get_all_active_grids`` returns a list of
+        ``get_grid_status`` dicts (symbol, state, grid_capital,
+        emergency_stop, nested ``metrics``, synced_from_exchange). The
+        metrics are flattened to the top-level keys the dashboard reads.
+        The status dict carries no order counts or price range, so the
+        legacy keys for those keep their defaults.
+
+        Returns:
+            One dict per active grid.
+        """
         grids = []
 
         try:
             if self.grid_manager:
                 active_grids = self.grid_manager.get_all_active_grids()
-                if active_grids:
-                    for symbol, grid_data in active_grids.items():  # type: ignore[attr-defined]  # list has no items(); see PR #7
-                        grids.append(
-                            {
-                                "symbol": symbol,
-                                "state": grid_data.get("state", "unknown"),
-                                "grid_levels": grid_data.get("levels", []),
-                                "upper_price": grid_data.get("upper_price"),
-                                "lower_price": grid_data.get("lower_price"),
-                                "filled_orders": grid_data.get("filled_count", 0),
-                                "total_orders": grid_data.get("total_orders", 0),
-                                "realized_pnl": grid_data.get("realized_pnl", 0),
-                                "created_at": grid_data.get("created_at"),
-                            }
-                        )
+                for grid_data in active_grids or []:
+                    metrics = grid_data.get("metrics") or {}
+                    state = grid_data.get("state", "unknown")
+                    buy_fills = metrics.get("total_buy_fills", 0)
+                    sell_fills = metrics.get("total_sell_fills", 0)
+                    grids.append(
+                        {
+                            "symbol": grid_data.get("symbol"),
+                            "state": state,
+                            "status": state,
+                            "grid_capital": grid_data.get("grid_capital", 0),
+                            "emergency_stop": grid_data.get("emergency_stop", 0),
+                            "synced_from_exchange": grid_data.get(
+                                "synced_from_exchange", False
+                            ),
+                            "total_buy_fills": buy_fills,
+                            "total_sell_fills": sell_fills,
+                            "filled_orders": buy_fills + sell_fills,
+                            "net_position": metrics.get("net_position", 0),
+                            "total_fees": metrics.get("total_fees", 0),
+                            "realized_pnl": metrics.get("realized_pnl", 0),
+                            "unrealized_pnl": metrics.get("unrealized_pnl", 0),
+                            "total_pnl": metrics.get("total_pnl", 0),
+                            "completed_round_trips": metrics.get(
+                                "completed_round_trips", 0
+                            ),
+                            # Not part of get_grid_status today.
+                            "grid_levels": grid_data.get("levels", []),
+                            "upper_price": grid_data.get("upper_price"),
+                            "lower_price": grid_data.get("lower_price"),
+                            "total_orders": grid_data.get("total_orders", 0),
+                            "created_at": grid_data.get("created_at"),
+                        }
+                    )
         except Exception as e:
             logger.error(f"Error getting grids: {e}")
 
@@ -993,8 +1023,14 @@ class BotIntegration:
     async def sync_positions(self) -> Dict[str, Any]:
         """Sync positions from Pacifica exchange to database.
 
+        Reads the venue's open positions and mirrors them into the local
+        ``positions`` table only: ``save_position`` upserts one row per
+        symbol/side and ``close_position`` deletes the local row. Nothing
+        here places, amends or cancels an order on the venue.
+
         Returns:
             Dict with synced/inserted/updated/closed counts and errors.
+            ``success`` is True only when no item raised.
         """
         result: Dict[str, Any] = {
             "success": False,
@@ -1013,18 +1049,26 @@ class BotIntegration:
             live_positions = self.pacifica_client.get_positions()
 
             # Get existing DB positions for insert vs update detection
-            existing_positions = {}
+            # Rows are unique per symbol AND side, so that pair is the key.
+            # The side is normalized for comparison only; the stored
+            # spelling is what close_position must be given.
+            existing_positions: Dict[Tuple[str, str], Dict[str, Any]] = {}
             try:
                 db_positions = self.database.get_positions()
                 if db_positions:
                     existing_positions = {
-                        p.get("symbol"): p for p in db_positions if p.get("symbol")
+                        (
+                            str(p["symbol"]),
+                            self._normalize_position_side(p.get("side")),
+                        ): p
+                        for p in db_positions
+                        if p.get("symbol")
                     }
             except Exception as e:
                 logger.warning(f"Could not fetch existing DB positions: {e}")
 
             # Filter and map live positions
-            active_symbols = set()
+            active_keys = set()
             if live_positions:
                 for pos in live_positions:
                     try:
@@ -1032,12 +1076,16 @@ class BotIntegration:
                         if mapped["quantity"] <= 0:
                             continue
 
-                        symbol = mapped["symbol"]
-                        active_symbols.add(symbol)
+                        key = (mapped["symbol"], mapped["side"])
+                        active_keys.add(key)
 
-                        self.database.upsert_position(mapped)  # type: ignore[attr-defined]  # no such method; see PR #7
+                        # save_position writes funding_pnl on every upsert
+                        # and defaults it to 0, so pass the venue's value
+                        # the same way the trading loop does.
+                        mapped["funding_pnl"] = float(pos.get("funding_pnl") or 0)
+                        self.database.save_position(mapped)
 
-                        if symbol in existing_positions:
+                        if key in existing_positions:
                             result["updated_count"] += 1
                         else:
                             result["inserted_count"] += 1
@@ -1049,15 +1097,16 @@ class BotIntegration:
                         )
 
             # Remove positions closed on exchange
-            for symbol in existing_positions:
-                if symbol not in active_symbols:
+            for key, db_pos in existing_positions.items():
+                if key not in active_keys:
+                    symbol = key[0]
                     try:
-                        self.database.close_position(symbol)  # type: ignore[call-arg, arg-type]  # side missing; see PR #7
+                        self.database.close_position(symbol, str(db_pos.get("side")))
                         result["closed_count"] += 1
                     except Exception as e:
                         result["errors"].append(f"Error closing {symbol}: {e}")
 
-            result["success"] = True
+            result["success"] = not result["errors"]
 
         except Exception as e:
             logger.error(f"Error syncing positions: {e}")
@@ -2594,7 +2643,8 @@ async def get_event_history() -> Dict[str, Any]:
 
         event_bus = bot.event_bus
         recent_events = []
-        for event in event_bus._event_history[-20:]:  # type: ignore[index, attr-defined]  # deque slice; see PR #7
+        # _event_history is a deque, which cannot be sliced.
+        for event in list(event_bus._event_history)[-20:]:
             recent_events.append(
                 {
                     "id": event.id,
