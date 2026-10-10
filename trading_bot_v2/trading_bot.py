@@ -243,6 +243,11 @@ class TradingBot:
         self._circuit_breaker_triggered = False
         self._circuit_breaker_tripped_at: Optional[str] = None
         self._circuit_breaker_reason: Optional[str] = None
+        # Resting entry orders are cancelled while tripped: sweep still
+        # needed, cancels accepted so far, cancels failing at last sweep.
+        self._breaker_sweep_pending = False
+        self._breaker_orders_cancelled = 0
+        self._breaker_cancel_failures = 0
         self._circuit_breaker_loss_pct = (
             config.circuit_breaker_loss_pct
         )  # From config (default 10%)
@@ -672,6 +677,11 @@ class TradingBot:
                 # protecting (state missing / unsupported)
                 self._loop_step = "enforce_local_stops"
                 self._enforce_local_stops()
+
+                # While the breaker is tripped: cancel resting entry orders
+                # (no-op once none remain; never raises)
+                self._loop_step = "sweep_breaker_entry_orders"
+                self._sweep_breaker_entry_orders()
 
                 # GRID MONITORING: Monitor active grids for fills, P&L, emergency stops
                 self._loop_step = "monitor_grids"
@@ -3530,6 +3540,9 @@ class TradingBot:
         self._circuit_breaker_triggered = True
         self._circuit_breaker_tripped_at = record.get("tripped_at")
         self._circuit_breaker_reason = record.get("reason")
+        # Entry orders may still be resting from before the restart; the
+        # first loop iteration sweeps them.
+        self._breaker_sweep_pending = True
         logging.critical(
             f"CIRCUIT BREAKER still tripped from {self._circuit_breaker_tripped_at} "
             f"({self._circuit_breaker_reason}) - new entries blocked until "
@@ -3575,7 +3588,50 @@ class TradingBot:
             self.hub_publish_func(
                 {"type": "circuit_breaker", **details, "timestamp": time.time()}
             )
+        # Pull resting entry orders now rather than one loop later.
+        self._breaker_sweep_pending = True
+        try:
+            self._sweep_breaker_entry_orders()
+        except Exception as e:
+            logging.error(f"Entry order sweep failed on trip (will retry): {e}")
         return True
+
+    def _sweep_breaker_entry_orders(self) -> None:
+        """While tripped, cancel resting entry orders until none remain.
+
+        Runs on the trip and then once per loop iteration.  It keeps
+        running while a cancel is failing or an inventory-closing order
+        was left resting (that order turns into an entry if a stop closes
+        the inventory first), and stops calling the venue once neither is
+        the case.  Never raises.
+        """
+        if not getattr(self, "_circuit_breaker_triggered", False):
+            return
+        if not getattr(self, "_breaker_sweep_pending", False):
+            return
+        grid_lifecycle = getattr(self, "grid_lifecycle", None)
+        if grid_lifecycle is None:
+            self._breaker_sweep_pending = False
+            return
+        try:
+            result = grid_lifecycle.cancel_entry_orders()
+        except Exception as e:
+            logging.error(f"Entry order sweep failed (will retry next loop): {e}")
+            self._breaker_cancel_failures = 1
+            return
+        cancelled = int(result.get("cancelled", 0))
+        failed = int(result.get("failed", 0))
+        kept = int(result.get("kept", 0))
+        self._breaker_orders_cancelled = (
+            getattr(self, "_breaker_orders_cancelled", 0) + cancelled
+        )
+        self._breaker_cancel_failures = failed
+        self._breaker_sweep_pending = bool(failed or kept)
+        if cancelled or failed:
+            logging.critical(
+                f"Circuit breaker entry order sweep: {cancelled} cancelled, "
+                f"{failed} failing (retried next loop), {kept} closing kept"
+            )
 
     def reset_circuit_breaker(self) -> Dict[str, Any]:
         """Manually clear a tripped breaker so new entries may resume.
@@ -3584,9 +3640,14 @@ class TradingBot:
         not a process restart, not a supervisor resume).  If the loss is
         still at the limit the next risk check trips it again.
 
+        Cancelled grid levels are not re-placed: a stripped grid stays
+        ACTIVE (its emergency stop keeps guarding inventory) until it is
+        cleared, after which the normal grid signal path places a new one.
+
         Returns:
-            Dict with ``was_tripped`` and the cleared ``tripped_at`` /
-            ``reason``.
+            Dict with ``was_tripped``, the cleared ``tripped_at`` /
+            ``reason`` and the trip's ``orders_cancelled`` /
+            ``cancels_failing`` counters.
 
         Raises:
             OSError: When the persisted record cannot be cleared; the
@@ -3596,11 +3657,16 @@ class TradingBot:
             "was_tripped": self._circuit_breaker_triggered,
             "tripped_at": self._circuit_breaker_tripped_at,
             "reason": self._circuit_breaker_reason,
+            "orders_cancelled": getattr(self, "_breaker_orders_cancelled", 0),
+            "cancels_failing": getattr(self, "_breaker_cancel_failures", 0),
         }
         _supervisor_control().set_breaker_state(None)
         self._circuit_breaker_triggered = False
         self._circuit_breaker_tripped_at = None
         self._circuit_breaker_reason = None
+        self._breaker_sweep_pending = False
+        self._breaker_orders_cancelled = 0
+        self._breaker_cancel_failures = 0
         logging.warning(f"Circuit breaker manually RESET (was: {previous})")
         if self.hub_publish_func:
             self.hub_publish_func(
@@ -3951,6 +4017,12 @@ class TradingBot:
                 "circuit_breaker_triggered": self._circuit_breaker_triggered,
                 "circuit_breaker_tripped_at": self._circuit_breaker_tripped_at,
                 "circuit_breaker_reason": self._circuit_breaker_reason,
+                "circuit_breaker_orders_cancelled": getattr(
+                    self, "_breaker_orders_cancelled", 0
+                ),
+                "circuit_breaker_cancels_failing": getattr(
+                    self, "_breaker_cancel_failures", 0
+                ),
                 "account_balance": balance,
                 "total_positions": len(positions),
                 "total_unrealized_pnl": total_pnl,

@@ -568,6 +568,8 @@ class BotIntegration:
                     "circuit_breaker_triggered": False,
                     "circuit_breaker_tripped_at": None,
                     "circuit_breaker_reason": None,
+                    "circuit_breaker_orders_cancelled": 0,
+                    "circuit_breaker_cancels_failing": 0,
                     "exchange": _exchange,
                     "exchange_mode": _mode,
                 }
@@ -628,6 +630,12 @@ class BotIntegration:
                     )
                     status["circuit_breaker_reason"] = getattr(
                         self.trading_bot, "_circuit_breaker_reason", None
+                    )
+                    status["circuit_breaker_orders_cancelled"] = getattr(
+                        self.trading_bot, "_breaker_orders_cancelled", 0
+                    )
+                    status["circuit_breaker_cancels_failing"] = getattr(
+                        self.trading_bot, "_breaker_cancel_failures", 0
                     )
 
                 # Get current regime (use BTC as reference)
