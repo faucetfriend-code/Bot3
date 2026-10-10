@@ -9,7 +9,9 @@ coordinator ``_coordinate_signal_execution``, the circuit breaker in
 The numbers are chosen so every assertion is an exact value derived in
 a comment, not a ``>= 1.0`` smoke check.  Tests marked
 ``xfail(strict=True)`` document real defects; a separate change owns
-the fixes.
+the fixes.  The defects fixed by the A3 logic audit (sizing floor,
+exposure read failure, breaker units, breaker trip behaviour) are
+asserted here as ordinary passing tests of the fixed behaviour.
 """
 
 from types import SimpleNamespace
@@ -98,22 +100,23 @@ class TestGetPositionSize:
         # 1_500 cap - 1_000 used = 500 notional -> 5 contracts
         assert rm.get_position_size(sizing_signal(), BALANCE, 1_000.0) == 5.0
 
-    def test_exposure_exactly_at_cap_falls_to_the_quantity_floor(self) -> None:
-        # No room left: notional 0 -> quantity 0 -> hard floor of 1.0.
-        # request_capital_allocation downstream refuses the trade with
-        # exposure_limit_exceeded; this pins that the sizer alone does not.
+    def test_exposure_exactly_at_cap_requests_nothing(self) -> None:
+        # No room left: notional 0 -> quantity 0.  There is no 1.0-contract
+        # floor (audit fix #5): an exhausted budget sizes to nothing.
         rm = RiskManager()
-        assert rm.get_position_size(sizing_signal(), BALANCE, 1_500.0) == 1.0
+        assert rm.get_position_size(sizing_signal(), BALANCE, 1_500.0) == 0.0
 
-    def test_exposure_over_cap_also_floors_to_one(self) -> None:
+    def test_exposure_over_cap_requests_nothing(self) -> None:
+        # Room is negative (1_500 - 9_000); the result is clamped at zero.
         rm = RiskManager()
-        assert rm.get_position_size(sizing_signal(), BALANCE, 9_000.0) == 1.0
+        assert rm.get_position_size(sizing_signal(), BALANCE, 9_000.0) == 0.0
 
     @pytest.mark.parametrize("stop", [None, 0.0])
     def test_no_stop_uses_ten_percent_of_risk(self, stop: Optional[float]) -> None:
         rm = RiskManager(max_portfolio_exposure_pct=5.0)
-        # 500 * 0.1 = 50 notional -> 0.5 contracts -> floored to 1.0
-        assert rm.get_position_size(sizing_signal(stop_loss=stop), BALANCE, 0.0) == 1.0
+        # 500 * 0.1 = 50 notional -> 0.5 contracts, kept fractional (no floor)
+        qty = rm.get_position_size(sizing_signal(stop_loss=stop), BALANCE, 0.0)
+        assert qty == pytest.approx(0.5)
 
     def test_no_stop_small_price_shows_the_ten_percent_rule(self) -> None:
         rm = RiskManager(max_portfolio_exposure_pct=5.0)
@@ -126,20 +129,22 @@ class TestGetPositionSize:
         assert rm.get_position_size(sig, BALANCE, 0.0) == pytest.approx(50.0)
 
     @pytest.mark.parametrize("price", [0.0, -5.0])
-    def test_invalid_entry_price_returns_the_safe_minimum(self, price: float) -> None:
+    def test_invalid_entry_price_requests_nothing(self, price: float) -> None:
+        # Nothing can be sized without a price; the old 1.0 fallback asked
+        # for a whole contract of an asset whose price is unknown.
         rm = RiskManager()
         assert (
-            rm.get_position_size(sizing_signal(entry_price=price), BALANCE, 0.0) == 1.0
+            rm.get_position_size(sizing_signal(entry_price=price), BALANCE, 0.0) == 0.0
         )
 
     def test_signal_without_entry_price_attribute(self) -> None:
         rm = RiskManager()
         sig = SimpleNamespace(asset="BTC")
-        assert rm.get_position_size(sig, BALANCE, 0.0) == 1.0
+        assert rm.get_position_size(sig, BALANCE, 0.0) == 0.0
 
-    def test_zero_balance_floors_to_one_contract(self) -> None:
+    def test_zero_balance_requests_nothing(self) -> None:
         rm = RiskManager()
-        assert rm.get_position_size(sizing_signal(), 0.0, 0.0) == 1.0
+        assert rm.get_position_size(sizing_signal(), 0.0, 0.0) == 0.0
 
     def test_regime_multiplier_applies_before_floor(self) -> None:
         rm = RiskManager()
@@ -686,10 +691,20 @@ class TestCurrentExposure:
     def test_no_positions_is_zero(self) -> None:
         assert make_bot(FakeExchange())._get_current_exposure() == 0.0
 
-    def test_exchange_error_is_zero(self) -> None:
+    def test_exchange_error_raises_instead_of_reading_as_zero(self) -> None:
+        # Audit fix #3: a failed positions read used to count as zero
+        # exposure and let the allocator grant the full budget.
         exchange = FakeExchange()
         exchange.get_positions = raiser(RuntimeError("x"))
-        assert make_bot(exchange)._get_current_exposure() == 0.0
+        with pytest.raises(RuntimeError, match="Exposure unavailable"):
+            make_bot(exchange)._get_current_exposure()
+
+    def test_exchange_error_rejects_the_signal(self, unpaused: Any) -> None:
+        exchange = FakeExchange(balance=BALANCE)
+        exchange.get_positions = raiser(RuntimeError("x"))
+        bot = make_bot(exchange)
+        assert bot._should_execute_signal(make_signal()) is False
+        assert "Exposure unavailable" in bot.signal_logger.rejected[0]["reason"]
 
 
 class TestCoordinateExecution:
@@ -698,8 +713,10 @@ class TestCoordinateExecution:
         bot = make_bot(exchange, risk_manager=RiskManager())
         bot._coordinate_signal_execution(make_signal())
         assert exchange.orders == []
+        # The sizer now returns 0 at the cap (no 1.0 floor), so the
+        # allocator refuses the empty request before its own cap check.
         reason = bot.signal_logger.rejected[0]["reason"]
-        assert reason == "Capital allocation denied: exposure_limit_exceeded"
+        assert reason == "Capital allocation denied: invalid_request_amount"
 
     def test_order_quantity_comes_from_the_allocation(self) -> None:
         exchange = _exposed(BALANCE, 1_000.0)
@@ -755,29 +772,35 @@ def _breaker_bot(balance: float, pnl_values: List[float]) -> Any:
 
 
 class TestCircuitBreaker:
-    def test_loss_at_threshold_trips_and_stops(self) -> None:
+    def test_loss_at_threshold_trips_and_keeps_the_loop_running(
+        self, unpaused: Any
+    ) -> None:
+        # A trip blocks new entries but must not stop the loop: the loop
+        # is what enforces local stops on venues without venue-side stops.
         bot = _breaker_bot(BALANCE, [-600.0, -400.0])  # -10%
         events: List[Dict[str, Any]] = []
         bot.hub_publish_func = events.append
         bot._monitor_risk()
-        assert bot._circuit_breaker_triggered is True and bot.stopped is True
+        assert bot._circuit_breaker_triggered is True and bot.stopped is False
         assert events[0]["type"] == "circuit_breaker"
         assert events[0]["pnl_percentage"] == pytest.approx(-10.0)
+        assert bot._should_execute_signal(make_signal()) is False
+        assert "Circuit breaker" in bot.signal_logger.rejected[0]["reason"]
+
+    def test_repeated_checks_while_tripped_publish_one_event(self) -> None:
+        bot = _breaker_bot(BALANCE, [-1_000.0])
+        events: List[Dict[str, Any]] = []
+        bot.hub_publish_func = events.append
+        bot._monitor_risk()
+        bot._monitor_risk()
+        assert [e["type"] for e in events] == ["circuit_breaker"]
+        assert bot.stopped is False
 
     def test_profit_never_trips(self) -> None:
         bot = _breaker_bot(BALANCE, [500.0])
         bot._monitor_risk()
         assert bot._circuit_breaker_triggered is False and bot.stopped is False
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "_monitor_risk compares pnl_percentage (a percent, -5.0) against "
-            "config.circuit_breaker_loss_pct (a fraction, 0.10), so the breaker "
-            "trips at a 0.1% loss instead of 10%.  Units mismatch; the log line "
-            "prints the threshold as '0.1%' for the same reason."
-        ),
-    )
     @pytest.mark.parametrize("loss", [-100.0, -500.0, -800.0])
     def test_loss_under_threshold_does_not_trip(self, loss: float) -> None:
         bot = _breaker_bot(BALANCE, [loss])  # 1%, 5%, 8%
@@ -786,8 +809,8 @@ class TestCircuitBreaker:
         assert bot.stopped is False
 
     def test_tiny_loss_under_the_misread_threshold_stays_off(self) -> None:
-        # 0.05% loss: below even the fraction-as-percent threshold, so this
-        # passes today and keeps passing once the units are fixed.
+        # 0.05% loss: below even the old fraction-as-percent threshold
+        # (0.1%), so it passed before the units were fixed and still does.
         bot = _breaker_bot(BALANCE, [-5.0])
         bot._monitor_risk()
         assert bot._circuit_breaker_triggered is False
