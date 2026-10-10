@@ -28,6 +28,15 @@ Safety properties
 - Corrupt or unreadable state fails closed: new entries remain paused until
   an operator repairs the state or explicitly resumes.
 - File write is atomic (write to .tmp, rename) to avoid partial reads.
+
+Circuit breaker record
+----------------------
+- The portfolio circuit breaker persists its trip under the separate
+  `circuit_breaker` key of the same file so a trip survives a restart.
+- It is NOT a pause: `pause()`, `resume()` and pause expiry carry the key
+  over untouched. Only `set_breaker_state(None)` (the bot's manual reset)
+  clears it.
+- Unreadable state reports the breaker as tripped (fail closed).
 """
 
 from __future__ import annotations
@@ -53,6 +62,8 @@ _PAUSE_FILE = (
     .expanduser()
     .resolve()
 )
+# Key of the circuit breaker record inside the pause state file.
+_BREAKER_KEY = "circuit_breaker"
 
 
 class SupervisorControl:
@@ -69,7 +80,8 @@ class SupervisorControl:
         return cls._instance
 
     def _init(self) -> None:
-        self._file_lock = threading.Lock()
+        # Re-entrant: read-modify-write sections hold it around _write_state.
+        self._file_lock = threading.RLock()
         # Don't create the file on init — fail-open if it doesn't exist
         if not _PAUSE_FILE.exists():
             logger.info(
@@ -101,9 +113,11 @@ class SupervisorControl:
                 f"SupervisorControl: cannot trust pause state ({e}); "
                 "new entries paused until operator recovery"
             )
+            reason = "Pause state unreadable; operator recovery required"
             return {
                 "paused": True,
-                "reason": "Pause state unreadable; operator recovery required",
+                "reason": reason,
+                _BREAKER_KEY: {"tripped": True, "tripped_at": None, "reason": reason},
             }
 
     def _write_state(self, state: dict) -> None:
@@ -116,6 +130,19 @@ class SupervisorControl:
                 f.flush()
                 os.fsync(f.fileno())
             tmp.replace(_PAUSE_FILE)
+
+    def _write_keeping_breaker(self, state: dict) -> None:
+        """Write a new pause state, carrying the circuit breaker record over.
+
+        Args:
+            state: New pause state; it replaces everything except the
+                `circuit_breaker` key, which only the breaker may change.
+        """
+        with self._file_lock:
+            record = self._read_state().get(_BREAKER_KEY)
+            if record:
+                state[_BREAKER_KEY] = record
+            self._write_state(state)
 
     # ────────────────────────────────────────────────────────────────────
     # Public API
@@ -140,7 +167,7 @@ class SupervisorControl:
                     logger.info(
                         f"SupervisorControl: pause expired at {until_ts}, auto-resuming"
                     )
-                    self._write_state(
+                    self._write_keeping_breaker(
                         {
                             "paused": False,
                             "expired_at": until_ts,
@@ -176,7 +203,7 @@ class SupervisorControl:
             "since_ts": datetime.now(timezone.utc).isoformat(),
             "until_ts": until_ts,
         }
-        self._write_state(state)
+        self._write_keeping_breaker(state)
         logger.warning(
             f"SupervisorControl: PAUSED ({reason}) "
             f"{'until ' + until_ts if until_ts else 'indefinitely'}"
@@ -189,9 +216,36 @@ class SupervisorControl:
             "paused": False,
             "resumed_ts": datetime.now(timezone.utc).isoformat(),
         }
-        self._write_state(state)
+        self._write_keeping_breaker(state)
         logger.info("SupervisorControl: RESUMED — new entries allowed")
         return state
+
+    def breaker_state(self) -> dict:
+        """Return the persisted circuit breaker record.
+
+        Returns:
+            `{"tripped": True, "tripped_at": ..., "reason": ...}` while a
+            trip is recorded (or the state is unreadable), else `{}`.
+        """
+        record = self._read_state().get(_BREAKER_KEY)
+        if isinstance(record, dict) and record.get("tripped"):
+            return dict(record)
+        return {}
+
+    def set_breaker_state(self, record: Optional[dict]) -> None:
+        """Persist or clear the circuit breaker record; the pause is untouched.
+
+        Args:
+            record: Trip record to store, or None to clear it (manual reset).
+        """
+        with self._file_lock:
+            state = self._read_state()
+            state.setdefault("paused", False)
+            if record:
+                state[_BREAKER_KEY] = dict(record)
+            else:
+                state.pop(_BREAKER_KEY, None)
+            self._write_state(state)
 
     def status(self) -> dict:
         """Return full state with computed `is_paused` boolean."""
