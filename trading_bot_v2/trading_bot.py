@@ -129,6 +129,33 @@ def _resolve_exchange(bot):
     return exchange
 
 
+def _supervisor_control():
+    """Return the supervisor control singleton (holds the persisted state)."""
+    try:
+        from .supervisor_control import get_supervisor_control
+    except ImportError:
+        from supervisor_control import get_supervisor_control
+    return get_supervisor_control()
+
+
+def _breaker_block_reason(bot) -> Optional[str]:
+    """Return why new entries are blocked by the circuit breaker, if tripped.
+
+    Every path that opens or adds exposure asks this before sending an
+    order.  getattr-guarded so duck-typed stand-ins (tests) work.
+
+    Args:
+        bot: TradingBot instance or duck-typed stand-in.
+
+    Returns:
+        A reason string while the breaker is tripped, else None.
+    """
+    if not getattr(bot, "_circuit_breaker_triggered", False):
+        return None
+    reason = getattr(bot, "_circuit_breaker_reason", None) or "portfolio loss limit"
+    return f"Circuit breaker tripped ({reason}) - manual reset required"
+
+
 class TradingBot:
     """
     Trading bot class for automated trading on Pacifica exchange.
@@ -210,11 +237,16 @@ class TradingBot:
         # Initialize hub publish function
         self.hub_publish_func = hub_publish_func
 
-        # Initialize circuit breaker
+        # Initialize circuit breaker.  A trip blocks new entries until
+        # reset_circuit_breaker(); it is restored from the supervisor
+        # state file so a restart does not silently re-arm trading.
         self._circuit_breaker_triggered = False
+        self._circuit_breaker_tripped_at: Optional[str] = None
+        self._circuit_breaker_reason: Optional[str] = None
         self._circuit_breaker_loss_pct = (
             config.circuit_breaker_loss_pct
         )  # From config (default 10%)
+        self._load_circuit_breaker_state()
 
         # Initialize WebSocket client if enabled
         if self.config.enable_websocket:
@@ -266,6 +298,8 @@ class TradingBot:
             db=self.db,
             regime_detector=self.market_regime,
         )
+        # Grid re-arming (replenish / recenter) must respect the breaker.
+        self.grid_lifecycle.entry_gate = self._entry_block_reason
 
         # Initialize grid system: load from DB, repair orphans, validate integrity
         self.grid_lifecycle.initialize_grid_system()
@@ -1600,15 +1634,12 @@ class TradingBot:
         """
         try:
             # Check 0a: Circuit breaker (highest priority — defensive layer)
-            # Belt-and-suspenders: stop() clears _running_event, but we don't
-            # want to depend on stop() succeeding. If the breaker tripped,
-            # block new entries even if the loop is somehow still spinning.
-            if self._circuit_breaker_triggered:
-                reason = (
-                    f"Circuit breaker triggered (portfolio loss "
-                    f">= {self._circuit_breaker_loss_pct:.1%})"
-                )
-                logger.critical(
+            # A trip does not stop the loop (stops and exits keep being
+            # managed), so this is what keeps new entries out until an
+            # operator calls reset_circuit_breaker().
+            reason = _breaker_block_reason(self)
+            if reason:
+                logger.warning(
                     f"🛑 Signal blocked by circuit breaker for {signal.asset} "
                     f"{signal.strategy.name}"
                 )
@@ -1948,6 +1979,10 @@ class TradingBot:
         """
         try:
             symbol = signal.asset
+            block_reason = _breaker_block_reason(self)
+            if block_reason:
+                return {"success": False, "error": block_reason}
+
             # RiskManager returns "allocated_amount" (not "capital_allocated")
             capital = allocation_result.get("allocated_amount", 0)
 
@@ -2069,6 +2104,16 @@ class TradingBot:
         """
         try:
             symbol = signal.asset
+            # Last gate before an entry order: covers callers that skip
+            # _should_execute_signal and a trip that lands mid-cycle.
+            block_reason = _breaker_block_reason(self)
+            if block_reason:
+                logger.warning(f"Entry blocked for {symbol}: {block_reason}")
+                self.signal_logger.log_signal_rejected(
+                    signal=signal, reason=block_reason
+                )
+                return
+
             # RiskManager returns "allocated_amount" (not "capital_allocated")
             capital_allocated = allocation_result.get("allocated_amount", 0)
 
@@ -3148,6 +3193,10 @@ class TradingBot:
         """
         try:
             symbol = signal.asset
+            block_reason = _breaker_block_reason(self)
+            if block_reason:
+                logging.warning(f"Grid entry blocked for {symbol}: {block_reason}")
+                return None
             logging.info(f"Executing GRID signal for {symbol}")
 
             # Calculate position size for grid (total capital allocation)
@@ -3446,26 +3495,18 @@ class TradingBot:
 
             # Check circuit breaker threshold
             if pnl_percentage <= -threshold_pct:
-                self._circuit_breaker_triggered = True
-                logging.critical(
-                    f"🚨 CIRCUIT BREAKER TRIGGERED: {pnl_percentage:.1f}% loss "
-                    f"(${total_pnl:.2f} / ${balance:.2f})"
+                # Blocks new entries only: the loop keeps running so local
+                # stops, exits and reconciliation stay active.
+                self._trip_circuit_breaker(
+                    f"portfolio loss {pnl_percentage:.1f}% "
+                    f"(${total_pnl:.2f} / ${balance:.2f}) reached the "
+                    f"-{threshold_pct:.1f}% limit",
+                    {
+                        "pnl_percentage": pnl_percentage,
+                        "total_pnl": total_pnl,
+                        "balance": balance,
+                    },
                 )
-
-                # Stop trading
-                self.stop()
-
-                # Publish circuit breaker event
-                if self.hub_publish_func:
-                    self.hub_publish_func(
-                        {
-                            "type": "circuit_breaker",
-                            "pnl_percentage": pnl_percentage,
-                            "total_pnl": total_pnl,
-                            "balance": balance,
-                            "timestamp": time.time(),
-                        }
-                    )
 
             # Warning at 80% of threshold
             elif pnl_percentage <= -threshold_pct * 0.8:
@@ -3476,6 +3517,96 @@ class TradingBot:
 
         except Exception as e:
             logging.error(f"Error monitoring risk: {e}")
+
+    def _entry_block_reason(self) -> Optional[str]:
+        """Return why new entries are blocked right now, or None if allowed."""
+        return _breaker_block_reason(self)
+
+    def _load_circuit_breaker_state(self) -> None:
+        """Restore a persisted trip so a restart does not re-arm trading."""
+        record = _supervisor_control().breaker_state()
+        if not record.get("tripped"):
+            return
+        self._circuit_breaker_triggered = True
+        self._circuit_breaker_tripped_at = record.get("tripped_at")
+        self._circuit_breaker_reason = record.get("reason")
+        logging.critical(
+            f"CIRCUIT BREAKER still tripped from {self._circuit_breaker_tripped_at} "
+            f"({self._circuit_breaker_reason}) - new entries blocked until "
+            f"manual reset"
+        )
+
+    def _trip_circuit_breaker(self, reason: str, details: Dict[str, Any]) -> bool:
+        """Trip the breaker: block new entries, keep managing positions.
+
+        Idempotent: while already tripped this does nothing, so the log,
+        the persisted record and the hub event fire once per trip.
+
+        Args:
+            reason: Human-readable cause, shown in status and logs.
+            details: Extra fields for the ``circuit_breaker`` hub event.
+
+        Returns:
+            True when this call tripped the breaker, False if it already was.
+        """
+        if self._circuit_breaker_triggered:
+            return False
+        self._circuit_breaker_triggered = True
+        self._circuit_breaker_tripped_at = datetime.now(timezone.utc).isoformat()
+        self._circuit_breaker_reason = reason
+        logging.critical(
+            f"CIRCUIT BREAKER TRIGGERED: {reason} - new entries blocked "
+            f"until manual reset; open positions are still managed"
+        )
+        try:
+            _supervisor_control().set_breaker_state(
+                {
+                    "tripped": True,
+                    "tripped_at": self._circuit_breaker_tripped_at,
+                    "reason": reason,
+                }
+            )
+        except Exception as e:
+            logging.error(
+                f"Circuit breaker trip NOT persisted ({e}); it holds in "
+                f"memory only and a restart would clear it"
+            )
+        if self.hub_publish_func:
+            self.hub_publish_func(
+                {"type": "circuit_breaker", **details, "timestamp": time.time()}
+            )
+        return True
+
+    def reset_circuit_breaker(self) -> Dict[str, Any]:
+        """Manually clear a tripped breaker so new entries may resume.
+
+        Operator action; nothing else clears a trip (not a loop restart,
+        not a process restart, not a supervisor resume).  If the loss is
+        still at the limit the next risk check trips it again.
+
+        Returns:
+            Dict with ``was_tripped`` and the cleared ``tripped_at`` /
+            ``reason``.
+
+        Raises:
+            OSError: When the persisted record cannot be cleared; the
+                breaker then stays tripped.
+        """
+        previous = {
+            "was_tripped": self._circuit_breaker_triggered,
+            "tripped_at": self._circuit_breaker_tripped_at,
+            "reason": self._circuit_breaker_reason,
+        }
+        _supervisor_control().set_breaker_state(None)
+        self._circuit_breaker_triggered = False
+        self._circuit_breaker_tripped_at = None
+        self._circuit_breaker_reason = None
+        logging.warning(f"Circuit breaker manually RESET (was: {previous})")
+        if self.hub_publish_func:
+            self.hub_publish_func(
+                {"type": "circuit_breaker_reset", "timestamp": time.time()}
+            )
+        return previous
 
     # Mapping from the display names returned by get_active_strategies() to the
     # strategy string stored in the trades/positions DB tables.
@@ -3818,6 +3949,8 @@ class TradingBot:
             return {
                 "is_running": self.is_running,
                 "circuit_breaker_triggered": self._circuit_breaker_triggered,
+                "circuit_breaker_tripped_at": self._circuit_breaker_tripped_at,
+                "circuit_breaker_reason": self._circuit_breaker_reason,
                 "account_balance": balance,
                 "total_positions": len(positions),
                 "total_unrealized_pnl": total_pnl,
