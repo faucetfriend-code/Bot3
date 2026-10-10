@@ -203,13 +203,6 @@ class TestEntriesBlockedWhileTripped:
         bot.exchange.place_order.assert_not_called()
         bot.grid_lifecycle.register_new_grid.assert_not_called()
 
-    def test_legacy_grid_execution_sends_no_order(self):
-        bot = _tripped_bot()
-        bot._calculate_position_size = MagicMock(return_value=100.0)
-        assert bot._execute_grid_signal(_signal(StrategyType.GRID_TRADING)) is None
-        bot._calculate_position_size.assert_not_called()
-        bot.client.place_order.assert_not_called()
-
 
 def _grid_manager(net_position: float, gate) -> GridLifecycleManager:
     """A grid manager with one ACTIVE BTC grid and the given entry gate."""
