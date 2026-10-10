@@ -66,7 +66,6 @@ STRATEGY_KEY_TO_DISPLAY: Dict[str, str] = {
     "grid_trading": "GridTrading",
     "liquidation_capture": "LiquidationCapture",
     "vwap_scalping": "VWAPScalping",
-    "funding_arb": "FundingArb",
     "momentum_scalping": "MomentumScalping",
     "orderbook_imbalance": "OrderBookImbalance",
     "session_range_breakout": "SessionRangeBreakout",

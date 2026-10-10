@@ -13,7 +13,7 @@ actual indicator thresholds for each strategy.
 
 import math
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock
 
@@ -25,7 +25,6 @@ from trading_bot_v2.strategies.ma_crossover import MACrossoverStrategy
 from trading_bot_v2.strategies.grid_trading import GridTradingStrategy
 from trading_bot_v2.strategies.liquidation_capture import LiquidationCaptureStrategy
 from trading_bot_v2.strategies.vwap_scalping import VWAPScalpingStrategy
-from trading_bot_v2.strategies.funding_arb import FundingArbStrategy
 from trading_bot_v2.strategies.momentum_scalping import MomentumScalpingStrategy
 from trading_bot_v2.strategies.orderbook_imbalance import OrderBookImbalanceStrategy
 
@@ -1203,211 +1202,6 @@ class TestVWAPScalpingE2E:
 
 
 # ===========================================================================
-# 6. Funding Arb E2E
-# ===========================================================================
-
-
-class TestFundingArbE2E:
-    def _make_strategy(self, client=None, **kwargs):
-        defaults = dict(
-            min_funding_rate=0.0001,
-            max_allocation_pct=0.20,
-            min_confidence=0.50,
-            client=client,
-        )
-        defaults.update(kwargs)
-        return FundingArbStrategy(**defaults)
-
-    def _make_client_with_funding(self, rate=0.0005):
-        client = MagicMock()
-        client.get_market_data = MagicMock(
-            return_value={
-                "funding_rate": rate,
-                "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
-            }
-        )
-        client.get_funding_history = MagicMock(
-            return_value=[{"funding_rate": rate} for _ in range(8)]
-        )
-        client.get_balance = MagicMock(return_value={"equity": "15000"})
-        return client
-
-    # -- Phase 1: Signal Generation --
-
-    def test_sell_signal_positive_funding(self):
-        """Positive funding rate -> SHORT signal (receive funding)."""
-        client = self._make_client_with_funding(rate=0.0005)
-        strategy = self._make_strategy(client=client)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-
-        assert len(signals) == 1
-        sig = signals[0]
-        assert sig.side == OrderSide.SELL
-        assert sig.strategy == StrategyType.FUNDING_ARB
-        assert sig.indicators["funding_rate"] == 0.0005
-        assert sig.is_valid()
-
-    def test_buy_signal_negative_funding(self):
-        """Negative funding rate -> LONG signal (receive funding)."""
-        client = self._make_client_with_funding(rate=-0.0005)
-        strategy = self._make_strategy(client=client)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-
-        assert len(signals) == 1
-        sig = signals[0]
-        assert sig.side == OrderSide.BUY
-        assert sig.strategy == StrategyType.FUNDING_ARB
-
-    # -- Phase 2: Execution --
-
-    def test_position_registered_after_execution(self):
-        """After signal execution, position is tracked."""
-        client = self._make_client_with_funding(rate=0.0005)
-        strategy = self._make_strategy(client=client)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-        assert len(signals) == 1
-
-        strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
-        assert "BTC" in strategy.active_positions
-
-    # -- Phase 3: Position Closing --
-
-    def test_close_on_rate_flip(self):
-        """Rate flips direction -> close signal generated."""
-        client = self._make_client_with_funding(rate=0.0005)
-        strategy = self._make_strategy(client=client)
-
-        # Register existing position
-        strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
-
-        # Now rate flips negative
-        client.get_market_data.return_value = {
-            "funding_rate": -0.0005,
-            "next_funding_time": datetime.now(timezone.utc) + timedelta(minutes=30),
-        }
-        client.get_funding_history.return_value = [{"funding_rate": -0.0005}] * 8
-        # Force cache refresh
-        strategy._last_cache_update = None
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-
-        # Should generate close signal (rate flipped)
-        assert len(signals) == 1
-        sig = signals[0]
-        assert sig.side == OrderSide.BUY  # Close SHORT = BUY
-
-    # -- Phase 4: Edge Cases --
-
-    def test_no_client_returns_empty(self):
-        """No client -> no signals (can't fetch funding rates)."""
-        strategy = self._make_strategy(client=None)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-        assert signals == []
-
-    def test_below_min_rate_no_signal(self):
-        """Funding rate below threshold -> no signal."""
-        client = self._make_client_with_funding(rate=0.00001)  # Below 0.01%
-        strategy = self._make_strategy(client=client)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-        assert signals == []
-
-    def test_existing_position_blocks_new_signal(self):
-        """Already holding a position in same direction -> no new signal.
-
-        The venue is the source of truth for open positions, so the mock
-        client has to report the position too - a locally "registered"
-        position the exchange does not have is now (correctly) pruned.
-        """
-        client = self._make_client_with_funding(rate=0.0005)
-        client.get_positions = MagicMock(
-            return_value=[
-                {"symbol": "BTC", "side": "short", "quantity": "100.0"},
-            ]
-        )
-        strategy = self._make_strategy(client=client)
-        strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-        # Should not open new position (returns empty or close if rate changed)
-        # With same rate, should return empty
-        assert signals == []
-
-    def test_position_gone_from_venue_is_pruned(self):
-        """A locally tracked position the venue does not report is dropped."""
-        client = self._make_client_with_funding(rate=0.0005)
-        client.get_positions = MagicMock(return_value=[])
-        strategy = self._make_strategy(client=client)
-        strategy.register_position("BTC", "short_funding", 100.0, 0.0005)
-
-        strategy.sync_positions_from_client("BTC")
-        assert strategy.get_active_positions() == {}
-
-    def test_close_signal_when_opportunity_disappears(self):
-        """Rate collapses to nothing -> explicit close signal, not silence."""
-        client = self._make_client_with_funding(rate=0.0)
-        client.get_positions = MagicMock(
-            return_value=[
-                {"symbol": "BTC", "side": "short", "quantity": "100.0"},
-            ]
-        )
-        strategy = self._make_strategy(client=client)
-
-        multi_tf = DataGenerator.build_multi_tf_data(
-            data_15m=DataGenerator.simple_15m_data()
-        )
-        signals = strategy.generate_signals("BTC", multi_tf, 100.0)
-
-        assert len(signals) == 1
-        assert signals[0].side == OrderSide.BUY  # closes the short
-        assert signals[0].indicators["close_position"] is True
-
-    def test_sim_time_drives_the_rate_cache(self):
-        """With _sim_time injected the cache expires on simulated time."""
-        client = self._make_client_with_funding(rate=0.0005)
-        strategy = self._make_strategy(client=client)
-        base = datetime(2024, 1, 1, tzinfo=timezone.utc)
-
-        strategy._sim_time = base
-        strategy.update_funding_rates(["BTC"])
-        assert client.get_market_data.call_count == 1
-
-        # Wall-clock has barely moved, but simulated time has not either.
-        strategy._sim_time = base + timedelta(seconds=60)
-        strategy.update_funding_rates(["BTC"])
-        assert client.get_market_data.call_count == 1
-
-        strategy._sim_time = base + timedelta(seconds=600)
-        strategy.update_funding_rates(["BTC"])
-        assert client.get_market_data.call_count == 2
-
-
-# ===========================================================================
 # 7. Momentum Scalping E2E
 # ===========================================================================
 
@@ -1618,7 +1412,6 @@ class TestMomentumScalpingConfigIntegrity:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=True,
             enable_orderbook_imbalance=False,
             enable_session_range_breakout=False,
@@ -1915,18 +1708,17 @@ class TestOrderBookImbalanceE2E:
 
 class TestCrossStrategyIntegration:
     def test_all_strategies_instantiate(self, mock_risk_manager, mock_client):
-        """All 8 strategies can be instantiated without errors."""
+        """All 7 strategies can be instantiated without errors."""
         strategies = [
             MeanReversionStrategy(),
             MACrossoverStrategy(),
             GridTradingStrategy(risk_manager=mock_risk_manager),
             LiquidationCaptureStrategy(),
             VWAPScalpingStrategy(),
-            FundingArbStrategy(client=mock_client),
             MomentumScalpingStrategy(),
             OrderBookImbalanceStrategy(),
         ]
-        assert len(strategies) == 8
+        assert len(strategies) == 7
 
     def test_all_signals_have_correct_strategy_type(
         self, mock_risk_manager, mock_client
@@ -1938,7 +1730,6 @@ class TestCrossStrategyIntegration:
             "grid_trading": StrategyType.GRID_TRADING,
             "liquidation_capture": StrategyType.LIQUIDATION_CAPTURE,
             "vwap_scalping": StrategyType.VWAP_SCALPING,
-            "funding_arb": StrategyType.FUNDING_ARB,
             "momentum_scalping": StrategyType.MOMENTUM_SCALPING,
             "orderbook_imbalance": StrategyType.ORDERBOOK_IMBALANCE,
         }

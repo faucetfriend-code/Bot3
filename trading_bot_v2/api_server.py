@@ -513,7 +513,7 @@ class BotIntegration:
                     enable_trend_following=False,
                     enable_grid_trading=True,
                     enable_liquidation_capture=True,
-                    client=self.pacifica_client,  # For FundingArb API calls
+                    client=self.pacifica_client,  # Exchange client (stored only)
                     ws_client=self.ws_client,  # For OrderBookImbalance
                 )
                 logger.info("StrategyManager initialized")
@@ -1132,33 +1132,28 @@ class BotIntegration:
                         "GridTrading",
                         "VWAPScalping",
                         "LiquidationCapture",
-                        "FundingArb",
                         "OrderBookImbalance",
                     ],
                     "ranging_volatile": [
                         "GridTrading",
                         "VWAPScalping",
                         "LiquidationCapture",
-                        "FundingArb",
                         "OrderBookImbalance",
                     ],
                     "trending_strong": [
                         "MACrossover",
                         "MomentumScalping",
                         "LiquidationCapture",
-                        "FundingArb",
                         "OrderBookImbalance",
                     ],
                     "trending_moderate": [
                         "MACrossover",
                         "MomentumScalping",
                         "LiquidationCapture",
-                        "FundingArb",
                         "OrderBookImbalance",
                     ],
                     "indecisive": [
                         "LiquidationCapture",
-                        "FundingArb",
                         "OrderBookImbalance",
                     ],
                 }

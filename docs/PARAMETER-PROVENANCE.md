@@ -384,6 +384,10 @@ parameters is class D.** No sweep, no artifact, no tuning-log section beyond a
 
 ### FundingArb
 
+> **Removed 2026-10-10.** The strategy was deleted as never tested or used; none of the
+> parameters below exist any more and `ENABLE_FUNDING_ARB` / `FUNDING_ARB_*` are ignored.
+> The section is kept as the provenance record that motivated the removal.
+
 Constructor `strategies/funding_arb.py:32-57`. **All class D**, same as above -
 no sweep, no artifact, 0 trades on record. Disabled by default
 (`ENABLE_FUNDING_ARB` default False).
@@ -625,7 +629,8 @@ Ordered by how much folklore each removes per unit of work.
    so the promotion gate has no history and this document had nothing to cite.
 6. **Sweep the class D bulk.** OrderBookImbalance (13 parameters) and FundingArb
    (5) have never been measured at all, and both produce 0 trades. Either measure
-   them or stop shipping them enabled.
+   them or stop shipping them enabled. (FundingArb: resolved by removal on
+   2026-10-10.)
 7. **Delete or quarantine `BTV2/CLI_AGENT_GUIDE.md:1544-1556`.** That table is
    the upstream source of the folklore. As long as it reads as a recommendation
    table for the live bot, it will be re-transcribed.

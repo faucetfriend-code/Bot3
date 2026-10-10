@@ -300,7 +300,7 @@ class TradingBot:
         self.strategy_manager = StrategyManager(
             regime_detector=self.market_regime,
             risk_manager=self.risk_manager,
-            client=self.client,  # Pass client for FundingArb API calls
+            client=self.client,  # Exchange client (stored, not read by strategies)
             ws_client=self.ws_client,  # Pass WS client for OrderBookImbalance
             db=self.db,  # Pass db for adaptive per-regime strategy weights
         )
@@ -3721,7 +3721,6 @@ class TradingBot:
         "MeanReversion": "MEAN_REVERSION",
         "MomentumScalping": "MOMENTUM_SCALPING",
         "VWAPScalping": "VWAP_SCALPING",
-        "FundingArb": "FUNDING_ARB",
         "LiquidationCapture": "LIQUIDATION_CAPTURE",
         "OrderBookImbalance": "ORDERBOOK_IMBALANCE",
     }

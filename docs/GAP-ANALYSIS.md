@@ -64,6 +64,10 @@ Bot 3 is a multi-strategy cryptocurrency perpetual futures trading system built 
 
 ### Strategy Inventory (8 Strategies)
 
+> **Update 2026-10-10:** Funding Arbitrage (`strategies/funding_arb.py`) was removed as
+> never tested or used, leaving 7 of the strategies below. The table and the "8
+> strategies" counts in this document are the June 2026 snapshot.
+
 | Strategy | File | Lines | Status | Market Regime |
 |----------|------|-------|--------|---------------|
 | Mean Reversion | `strategies/mean_reversion.py` | 650 | Active | RANGING_CALM |

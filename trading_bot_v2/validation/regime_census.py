@@ -48,9 +48,9 @@ from .runner import (
 )
 
 #: Strategies worth censusing: every optimizable strategy the backtest
-#: engine can actually run. FundingArb and OrderBookImbalance are excluded
-#: because SimulatedExchange cannot serve them (see engine
-#: NON_BACKTESTABLE_STRATEGIES) - they would report zeros everywhere.
+#: engine can actually run. OrderBookImbalance is excluded
+#: because SimulatedExchange cannot serve it (see engine
+#: NON_BACKTESTABLE_STRATEGIES) - it would report zeros everywhere.
 DEFAULT_STRATEGIES: Tuple[str, ...] = (
     "momentum_scalping",
     "ma_crossover",

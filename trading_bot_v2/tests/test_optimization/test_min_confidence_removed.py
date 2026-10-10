@@ -8,7 +8,7 @@ other four dimensions could have used.
 
 MeanReversion assigns ``self.min_confidence`` in ``__init__`` and then
 references it only inside debug log f-strings; nothing compares against
-it, unlike ma_crossover and funding_arb which do enforce theirs. The one
+it, unlike ma_crossover which does enforce its own. The one
 gate that could act on confidence,
 ``StrategyManager._apply_regime_confidence_gate``, uses the global
 MIN_SIGNAL_CONFIDENCE_FLOOR (0.0) plus a per-regime adjustment that is
@@ -58,7 +58,7 @@ class TestSearchSpace:
 
     def test_other_strategies_keep_their_own_min_confidence(self):
         """Only mean_reversion was inert - do not strip the enforcers."""
-        for strategy in ("ma_crossover", "funding_arb"):
+        for strategy in ("ma_crossover", "momentum_scalping"):
             assert "min_confidence" in PARAMETER_TYPES[strategy]
 
 

@@ -75,8 +75,6 @@ class RegimePositionReviewer:
     # reviewed out by a regime flip.
     OVERLAY_STRATEGIES = {
         "liquidationcapture",
-        "fundingarb",
-        "fundingarbitrage",
         "orderbookimbalance",
         "sessionrangebreakout",
     }

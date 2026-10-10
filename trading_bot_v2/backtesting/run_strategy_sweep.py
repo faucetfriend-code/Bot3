@@ -58,7 +58,6 @@ ALL_STRATEGIES: List[str] = [
     "LiquidationCapture",
     "VWAPScalping",
     "MomentumScalping",
-    "FundingArb",
     "OrderBookImbalance",
     "SessionRangeBreakout",
     "CalendarFlow",

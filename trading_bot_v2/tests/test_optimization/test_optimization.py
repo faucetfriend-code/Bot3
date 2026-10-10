@@ -68,7 +68,6 @@ class TestSearchSpaces:
             "liquidation_capture",
             "vwap_scalping",
             "vwap_pullback",
-            "funding_arb",
             "momentum_scalping",
             "orderbook_imbalance",
         ):

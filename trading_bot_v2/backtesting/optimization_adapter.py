@@ -183,7 +183,6 @@ class OptimizationAdapter:
             "grid_trading": "grid",
             "liquidation_capture": "liquidation",
             "vwap_scalping": "vwap",
-            "funding_arb": "funding",
             "momentum_scalping": "momentum",
             "orderbook_imbalance": "orderbook",
         }

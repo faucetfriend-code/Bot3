@@ -2,9 +2,8 @@
 
 This module defines the exchange-agnostic surface that the trading bot
 consumes.  The surface was mapped from actual call sites (trading_bot.py,
-grid_lifecycle_manager.py, api_server.py, multi_timeframe_fetcher.py,
-strategies/funding_arb.py) - it intentionally contains no methods that
-nobody calls.
+grid_lifecycle_manager.py, api_server.py, multi_timeframe_fetcher.py)
+- it intentionally contains no methods that nobody calls.
 
 Normalized vocabulary
 ---------------------
