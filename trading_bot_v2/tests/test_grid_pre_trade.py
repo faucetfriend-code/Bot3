@@ -9,7 +9,7 @@ REST client, so only the network edge is faked.
 Covered:
 - a valid grid places exactly the orders it placed before the check existed
 - each sub-check: a violating grid sends zero orders and registers nothing
-- the level-count range is a warning, not a rejection
+- the configured total level count must be 5-20; odd totals warn
 - the repo's default grid parameters pass for the default symbols
 - the check has no bare ``assert`` (it must survive ``python -O``)
 """
@@ -336,41 +336,71 @@ class TestViolationsSendNothing:
 
 
 # ---------------------------------------------------------------------------
-# Level count: warning only
+# Level count: configured total must be 5-20
 # ---------------------------------------------------------------------------
 
 
-class TestLevelCountIsWarningOnly:
-    @pytest.mark.parametrize(("configured", "placed"), [(3, 2), (4, 4), (5, 4)])
-    def test_small_ladder_still_trades_with_warning(
-        self, configured: int, placed: int
-    ) -> None:
+def _level_warnings(log: Any) -> List[str]:
+    return [call.args[0] for call in log.warning.call_args_list]
+
+
+class TestLevelCountRangeEnforced:
+    @pytest.mark.parametrize("configured", [-2, 1, 3, 4, 21, 40])
+    def test_out_of_range_total_rejected(self, configured: int) -> None:
+        """Rejected on the configured total: no orders, no grid state."""
         manager = _make_manager()
         client = _make_client()
         stub = _make_bot(manager, client)
+        _run(stub, _grid_signal(grid_levels=configured))
+
+        reason = _assert_nothing_sent(stub, manager, client, "SUI")
+        assert "Grid pre-trade check failed" in reason
+        assert f"configured grid levels {configured}" in reason
+        assert "5-20" in reason
+
+    @pytest.mark.parametrize("configured", [5, 8, 10, 20])
+    def test_in_range_total_places_the_ladder(self, configured: int) -> None:
+        manager = _make_manager()
+        client = _make_client()
+        stub = _make_bot(manager, client)
+        _run(stub, _grid_signal(grid_levels=configured), capital=2000.0)
+
+        assert client.place_order.call_count == configured // 2 * 2
+        assert manager.has_active_grid("SUI")
+        stub.signal_logger.log_signal_failed.assert_not_called()
+
+    @pytest.mark.parametrize("configured", [5, 9, 19])
+    def test_odd_total_warns_and_still_places(self, configured: int) -> None:
+        manager = _make_manager()
+        client = _make_client()
+        stub = _make_bot(manager, client)
+        placed = configured // 2 * 2
         with patch("trading_bot_v2.trading_bot.logger") as log:
-            _run(stub, _grid_signal(grid_levels=configured))
+            _run(stub, _grid_signal(grid_levels=configured), capital=2000.0)
 
         assert client.place_order.call_count == placed
         assert manager.has_active_grid("SUI")
-        warnings = [call.args[0] for call in log.warning.call_args_list]
-        assert any(f"{placed} levels" in w and "5-20" in w for w in warnings)
+        odd = [w for w in _level_warnings(log) if "odd" in w]
+        assert len(odd) == 1
+        assert f"only {placed} orders will be placed" in odd[0]
 
-    @pytest.mark.parametrize("levels", [5, 8, 20])
-    def test_in_range_ladder_does_not_warn(self, levels: int) -> None:
+    @pytest.mark.parametrize("levels", [6, 8, 10, 20])
+    def test_check_in_range_even_does_not_warn(self, levels: int) -> None:
         with patch("trading_bot_v2.trading_bot.logger") as log:
-            TradingBot._assert_grid_pre_trade(
-                symbol="SUI",
-                grid_spacing=0.006,
-                num_levels=levels,
-                quantity_per_level=100.0,
-                current_price=1.0,
-                emergency_stop_price=0.92,
-                min_order_size=10.0,
-                min_order_is_notional=True,
-                lowest_level_price=0.97,
-            )
-        log.warning.assert_not_called()
+            _check(num_levels=levels)
+        assert not [w for w in _level_warnings(log) if "level" in w]
+
+    @pytest.mark.parametrize("levels", [0, 4, 21])
+    def test_check_directly_rejects_out_of_range(self, levels: int) -> None:
+        with pytest.raises(GridPreTradeError, match="5-20"):
+            _check(num_levels=levels)
+
+    def test_unset_levels_use_the_default_of_ten(self) -> None:
+        manager = _make_manager()
+        client = _make_client()
+        stub = _make_bot(manager, client)
+        _run(stub, _grid_signal(grid_levels=None))
+        assert client.place_order.call_count == 10
 
 
 # ---------------------------------------------------------------------------

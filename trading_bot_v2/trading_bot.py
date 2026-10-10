@@ -169,6 +169,11 @@ def _breaker_block_reason(bot: Any) -> Optional[str]:
     return f"Circuit breaker tripped ({reason}) - manual reset required"
 
 
+# Allowed range for the configured TOTAL grid level count (inclusive).
+GRID_MIN_LEVELS = 5
+GRID_MAX_LEVELS = 20
+
+
 class GridPreTradeError(ValueError):
     """A grid failed a pre-trade check and must not be sent to the exchange."""
 
@@ -2127,6 +2132,19 @@ class TradingBot:
             if capital <= 0:
                 return {"success": False, "error": "No capital allocated"}
 
+            # Configured TOTAL level count, read exactly as
+            # _calculate_grid_levels reads it.  Range-checked before any
+            # ladder maths so a degenerate value (e.g. 1, which builds no
+            # buy side) is rejected as a pre-trade failure, not a calc error.
+            configured_levels = signal.grid_levels or 10
+            try:
+                TradingBot._check_grid_level_range(symbol, configured_levels)
+            except GridPreTradeError as check_error:
+                return {
+                    "success": False,
+                    "error": f"Grid pre-trade check failed: {check_error}",
+                }
+
             # Calculate grid levels
             grid_levels = self._calculate_grid_levels(
                 signal=signal,
@@ -2161,7 +2179,7 @@ class TradingBot:
                 TradingBot._assert_grid_pre_trade(
                     symbol=symbol,
                     grid_spacing=grid_levels.get("grid_spacing", 0),
-                    num_levels=len(all_levels),
+                    num_levels=configured_levels,
                     quantity_per_level=min(level["quantity"] for level in all_levels),
                     current_price=current_price,
                     emergency_stop_price=_grid_emergency_stop_price(
@@ -3796,6 +3814,19 @@ class TradingBot:
             logging.error(f"Error monitoring emergency stops: {e}")
 
     @staticmethod
+    def _check_grid_level_range(symbol: str, configured_levels: int) -> None:
+        """Reject a configured total grid level count outside 5-20.
+
+        Raises:
+            GridPreTradeError: If ``configured_levels`` is not in 5..20.
+        """
+        if not GRID_MIN_LEVELS <= configured_levels <= GRID_MAX_LEVELS:
+            raise GridPreTradeError(
+                f"configured grid levels {configured_levels} for {symbol} "
+                f"outside the allowed {GRID_MIN_LEVELS}-{GRID_MAX_LEVELS} range"
+            )
+
+    @staticmethod
     def _assert_grid_pre_trade(
         symbol: str,
         grid_spacing: float,
@@ -3825,15 +3856,20 @@ class TradingBot:
            always neutral (buys below, sells above) with one downside
            stop, so "below price" holds for every grid this path creates.
 
-        Warning only (not enforced):
-        4. Total level count outside 5-20.  GRID_TRADING_LEVELS values
-           below 5 are documented as tuned configurations, so this range
-           cannot be shown to be a hard requirement.
+        4. Configured total level count within 5-20 (inclusive).  The
+           count is the configured total (GRID_TRADING_LEVELS /
+           ``signal.grid_levels``), not the orders placed: the live path
+           places ``levels // 2`` buys and ``levels // 2`` sells.
+
+        Warning only:
+        5. Odd configured total: one level is lost to integer halving
+           (5 places 4 orders).  Allowed; the warning states the real
+           order count.
 
         Args:
             symbol: Trading symbol.
             grid_spacing: Grid spacing in price units.
-            num_levels: Total orders in the ladder (BUY + SELL levels).
+            num_levels: Configured TOTAL level count (not orders placed).
             quantity_per_level: Smallest base-asset quantity of any level.
             current_price: Market price the ladder was built around.
             emergency_stop_price: Stop the grid will be registered with.
@@ -3852,11 +3888,13 @@ class TradingBot:
                 f"grid spacing must be positive, got {grid_spacing}"
             )
 
-        # Level count: warning only, see docstring.
-        if not 5 <= num_levels <= 20:
+        # Level count: enforced range, odd values warn (see docstring)
+        TradingBot._check_grid_level_range(symbol, num_levels)
+        if num_levels % 2:
             logger.warning(
-                f"Grid pre-trade: {symbol} ladder has {num_levels} levels, "
-                f"outside the 5-20 range of the Grid Trading Brief (not enforced)"
+                f"Grid pre-trade: {symbol} configured {num_levels} levels "
+                f"(odd); only {num_levels // 2 * 2} orders will be placed "
+                f"({num_levels // 2} buys and {num_levels // 2} sells)"
             )
 
         # Validate per-level size against the exchange minimum
