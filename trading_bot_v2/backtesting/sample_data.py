@@ -32,7 +32,7 @@ import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Sequence, Tuple
 
 import pandas as pd
 
@@ -107,10 +107,10 @@ ACTIVITY_PERSISTENCE = 0.85
 ACTIVITY_NOISE = 0.45
 
 
-def _minute_bars(spec: SampleSpec) -> List[Dict[str, float]]:
+def _minute_bars(spec: SampleSpec) -> List[Dict[str, Any]]:
     """Walk the 1m price path and build one OHLCV row per minute."""
     rng = random.Random(spec.seed)
-    rows: List[Dict[str, float]] = []
+    rows: List[Dict[str, Any]] = []
     price = spec.start_price
     stamp = spec.start
     activity = 0.0
@@ -140,7 +140,7 @@ def _bar(
     spec: SampleSpec,
     segment: RegimeSegment,
     activity: float,
-) -> Dict[str, float]:
+) -> Dict[str, Any]:
     """One 1m candle around an open/close pair."""
     wick = segment.vol_per_minute * 0.6 * math.exp(0.5 * activity)
     high = max(open_, close) * (1.0 + abs(rng.gauss(0.0, wick)))

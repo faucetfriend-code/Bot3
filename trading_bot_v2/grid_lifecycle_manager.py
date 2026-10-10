@@ -356,7 +356,7 @@ class GridLifecycleManager:
         return None
 
     @staticmethod
-    def _resting_order_value(order: Dict[str, Any], keys: tuple) -> float:
+    def _resting_order_value(order: Dict[str, Any], keys: Tuple[str, ...]) -> float:
         """Return the first parseable positive number under ``keys`` (else 0)."""
         for key in keys:
             try:
@@ -380,7 +380,7 @@ class GridLifecycleManager:
 
     def _select_entry_orders(
         self, orders: List[Dict[str, Any]], net: Dict[str, float]
-    ) -> tuple:
+    ) -> Tuple[List[Dict[str, Any]], int]:
         """Split resting orders into entries to cancel and orders to keep.
 
         Protective rows (TP/SL, stop types, reduce-only) and rows without
@@ -445,7 +445,8 @@ class GridLifecycleManager:
         symbol = str(order.get("symbol") or "")
         order_id = self._extract_order_id_from_order(order)
         try:
-            ack = self.client.cancel_order(symbol, order_id)
+            # _select_entry_orders never selects a row without an order id.
+            ack = self.client.cancel_order(symbol, cast(str, order_id))
         except Exception as exc:  # noqa: BLE001 - one failure must not stop the rest
             logger.error(f"Entry order cancel RAISED for {symbol} {order_id}: {exc}")
             return False

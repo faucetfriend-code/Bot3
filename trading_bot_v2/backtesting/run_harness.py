@@ -33,7 +33,7 @@ import argparse
 import json
 import sys
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Dict, Optional, Sequence
 
 from loguru import logger
 
@@ -41,6 +41,9 @@ from .harness import DEFAULT_OUTPUT_DIR, MODES, HarnessConfig, run_harness
 from .ohlcv import CandleDataError
 from .sample_data import DEFAULT_SYMBOL
 from .strategy_interface import STRATEGY_REGISTRY
+
+if TYPE_CHECKING:
+    from loguru import Record
 
 SAMPLE_DATA_DIR = Path(__file__).resolve().parent / "sample_data"
 #: The committed sample spans 2024-01-01 .. 2024-01-30. Starting on the
@@ -143,7 +146,7 @@ def _configure_logging(level: str, strategy_level: str) -> None:
     harness_no = logger.level(level.upper()).no
     other_no = logger.level(strategy_level.upper()).no
 
-    def _keep(record: dict) -> bool:
+    def _keep(record: Record) -> bool:
         threshold = (
             harness_no
             if str(record["name"]).startswith("trading_bot_v2.backtesting")

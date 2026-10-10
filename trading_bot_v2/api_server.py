@@ -1867,8 +1867,8 @@ async def stop_bot() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/circuit-breaker/reset", dependencies=AUTH_DEPS)
-async def reset_circuit_breaker():
+@app.post("/api/bot/circuit-breaker/reset", dependencies=AUTH_DEPS, response_model=None)
+async def reset_circuit_breaker() -> Dict[str, Any]:
     """Manually reset a tripped circuit breaker so new entries may resume.
 
     The only way to clear a trip: starting or restarting the bot does not.

@@ -4,7 +4,7 @@ import threading
 import os
 import uuid
 import warnings
-from typing import Any, Callable, Dict, List, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, cast
 from datetime import datetime, timezone
 import urllib3
 from loguru import logger
@@ -88,6 +88,9 @@ from .telegram_alerts import telegram_alerts
 # Import PositionReconciler for H4 position reconciliation
 from .position_reconciler import PositionReconciler, position_quantity
 
+if TYPE_CHECKING:
+    from .supervisor_control import SupervisorControl
+
 
 def _signal_stop_price(signal: Any) -> Optional[float]:
     """The signal's protective stop, or None when it carries none."""
@@ -129,16 +132,16 @@ def _resolve_exchange(bot: Any) -> ExchangeClient:
     return exchange
 
 
-def _supervisor_control():
+def _supervisor_control() -> "SupervisorControl":
     """Return the supervisor control singleton (holds the persisted state)."""
     try:
         from .supervisor_control import get_supervisor_control
     except ImportError:
-        from supervisor_control import get_supervisor_control
+        from supervisor_control import get_supervisor_control  # type: ignore[import-not-found, no-redef]  # script-mode fallback
     return get_supervisor_control()
 
 
-def _breaker_block_reason(bot) -> Optional[str]:
+def _breaker_block_reason(bot: Any) -> Optional[str]:
     """Return why new entries are blocked by the circuit breaker, if tripped.
 
     Every path that opens or adds exposure asks this before sending an
@@ -1669,7 +1672,7 @@ class TradingBot:
             try:
                 from .supervisor_control import get_supervisor_control
             except ImportError:
-                from supervisor_control import get_supervisor_control  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+                from supervisor_control import get_supervisor_control  # type: ignore[no-redef]  # script-mode fallback
             sup = get_supervisor_control()
             if sup.is_paused():
                 pause_status = sup.status().get("raw_state", {})

@@ -761,7 +761,7 @@ class BacktestEngine:
         return schedule
 
     @staticmethod
-    def _resolve_strategy_filter(strategy_filter: str) -> set:
+    def _resolve_strategy_filter(strategy_filter: str) -> set[str]:
         """Resolve a strategy filter to the set of display names to enable.
 
         Accepts display ("MeanReversion") and snake_case ("mean_reversion")

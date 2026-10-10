@@ -248,8 +248,8 @@ class PerformanceTracker:
 
 
 def per_strategy_breakdown(
-    trade_log: List[Dict], closed_trades: List[Dict]
-) -> Dict[str, Dict]:
+    trade_log: List[Dict[str, Any]], closed_trades: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
     """Aggregate fills and closed-trade outcomes per strategy.
 
     Args:
@@ -262,9 +262,9 @@ def per_strategy_breakdown(
         there were no losing trades (undefined, not infinite, so the
         value stays JSON-safe).
     """
-    cells: Dict[str, Dict] = {}
+    cells: Dict[str, Dict[str, Any]] = {}
 
-    def cell(name: str) -> Dict:
+    def cell(name: str) -> Dict[str, Any]:
         return cells.setdefault(
             name or "unknown",
             {
