@@ -2178,23 +2178,25 @@ class TradingBot:
                 )
                 return
 
-            # Refine signal through ExecutionLayer before execution
-            refined_signal = self.execution_layer.refine_entry(  # type: ignore[union-attr]  # bug: may be None
-                signal, symbol
-            )
-            if refined_signal is None:
-                logger.info(
-                    f"⚠️ ExecutionLayer skipped entry for {symbol} - timing not favorable"
-                )
-                self.signal_logger.log_signal_rejected(
-                    signal=signal,
-                    reason="ExecutionLayer timing skip",
-                    notes="1m/5m timing conditions not met",
-                )
-                return
+            # Refine signal through ExecutionLayer before execution.  The
+            # layer is None when its constructor failed at startup; in that
+            # case the signal goes through unrefined.
+            if self.execution_layer is not None:
+                refined_signal = self.execution_layer.refine_entry(signal, symbol)
+                if refined_signal is None:
+                    logger.info(
+                        f"ExecutionLayer skipped entry for {symbol} "
+                        "- timing not favorable"
+                    )
+                    self.signal_logger.log_signal_rejected(
+                        signal=signal,
+                        reason="ExecutionLayer timing skip",
+                        notes="1m/5m timing conditions not met",
+                    )
+                    return
 
-            # Use refined signal for execution
-            signal = refined_signal
+                # Use refined signal for execution
+                signal = refined_signal
 
             # Generate + persist the client order id BEFORE transmission so
             # an ambiguous response (timeout, bare ack) can be looked up.
