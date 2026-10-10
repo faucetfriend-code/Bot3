@@ -476,8 +476,9 @@ class TestEngineWarmup:
         assert BacktestEngine._nearest_idx(idx_map, ts_4h, ts_4h[7]) == 7
         # 5m timestamp between two 4h bars -> most recent bar at or before it
         assert BacktestEngine._nearest_idx(idx_map, ts_4h, "2024-01-02T06:05:00") == 7
-        # Before the series starts -> clamp to 0
-        assert BacktestEngine._nearest_idx(idx_map, ts_4h, "2023-12-01T00:00:00") == 0
+        # Before the series starts -> -1: no bar exists yet (callers slice an
+        # empty history). Clamping to 0 would serve a future bar (look-ahead).
+        assert BacktestEngine._nearest_idx(idx_map, ts_4h, "2023-12-01T00:00:00") == -1
 
     def test_first_index_at_or_after(self):
         ts = _timestamps(10)
