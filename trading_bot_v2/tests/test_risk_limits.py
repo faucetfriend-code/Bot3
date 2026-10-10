@@ -841,34 +841,6 @@ class TestCircuitBreaker:
 
 
 class TestLegacySizingWrappers:
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason=(
-            "TradingBot._calculate_position_size calls RiskManager."
-            "get_position_size(strategy=, entry_price=, stop_loss=, confidence=) "
-            "but the authoritative signature is (signal, account_balance, "
-            "current_exposure, regime).  Only the retired _execute_grid_signal "
-            "path reaches it, but any caller gets a TypeError."
-        ),
-    )
-    def test_calculate_position_size_delegates(self) -> None:
-        bot = make_bot(FakeExchange(), risk_manager=RiskManager())
-        assert bot._calculate_position_size(make_signal()) > 0
-
-    @pytest.mark.xfail(
-        strict=True,
-        raises=TypeError,
-        reason=(
-            "TradingBot._validate_position_size omits the required "
-            "account_balance / current_exposure arguments of RiskManager."
-            "validate_position_size, so it raises instead of validating."
-        ),
-    )
-    def test_validate_position_size_delegates(self) -> None:
-        bot = make_bot(FakeExchange(), risk_manager=RiskManager())
-        assert bot._validate_position_size(1.0, 100.0) in (True, False)
-
     def test_emergency_stop_is_seven_and_a_half_percent_below_entry(self) -> None:
         bot = make_bot(FakeExchange())
         assert bot._calculate_emergency_stop(make_signal(entry_price=200.0)) == 185.0

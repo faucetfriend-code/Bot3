@@ -173,7 +173,7 @@ class Position:
     def _calculate_liquidation_price(self) -> None:
         """Calculate liquidation price based on leverage."""
         if self.leverage <= 1:
-            return 0  # type: ignore[return-value]  # returns 0, other path None
+            return
 
         liquidation_distance = 1.0 / self.leverage
 
@@ -347,59 +347,6 @@ class Order:
     max_size: Optional[float] = None
     min_leverage: int = 5
     max_leverage: int = 50
-
-    def is_valid_for_pacifica(self) -> Tuple[bool, List[str]]:
-        """
-        Validate order meets Pacifica requirements.
-
-        Returns:
-            Tuple of (is_valid, list_of_errors)
-        """
-        errors: List[str] = []
-
-        # Validate price (tick size)
-        if self.price and self.tick_size:
-            if (self.price % self.tick_size) != 0:
-                errors.append(
-                    f"Price {self.price} not a multiple of tick size {self.tick_size}"
-                )
-
-        # Validate quantity (lot size)
-        if self.lot_size:
-            if (self.quantity % self.lot_size) != 0:
-                errors.append(
-                    f"Quantity {self.quantity} not a multiple of lot size {self.lot_size}"
-                )
-
-        # Validate size limits
-        if self.min_size and self.quantity < self.min_size:
-            errors.append(f"Quantity {self.quantity} below minimum {self.min_size}")
-
-        if self.max_size and self.quantity > self.max_size:
-            errors.append(f"Quantity {self.quantity} exceeds maximum {self.max_size}")
-
-        # Validate leverage
-        if self.leverage < self.min_leverage:
-            errors.append(
-                f"Leverage {self.leverage}x below minimum {self.min_leverage}x"
-            )
-
-        if self.leverage > self.max_leverage:
-            errors.append(
-                f"Leverage {self.leverage}x exceeds maximum {self.max_leverage}x"
-            )
-
-        # Validate order type requirements
-        if self.order_type == OrderType.LIMIT and self.price is None:
-            errors.append("Limit order requires price")
-
-        if (
-            self.order_type in [OrderType.STOP_MARKET, OrderType.STOP_LIMIT]
-            and self.stop_price is None
-        ):
-            errors.append("Stop order requires stop_price")
-
-        return len(errors) == 0, errors
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization."""

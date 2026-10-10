@@ -2,7 +2,6 @@
 
 Covers, in the order an entry travels:
 
-* ``models.Order.is_valid_for_pacifica`` - the static order validator;
 * ``order_result.OrderResult`` - ack and fill-lookup normalization;
 * ``execution_layer.ExecutionLayer`` - the 1m/5m entry refinement, with
   hand-built deterministic candles instead of seeded random walks;
@@ -47,65 +46,6 @@ def _order(**overrides: Any) -> Order:
 
 
 class TestOrderValidation:
-    def test_default_market_order_is_valid(self) -> None:
-        ok, errors = _order().is_valid_for_pacifica()
-        assert ok is True and errors == []
-
-    def test_limit_order_requires_price(self) -> None:
-        ok, errors = _order(order_type=OrderType.LIMIT).is_valid_for_pacifica()
-        assert ok is False
-        assert errors == ["Limit order requires price"]
-
-    @pytest.mark.parametrize("kind", [OrderType.STOP_MARKET, OrderType.STOP_LIMIT])
-    def test_stop_orders_require_stop_price(self, kind: OrderType) -> None:
-        ok, errors = _order(order_type=kind, price=100.0).is_valid_for_pacifica()
-        assert ok is False
-        assert "Stop order requires stop_price" in errors
-
-    def test_price_off_tick_is_rejected(self) -> None:
-        order = _order(order_type=OrderType.LIMIT, price=100.3, tick_size=0.5)
-        ok, errors = order.is_valid_for_pacifica()
-        assert ok is False and "tick size" in errors[0]
-
-    def test_price_on_tick_is_accepted(self) -> None:
-        order = _order(order_type=OrderType.LIMIT, price=100.5, tick_size=0.5)
-        assert order.is_valid_for_pacifica() == (True, [])
-
-    @pytest.mark.parametrize(
-        ("quantity", "valid"),
-        [(0.5, True), (1.0, True), (0.49, False), (1.01, False)],
-    )
-    def test_size_limits_are_inclusive(self, quantity: float, valid: bool) -> None:
-        order = _order(quantity=quantity, min_size=0.5, max_size=1.0)
-        assert order.is_valid_for_pacifica()[0] is valid
-
-    @pytest.mark.parametrize(
-        ("leverage", "valid"), [(5, True), (50, True), (4, False), (51, False)]
-    )
-    def test_leverage_bounds_are_inclusive(self, leverage: int, valid: bool) -> None:
-        assert _order(leverage=leverage).is_valid_for_pacifica()[0] is valid
-
-    def test_zero_quantity_below_minimum(self) -> None:
-        ok, errors = _order(quantity=0.0, min_size=0.001).is_valid_for_pacifica()
-        assert ok is False and "below minimum" in errors[0]
-
-    def test_multiple_errors_are_all_reported(self) -> None:
-        order = _order(order_type=OrderType.LIMIT, leverage=1, quantity=0.0)
-        order.min_size = 0.001
-        ok, errors = order.is_valid_for_pacifica()
-        assert ok is False and len(errors) == 3
-
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "is_valid_for_pacifica uses float modulo for the lot-size check: "
-            "0.3 % 0.1 is 0.0999..., so a quantity that IS a whole number of "
-            "lots is rejected.  Needs a tolerance or Decimal arithmetic."
-        ),
-    )
-    def test_whole_lot_quantity_with_decimal_lot_size_is_valid(self) -> None:
-        assert _order(quantity=0.3, lot_size=0.1).is_valid_for_pacifica()[0] is True
-
     def test_to_dict_serializes_enums(self) -> None:
         data = _order().to_dict()
         assert data["side"] == "buy"

@@ -62,7 +62,6 @@ class PacificaWebSocketClient:
         "_kline_cache",
         "_orderbook_cache",
         "_ui_callbacks",
-        "_channel_callbacks",
         "_last_heartbeat",
         "_running",
         "_message_count",
@@ -86,7 +85,6 @@ class PacificaWebSocketClient:
         self._reconnect_delay = 1
         self._last_heartbeat: float = 0
         self._ui_callbacks: List[Callable[[Dict[str, Any]], None]] = []
-        self._channel_callbacks: Dict[str, Callable[[Dict[str, Any]], None]] = {}
 
         # Determine WebSocket URL.
         # PACIFICA_DATA_WS_URL overrides the TESTNET flag for the market-data feed,
@@ -496,41 +494,6 @@ class PacificaWebSocketClient:
         except Exception as e:
             logger.error(f"Failed to subscribe to candle {symbol} {interval}: {e}")
 
-    def update_trading_symbols(self, active_symbols: List[str]) -> None:
-        """
-        Update WebSocket subscriptions to only include actively traded symbols.
-
-        This method should be called when trading symbols change to optimize
-        WebSocket subscriptions and reduce unnecessary data streams.
-
-        Args:
-            active_symbols: List of symbols currently being traded (e.g., ["SUI", "DOGE"])
-        """
-        if not self._running:
-            logger.warning("WebSocket client not running - cannot update subscriptions")
-            return
-
-        # Normalize symbols
-        normalized_symbols = [s.upper() for s in active_symbols]
-        intervals = ["1m", "5m", "15m", "1h", "4h"]  # Include execution timeframes
-
-        # Create subscription tasks for all symbol/interval combinations
-        subscription_tasks = []
-        for symbol in normalized_symbols:
-            for interval in intervals:
-                task = self.subscribe_candle(symbol, interval)
-                subscription_tasks.append(task)
-
-        # Run all subscriptions concurrently
-        if subscription_tasks:
-            asyncio.run_coroutine_threadsafe(
-                asyncio.gather(*subscription_tasks, return_exceptions=True),  # type: ignore[arg-type]  # gather() is a Future, not a coroutine; reported
-                self._loop,
-            )
-            logger.info(
-                f"✅ Updated WebSocket subscriptions for {len(normalized_symbols)} symbols: {normalized_symbols}"
-            )
-
     async def _send_subscription(self, subscription_msg: Dict[str, Any]) -> None:
         """Send a subscription message through the WebSocket"""
         if self._ws and self._connected:
@@ -539,22 +502,6 @@ class PacificaWebSocketClient:
     def register_ui_callback(self, callback: Callable[[Dict[str, Any]], None]) -> None:
         """Register callback for FastAPI /ws to forward events to browser"""
         self._ui_callbacks.append(callback)
-
-    async def subscribe(
-        self, channel_type: str, callback: Callable[[Dict[str, Any]], None]
-    ) -> None:
-        """Subscribe to a channel with a callback"""
-        # Map channel type to event type
-        channel_map = {
-            "ticker": "price",
-            "funding": "funding",
-            "position": "position_update",
-            "order": "order_update",
-            "balance": "balance",
-            "candle": "candle_update",
-        }
-        event_type = channel_map.get(str(channel_type), str(channel_type))
-        self._channel_callbacks[event_type] = callback
 
     # ====================== INTERNAL ======================
 
@@ -732,7 +679,6 @@ class PacificaWebSocketClient:
                                         "price": mark_price,
                                     }
                                     self._broadcast(event)
-                                    self._call_channel_callback("price", event)
                                 except (ValueError, TypeError) as e:
                                     logger.warning(
                                         f"Invalid price data for {price_symbol}: {mark_price} - {e}"
@@ -753,7 +699,6 @@ class PacificaWebSocketClient:
                         **self._funding_cache[symbol],
                     }
                     self._broadcast(event)
-                    self._call_channel_callback("funding", event)
 
             elif channel == "position":
                 pos = data.get("position", {})
@@ -762,7 +707,6 @@ class PacificaWebSocketClient:
                     self._position_cache[pos_symbol] = pos
                     event = {"type": "position_update", "position": pos}
                     self._broadcast(event)
-                    self._call_channel_callback("position_update", event)
 
             elif channel == "balance":
                 self._balance_cache.update(
@@ -775,12 +719,10 @@ class PacificaWebSocketClient:
                 )
                 event = {"type": "balance", **self._balance_cache}
                 self._broadcast(event)
-                self._call_channel_callback("balance", event)
 
             elif channel in ("order", "executionReport"):
                 event = {"type": "order_update", "data": data}
                 self._broadcast(event)
-                self._call_channel_callback("order_update", event)
 
             elif channel == "candle":
                 # Handle real-time candle data from WebSocket
@@ -839,7 +781,6 @@ class PacificaWebSocketClient:
                         "candle": ohlcv_candle,
                     }
                     self._broadcast(event)
-                    self._call_channel_callback("candle_update", event)
                     logger.debug(
                         f"📊 Candle update: {symbol} {interval} - O:{ohlcv_candle['open']:.2f} C:{ohlcv_candle['close']:.2f}"
                     )
@@ -872,7 +813,6 @@ class PacificaWebSocketClient:
                         "timestamp": data.get("t", 0),
                     }
                     self._broadcast(event)
-                    self._call_channel_callback("orderbook_update", event)
 
                     # Debug log first few orderbook messages
                     if self._message_count < 5:
@@ -883,14 +823,6 @@ class PacificaWebSocketClient:
 
         except Exception as e:
             logger.error(f"Error handling WS message: {e} | Raw: {raw[:200]}")  # type: ignore[str-bytes-safe]  # bytes frame logs as b'..'; reported
-
-    def _call_channel_callback(self, event_type: str, event: Dict[str, Any]) -> None:
-        """Call the specific channel callback"""
-        if event_type in self._channel_callbacks:
-            try:
-                asyncio.create_task(self._channel_callbacks[event_type](event))  # type: ignore[arg-type]  # callback typed as sync; reported
-            except Exception as e:
-                logger.error(f"Channel callback error for {event_type}: {e}")
 
     def _broadcast(self, event: Dict[str, Any]) -> None:
         """Send event to all registered UI callbacks (FastAPI /ws)"""

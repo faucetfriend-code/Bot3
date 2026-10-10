@@ -3795,62 +3795,6 @@ class DatabaseManager:
         return deleted_counts
 
     # Async methods for non-blocking database operations
-    async def save_trade_async(self, trade_data: Dict[str, Any]) -> Optional[int]:
-        """Async version of save_trade."""
-        if not HAS_AIOSQLITE:
-            return self.save_trade(trade_data)
-
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute(
-                """
-                INSERT INTO trades (symbol, side, quantity, entry_price,
-                                  exit_price, entry_time, exit_time, pnl,
-                                  commission, strategy, status, regime, exchange)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-                (
-                    trade_data["symbol"],
-                    trade_data["side"],
-                    trade_data["quantity"],
-                    trade_data["entry_price"],
-                    trade_data.get("exit_price"),
-                    trade_data["entry_time"],
-                    trade_data.get("exit_time"),
-                    trade_data.get("pnl", 0),
-                    trade_data.get("commission", 0),
-                    trade_data.get("strategy"),
-                    trade_data.get("status", "open"),
-                    trade_data.get("regime"),
-                    trade_data.get("exchange"),
-                ),
-            )
-            await db.commit()
-            # last_insert_rowid is not an aiosqlite.Connection API (see PR #7).
-            return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
-
-    async def save_signal_async(self, signal_data: Dict[str, Any]) -> int:
-        """Async version of save_signal."""
-        if not HAS_AIOSQLITE:
-            return self.save_signal(signal_data)
-
-        async with aiosqlite.connect(DATABASE_PATH) as db:
-            await db.execute(
-                """
-                INSERT INTO signals (symbol, signal_type, strength, indicators, timestamp)
-                VALUES (?, ?, ?, ?, ?)
-            """,
-                (
-                    signal_data["symbol"],
-                    signal_data["signal_type"],
-                    signal_data["strength"],
-                    json.dumps(signal_data.get("indicators", {})),
-                    signal_data["timestamp"],
-                ),
-            )
-            await db.commit()
-            # last_insert_rowid is not an aiosqlite.Connection API (see PR #7).
-            return db.last_insert_rowid()  # type: ignore[attr-defined, no-any-return]
-
     async def get_recent_trades_async(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Async version of get_trades."""
         if not HAS_AIOSQLITE:
