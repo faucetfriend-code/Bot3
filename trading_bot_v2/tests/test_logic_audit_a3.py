@@ -93,6 +93,7 @@ def _breaker_bot(balance: float, unrealized_pnl: float) -> SimpleNamespace:
         "_monitor_risk_coordinated",
         "_position_unrealized_pnl",
         "_trip_circuit_breaker",
+        "_sweep_breaker_entry_orders",
     )
 
 
