@@ -3,7 +3,7 @@
 Covers: factory selection/registry errors, side and amount vocabulary
 round-trips, pacifica-native wire format produced from normalized args,
 position/balance normalization (ghost filtering), funding capabilities,
-FundingArb interval awareness, and TradingBot factory wiring.
+and TradingBot factory wiring.
 """
 
 from unittest.mock import MagicMock, patch
@@ -301,43 +301,6 @@ class TestCapabilities:
         assert info.funding_rate == 0.0002
         assert info.funding_interval_hours == 1
         assert info.next_funding_time == 12345
-
-
-class TestFundingArbIntervalAwareness:
-    def _strategy(self, interval_hours):
-        from trading_bot_v2.strategies.funding_arb import FundingArbStrategy
-
-        strategy = FundingArbStrategy(
-            min_funding_rate=0.0001,
-            funding_interval_hours=interval_hours,
-        )
-        # Seed cache directly so no client is needed
-        strategy.funding_cache["BTC"] = {
-            "current_rate": 0.0003,
-            "avg_rate_8h": 0.0003,
-            "next_payment": None,
-        }
-        return strategy
-
-    def test_default_hourly_matches_legacy_math(self):
-        strategy = self._strategy(1)
-        opportunity = strategy.analyze_funding_opportunity("BTC")
-        assert opportunity is not None
-        assert opportunity["annualized_yield"] == pytest.approx(0.0003 * 24 * 365)
-
-    def test_8h_interval_scales_daily_yield(self):
-        strategy = self._strategy(8)
-        opportunity = strategy.analyze_funding_opportunity("BTC")
-        assert opportunity is not None
-        assert opportunity["annualized_yield"] == pytest.approx(0.0003 * 3 * 365)
-
-    def test_summary_apy_scales_with_interval(self):
-        hourly = self._strategy(1).get_funding_summary()
-        eight_hourly = self._strategy(8).get_funding_summary()
-        assert hourly["opportunities"][0]["apy"] == pytest.approx(0.0003 * 24 * 365)
-        assert eight_hourly["opportunities"][0]["apy"] == pytest.approx(
-            0.0003 * 3 * 365
-        )
 
 
 # ======================================================================

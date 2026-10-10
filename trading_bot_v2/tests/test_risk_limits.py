@@ -359,7 +359,6 @@ class TestStrategyRiskProfile:
             ("mean_reversion", "medium"),
             ("MeanReversion", "medium"),
             ("Liquidation Capture", "high"),
-            ("FUNDING_ARBITRAGE", "low"),
             ("momentumscalping", "high"),
             ("unknown_strategy", "medium"),
         ],

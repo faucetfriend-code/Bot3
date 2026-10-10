@@ -595,7 +595,6 @@ class TestStrategyManagerValidation:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -700,7 +699,6 @@ class TestSignalDiscardAccounting:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -830,7 +828,6 @@ class TestStrategyManagerRegimeRouting:
             enable_grid_trading=True,
             enable_liquidation_capture=True,
             enable_vwap_scalping=True,
-            enable_funding_arb=True,
             enable_momentum_scalping=True,
             enable_orderbook_imbalance=True,
         )
@@ -889,17 +886,22 @@ class TestStrategyManagerRegimeRouting:
                 f"LiqCapture not called in {regime}"
             )
 
-    def test_overlay_funding_arb_always_runs(self):
-        for regime in [MarketRegime.TRENDING_STRONG, MarketRegime.RANGING_VOLATILE]:
-            sm, det = self._make_sm_with_mock_strategies(regime)
-            det.detect_regime_cached.return_value = regime
-            det.get_active_strategies.return_value = (
-                MarketRegimeDetector().get_active_strategies(regime)
-            )
-            sm.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
-            assert sm.strategies["FundingArb"].generate_signals.called, (
-                f"FundingArb not called in {regime}"
-            )
+    def test_leftover_removed_strategy_env_flag_is_ignored(self, monkeypatch):
+        """A stale enable flag for a strategy that no longer exists is inert.
+
+        Deployments may still carry the flag in their environment; it must
+        neither register a strategy nor break construction or routing.
+        """
+        stale_flag = "ENABLE_FUNDING_ARB"  # strategy removed 2026-10-10
+        monkeypatch.setenv(stale_flag, "true")
+        baseline, _ = self._make_sm_with_mock_strategies(MarketRegime.TRENDING_STRONG)
+        monkeypatch.delenv(stale_flag)
+        clean, _ = self._make_sm_with_mock_strategies(MarketRegime.TRENDING_STRONG)
+
+        assert set(baseline.strategies) == set(clean.strategies)
+        assert not any("funding" in name.lower() for name in baseline.strategies)
+        baseline.generate_signals_for_market("SUI-PERP", self._data(), 100.0)
+        assert baseline.strategies["MACrossover"].generate_signals.called
 
     def test_overlay_orderbook_imbalance_always_runs(self):
         # OrderBookImbalance needs ws_client to provide orderbook data; without it, it won't get orderbook
@@ -961,7 +963,6 @@ class TestConflictResolution:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -1116,7 +1117,6 @@ class TestCooldownAndAntiSpam:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -1486,7 +1486,6 @@ class TestIntegrationPipeline:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -1525,7 +1524,6 @@ class TestIntegrationPipeline:
             enable_grid_trading=False,
             enable_liquidation_capture=False,
             enable_vwap_scalping=True,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )
@@ -1619,7 +1617,6 @@ class TestIntegrationPipeline:
             enable_grid_trading=True,
             enable_liquidation_capture=False,
             enable_vwap_scalping=False,
-            enable_funding_arb=False,
             enable_momentum_scalping=False,
             enable_orderbook_imbalance=False,
         )

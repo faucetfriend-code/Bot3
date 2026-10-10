@@ -329,7 +329,7 @@ class TestOutcomeTaxonomy:
         assert "never traded" in verdict.outcome_reason
 
     def test_empty_symbol_map_is_no_trades(self):
-        verdict = evaluate_strategy_gate(strategy="funding_arb", symbol_returns={})
+        verdict = evaluate_strategy_gate(strategy="calendar_flow", symbol_returns={})
         assert verdict.outcome is GateOutcome.NO_TRADES
         assert verdict.passed is False
 

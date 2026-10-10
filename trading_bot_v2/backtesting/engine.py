@@ -95,12 +95,7 @@ class _TimeExitInfo(TypedDict):
 # Keys are the snake_case optimization identifiers (see
 # regime_param_overlay.STRATEGY_KEY_TO_DISPLAY).
 #
-# ``funding_arb`` was here until real funding history was ingested
-# (data_manager.BinanceFundingSource) and SimulatedExchange grew
-# get_market_data / get_funding_history / get_balance. It is now
-# backtestable - under an explicit cross-venue modelling assumption
-# documented in backtesting/funding.py. ``orderbook_imbalance`` stays:
-# L2 depth is genuinely absent from the store.
+# ``orderbook_imbalance``: L2 depth is genuinely absent from the store.
 NON_BACKTESTABLE_STRATEGIES = frozenset({"orderbook_imbalance"})
 
 # StrategyManager display name -> constructor enable-flag kwarg.
@@ -111,7 +106,6 @@ STRATEGY_ENABLE_FLAGS: Dict[str, str] = {
     "LiquidationCapture": "enable_liquidation_capture",
     "VWAPScalping": "enable_vwap_scalping",
     "MomentumScalping": "enable_momentum_scalping",
-    "FundingArb": "enable_funding_arb",
     "OrderBookImbalance": "enable_orderbook_imbalance",
     "SessionRangeBreakout": "enable_session_range_breakout",
     "CalendarFlow": "enable_calendar_flow",
@@ -748,8 +742,8 @@ class BacktestEngine:
             logger.error(
                 f"Funding history does NOT cover {uncovered} of the "
                 f"requested window ({start} .. {end}); the series starts "
-                f"{schedule.times[0].date()}. Nothing is charged there and "
-                f"FundingArb sees no rate - those bars are silently "
+                f"{schedule.times[0].date()}. Nothing is charged there - "
+                f"those bars are silently "
                 f"funding-free. Shorten the span or accept the hole."
             )
         funnel.note("funding_model", note)
@@ -1248,9 +1242,8 @@ class BacktestEngine:
                 # indicators["close_position"] is not asking to be
                 # reinterpreted, it is the owning strategy retiring its
                 # own position. Time exits already bypass this gate for
-                # the same reason. No strategy that shipped before
-                # FundingArb sets the flag, so the default path is
-                # untouched.
+                # the same reason. No shipped strategy sets the flag
+                # today, so the default path is untouched.
                 explicit_close = bool((signal.indicators or {}).get("close_position"))
                 # Opposing direction - signal-driven close, if permitted
                 if not self._opposing_closes_position and not explicit_close:

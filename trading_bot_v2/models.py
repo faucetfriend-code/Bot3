@@ -517,12 +517,9 @@ class Signal:
         """Reward-to-risk ratio, or 0.0 when the signal carries no stop.
 
         A stopless signal has no risk denominator, so the ratio is
-        undefined rather than infinite. FundingArb is the strategy that
-        emits them (a funding position is retired when the rate turns,
-        not at a price level); before this guard the None stop raised a
-        TypeError inside StrategyManager's own log line, which the broad
-        handler there swallowed - so every FundingArb signal ever
-        generated was discarded without a trace.
+        undefined rather than infinite. No shipped strategy emits one;
+        the guard stays as a defensive check so a malformed signal
+        cannot raise a TypeError in a log line.
         """
         if self.stop_loss is None or self.take_profit is None:
             return 0.0

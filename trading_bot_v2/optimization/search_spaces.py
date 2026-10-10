@@ -532,27 +532,6 @@ def _vwap_scalping_space() -> SearchSpace:
     }
 
 
-def _funding_arb_space() -> SearchSpace:
-    """
-    Funding Arbitrage Strategy search space.
-
-    Focuses on funding rate thresholds and position sizing.
-    Runs in ALL regimes (passive strategy).
-    """
-    return {
-        # Funding rate thresholds
-        "min_funding_rate": (0.0001, 0.001),  # 0.01% - 0.1% minimum
-        # Position sizing
-        "max_allocation_pct": (0.10, 0.30),  # 10-30% of account
-        # Rebalance
-        "rebalance_threshold": (0.01, 0.05),  # 1-5% delta threshold
-        # Analysis window
-        "lookback_hours": (4, 16),  # Hours of history
-        # Confidence
-        "min_confidence": (0.60, 0.85),
-    }
-
-
 def _momentum_scalping_space() -> SearchSpace:
     """
     Momentum Scalping Strategy search space.
@@ -619,7 +598,6 @@ SEARCH_SPACE_BUILDERS: Dict[str, Callable[[], SearchSpace]] = {
     "liquidation_capture": _liquidation_capture_space,
     "vwap_scalping": _vwap_scalping_space,
     "vwap_pullback": _vwap_pullback_space,
-    "funding_arb": _funding_arb_space,
     "momentum_scalping": _momentum_scalping_space,
     "orderbook_imbalance": _orderbook_imbalance_space,
 }
@@ -681,13 +659,6 @@ PARAMETER_TYPES: Dict[str, Dict[str, str]] = {
         "time_exit_hours": "int",
         "rvol_min": "float",
         "cooldown_hours": "float",
-    },
-    "funding_arb": {
-        "min_funding_rate": "float",
-        "max_allocation_pct": "float",
-        "rebalance_threshold": "float",
-        "lookback_hours": "int",
-        "min_confidence": "float",
     },
     "momentum_scalping": {
         "ema_fast": "int",

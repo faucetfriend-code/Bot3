@@ -23,7 +23,7 @@ do not cross them. Neither bot reads `Agent OS/.env` at runtime.
 
 ## Project Overview
 
-Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures (testnet). 8 strategies with ADX-based regime detection, Kelly Criterion position sizing, and circuit breaker risk management. Python 3.14, FastAPI, SQLite, WebSocket.
+Multi-strategy cryptocurrency trading bot for **Pacifica.fi** perpetual futures (testnet). 7 strategies (the former eighth, funding arbitrage, was removed on 2026-10-10 as never tested) with ADX-based regime detection, Kelly Criterion position sizing, and circuit breaker risk management. Python 3.14, FastAPI, SQLite, WebSocket.
 
 ## Quick Start
 
@@ -113,8 +113,6 @@ Bot3/
       grid_trading.py        # ATR-spaced grid (RANGING_VOLATILE)
       liquidation_capture.py # Cascade detection (ALL regimes, overlay)
       vwap_scalping.py       # VWAP deviation (RANGING regimes)
-      funding_arb.py         # Funding rate exploit (ALL regimes, overlay; backtestable
-                             # since 2026-07-29 against real funding history)
       momentum_scalping.py   # EMA 9/21 cross (TRENDING regimes)
       orderbook_imbalance.py # L2 bid/ask analysis (ALL regimes, overlay)
     tests/                   # Primary test directory
@@ -143,7 +141,9 @@ Market Data -> Regime Detection (ADX 4h) -> Strategy Selection -> Signal Generat
 | RANGING_CALM | <20, low vol | MeanReversion (70%), VWAPScalping (30%) |
 | INDECISIVE | 20-25 | Stay flat |
 
-**Overlay strategies** (run in ALL regimes independently): LiquidationCapture, FundingArb, OrderBookImbalance
+**Overlay strategies** (run in ALL regimes independently): LiquidationCapture, OrderBookImbalance
+
+The funding arbitrage strategy (`FundingArb`, `strategies/funding_arb.py`, `ENABLE_FUNDING_ARB`) was removed on 2026-10-10: it was built as an idea, never tested or used, and emitted stopless signals the execution path could not handle. A leftover `ENABLE_FUNDING_ARB` or `FUNDING_ARB_*` variable in an environment is ignored. Funding-rate data plumbing (exchange funding endpoints, backtest funding charges, the directional-bias funding leg) is unaffected.
 
 Under `REGIME_MODE=volatility` the taxonomy is three terciles of trailing
 realized volatility instead, with a **proposed** mapping grounded in what each
@@ -265,8 +265,8 @@ Key variables:
   at every hourly settlement, longs always paying. That constant is the mean Binance
   **8-hour** BTC rate applied **hourly**, i.e. an 87.6%/yr carry against a measured
   11.66%/yr, and it can never go negative. `historical` charges the real ingested
-  series instead (`{SYMBOL}_funding.parquet`, Binance USD-M, BTC from 2019-09-10);
-  `funding_arb` is meaningless without it. The default stays `flat` only so the
+  series instead (`{SYMBOL}_funding.parquet`, Binance USD-M, BTC from 2019-09-10).
+  The default stays `flat` only so the
   existing campaign remains comparable. Related: `BACKTEST_FUNDING_CONVERSION`
   (`prorata` default / `identity`), `BACKTEST_FUNDING_SCALE=1.0` (unmeasured
   cross-venue basis), `BACKTEST_FUNDING_INTERVAL_HOURS` (defaults to the exchange

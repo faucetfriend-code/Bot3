@@ -22,7 +22,7 @@ JSON string sent on the wire.
 Response shape contract ("bot-native" surface)
 ----------------------------------------------
 The legacy call sites in this codebase (grid lifecycle, api_server,
-funding_arb, risk manager) parse Pacifica-shaped dicts: bare base
+risk manager) parse Pacifica-shaped dicts: bare base
 symbols ("BTC"), lowercase "long"/"short" position sides, "buy"/"sell"
 order sides, base-currency amounts, and keys like ``order_id``,
 ``entry_price``, ``funding_rate``.  This client therefore converts
@@ -1580,7 +1580,7 @@ class BlofinClient:
     def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Return funding-rate history records (newest first).
 
-        Record keys match the Pacifica shape read by FundingArb:
+        Record keys match the Pacifica shape:
         "funding_rate", "timestamp", "next_funding".
         """
         inst_id = self.to_inst_id(symbol)
