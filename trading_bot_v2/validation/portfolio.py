@@ -71,7 +71,19 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import (
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Sequence,
+    Tuple,
+    cast,
+)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -202,7 +214,7 @@ def align_curves(
     """
     if not curves:
         return [], {}
-    common: Optional[set] = None
+    common: Optional[set[str]] = None
     for points in curves.values():
         stamps = {str(ts) for ts, _ in points}
         common = stamps if common is None else (common & stamps)
@@ -317,7 +329,7 @@ def pearson(a: Sequence[float], b: Sequence[float]) -> float:
 
 
 def correlation_matrix(
-    series: Dict[str, Sequence[float]],
+    series: Mapping[str, Sequence[float]],
 ) -> Dict[str, Dict[str, float]]:
     """Return the full Pearson correlation matrix of several series.
 
@@ -664,13 +676,15 @@ class ConflictProbe:
         return self._target
 
     def __enter__(self) -> "ConflictProbe":
-        target = self._resolve_target()
+        # The target is any class carrying ``_resolve_signal_conflicts``
+        # (duck-typed, see the doctest), so it is handled as Any here.
+        target = cast(Any, self._resolve_target())
         original = target._resolve_signal_conflicts
         self._original = original
         events = self.events
 
         def wrapper(manager: Any, signals: List[Any], regime: Any) -> List[Any]:
-            survivors = original(manager, signals, regime)
+            survivors: List[Any] = original(manager, signals, regime)
             if len(signals) > 1:
                 incoming = {id(s) for s in signals}
                 kept = {id(s) for s in survivors}
@@ -696,9 +710,9 @@ class ConflictProbe:
         target._resolve_signal_conflicts = wrapper
         return self
 
-    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> Literal[False]:
         if self._original is not None and self._target is not None:
-            self._target._resolve_signal_conflicts = self._original
+            cast(Any, self._target)._resolve_signal_conflicts = self._original
             self._original = None
         return False
 

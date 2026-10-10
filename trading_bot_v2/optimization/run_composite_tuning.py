@@ -102,13 +102,18 @@ import os
 import statistics
 import sys
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from loguru import logger
 
 from ..backtesting.optimization_adapter import OptimizationAdapter
 from .search_spaces import get_search_space
 from .seeding import derive_seed
+
+if TYPE_CHECKING:
+    import optuna
+
+    from ..backtesting.performance import BacktestResult
 
 #: The six composite states: three volatility terciles crossed with
 #: directional ("trend" = bull|bear, side-symmetric) vs neutral.
@@ -202,7 +207,7 @@ def resolved_settings() -> Dict[str, Any]:
     from ..config import config
     from ..volatility_regime import get_regime_mode
 
-    def _safe(name, fn):
+    def _safe(name: str, fn: Callable[[], object]) -> object:
         try:
             return fn()
         except Exception as exc:  # never lose a report to a resolver
@@ -396,7 +401,9 @@ def _add_months(iso: str, months: int) -> str:
     )
 
 
-def _folds(start: str, end: str, train_m: int, test_m: int, step_m: int):
+def _folds(
+    start: str, end: str, train_m: int, test_m: int, step_m: int
+) -> Iterator[Tuple[str, str, str, str]]:
     """Yield (train_start, train_end, test_start, test_end) folds."""
     cursor = start
     while True:
@@ -572,7 +579,7 @@ def record_fold_trials(
         return None
 
 
-def _suggest(trial, space: Dict[str, Any]) -> Dict[str, Any]:
+def _suggest(trial: "optuna.trial.Trial", space: Dict[str, Any]) -> Dict[str, Any]:
     """Sample one parameter set from a search-space definition."""
     params: Dict[str, Any] = {}
     for name, spec in space.items():
@@ -591,7 +598,7 @@ def _suggest(trial, space: Dict[str, Any]) -> Dict[str, Any]:
 
 def _state_scores(
     adapter: OptimizationAdapter,
-    result,
+    result: "BacktestResult",
     states: List[str],
     objective: str,
     capital: float,
@@ -1048,7 +1055,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
         trial_records: List[Dict[str, Any]] = []
 
-        def objective_fn(trial):
+        def objective_fn(trial: "optuna.trial.Trial") -> float:
             params = _suggest(trial, space)
             result = adapter.run_backtest(
                 args.strategy,

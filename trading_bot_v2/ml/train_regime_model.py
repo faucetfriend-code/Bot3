@@ -23,7 +23,7 @@ Notes:
 import argparse
 import os
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, cast
 
 import numpy as np
 
@@ -132,9 +132,9 @@ def train_gmm(X: np.ndarray, save: bool = True) -> Optional[Dict[str, object]]:
 
     _print_cluster_table(
         "GMM cluster means (raw feature units):",
-        summary["cluster_means_raw"],
-        summary["cluster_to_latent"],
-        summary["cluster_sizes"],
+        cast(np.ndarray, summary["cluster_means_raw"]),
+        cast(Dict[int, str], summary["cluster_to_latent"]),
+        cast(Dict[int, int], summary["cluster_sizes"]),
     )
     print(
         f"\n  converged={summary['converged']}  "
@@ -165,13 +165,13 @@ def train_hmm(
 
     _print_cluster_table(
         "HMM state means (raw feature units):",
-        summary["state_means_raw"],
-        summary["state_to_latent"],
-        summary["state_sizes"],
+        cast(np.ndarray, summary["state_means_raw"]),
+        cast(Dict[int, str], summary["state_to_latent"]),
+        cast(Dict[int, int], summary["state_sizes"]),
     )
 
     transmat = np.asarray(summary["transmat"])
-    labels = summary["state_to_latent"]
+    labels = cast(Dict[int, str], summary["state_to_latent"])
     print("\n  Learned transition matrix (rows = from-state):")
     head = "    " + " " * 12
     for j in range(transmat.shape[1]):

@@ -9,9 +9,13 @@ Output is viewable in any browser without a server.
 """
 
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ..performance import BacktestResult
 
 
-def generate_html_report(result, output_path: str) -> None:
+def generate_html_report(result: "BacktestResult", output_path: str) -> None:
     """
     Writes a self-contained HTML backtest report to output_path.
     """
@@ -20,7 +24,7 @@ def generate_html_report(result, output_path: str) -> None:
 
     # Calculate drawdown series
     peak = result.initial_capital
-    drawdowns = []
+    drawdowns: list[float] = []
     for eq in equities:
         peak = max(peak, eq)
         drawdowns.append(round((peak - eq) / peak * 100, 2))

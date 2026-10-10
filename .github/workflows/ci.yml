@@ -62,7 +62,7 @@ jobs:
       - name: Ruff format gate (line length 88)
         run: ruff format --check --diff trading_bot_v2/
 
-  # Type checking (non-blocking until the strict-clean work lands)
+  # Type checking (blocking; strict config in pyproject.toml [tool.mypy])
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
@@ -75,14 +75,25 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          cache-dependency-path: |
+            pyproject.toml
+            trading_bot_v2/requirements.txt
 
+      # mypy itself is pinned in pyproject.toml ([project.optional-dependencies]
+      # typing). Strict mode resolves every import, so the runtime requirements
+      # and the stub packages are installed as well. encryption.py imports
+      # cryptography, which requirements.txt does not list.
       - name: Install dependencies
-        run: python -m pip install -e ".[typing]"
+        run: |
+          python -m pip install -r trading_bot_v2/requirements.txt
+          python -m pip install -e ".[typing]"
+          python -m pip install pandas-stubs types-requests types-psycopg2 types-psutil scipy-stubs
+          python -m pip install cryptography
 
+      # Strict configuration lives in pyproject.toml ([tool.mypy]); the
+      # --strict flag here keeps the command identical to the local check.
       - name: Run MyPy
-        run: mypy trading_bot_v2/ --ignore-missing-imports
-        continue-on-error: true  # Non-blocking for now
+        run: mypy --strict trading_bot_v2/
 
   # Unit tests with coverage (blocking)
   test:

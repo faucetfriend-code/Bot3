@@ -24,7 +24,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 from .database import get_db_connection, is_postgres, get_backend
 
@@ -1165,7 +1165,7 @@ class DatabaseValidator:
         if isinstance(timestamp, datetime):
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=timezone.utc)
-            return (now - timestamp).total_seconds()
+            return cast(float, (now - timestamp).total_seconds())
         if isinstance(timestamp, str):
             try:
                 dt = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))

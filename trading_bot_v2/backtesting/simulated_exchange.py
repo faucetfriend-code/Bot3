@@ -23,7 +23,7 @@ cost_model.py for where the rates come from and which profile is active.
 import os
 import random
 from datetime import datetime, timedelta
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass
 from loguru import logger
 
@@ -178,7 +178,7 @@ class SimulatedExchange:
         self._bar_range_pct: float = 0.0
         self._bar_notional: float = 0.0
 
-        self.trade_log: List[Dict] = []
+        self.trade_log: List[Dict[str, Any]] = []
 
     # ------------------------------------------------------------------
     # PacificaClient-compatible interface
@@ -212,7 +212,7 @@ class SimulatedExchange:
         unrealised = sum(p.unrealised_pnl for p in self._positions.values())
         return self.balance + self.open_cost_basis() + unrealised
 
-    def get_account_balance(self) -> Dict:
+    def get_account_balance(self) -> Dict[str, str]:
         # "available" is free cash and deliberately excludes open positions -
         # that is margin, not equity, and the engine's balance guard depends
         # on it staying bare cash.
@@ -222,7 +222,7 @@ class SimulatedExchange:
             "locked": str(round(self.open_cost_basis(), 4)),
         }
 
-    def get_positions(self) -> List[Dict]:
+    def get_positions(self) -> List[Dict[str, str]]:
         result = []
         for pos in self._positions.values():
             result.append(
@@ -245,7 +245,7 @@ class SimulatedExchange:
         price: Optional[float] = None,
         reduce_only: bool = False,
         parent_order_id: Optional[str] = None,
-    ) -> Dict:
+    ) -> Dict[str, str]:
         self._order_counter += 1
         order_id = f"bt_{self._order_counter:06d}"
         qty = float(quantity)
@@ -269,18 +269,18 @@ class SimulatedExchange:
         status = "rejected" if order.status == "cancelled" else "success"
         return {"order_id": order_id, "status": status}
 
-    def cancel_order(self, order_id: str) -> Dict:
+    def cancel_order(self, order_id: str) -> Dict[str, str]:
         if order_id in self._orders:
             self._orders[order_id].status = "cancelled"
         return {"status": "success"}
 
-    def cancel_all_orders(self, symbol: str) -> Dict:
+    def cancel_all_orders(self, symbol: str) -> Dict[str, str]:
         for order in self._orders.values():
             if order.symbol == symbol and order.status == "open":
                 order.status = "cancelled"
         return {"status": "success"}
 
-    def get_ticker(self, symbol: str) -> Dict:
+    def get_ticker(self, symbol: str) -> Dict[str, str]:
         return {
             "symbol": symbol,
             "last": str(self._current_price),
@@ -288,7 +288,7 @@ class SimulatedExchange:
             "ask": str(self._current_price * 1.0005),
         }
 
-    def get_orderbook(self, symbol: str, depth: int = 10) -> Dict:
+    def get_orderbook(self, symbol: str, depth: int = 10) -> Dict[str, List[List[str]]]:
         spread_pct = 0.0005
         bids = [
             [
@@ -306,14 +306,14 @@ class SimulatedExchange:
         ]
         return {"bids": bids, "asks": asks}
 
-    def get_funding_rate(self, symbol: str) -> Dict:
+    def get_funding_rate(self, symbol: str) -> Dict[str, str]:
         return {
             "symbol": symbol,
             "funding_rate": str(self._current_funding_rate()),
             "next_funding_time": self._next_funding_time(),
         }
 
-    def get_market_data(self, symbol: str) -> Dict:
+    def get_market_data(self, symbol: str) -> Dict[str, Any]:
         """PacificaClient-shaped market snapshot.
 
         FundingArbStrategy reads ``funding_rate`` and
@@ -337,7 +337,7 @@ class SimulatedExchange:
             "funding_interval_hours": self._venue_interval_hours(),
         }
 
-    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict]:
+    def get_funding_history(self, symbol: str, limit: int = 8) -> List[Dict[str, Any]]:
         """Recent funding settlements on the venue's own grid.
 
         Returns an empty list when no real schedule is loaded: a
@@ -358,7 +358,7 @@ class SimulatedExchange:
             return []
         return self.funding_schedule.venue_history(dt, limit=limit)
 
-    def get_balance(self) -> Dict:
+    def get_balance(self) -> Dict[str, float]:
         """Balance in the shape live clients return (``equity`` key)."""
         return {
             "balance": round(self.balance, 4),
@@ -386,7 +386,7 @@ class SimulatedExchange:
     # Engine-facing interface
     # ------------------------------------------------------------------
 
-    def advance(self, candle: Dict, timestamp: str) -> None:
+    def advance(self, candle: Dict[str, Any], timestamp: str) -> None:
         self._current_price = float(candle["close"])
         self._current_timestamp = timestamp
         self._capture_bar_context(candle)
@@ -399,7 +399,7 @@ class SimulatedExchange:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _capture_bar_context(self, candle: Dict) -> None:
+    def _capture_bar_context(self, candle: Dict[str, Any]) -> None:
         """Record the current bar's volatility and traded notional.
 
         Both feed the dynamic slippage model: a wide bar means the market
@@ -626,7 +626,7 @@ class SimulatedExchange:
         else:
             return (pos.entry_price - exit_price) * qty
 
-    def _check_pending_orders(self, candle: Dict) -> None:
+    def _check_pending_orders(self, candle: Dict[str, Any]) -> None:
         """
         Check and fill pending orders for this candle.
 

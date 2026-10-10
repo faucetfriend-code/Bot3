@@ -25,12 +25,15 @@ Usage:
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from loguru import logger
 
 from .event_system import EventBus, EventType, get_event_bus
 from .metrics import metrics
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
 
 # Relative tolerance for treating quantity/entry-price as "matching".
 # Avoids false-positive discrepancies from floating point noise.
@@ -165,7 +168,9 @@ class PositionReconciler:
     touch live orders.
     """
 
-    def __init__(self, db, event_bus: Optional[EventBus] = None):
+    def __init__(
+        self, db: "DatabaseManager", event_bus: Optional[EventBus] = None
+    ) -> None:
         """
         Initialize the reconciler.
 

@@ -493,7 +493,7 @@ class StrategyMonitor:
 
         # Correlation matrix & alerts
         corr_matrix = self.get_correlation_matrix(strategies)
-        seen_pairs: set = set()
+        seen_pairs: set[tuple[str, str]] = set()
         for sa in strategies:
             for sb in strategies:
                 if sa >= sb:

@@ -44,7 +44,7 @@ from loguru import logger
 class TradingMetrics:
     """Prometheus metrics collector for trading bot."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize Prometheus metrics."""
         # =====================================================================
         # Trade metrics

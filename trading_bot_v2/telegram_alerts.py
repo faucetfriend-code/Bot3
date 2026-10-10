@@ -29,7 +29,7 @@ Usage:
 
 import os
 import asyncio
-from typing import Optional
+from typing import Optional, cast
 from datetime import datetime
 import httpx
 from loguru import logger
@@ -40,7 +40,7 @@ from .event_system import Event, EventType
 class TelegramAlerts:
     """Telegram notification system for trading bot."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize Telegram alerts from environment variables."""
         self.bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
         self.chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -238,7 +238,7 @@ class TelegramAlerts:
         return await self._send_message(text)
 
     async def send_regime_change_alert(
-        self, old_regime: str, new_regime: str, affected_strategies: list
+        self, old_regime: str, new_regime: str, affected_strategies: list[str]
     ) -> bool:
         """
         Send market regime change alert.
@@ -322,9 +322,12 @@ class TelegramAlerts:
                 data = event.data if isinstance(event.data, dict) else {}
                 await self.send_error_alert(
                     error_type="component_failure",
-                    error_message=data.get(
-                        "error",
-                        data.get("message", "Unknown component failure"),
+                    error_message=cast(
+                        str,
+                        data.get(
+                            "error",
+                            data.get("message", "Unknown component failure"),
+                        ),
                     ),
                     context=(
                         f"Component: {data.get('component', event.source)}, "

@@ -20,6 +20,7 @@ import argparse
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import requests
 import pandas as pd
@@ -52,13 +53,13 @@ BINANCE_LIMIT = 1000
 
 def fetch_klines(
     interval: str, start_ms: int, end_ms: int, binance_symbol: str = "SUIUSDT"
-) -> list:
+) -> list[list[Any]]:
     """Fetch all klines for a given interval between start_ms and end_ms (epoch ms)."""
-    all_rows = []
+    all_rows: list[list[Any]] = []
     current_start = start_ms
 
     while current_start < end_ms:
-        params = {
+        params: dict[str, str | int] = {
             "symbol": binance_symbol,
             "interval": interval,
             "startTime": current_start,
@@ -89,7 +90,7 @@ def fetch_klines(
     return all_rows
 
 
-def rows_to_dataframe(rows: list) -> pd.DataFrame:
+def rows_to_dataframe(rows: list[list[Any]]) -> pd.DataFrame:
     """Convert Binance klines list to a clean DataFrame."""
     df = pd.DataFrame(
         rows,
@@ -121,7 +122,7 @@ def download(
     symbol: str = "SUI-USDC",
     start: str = "2024-01-01",
     end: str = "2024-12-31",
-    timeframes: list = None,
+    timeframes: list[str] | None = None,
     data_dir: str = "trading_bot_v2/backtesting/data",
 ) -> None:
     if timeframes is None:
@@ -171,7 +172,7 @@ def download(
     logger.info("Download complete.")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="Download historical OHLCV data from Binance"
     )

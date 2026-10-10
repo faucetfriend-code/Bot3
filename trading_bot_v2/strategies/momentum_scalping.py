@@ -33,7 +33,7 @@ RISK NOTES:
 - Works best with good execution speed
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -72,7 +72,7 @@ def calculate_rsi(prices: List[float], period: int = 14) -> List[float]:
     gains = [d if d > 0 else 0 for d in deltas]
     losses = [-d if d < 0 else 0 for d in deltas]
 
-    rsi_values = []
+    rsi_values: List[float] = []
 
     # First RSI calculation using SMA
     avg_gain = sum(gains[:period]) / period
@@ -103,7 +103,7 @@ def calculate_macd(
     fast_period: int = 12,
     slow_period: int = 26,
     signal_period: int = 9,
-) -> tuple:
+) -> Tuple[List[float], List[float], List[float]]:
     """Calculate MACD line, signal line, and histogram."""
     if len(prices) < slow_period + signal_period:
         return [], [], []
@@ -236,7 +236,7 @@ class MomentumScalpingStrategy:
                 self.atr_target_mult = repaired_target
 
         # Track last crossover per symbol for entry timing
-        self.last_crossover: Dict[str, Dict] = {}
+        self.last_crossover: Dict[str, Dict[str, Any]] = {}
         # {symbol: {"direction": "bullish/bearish", "time": datetime, "price": float}}
 
         # Cooldown tracking
@@ -328,7 +328,7 @@ class MomentumScalpingStrategy:
 
         Returns dict with confirmation status and details.
         """
-        result = {
+        result: Dict[str, Any] = {
             "confirmed": False,
             "rsi_ok": False,
             "macd_ok": False,
@@ -404,7 +404,11 @@ class MomentumScalpingStrategy:
         return bullish_4h if direction == "bullish" else not bullish_4h
 
     def generate_signals(
-        self, symbol: str, multi_tf_data: Dict[str, Any], current_price: float, **kwargs
+        self,
+        symbol: str,
+        multi_tf_data: Dict[str, Any],
+        current_price: float,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate momentum scalping signals.
@@ -412,7 +416,7 @@ class MomentumScalpingStrategy:
         Primary timeframe: 1h (validated 2022-2025, Sharpe +0.371 ROBUST).
         HTF gate: 4h trend alignment (highest-priority filter).
         """
-        signals = []
+        signals: List[Signal] = []
 
         # Check cooldown
         if not self._check_cooldown(symbol):

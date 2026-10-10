@@ -25,7 +25,7 @@ statistical features as the primary classifier, with ADX as a fallback.
 import os
 from datetime import datetime
 from enum import Enum
-from typing import List, Dict, Any, Callable, Optional
+from typing import TYPE_CHECKING, List, Dict, Any, Callable, Optional, cast
 from loguru import logger
 from .event_system import EventType
 from .indicators import (
@@ -34,6 +34,9 @@ from .indicators import (
     calculate_bollinger_bands,
     calculate_sma,
 )
+
+if TYPE_CHECKING:
+    from .ml.gmm_regime import GMMRegimeDetector
 
 
 def _env_float(name: str, default: float) -> float:
@@ -253,8 +256,8 @@ class MarketRegimeDetector:
         self._clock: Callable[[], datetime] = datetime.now
 
         # Regime caching to prevent unnecessary recalculation
-        self._regime_cache: Dict[str, Dict] = {}
-        self._pending_regime_changes: Dict[str, Dict] = {}
+        self._regime_cache: Dict[str, Dict[str, Any]] = {}
+        self._pending_regime_changes: Dict[str, Dict[str, Any]] = {}
         self._cache_ttl_hours = (
             1  # Recalculate every 1 hour (was 4h - too slow for regime changes)
         )
@@ -267,7 +270,7 @@ class MarketRegimeDetector:
         self._regime_since: Dict[str, datetime] = {}
 
         # Trend direction caching (for partial grid unwind decisions)
-        self._trend_direction_cache: Dict[str, Dict] = {}
+        self._trend_direction_cache: Dict[str, Dict[str, Any]] = {}
         self._trend_cache_ttl_minutes = 5  # Trend direction cache TTL
 
         # ADX value cache - stores the last calculated ADX per symbol so downstream
@@ -279,7 +282,7 @@ class MarketRegimeDetector:
         self._last_volatility_score: Optional[float] = None
 
         # ML regime detection (lazy-initialised)
-        self._gmm_detector = None
+        self._gmm_detector: Optional["GMMRegimeDetector"] = None
         self._use_ml_regime: bool = False
         self._ml_initialised = False
 
@@ -287,7 +290,7 @@ class MarketRegimeDetector:
         # computed alongside the ADX result at cache-refresh time and
         # persisted to the regime_shadow table; it NEVER changes the
         # returned regime. Lazy-initialised on first refresh.
-        self._shadow_detector: Optional[Any] = None
+        self._shadow_detector: Any = None
         self._shadow_model_type: Optional[str] = None
         self._shadow_initialised = False
 
@@ -355,7 +358,7 @@ class MarketRegimeDetector:
             self._use_ml_regime = False
             return False
 
-    def get_gmm_detector(self):
+    def get_gmm_detector(self) -> Optional["GMMRegimeDetector"]:
         """Return the GMM regime detector instance, or ``None`` if unavailable."""
         self._initialise_gmm()
         return self._gmm_detector
@@ -721,7 +724,7 @@ class MarketRegimeDetector:
                 logger.debug(
                     f"Using cached regime for {symbol}: {cache_entry['regime'].value} ({cache_age_hours:.1f}h old)"
                 )
-                return cache_entry["regime"]
+                return cast(MarketRegime, cache_entry["regime"])
 
         # Cache miss or expired - check for pending regime change
         new_regime = self._detect_regime_with_confirmation(symbol, market_data)
@@ -776,7 +779,9 @@ class MarketRegimeDetector:
         Confirmed transitions publish EventType.REGIME_CHANGED and persist to
         the regime_history table when an event bus / db are wired in.
         """
-        current_regime = self._regime_cache.get(symbol, {}).get("regime")
+        current_regime: Optional[MarketRegime] = self._regime_cache.get(symbol, {}).get(
+            "regime"
+        )
         new_regime = self.detect_regime(market_data, previous_regime=current_regime)
 
         # First detection for this symbol - accept immediately
@@ -1211,7 +1216,7 @@ class MarketRegimeDetector:
                     f"Using cached trend direction for {symbol}: "
                     f"{cache_entry['direction']} ({cache_age_minutes:.1f}m old)"
                 )
-                return cache_entry["direction"]
+                return cast(str, cache_entry["direction"])
 
         # Cache miss or expired - recalculate
         direction = self.get_trend_direction(market_data)
@@ -1225,7 +1230,7 @@ class MarketRegimeDetector:
         logger.debug(f"Trend direction calculated for {symbol}: {direction}")
         return direction
 
-    def clear_trend_cache(self, symbol: Optional[str] = None):
+    def clear_trend_cache(self, symbol: Optional[str] = None) -> None:
         """
         Clear trend direction cache.
 
@@ -1257,7 +1262,7 @@ class MarketRegimeDetector:
             return self._regime_cache[symbol].get("regime")
         return None
 
-    def clear_regime_cache(self, symbol: Optional[str] = None):
+    def clear_regime_cache(self, symbol: Optional[str] = None) -> None:
         """
         Clear regime cache.
 

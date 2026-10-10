@@ -34,7 +34,7 @@ import time
 import json
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, List, Optional, cast
 
 
 def _force_utf8_stdout() -> None:
@@ -89,27 +89,27 @@ def _non_backtestable_display_names() -> List[str]:
 _USE_COLOUR = sys.stdout.isatty() or os.getenv("FORCE_COLOR")
 
 
-def _c(code, text):
+def _c(code: str, text: str) -> str:
     return f"\033[{code}m{text}\033[0m" if _USE_COLOUR else text
 
 
-def green(t):
+def green(t: str) -> str:
     return _c("32", t)
 
 
-def red(t):
+def red(t: str) -> str:
     return _c("31", t)
 
 
-def yellow(t):
+def yellow(t: str) -> str:
     return _c("33", t)
 
 
-def dim(t):
+def dim(t: str) -> str:
     return _c("2", t)
 
 
-def bold(t):
+def bold(t: str) -> str:
     return _c("1", t)
 
 
@@ -192,7 +192,7 @@ class StrategyResult:
         self.final_equity = 0.0
         self.calmar = 0.0
         # Signal-funnel diagnostics (SignalFunnel.to_dict() payload)
-        self.diagnostics: dict = {}
+        self.diagnostics: dict[str, Any] = {}
         # P5 validation fields (filled by apply_validation_stats)
         self.trade_returns: List[float] = []
         self.psr: Optional[float] = None
@@ -376,27 +376,27 @@ def _row(r: StrategyResult) -> str:
         # discarded", which used to print identically.
         return f"  {name}  " + dim(f"0 trades fired  [{_outcome(r)}]")
 
-    def ret(v):
+    def ret(v: float) -> str:
         s = f"{v:+.2f}%".ljust(_COLS["Return"])
         return green(s) if v >= 0 else red(s)
 
-    def sharpe(v):
+    def sharpe(v: float) -> str:
         s = f"{v:.2f}".ljust(_COLS["Sharpe"])
         return green(s) if v >= 0.5 else yellow(s) if v >= 0 else red(s)
 
-    def dd(v):
+    def dd(v: float) -> str:
         s = f"{v:.1f}%".ljust(_COLS["MaxDD"])
         return green(s) if v <= 5 else yellow(s) if v <= 15 else red(s)
 
-    def wr(v):
+    def wr(v: float) -> str:
         s = f"{v:.1f}%".ljust(_COLS["WinRate"])
         return green(s) if v >= 50 else yellow(s) if v >= 35 else red(s)
 
-    def pf(v):
+    def pf(v: float) -> str:
         s = ("inf" if v >= 999999 else f"{v:.2f}").ljust(_COLS["ProfFactor"])
         return green(s) if v >= 1.0 else red(s)
 
-    def psr(v):
+    def psr(v: Optional[float]) -> str:
         if v is None:
             return dim("--".ljust(_COLS["PSR"]))
         s = f"{v:.3f}".ljust(_COLS["PSR"])
@@ -457,7 +457,7 @@ def _verdict(r: StrategyResult) -> str:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def main():
+def main() -> None:
     _force_utf8_stdout()
     from trading_bot_v2.config import config as cfg
 
@@ -608,10 +608,12 @@ def main():
         print(bold("  Deflated Sharpe (trial registry)"))
         print()
         for r in validated:
-            tag = green("PASS") if r.dsr >= 0.95 else red("FAIL")
+            # `validated` already filtered dsr is not None; the cast says so.
+            dsr = cast(float, r.dsr)
+            tag = green("PASS") if dsr >= 0.95 else red("FAIL")
             psr_str = f"{r.psr:.3f}" if r.psr is not None else "--"
             print(
-                f"  {r.name.ljust(24)}DSR {r.dsr:.3f} [{tag}]  "
+                f"  {r.name.ljust(24)}DSR {dsr:.3f} [{tag}]  "
                 f"PSR {psr_str}  N={r.n_trials} trials recorded"
             )
 

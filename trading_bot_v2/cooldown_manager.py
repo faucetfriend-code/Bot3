@@ -14,7 +14,7 @@ Cooldown Hierarchy:
     symbol -> strategy -> timeframe -> last_action_time
 """
 
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
@@ -91,7 +91,7 @@ class CooldownManager:
             manager.set_cooldown('ETH', StrategyType.MEAN_REVERSION, '4h', CooldownType.SIGNAL)
     """
 
-    def __init__(self, config: CooldownConfig = None):
+    def __init__(self, config: Optional[CooldownConfig] = None) -> None:
         """
         Initialize CooldownManager.
 
@@ -170,7 +170,7 @@ class CooldownManager:
         strategy: StrategyType,
         timeframe: str,
         cooldown_type: CooldownType,
-        reason: str = None,
+        reason: Optional[str] = None,
     ) -> CooldownEntry:
         """
         Set a cooldown after action.
@@ -211,7 +211,7 @@ class CooldownManager:
 
         return entry
 
-    def set_emergency_cooldown(self, duration_seconds: int, reason: str):
+    def set_emergency_cooldown(self, duration_seconds: int, reason: str) -> None:
         """
         Set global emergency cooldown (blocks ALL trading).
 
@@ -222,12 +222,14 @@ class CooldownManager:
         self._emergency_cooldown = datetime.now() + timedelta(seconds=duration_seconds)
         logger.critical(f"EMERGENCY COOLDOWN: {reason} ({duration_seconds}s)")
 
-    def clear_emergency_cooldown(self):
+    def clear_emergency_cooldown(self) -> None:
         """Clear emergency cooldown (resume trading)."""
         self._emergency_cooldown = None
         logger.warning("Emergency cooldown CLEARED - trading resumed")
 
-    def clear_cooldown(self, symbol: str, strategy: StrategyType, timeframe: str):
+    def clear_cooldown(
+        self, symbol: str, strategy: StrategyType, timeframe: str
+    ) -> None:
         """Manually clear a specific cooldown."""
         if (
             symbol in self._cooldowns
@@ -237,10 +239,10 @@ class CooldownManager:
             del self._cooldowns[symbol][strategy][timeframe]
             logger.debug(f"Cooldown cleared: {symbol} {strategy.value} {timeframe}")
 
-    def get_all_cooldowns(self, symbol: str = None) -> Dict:
+    def get_all_cooldowns(self, symbol: Optional[str] = None) -> Dict[str, Any]:
         """Get all active cooldowns, optionally filtered by symbol."""
         now = datetime.now()
-        result = {}
+        result: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]] = {}
 
         for sym, strategies in self._cooldowns.items():
             if symbol and sym != symbol:
@@ -295,7 +297,7 @@ class CooldownManager:
 
         return int(duration)
 
-    def cleanup_expired(self):
+    def cleanup_expired(self) -> None:
         """Remove expired cooldowns (call periodically)."""
         now = datetime.now()
         cleaned = 0

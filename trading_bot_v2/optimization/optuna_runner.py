@@ -21,7 +21,7 @@ import math
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Optional, List, Sequence, Tuple
+from typing import Dict, Any, Optional, List, Sequence, Tuple, cast
 from datetime import datetime
 from loguru import logger
 
@@ -1686,7 +1686,7 @@ class OptunaRunner:
         Returns:
             List of study metadata dictionaries
         """
-        studies = []
+        studies: List[Dict[str, Any]] = []
 
         try:
             import sqlite3
@@ -1771,7 +1771,7 @@ class OptunaRunner:
             return None
 
         latest = max(studies, key=lambda s: s["study_name"])
-        return latest["study_name"]
+        return cast(str, latest["study_name"])
 
     def delete_study(self, strategy: str, study_name: Optional[str] = None) -> bool:
         """

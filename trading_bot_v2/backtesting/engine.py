@@ -27,9 +27,20 @@ Usage:
 import os
 from bisect import bisect_left, bisect_right
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypedDict,
+    Union,
+    cast,
+)
 from loguru import logger
 
+from ..config import StrategyType
 from ..diagnostics.funnel import (
     NULL_FUNNEL,
     REASON_EXEC_EXCEPTION,
@@ -44,9 +55,10 @@ from ..diagnostics.funnel import (
     STAGE_EXECUTION_BLOCKED,
     STAGE_FILLS,
     STAGE_ORDERS_PLACED,
+    NullFunnel,
     SignalFunnel,
 )
-from ..models import OrderSide, StrategyType
+from ..models import OrderSide, Signal
 from ..regime_param_overlay import (
     DISPLAY_TO_STRATEGY_KEY,
     apply_params_to_strategy,
@@ -57,12 +69,26 @@ from ..risk_manager import RiskManager
 from .data_loader import BacktestDataLoader, autodownload_lever
 from .funding import (
     FUNDING_MODEL_HISTORICAL,
+    FundingSchedule,
     load_funding_schedule,
     validate_funding_model,
 )
 from .simulated_exchange import SimulatedExchange
 from .performance import PerformanceTracker, BacktestResult
 from .cost_model import CostModel
+
+if TYPE_CHECKING:
+    from ..strategies.liquidation_capture import LiquidationCaptureStrategy
+
+
+class _TimeExitInfo(TypedDict):
+    """Per-position time-exit tracking (see BacktestEngine._position_time_exit)."""
+
+    open_ts: Optional[datetime]
+    entry_order_id: str
+    hours: float
+    strategy: str
+
 
 # Overlays that depend on live-only surfaces SimulatedExchange cannot
 # provide, so they can never produce meaningful signals in a backtest.
@@ -285,7 +311,11 @@ class BacktestEngine:
     Every 60 candles (5h) an equity snapshot is recorded.
     """
 
-    def __init__(self, override_config=None, loader_factory=None):
+    def __init__(
+        self,
+        override_config: Any = None,
+        loader_factory: Optional[Callable[[str, str], BacktestDataLoader]] = None,
+    ):
         """Build an engine.
 
         Args:
@@ -299,7 +329,8 @@ class BacktestEngine:
         # Import here to avoid circular imports and to allow override_config
         from ..config import config as live_config
 
-        self.cfg = override_config or live_config
+        # Live Config or an attribute-override proxy (OptimizationAdapter).
+        self.cfg: Any = override_config or live_config
         self._loader_factory = loader_factory or (
             lambda symbol, data_dir: BacktestDataLoader(
                 symbol=symbol, data_dir=data_dir
@@ -307,7 +338,7 @@ class BacktestEngine:
         )
         # Signal funnel for this run (replaced in run(); NullFunnel until
         # then so _execute_signal is safe to call standalone in tests).
-        self._funnel = NULL_FUNNEL
+        self._funnel: Union[SignalFunnel, NullFunnel] = NULL_FUNNEL
         # Per-run state (reset in run())
         self._hedge_mode: bool = False
         self._opposing_closes_position: bool = False
@@ -335,10 +366,10 @@ class BacktestEngine:
         # activation_r x risk in profit. The ratchet replaces the REAL
         # resting stop order, so fills keep the exchange's stop
         # semantics (tie-breaks, fees, roles).
-        self._position_trailing: Dict[str, Dict] = {}
+        self._position_trailing: Dict[str, Dict[str, Any]] = {}
         # Time-exit tracking for signals carrying indicators["time_exit_hours"]:
         # {symbol: {"open_ts": datetime, "hours": float, "strategy": str}}
-        self._position_time_exit: Dict[str, Dict] = {}
+        self._position_time_exit: Dict[str, _TimeExitInfo] = {}
         self._pending_entry_order_ids: Dict[str, str] = {}
         self._sim_dt: Optional[datetime] = None
 
@@ -614,7 +645,7 @@ class BacktestEngine:
             return 1
 
     @staticmethod
-    def _funding_shortfall(schedule, start: str, end: str) -> str:
+    def _funding_shortfall(schedule: FundingSchedule, start: str, end: str) -> str:
         """Describe the part of [start, end] the funding series misses.
 
         Args:
@@ -640,7 +671,7 @@ class BacktestEngine:
 
     def _resolve_funding_schedule(
         self, symbol: str, funnel: Any, start: str = "", end: str = ""
-    ):
+    ) -> Optional[FundingSchedule]:
         """Resolve the funding model for this run and log it loudly.
 
         Two models exist and the difference is large enough that no run
@@ -730,7 +761,7 @@ class BacktestEngine:
         return schedule
 
     @staticmethod
-    def _resolve_strategy_filter(strategy_filter: str) -> set:
+    def _resolve_strategy_filter(strategy_filter: str) -> set[str]:
         """Resolve a strategy filter to the set of display names to enable.
 
         Accepts display ("MeanReversion") and snake_case ("mean_reversion")
@@ -828,10 +859,11 @@ class BacktestEngine:
             funding_interval_hours=self._venue_funding_interval_hours(),
         )
         loader = self._loader_factory(symbol, self.cfg.backtest_data_dir)
-        risk_manager = RiskManager(client=exchange)
+        # SimulatedExchange is a duck-typed stand-in for the live client.
+        risk_manager = RiskManager(client=cast(Any, exchange))
 
         # Build strategy enable kwargs for single-strategy mode
-        strategy_kwargs: Dict = {}
+        strategy_kwargs: Dict[str, bool] = {}
         if strategy_filter:
             wanted = self._resolve_strategy_filter(strategy_filter)
             for name, flag in STRATEGY_ENABLE_FLAGS.items():
@@ -853,10 +885,12 @@ class BacktestEngine:
                 )
             strategy_kwargs[flag] = False
 
+        # The cast is for the ** unpack only: mypy checks a **Dict[str, bool]
+        # against every keyword parameter, including the non-bool ones.
         strategy_manager = StrategyManager(
             risk_manager=risk_manager,
             client=exchange,
-            **strategy_kwargs,
+            **cast(Dict[str, Any], strategy_kwargs),
         )
         strategy_manager.set_funnel(funnel)
 
@@ -988,7 +1022,12 @@ class BacktestEngine:
             # replay). Uses the same injection point as
             # analysis/regime_stability.py.
             if sim_dt is not None:
-                strategy_manager.regime_detector._clock = lambda dt=sim_dt: dt
+                # The default argument freezes this bar's time; the cast
+                # only names the zero-argument signature the lambda has
+                # when called.
+                strategy_manager.regime_detector._clock = cast(
+                    Callable[[], datetime], lambda dt=sim_dt: dt
+                )
 
             # --- Ratchet trailing stops behind the favourable extreme ---
             if self._position_trailing:
@@ -1047,7 +1086,10 @@ class BacktestEngine:
                         )
                         # Wire LiquidationCapture session tracking
                         if signal.strategy == StrategyType.LIQUIDATION_CAPTURE:
-                            lc = strategy_manager.strategies.get("LiquidationCapture")
+                            lc = cast(
+                                "Optional[LiquidationCaptureStrategy]",
+                                strategy_manager.strategies.get("LiquidationCapture"),
+                            )
                             if lc:
                                 lc.record_trade()
                 except Exception as e:
@@ -1135,7 +1177,7 @@ class BacktestEngine:
     # ------------------------------------------------------------------
 
     def _execute_signal(
-        self, signal, exchange: SimulatedExchange, candle_idx: int
+        self, signal: Signal, exchange: SimulatedExchange, candle_idx: int
     ) -> bool:
         """
         Translate a Signal object into a SimulatedExchange order.
@@ -1317,6 +1359,7 @@ class BacktestEngine:
         # additionally cap the executed quantity at the current position size.
         position_after = exchange._positions.get(signal.asset)
         exit_qty = position_after.quantity if position_after is not None else qty
+        parent_order_id: Optional[str]
         parent_order_id = entry_result["order_id"]
         if is_pyramid_add and position_after is not None:
             # Protection for an existing position must remain active while its
@@ -1435,7 +1478,9 @@ class BacktestEngine:
         """
         for asset in list(self._pending_entry_ttl):
             entry_id = self._pending_entry_order_ids.get(asset)
-            entry = exchange._orders.get(entry_id)
+            # A None key is a plain miss on the str-keyed order book; the
+            # cast only tells the checker so.
+            entry = exchange._orders.get(cast(str, entry_id))
             if (entry is not None and entry.status != "open") or (
                 entry_id is None and asset in exchange._positions
             ):
@@ -1462,7 +1507,7 @@ class BacktestEngine:
             )
 
     def _apply_trailing_stops(
-        self, exchange: SimulatedExchange, candle_5m: Dict
+        self, exchange: SimulatedExchange, candle_5m: Dict[str, float]
     ) -> None:
         """Ratchet trailing stops behind each tracked position's peak.
 
@@ -1573,7 +1618,9 @@ class BacktestEngine:
             if info.get("open_ts") is None:
                 info["open_ts"] = sim_dt
 
-            age_hours = (sim_dt - info["open_ts"]).total_seconds() / 3600.0
+            # open_ts was just backfilled above when it was None.
+            open_ts = cast(datetime, info["open_ts"])
+            age_hours = (sim_dt - open_ts).total_seconds() / 3600.0
             if age_hours < info["hours"]:
                 continue
 
@@ -1599,11 +1646,13 @@ class BacktestEngine:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _candle_at(candles: Dict, idx: int) -> Dict:
+    def _candle_at(candles: Dict[str, List[Any]], idx: int) -> Dict[str, float]:
         return {k: candles[k][idx] for k in ("open", "high", "low", "close", "volume")}
 
     @staticmethod
-    def _history(candles: Dict, up_to: int, lookback: int) -> Dict:
+    def _history(
+        candles: Dict[str, List[Any]], up_to: int, lookback: int
+    ) -> Dict[str, List[Any]]:
         """Return a slice of candles up to and including up_to index.
 
         Includes the "timestamp" list (ISO-8601 strings from the data loader)
@@ -1614,7 +1663,7 @@ class BacktestEngine:
         return {k: candles[k][start : up_to + 1] for k in candles}
 
     @staticmethod
-    def _nearest_idx(idx_map: Dict, sorted_ts: List[str], ts) -> int:
+    def _nearest_idx(idx_map: Dict[str, int], sorted_ts: List[str], ts: str) -> int:
         """Return the most recent higher-TF index at or before ts.
 
         Exact hit first (the common case, since higher-TF bars land on 5m
@@ -1632,7 +1681,7 @@ class BacktestEngine:
 
     @staticmethod
     def _completed_idx(
-        idx_map: Dict, sorted_ts: List[str], ts: str, timeframe_minutes: int
+        idx_map: Dict[str, int], sorted_ts: List[str], ts: str, timeframe_minutes: int
     ) -> int:
         """Last completed candle at the close of the replayed five-minute bar.
 
@@ -1645,6 +1694,6 @@ class BacktestEngine:
         return BacktestEngine._nearest_idx(idx_map, sorted_ts, cutoff.isoformat())
 
     @staticmethod
-    def _first_index_at_or_after(timestamps: List, boundary: str) -> int:
+    def _first_index_at_or_after(timestamps: List[str], boundary: str) -> int:
         """Index of the first timestamp at or after boundary (len if none)."""
         return bisect_left([str(t) for t in timestamps], str(boundary))

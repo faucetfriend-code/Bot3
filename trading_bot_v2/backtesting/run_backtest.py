@@ -14,12 +14,18 @@ Strategies (--strategy):
 """
 
 import argparse
-from trading_bot_v2.backtesting import BacktestEngine, WalkForwardAnalyzer
+from typing import List, cast
+
+from trading_bot_v2.backtesting import (
+    BacktestEngine,
+    BacktestResult,
+    WalkForwardAnalyzer,
+)
 from trading_bot_v2.config import config
 from trading_bot_v2.diagnostics.report import print_funnel_report
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Run trading bot backtest")
     parser.add_argument("--start", default=config.backtest_start_date)
     parser.add_argument("--end", default=config.backtest_end_date)
@@ -58,12 +64,17 @@ def main():
 
     if args.walk_forward:
         wf = WalkForwardAnalyzer(engine)
-        results = wf.run(
-            args.start,
-            args.end,
-            args.symbol,
-            args.capital,
-            strategy=strategy_filter,
+        # optimize=False (the default) is the legacy path that returns the
+        # per-window result list rather than a WalkForwardReport.
+        results = cast(
+            List[BacktestResult],
+            wf.run(
+                args.start,
+                args.end,
+                args.symbol,
+                args.capital,
+                strategy=strategy_filter,
+            ),
         )
         # Save combined report for walk-forward
         for i, r in enumerate(results):

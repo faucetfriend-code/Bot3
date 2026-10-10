@@ -150,7 +150,7 @@ class InfeasibleParamsError(ValueError):
 
 #: Keys already logged, so a study of 200 trials emits one line per
 #: dimension rather than 200.
-_CALIBRATION_LOGGED: set = set()
+_CALIBRATION_LOGGED: set[Tuple[str, ...]] = set()
 
 
 def calibration_warnings(
@@ -198,7 +198,7 @@ def _calibration_reasons(
         Reasons for thresholds no observed value could ever satisfy.
     """
     if not load_calibrations(strategy_name, symbol=symbol):
-        key = ("missing", strategy_name, symbol or "*")
+        key: Tuple[str, ...] = ("missing", strategy_name, symbol or "*")
         if key not in _CALIBRATION_LOGGED:
             _CALIBRATION_LOGGED.add(key)
             logger.info(
@@ -740,7 +740,7 @@ def _ordered_pair_floor(
     for lower_name, upper_name, _ in ORDERED_PAIR_CONSTRAINTS.get(strategy_name, ()):
         if upper_name != param_name:
             continue
-        lower_value = sampled.get(lower_name)
+        lower_value: Optional[float] = sampled.get(lower_name)
         if lower_value is None:
             continue
         gap = 1 if param_type == "int" else ORDERED_PAIR_FLOAT_GAP

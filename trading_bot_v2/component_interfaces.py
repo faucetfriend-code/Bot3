@@ -105,7 +105,7 @@ class GridInterface(ComponentInterface):
         symbol: str,
         grid_capital: float,
         emergency_stop_price: float,
-        regime: str = None,
+        regime: str | None = None,
         atr: float = 0,
         spacing: float = 0,
         num_levels: int = 10,

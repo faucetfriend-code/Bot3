@@ -27,7 +27,7 @@ import uuid
 from contextlib import closing
 from decimal import Decimal
 from threading import RLock
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, cast
 
 from ..models import OrderSide, OrderType
 from ..order_result import OrderResult, OrderResultStatus
@@ -42,6 +42,9 @@ from .base import (
     PositionSide,
 )
 
+if TYPE_CHECKING:
+    from ..pacifica_client import PacificaClient
+
 logger = logging.getLogger(__name__)
 
 # Keys checked (in order) when extracting fields from raw position dicts.
@@ -50,7 +53,9 @@ _QTY_KEYS = ("size", "amount", "quantity", "position_size", "pos_size")
 _ENTRY_KEYS = ("avg_entry_price", "entry_price", "average_entry", "avg_price", "entry")
 
 
-def _first_float(data: Dict[str, Any], keys, default: float = 0.0) -> float:
+def _first_float(
+    data: Dict[str, Any], keys: tuple[str, ...], default: float = 0.0
+) -> float:
     """Return the first parseable float among ``keys`` in ``data``."""
     for key in keys:
         if key in data and data[key] is not None:
@@ -86,7 +91,7 @@ class PacificaExchange(ExchangeClient):
                 singleton from ``pacifica_ws_client.get_ws_client()`` is
                 used lazily on first access.
         """
-        self._rest = rest_client
+        self._rest: Optional["PacificaClient"] = rest_client
         self._ws = ws_client
         self._stop_lock = RLock()
 
@@ -100,15 +105,15 @@ class PacificaExchange(ExchangeClient):
         return cls._CAPABILITIES
 
     @property
-    def rest_client(self) -> Any:
+    def rest_client(self) -> "PacificaClient":
         """Underlying PacificaClient (built lazily from config if needed)."""
         if self._rest is None:
             from ..config import config
             from ..pacifica_client import PacificaClient
 
             self._rest = PacificaClient(
-                agent_wallet_private_key=config.pacifica_private_key,
-                account_public_key=config.pacifica_public_key,
+                agent_wallet_private_key=cast(str, config.pacifica_private_key),
+                account_public_key=cast(str, config.pacifica_public_key),
                 testnet=config.testnet,
             )
         return self._rest

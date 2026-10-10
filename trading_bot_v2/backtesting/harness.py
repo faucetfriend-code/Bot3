@@ -271,7 +271,9 @@ class DirectReplay:
     ) -> List[Any]:
         """Ask every warmed-up adapter for its signals on this bar."""
         multi_tf = {tf: bundles[tf] for tf in ("15m", "1h", "4h")}
-        execution_tf = {tf: bundles[tf] for tf in ("5m", "1m") if tf in bundles}
+        execution_tf: Dict[str, Dict[str, List[Any]]] = {
+            tf: bundles[tf] for tf in ("5m", "1m") if tf in bundles
+        }
         signals: List[Any] = []
         for adapter in self.adapters:
             primary = adapter.spec.primary_timeframe

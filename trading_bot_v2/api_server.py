@@ -9,7 +9,8 @@ import asyncio
 import hmac
 import logging
 import threading
-from typing import Dict, Any, List, Optional
+from collections.abc import AsyncIterator, Mapping
+from typing import TYPE_CHECKING, Dict, Any, List, Optional, Tuple, cast
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -57,31 +58,35 @@ try:
     from .exchanges import get_exchange_client
 except ImportError:
     # When running as script: python api_server.py
-    from trading_bot import TradingBot
-    from database import DatabaseManager
-    from pacifica_client import PacificaClient
-    from strategy_manager import StrategyManager
-    from market_regime import MarketRegimeDetector
-    from multi_timeframe_fetcher import MultiTimeframeFetcher
-    from grid_lifecycle_manager import GridLifecycleManager
-    from risk_manager import RiskManager
-    from indicators import calculate_rsi, calculate_adx
-    from config import config
-    from config_validation import (
+    from trading_bot import TradingBot  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from database import DatabaseManager  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from pacifica_client import PacificaClient  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from strategy_manager import StrategyManager  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from market_regime import MarketRegimeDetector  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from multi_timeframe_fetcher import MultiTimeframeFetcher  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from grid_lifecycle_manager import GridLifecycleManager  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from risk_manager import RiskManager  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from indicators import calculate_rsi, calculate_adx  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from config import config  # type: ignore[attr-defined, no-redef]  # script-mode fallback
+    from config_validation import (  # type: ignore[import-not-found, no-redef]  # script-mode fallback
         StartupConfigError,
         check_api_binding,
         is_loopback_host,
         run_startup_validation,
     )
-    from ws_factory import get_market_ws_client as get_ws_client
-    from backup_scheduler import BackupScheduler
+    from ws_factory import get_market_ws_client as get_ws_client  # type: ignore[import-not-found, no-redef]  # script-mode fallback
+    from backup_scheduler import BackupScheduler  # type: ignore[import-not-found, no-redef]  # script-mode fallback
 
     try:
-        from exchanges import get_exchange_client
+        from exchanges import get_exchange_client  # type: ignore[import-not-found, no-redef]  # script-mode fallback
     except ImportError:
         # Script mode cannot resolve the package-relative exchanges
         # package; fall back to direct PacificaClient construction.
-        get_exchange_client = None
+        get_exchange_client = None  # type: ignore[assignment]  # script-mode fallback
+
+if TYPE_CHECKING:
+    from .event_system import Event
+    from .exchanges.base import ExchangeClient
 
 # Configure logging
 # - Console: stdout (existing behavior)
@@ -158,7 +163,7 @@ logger = logging.getLogger(__name__)
 
 # Create FastAPI app with lifespan context manager
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """Lifespan context manager for startup and shutdown events."""
     # Startup. The bind/token policy check runs here, not only in __main__,
     # so `uvicorn trading_bot_v2.api_server:app` cannot skip it. A failure
@@ -318,7 +323,7 @@ AUTH_DEPS = [Depends(require_api_token)]
 DEBUG_MUTATING_DEPS = [Depends(require_debug_routes), Depends(require_api_token)]
 
 
-def resolve_bind_address() -> tuple:
+def resolve_bind_address() -> Tuple[str, int]:
     """Validate the startup configuration and return the (host, port) to bind.
 
     Runs the .env duplicate-key warning, the live-credential check and the
@@ -347,14 +352,15 @@ class BotIntegration:
     Manages real TradingBot, DatabaseManager, PacificaClient with thread-safe state.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._lock = threading.Lock()
         self._is_running = False
-        self._bot_task: Optional[asyncio.Task] = None
+        self._bot_task: Optional[asyncio.Task[None]] = None
 
         # Initialize real components
         self.database: Optional[DatabaseManager] = None
-        self.exchange = None  # ExchangeClient adapter (set in initialize)
+        # ExchangeClient adapter (set in initialize)
+        self.exchange: Optional["ExchangeClient"] = None
         self.pacifica_client: Optional[PacificaClient] = None
         self.trading_bot: Optional[TradingBot] = None
         self.strategy_manager: Optional[StrategyManager] = None
@@ -362,14 +368,13 @@ class BotIntegration:
         self.mtf_fetcher: Optional[MultiTimeframeFetcher] = None
         self.grid_manager: Optional[GridLifecycleManager] = None
         self.risk_manager: Optional[RiskManager] = None
-        self.ws_client = (
-            None  # WebSocket client for market data (starts at server startup)
-        )
+        # WebSocket client for market data (starts at server startup)
+        self.ws_client: Any = None
         self.backup_scheduler: Optional[BackupScheduler] = None
 
         self._initialized = False
 
-    def initialize(self):
+    def initialize(self) -> None:
         """Initialize all bot components."""
         if self._initialized:
             return
@@ -672,7 +677,7 @@ class BotIntegration:
                     "error": str(e),
                 }
 
-    async def start(self):
+    async def start(self) -> None:
         """Start the trading bot."""
         print("=== DIAGNOSTIC: BotIntegration.start() CALLED ===", flush=True)
         logger.info("BotIntegration.start() called")
@@ -704,7 +709,7 @@ class BotIntegration:
             logger.error(f"Error starting bot: {e}", exc_info=True)
             raise
 
-    async def stop(self):
+    async def stop(self) -> None:
         """Stop the trading bot."""
         with self._lock:
             if not self._is_running:
@@ -722,7 +727,7 @@ class BotIntegration:
             logger.error(f"Error stopping bot: {e}")
             raise
 
-    def get_positions(self) -> List[Dict]:
+    def get_positions(self) -> List[Dict[str, Any]]:
         """Get current positions from database and Pacifica."""
         positions = []
 
@@ -789,7 +794,7 @@ class BotIntegration:
 
     def get_trades(
         self, limit: int = 100, exchange: Optional[str] = None
-    ) -> List[Dict]:
+    ) -> List[Dict[str, Any]]:
         """Get recent trades (TradeStore-backed via database.get_trades).
 
         Args:
@@ -835,7 +840,7 @@ class BotIntegration:
 
         return trades
 
-    def get_orders(self) -> List[Dict]:
+    def get_orders(self) -> List[Dict[str, Any]]:
         """Get open orders from Pacifica."""
         orders = []
 
@@ -854,7 +859,7 @@ class BotIntegration:
 
         return orders
 
-    def get_grids(self) -> List[Dict]:
+    def get_grids(self) -> List[Dict[str, Any]]:
         """Get active grid trading configurations."""
         grids = []
 
@@ -862,7 +867,7 @@ class BotIntegration:
             if self.grid_manager:
                 active_grids = self.grid_manager.get_all_active_grids()
                 if active_grids:
-                    for symbol, grid_data in active_grids.items():
+                    for symbol, grid_data in active_grids.items():  # type: ignore[attr-defined]  # list has no items(); see PR #7
                         grids.append(
                             {
                                 "symbol": symbol,
@@ -991,7 +996,7 @@ class BotIntegration:
         Returns:
             Dict with synced/inserted/updated/closed counts and errors.
         """
-        result = {
+        result: Dict[str, Any] = {
             "success": False,
             "synced_count": 0,
             "inserted_count": 0,
@@ -1030,7 +1035,7 @@ class BotIntegration:
                         symbol = mapped["symbol"]
                         active_symbols.add(symbol)
 
-                        self.database.upsert_position(mapped)
+                        self.database.upsert_position(mapped)  # type: ignore[attr-defined]  # no such method; see PR #7
 
                         if symbol in existing_positions:
                             result["updated_count"] += 1
@@ -1047,7 +1052,7 @@ class BotIntegration:
             for symbol in existing_positions:
                 if symbol not in active_symbols:
                     try:
-                        self.database.close_position(symbol)
+                        self.database.close_position(symbol)  # type: ignore[call-arg, arg-type]  # side missing; see PR #7
                         result["closed_count"] += 1
                     except Exception as e:
                         result["errors"].append(f"Error closing {symbol}: {e}")
@@ -1060,9 +1065,9 @@ class BotIntegration:
 
         return result
 
-    def get_activity(self, limit: int = 50) -> List[Dict]:
+    def get_activity(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get market activity with regime detection and RSI for each market."""
-        activity = []
+        activity: List[Dict[str, Any]] = []
 
         try:
             if not self.pacifica_client:
@@ -1088,7 +1093,7 @@ class BotIntegration:
                 display_symbol = symbol.replace("-PERP", "").upper()
 
                 # Get real-time price from WebSocket cache
-                price = 0
+                price: float = 0
                 if ws_client:
                     ws_price = ws_client.get_price(display_symbol)
                     if ws_price:
@@ -1287,7 +1292,7 @@ class BotIntegration:
 
         return activity
 
-    def shutdown(self):
+    def shutdown(self) -> None:
         """Clean shutdown of all components."""
         logger.info("Shutting down bot components...")
 
@@ -1318,7 +1323,7 @@ active_connections: List[WebSocket] = []
 
 
 @app.on_event("startup")
-async def startup_event():
+async def startup_event() -> None:
     """Initialize bot components on server startup."""
     try:
         bot_integration.initialize()
@@ -1330,7 +1335,7 @@ async def startup_event():
 
 
 @app.on_event("shutdown")
-async def shutdown_event():
+async def shutdown_event() -> None:
     """Gracefully stop bot on server shutdown."""
     try:
         if bot_integration._is_running:
@@ -1342,7 +1347,7 @@ async def shutdown_event():
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def websocket_endpoint(websocket: WebSocket) -> None:
     """WebSocket endpoint for real-time updates."""
     # Read-only (status stream + ping/pong). Any command handling added here
     # must require the API token; tests assert no order/signal call appears.
@@ -1383,7 +1388,7 @@ async def websocket_endpoint(websocket: WebSocket):
             active_connections.remove(websocket)
 
 
-async def broadcast_update(update_type: str, data: Dict[str, Any]):
+async def broadcast_update(update_type: str, data: Dict[str, Any]) -> None:
     """Broadcast real-time updates to all connected WebSocket clients."""
     message = {
         "type": update_type,
@@ -1405,7 +1410,7 @@ async def broadcast_update(update_type: str, data: Dict[str, Any]):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def get_root():
+async def get_root() -> HTMLResponse:
     """Serve the main web interface from interface.html."""
     try:
         # Get the path to interface.html (one level up from trading_bot_v2)
@@ -1426,8 +1431,8 @@ async def get_root():
         )
 
 
-@app.get("/api/status")
-async def get_status():
+@app.get("/api/status", response_model=None)
+async def get_status() -> Dict[str, Any]:
     """Get bot status and statistics."""
     try:
         status = bot_integration.get_status()
@@ -1438,15 +1443,15 @@ async def get_status():
 
 
 @app.get("/metrics")
-async def metrics_endpoint():
+async def metrics_endpoint() -> Response:
     """Prometheus metrics endpoint."""
     return Response(
         content=metrics.get_metrics(), media_type=metrics.get_content_type()
     )
 
 
-@app.get("/health")
-async def health_endpoint():
+@app.get("/health", response_model=None)
+async def health_endpoint() -> Dict[str, Any]:
     """Lightweight liveness check for container/orchestrator healthchecks.
 
     Intentionally dependency-free: it does not call bot_integration or hit
@@ -1459,8 +1464,10 @@ async def health_endpoint():
     }
 
 
-@app.get("/api/trades")
-async def get_trades(limit: int = 100, exchange: Optional[str] = None):
+@app.get("/api/trades", response_model=None)
+async def get_trades(
+    limit: int = 100, exchange: Optional[str] = None
+) -> Dict[str, Any]:
     """Get recent trades, optionally filtered by executing exchange."""
     try:
         trades = bot_integration.get_trades(limit=limit, exchange=exchange)
@@ -1470,8 +1477,8 @@ async def get_trades(limit: int = 100, exchange: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/positions")
-async def get_positions():
+@app.get("/api/positions", response_model=None)
+async def get_positions() -> Dict[str, Any]:
     """Get current positions."""
     try:
         positions = bot_integration.get_positions()
@@ -1481,8 +1488,8 @@ async def get_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/orders")
-async def get_orders():
+@app.get("/api/orders", response_model=None)
+async def get_orders() -> Dict[str, Any]:
     """Get open orders (excluding grid orders)."""
     try:
         orders = bot_integration.get_orders()
@@ -1492,7 +1499,9 @@ async def get_orders():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _cancel_all_orders_compat(client: Any, symbol: Optional[str], include_stops: bool):
+def _cancel_all_orders_compat(
+    client: Any, symbol: Optional[str], include_stops: bool
+) -> Any:
     """Call ``cancel_all_orders`` passing ``include_stops`` only when supported.
 
     The Pacifica native client predates the flag; the Blofin client and
@@ -1501,6 +1510,7 @@ def _cancel_all_orders_compat(client: Any, symbol: Optional[str], include_stops:
     import inspect
 
     if include_stops:
+        params: Mapping[str, inspect.Parameter]
         try:
             params = inspect.signature(client.cancel_all_orders).parameters
         except (TypeError, ValueError):
@@ -1513,8 +1523,10 @@ def _cancel_all_orders_compat(client: Any, symbol: Optional[str], include_stops:
     return client.cancel_all_orders(symbol)
 
 
-@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS)
-async def cancel_all_orders_endpoint(symbol: str = None, include_stops: bool = False):
+@app.post("/api/orders/cancel-all", dependencies=AUTH_DEPS, response_model=None)
+async def cancel_all_orders_endpoint(
+    symbol: Optional[str] = None, include_stops: bool = False
+) -> Dict[str, Any]:
     """Cancel all open orders and clear orphaned grid state.
 
     Protective venue stops (TP/SL rows) are LEFT IN PLACE by default so
@@ -1581,8 +1593,8 @@ async def cancel_all_orders_endpoint(symbol: str = None, include_stops: bool = F
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/grids")
-async def get_grids():
+@app.get("/api/grids", response_model=None)
+async def get_grids() -> Dict[str, Any]:
     """Get active grid trading configurations."""
     try:
         grids = bot_integration.get_grids()
@@ -1592,8 +1604,8 @@ async def get_grids():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/activity")
-async def get_activity(limit: int = 50):
+@app.get("/api/activity", response_model=None)
+async def get_activity(limit: int = 50) -> Dict[str, Any]:
     """Get market activity with regime detection and indicators."""
     try:
         activity = bot_integration.get_activity(limit=limit)
@@ -1603,8 +1615,8 @@ async def get_activity(limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/strategy-health")
-async def strategy_health():
+@app.get("/api/strategy-health", response_model=None)
+async def strategy_health() -> Dict[str, Any]:
     """
     Get strategy health report.
 
@@ -1615,7 +1627,7 @@ async def strategy_health():
         try:
             from .strategy_monitor import get_strategy_monitor
         except ImportError:
-            from strategy_monitor import get_strategy_monitor
+            from strategy_monitor import get_strategy_monitor  # type: ignore[import-not-found, no-redef]  # script-mode fallback
 
         monitor = get_strategy_monitor()
         report = monitor.get_health_report()
@@ -1625,8 +1637,10 @@ async def strategy_health():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/history")
-async def regime_history(symbol: Optional[str] = None, limit: int = 50):
+@app.get("/api/regimes/history", response_model=None)
+async def regime_history(
+    symbol: Optional[str] = None, limit: int = 50
+) -> Dict[str, Any]:
     """Get recent confirmed regime transitions from regime_history."""
     try:
         if not bot_integration.database:
@@ -1640,8 +1654,8 @@ async def regime_history(symbol: Optional[str] = None, limit: int = 50):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/current")
-async def regimes_current():
+@app.get("/api/regimes/current", response_model=None)
+async def regimes_current() -> Dict[str, Any]:
     """Get the current confirmed regime per symbol with time-in-regime."""
     try:
         detector = None
@@ -1660,8 +1674,10 @@ async def regimes_current():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/regimes/shadow")
-async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
+@app.get("/api/regimes/shadow", response_model=None)
+async def regimes_shadow(
+    symbol: Optional[str] = None, limit: int = 200
+) -> Dict[str, Any]:
     """Get recent ML shadow-mode observations with an agreement summary.
 
     Shadow mode logs the ML regime prediction alongside the authoritative
@@ -1675,7 +1691,7 @@ async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
         try:
             from .database import summarize_regime_shadow
         except ImportError:
-            from database import summarize_regime_shadow
+            from database import summarize_regime_shadow  # type: ignore[no-redef]  # script-mode fallback
 
         rows = bot_integration.database.get_regime_shadow(symbol=symbol, limit=limit)
         return {
@@ -1692,8 +1708,10 @@ async def regimes_shadow(symbol: Optional[str] = None, limit: int = 200):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/strategies/regime-attribution")
-async def strategies_regime_attribution(exchange: Optional[str] = None):
+@app.get("/api/strategies/regime-attribution", response_model=None)
+async def strategies_regime_attribution(
+    exchange: Optional[str] = None,
+) -> Dict[str, Any]:
     """Get per-(strategy, regime) performance attribution from closed trades.
 
     Optional ``exchange`` query param restricts attribution to trades
@@ -1703,7 +1721,7 @@ async def strategies_regime_attribution(exchange: Optional[str] = None):
         try:
             from .strategy_monitor import get_strategy_monitor
         except ImportError:
-            from strategy_monitor import get_strategy_monitor
+            from strategy_monitor import get_strategy_monitor  # type: ignore[no-redef]  # script-mode fallback
 
         monitor = get_strategy_monitor()
         return {
@@ -1715,8 +1733,8 @@ async def strategies_regime_attribution(exchange: Optional[str] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/weights/adaptive")
-async def adaptive_weights_status():
+@app.get("/api/weights/adaptive", response_model=None)
+async def adaptive_weights_status() -> Dict[str, Any]:
     """Get current adaptive strategy weight multipliers and evidence counts."""
     try:
         manager = None
@@ -1735,8 +1753,8 @@ async def adaptive_weights_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/overlays/regime-params")
-async def regime_param_overlays_status():
+@app.get("/api/overlays/regime-params", response_model=None)
+async def regime_param_overlays_status() -> Dict[str, Any]:
     """Get stored per-regime parameter overlays and runtime application state.
 
     Returns the active overlays from the regime_param_overlays table,
@@ -1771,8 +1789,8 @@ async def regime_param_overlays_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/backup", dependencies=AUTH_DEPS)
-async def trigger_backup():
+@app.post("/api/backup", dependencies=AUTH_DEPS, response_model=None)
+async def trigger_backup() -> Dict[str, Any]:
     """Trigger an immediate database backup (H5 automated backup)."""
     try:
         if not bot_integration.backup_scheduler:
@@ -1796,8 +1814,8 @@ async def trigger_backup():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/positions/sync", dependencies=AUTH_DEPS)
-async def sync_positions():
+@app.post("/api/positions/sync", dependencies=AUTH_DEPS, response_model=None)
+async def sync_positions() -> Dict[str, Any]:
     """Sync positions from exchange to database."""
     try:
         sync_result = await bot_integration.sync_positions()
@@ -1821,8 +1839,8 @@ async def sync_positions():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/start", dependencies=AUTH_DEPS)
-async def start_bot():
+@app.post("/api/bot/start", dependencies=AUTH_DEPS, response_model=None)
+async def start_bot() -> Dict[str, Any]:
     """Start the trading bot."""
     try:
         await bot_integration.start()
@@ -1835,8 +1853,8 @@ async def start_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/stop", dependencies=AUTH_DEPS)
-async def stop_bot():
+@app.post("/api/bot/stop", dependencies=AUTH_DEPS, response_model=None)
+async def stop_bot() -> Dict[str, Any]:
     """Stop the trading bot."""
     try:
         await bot_integration.stop()
@@ -1849,8 +1867,8 @@ async def stop_bot():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/bot/circuit-breaker/reset", dependencies=AUTH_DEPS)
-async def reset_circuit_breaker():
+@app.post("/api/bot/circuit-breaker/reset", dependencies=AUTH_DEPS, response_model=None)
+async def reset_circuit_breaker() -> Dict[str, Any]:
     """Manually reset a tripped circuit breaker so new entries may resume.
 
     The only way to clear a trip: starting or restarting the bot does not.
@@ -1880,8 +1898,8 @@ async def reset_circuit_breaker():
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@app.get("/api/supervisor/status")
-async def supervisor_status():
+@app.get("/api/supervisor/status", response_model=None)
+async def supervisor_status() -> Dict[str, Any]:
     """
     Return current supervisor pause state.
 
@@ -1891,7 +1909,7 @@ async def supervisor_status():
     try:
         from .supervisor_control import get_supervisor_control
     except ImportError:
-        from supervisor_control import get_supervisor_control
+        from supervisor_control import get_supervisor_control  # type: ignore[import-not-found, no-redef]  # script-mode fallback
     try:
         return get_supervisor_control().status()
     except Exception as e:
@@ -1899,8 +1917,10 @@ async def supervisor_status():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS)
-async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
+@app.post("/api/supervisor/pause", dependencies=AUTH_DEPS, response_model=None)
+async def supervisor_pause(
+    payload: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
     """
     Pause new trade entries. Existing positions and management continue.
 
@@ -1912,7 +1932,7 @@ async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
     try:
         from .supervisor_control import get_supervisor_control
     except ImportError:
-        from supervisor_control import get_supervisor_control
+        from supervisor_control import get_supervisor_control  # type: ignore[no-redef]  # script-mode fallback
 
     payload = payload or {}
     reason = payload.get("reason", "no reason given")
@@ -1927,15 +1947,15 @@ async def supervisor_pause(payload: Optional[Dict[str, Any]] = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS)
-async def supervisor_resume():
+@app.post("/api/supervisor/resume", dependencies=AUTH_DEPS, response_model=None)
+async def supervisor_resume() -> Dict[str, Any]:
     """
     Clear the supervisor pause. New entries are immediately allowed again.
     """
     try:
         from .supervisor_control import get_supervisor_control
     except ImportError:
-        from supervisor_control import get_supervisor_control
+        from supervisor_control import get_supervisor_control  # type: ignore[no-redef]  # script-mode fallback
     try:
         new_state = get_supervisor_control().resume()
         logger.info("▶  Supervisor RESUME applied — new entries allowed")
@@ -1945,8 +1965,8 @@ async def supervisor_resume():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS)
-async def clear_grid(symbol: str):
+@app.post("/api/grids/{symbol}/clear", dependencies=AUTH_DEPS, response_model=None)
+async def clear_grid(symbol: str) -> Dict[str, Any]:
     """Clear a grid registration for a symbol (allows new grid creation)."""
     try:
         # Use trading_bot's grid_lifecycle (authoritative source)
@@ -1978,7 +1998,7 @@ async def clear_grid(symbol: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _recent_signal_events(bot, limit: int = 50) -> list:
+def _recent_signal_events(bot: TradingBot, limit: int = 50) -> List["Event"]:
     """Read recent signal-generated events from the bot's event bus.
 
     Kept outside the GET handler so the read-only route never mentions the
@@ -1995,13 +2015,13 @@ def _recent_signal_events(bot, limit: int = 50) -> list:
     try:
         from .event_system import EventType
     except ImportError:
-        from event_system import EventType
+        from event_system import EventType  # type: ignore[import-not-found, no-redef]  # script-mode fallback
 
     return bot.event_bus.get_events_by_type(EventType.SIGNAL_GENERATED, limit=limit)
 
 
-@app.get("/api/signals")
-async def get_signals():
+@app.get("/api/signals", response_model=None)
+async def get_signals() -> Dict[str, Any]:
     """Get recent signals from the event bus (read-only)."""
     try:
         bot = bot_integration.trading_bot
@@ -2056,8 +2076,8 @@ async def get_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS)
-async def get_kline_cache_debug():
+@app.get("/api/debug/kline-cache", dependencies=AUTH_DEPS, response_model=None)
+async def get_kline_cache_debug() -> Dict[str, Any]:
     """Debug endpoint to check kline cache state."""
     try:
         ws_client = bot_integration.ws_client
@@ -2104,8 +2124,10 @@ async def get_kline_cache_debug():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS)
-async def test_signal_generation(symbol: str):
+@app.get(
+    "/api/debug/test-signals/{symbol}", dependencies=AUTH_DEPS, response_model=None
+)
+async def test_signal_generation(symbol: str) -> Dict[str, Any]:
     """Debug endpoint to test signal generation for a symbol."""
     try:
         bot = bot_integration.trading_bot
@@ -2216,7 +2238,7 @@ async def test_signal_generation(symbol: str):
             )
 
         # Add LiquidationCapture debug info for multiple timeframes
-        liq_debug = {}
+        liq_debug: Dict[str, Any] = {}
         try:
             # Check multiple timeframes
             for tf_name, tf_data_source in [
@@ -2266,7 +2288,7 @@ async def test_signal_generation(symbol: str):
             liq_debug["error"] = str(e)
 
         # Get bot's internal account balance
-        bot_balance = 0.0
+        bot_balance: float | str = 0.0
         try:
             bot_balance = bot._get_account_balance()
         except Exception as e:
@@ -2288,8 +2310,8 @@ async def test_signal_generation(symbol: str):
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS)
-async def get_signal_processing_log():
+@app.get("/api/debug/signal-processing", dependencies=AUTH_DEPS, response_model=None)
+async def get_signal_processing_log() -> Dict[str, Any]:
     """Debug endpoint to check signal processing stages - now uses SignalLogger."""
     try:
         bot = bot_integration.trading_bot
@@ -2318,8 +2340,8 @@ async def get_signal_processing_log():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/stats")
-async def get_signal_statistics():
+@app.get("/api/signals/stats", response_model=None)
+async def get_signal_statistics() -> Dict[str, Any]:
     """Get signal generation and execution statistics."""
     try:
         bot = bot_integration.trading_bot
@@ -2332,8 +2354,8 @@ async def get_signal_statistics():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/recent")
-async def get_recent_signals(count: int = 50):
+@app.get("/api/signals/recent", response_model=None)
+async def get_recent_signals(count: int = 50) -> Dict[str, Any]:
     """Get recent signals from the signal logger."""
     try:
         bot = bot_integration.trading_bot
@@ -2346,8 +2368,8 @@ async def get_recent_signals(count: int = 50):
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/by-status/{status}")
-async def get_signals_by_status(status: str):
+@app.get("/api/signals/by-status/{status}", response_model=None)
+async def get_signals_by_status(status: str) -> Dict[str, Any]:
     """Get signals filtered by status (generated, executed, rejected, failed)."""
     try:
         bot = bot_integration.trading_bot
@@ -2363,8 +2385,8 @@ async def get_signals_by_status(status: str):
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/signals/csv-path")
-async def get_signals_csv_path():
+@app.get("/api/signals/csv-path", response_model=None)
+async def get_signals_csv_path() -> Dict[str, Any]:
     """Get the path to the signals CSV file for easy access."""
     try:
         bot = bot_integration.trading_bot
@@ -2384,8 +2406,8 @@ async def get_signals_csv_path():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/gate-policy")
-async def get_validation_gate_policy():
+@app.get("/api/validation/gate-policy", response_model=None)
+async def get_validation_gate_policy() -> Dict[str, Any]:
     """Return the standing P5 validation gate policy parameters.
 
     Documentation endpoint only - reads env-configured thresholds
@@ -2412,8 +2434,10 @@ async def get_validation_gate_policy():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/runs")
-async def get_validation_runs(strategy: Optional[str] = None, limit: int = 20):
+@app.get("/api/validation/runs", response_model=None)
+async def get_validation_runs(
+    strategy: Optional[str] = None, limit: int = 20
+) -> Dict[str, Any]:
     """Stored validation-runner verdicts, newest first (read-only).
 
     Rows are written by the standalone validation runner
@@ -2429,8 +2453,8 @@ async def get_validation_runs(strategy: Optional[str] = None, limit: int = 20):
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/validation/latest")
-async def get_validation_latest():
+@app.get("/api/validation/latest", response_model=None)
+async def get_validation_latest() -> Dict[str, Any]:
     """Newest stored validation verdict per strategy (read-only)."""
     try:
         db = bot_integration.database or DatabaseManager()
@@ -2440,8 +2464,8 @@ async def get_validation_latest():
         return {"success": False, "error": str(e)}
 
 
-@app.get("/api/debug/key-config", dependencies=AUTH_DEPS)
-async def check_key_configuration():
+@app.get("/api/debug/key-config", dependencies=AUTH_DEPS, response_model=None)
+async def check_key_configuration() -> Dict[str, Any]:
     """Debug endpoint to check the active exchange's key configuration.
 
     Adapter-aware: Pacifica reports its two wallet pubkeys; Blofin
@@ -2488,8 +2512,8 @@ async def check_key_configuration():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/exchange/select", dependencies=AUTH_DEPS)
-async def select_exchange(payload: dict):
+@app.post("/api/exchange/select", dependencies=AUTH_DEPS, response_model=None)
+async def select_exchange(payload: Dict[str, Any]) -> Dict[str, Any]:
     """Switch the configured exchange (dashboard selector).
 
     Rewrites only the EXCHANGE= and BLOFIN_DEMO= lines in .env and stops
@@ -2522,7 +2546,7 @@ async def select_exchange(payload: dict):
         with open(env_path, "r", encoding="utf-8") as fh:
             lines = fh.readlines()
 
-        def _set_key(all_lines, key, value):
+        def _set_key(all_lines: List[str], key: str, value: str) -> List[str]:
             # Rewrite EVERY matching line, not just the first: .env has
             # carried duplicate keys (e.g. BLOFIN_DEMO twice) and
             # python-dotenv resolves duplicates last-wins, so a
@@ -2560,8 +2584,8 @@ async def select_exchange(payload: dict):
 # (T1). It placed a real order from an unauthenticated GET. Do not restore it.
 
 
-@app.get("/api/debug/event-history", dependencies=AUTH_DEPS)
-async def get_event_history():
+@app.get("/api/debug/event-history", dependencies=AUTH_DEPS, response_model=None)
+async def get_event_history() -> Dict[str, Any]:
     """Debug endpoint to check recent events from the event bus."""
     try:
         bot = bot_integration.trading_bot
@@ -2570,7 +2594,7 @@ async def get_event_history():
 
         event_bus = bot.event_bus
         recent_events = []
-        for event in event_bus._event_history[-20:]:  # Last 20 events
+        for event in event_bus._event_history[-20:]:  # type: ignore[index, attr-defined]  # deque slice; see PR #7
             recent_events.append(
                 {
                     "id": event.id,
@@ -2601,8 +2625,10 @@ async def get_event_history():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS)
-async def trigger_signal_generation():
+@app.post(
+    "/api/debug/trigger-signals", dependencies=DEBUG_MUTATING_DEPS, response_model=None
+)
+async def trigger_signal_generation() -> Dict[str, Any]:
     """
     Debug endpoint that manually triggers the trading loop's signal generation.
     Traces every step to identify why signals aren't being generated or published.
@@ -2612,7 +2638,7 @@ async def trigger_signal_generation():
         if not bot:
             return {"success": False, "error": "Trading bot not initialized"}
 
-        trace = {
+        trace: Dict[str, Any] = {
             "bot_running": bot._running_event.is_set()
             if hasattr(bot, "_running_event")
             else "unknown",
@@ -2649,7 +2675,7 @@ async def trigger_signal_generation():
             if not symbol:
                 continue
 
-            market_trace = {"symbol": symbol, "steps": []}
+            market_trace: Dict[str, Any] = {"symbol": symbol, "steps": []}
 
             # Step: Get price
             try:
@@ -2756,7 +2782,7 @@ async def trigger_signal_generation():
                             try:
                                 from .event_system import EventType
                             except ImportError:
-                                from event_system import EventType
+                                from event_system import EventType  # type: ignore[no-redef]  # script-mode fallback
 
                             bot.event_bus.publish_event(
                                 EventType.SIGNAL_GENERATED,
@@ -2813,8 +2839,12 @@ async def trigger_signal_generation():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/test-signal-handler", dependencies=DEBUG_MUTATING_DEPS)
-async def test_signal_handler():
+@app.post(
+    "/api/debug/test-signal-handler",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
+async def test_signal_handler() -> Dict[str, Any]:
     """Debug: manually invoke _handle_signal_generated and trace every step."""
     import traceback
 
@@ -2823,7 +2853,7 @@ async def test_signal_handler():
         if not bot:
             return {"success": False, "error": "Bot not available"}
 
-        result = {"steps": []}
+        result: Dict[str, Any] = {"steps": []}
 
         # Get a real signal
         markets = bot.client.get_markets()
@@ -2831,7 +2861,7 @@ async def test_signal_handler():
         if not core:
             return {"success": False, "error": "No markets"}
 
-        symbol = core[0].get("symbol")
+        symbol = cast(str, core[0].get("symbol"))
         ticker = bot._get_ticker_ws(symbol)
         price = float(ticker.get("last", 0))
         result["steps"].append({"step": "price", "symbol": symbol, "price": price})
@@ -2911,8 +2941,8 @@ async def test_signal_handler():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS)
-async def get_bot_internals():
+@app.get("/api/debug/bot-internals", dependencies=AUTH_DEPS, response_model=None)
+async def get_bot_internals() -> Dict[str, Any]:
     """Debug endpoint to check trading bot internal state."""
     try:
         bot = bot_integration.trading_bot
@@ -2966,8 +2996,8 @@ async def get_bot_internals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS)
-async def get_grid_state():
+@app.get("/api/debug/grid-state", dependencies=AUTH_DEPS, response_model=None)
+async def get_grid_state() -> Dict[str, Any]:
     """Debug: Check grid lifecycle manager state."""
     try:
         bot = bot_integration.trading_bot
@@ -2997,8 +3027,8 @@ async def get_grid_state():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS)
-async def get_balance_raw():
+@app.get("/api/debug/balance-raw", dependencies=AUTH_DEPS, response_model=None)
+async def get_balance_raw() -> Dict[str, Any]:
     """Get raw balance data from Pacifica API for debugging."""
     try:
         if not bot_integration.pacifica_client:
@@ -3018,8 +3048,8 @@ async def get_balance_raw():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS)
-async def get_loop_status():
+@app.get("/api/debug/loop-status", dependencies=AUTH_DEPS, response_model=None)
+async def get_loop_status() -> Dict[str, Any]:
     """Check trading loop iteration status."""
     try:
         bot = bot_integration.trading_bot
@@ -3054,21 +3084,25 @@ async def get_loop_status():
         return {"success": False, "error": str(e)}
 
 
-@app.post("/api/debug/call-actual-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
-async def call_actual_generate_signals():
+@app.post(
+    "/api/debug/call-actual-generate-signals",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
+async def call_actual_generate_signals() -> Dict[str, Any]:
     """Test signal generation with inline implementation to avoid module reload issues."""
     try:
         bot = bot_integration.trading_bot
         if not bot:
             return {"success": False, "error": "Trading bot not initialized"}
 
-        trace = {"steps": []}
+        trace: Dict[str, List[str]] = {"steps": []}
         count_before = getattr(bot.event_bus, "_published_count", 0)
 
         try:
             from .event_system import EventType
         except ImportError:
-            from event_system import EventType
+            from event_system import EventType  # type: ignore[no-redef]  # script-mode fallback
 
         # Inline implementation matching _generate_and_publish_signals
         markets = bot.client.get_markets()
@@ -3165,15 +3199,19 @@ async def call_actual_generate_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/call-generate-signals", dependencies=DEBUG_MUTATING_DEPS)
-async def call_generate_signals():
+@app.post(
+    "/api/debug/call-generate-signals",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
+async def call_generate_signals() -> Dict[str, Any]:
     """Directly call the bot's _generate_and_publish_signals method with tracing."""
     try:
         bot = bot_integration.trading_bot
         if not bot:
             return {"success": False, "error": "Trading bot not initialized"}
 
-        trace = {"steps": []}
+        trace: Dict[str, Any] = {"steps": []}
 
         # Get event count before (use monotonic counter, not len() which saturates at max_history)
         count_before = getattr(bot.event_bus, "_published_count", 0)
@@ -3200,7 +3238,7 @@ async def call_generate_signals():
             if not symbol:
                 continue
 
-            market_step = {"symbol": symbol, "substeps": []}
+            market_step: Dict[str, Any] = {"symbol": symbol, "substeps": []}
 
             # Get price
             try:
@@ -3272,7 +3310,7 @@ async def call_generate_signals():
                         try:
                             from .event_system import EventType
                         except ImportError:
-                            from event_system import EventType
+                            from event_system import EventType  # type: ignore[no-redef]  # script-mode fallback
 
                         bot.event_bus.publish_event(
                             EventType.SIGNAL_GENERATED,
@@ -3309,8 +3347,12 @@ async def call_generate_signals():
         return {"success": False, "error": str(e), "traceback": traceback.format_exc()}
 
 
-@app.post("/api/debug/clear-regime-cache", dependencies=DEBUG_MUTATING_DEPS)
-async def clear_regime_cache(symbol: str = None):
+@app.post(
+    "/api/debug/clear-regime-cache",
+    dependencies=DEBUG_MUTATING_DEPS,
+    response_model=None,
+)
+async def clear_regime_cache(symbol: Optional[str] = None) -> Dict[str, Any]:
     """Clear the regime detector's in-memory cache. Forces re-detection on the next loop.
     Pass ?symbol=BTC to clear a single symbol, or omit to clear all symbols.
     """

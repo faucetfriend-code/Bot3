@@ -17,7 +17,7 @@ import sys
 import argparse
 import io
 from datetime import datetime
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Fix Windows console encoding for emojis
 if sys.platform == "win32":
@@ -34,7 +34,11 @@ class HealthCheck:
     """Health check result container."""
 
     def __init__(
-        self, name: str, status: str, message: str, details: Dict[str, Any] = None
+        self,
+        name: str,
+        status: str,
+        message: str,
+        details: Optional[Dict[str, Any]] = None,
     ):
         self.name = name
         self.status = status  # OK, WARN, FAIL, CRITICAL
@@ -259,7 +263,7 @@ def check_signal_generation() -> HealthCheck:
         )
 
         # Count by regime
-        regime_counts = {}
+        regime_counts: Dict[str, int] = {}
         for m in markets:
             regime = m.get("regime", "Unknown")
             regime_counts[regime] = regime_counts.get(regime, 0) + 1
@@ -448,7 +452,9 @@ def run_all_checks() -> Dict[str, HealthCheck]:
     return checks
 
 
-def print_results(checks: Dict[str, HealthCheck], json_output: bool = False):
+def print_results(
+    checks: Dict[str, HealthCheck], json_output: bool = False
+) -> Optional[int]:
     """Print check results in human-readable or JSON format."""
 
     if json_output:
@@ -464,7 +470,7 @@ def print_results(checks: Dict[str, HealthCheck], json_output: bool = False):
             },
         }
         print(json.dumps(output, indent=2))
-        return
+        return None
 
     # Human-readable output
     print(f"\n{'=' * 70}")
@@ -500,7 +506,7 @@ def print_results(checks: Dict[str, HealthCheck], json_output: bool = False):
         return 0
 
 
-def main():
+def main() -> Optional[int]:
     """Main entry point."""
     parser = argparse.ArgumentParser(
         description="Health check monitoring for Trading Bot v2",

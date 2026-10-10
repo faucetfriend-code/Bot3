@@ -13,7 +13,7 @@ Usage:
 
 import os
 import threading
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional, Protocol
 
 from .base import (
     ExchangeBalance,
@@ -46,8 +46,19 @@ __all__ = [
 
 DEFAULT_EXCHANGE = "pacifica"
 
+
+class _AdapterFactory(Protocol):
+    # Typing-only view of an adapter class: constructible with the optional
+    # injected native clients, and exposing the capabilities() classmethod.
+    def __call__(
+        self, rest_client: Any = ..., ws_client: Any = ...
+    ) -> ExchangeClient: ...
+
+    def capabilities(self) -> ExchangeCapabilities: ...
+
+
 # Adding an exchange == one entry here (plus the adapter module).
-EXCHANGE_REGISTRY: Dict[str, Type[ExchangeClient]] = {
+EXCHANGE_REGISTRY: Dict[str, _AdapterFactory] = {
     "pacifica": PacificaExchange,
     "blofin": BlofinExchange,
 }

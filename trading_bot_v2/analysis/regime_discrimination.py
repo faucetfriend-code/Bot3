@@ -59,7 +59,7 @@ import random
 import statistics as st
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, cast
 
 from loguru import logger
 
@@ -981,7 +981,7 @@ def run_baselines(
                 ),
             }
             for key, col in (("adx", 2), ("vol_score", 3), ("trailing_vol", 4)):
-                rho = _spearman([r[col] for r in rows], values)
+                rho = _spearman(cast(List[float], [r[col] for r in rows]), values)
                 entry[f"{key}_abs_rho"] = abs(rho)
                 entry[f"{key}_rho_squared"] = rho * rho
             per_outcome[name] = entry
@@ -1076,7 +1076,7 @@ def _partial(fn: Callable[..., Any], **kwargs: Any) -> Callable[..., Any]:
     """
 
     def bound(bars: Sequence[BarFeatures], params: RegimeParams) -> List[Optional[str]]:
-        return fn(bars, params, **kwargs)
+        return cast(List[Optional[str]], fn(bars, params, **kwargs))
 
     return bound
 
@@ -1174,7 +1174,7 @@ def run_taxonomy_comparison(
             ]
             if len(keep) < 100:
                 continue
-            values = [series[i] for i in keep]
+            values = cast(List[float], [series[i] for i in keep])
             n = len(values)
             ranks_list = average_ranks(values)
             ranks = np.asarray(ranks_list, dtype=float)
@@ -1199,8 +1199,8 @@ def run_taxonomy_comparison(
                     }
             for key, column in (
                 ("adx", [bars[i].adx for i in keep]),
-                ("vol_score", [bars[i].vol_score for i in keep]),
-                ("trailing_vol", [trailing[i] for i in keep]),
+                ("vol_score", cast(List[float], [bars[i].vol_score for i in keep])),
+                ("trailing_vol", cast(List[float], [trailing[i] for i in keep])),
             ):
                 rho = _spearman(column, values)
                 entry[f"{key}_rho_squared"] = rho * rho
@@ -1466,8 +1466,8 @@ def run_knee(features: Dict[str, List[BarFeatures]], horizon: int) -> Dict[str, 
                     bar.adx,
                     bar.vol_score,
                     fv / med_vol if med_vol else 0.0,
-                    eff,
-                    ar / med_abs if med_abs else 0.0,
+                    cast(float, eff),
+                    cast(float, ar) / med_abs if med_abs else 0.0,
                 )
             )
     pooled.sort(key=lambda row: row[0])

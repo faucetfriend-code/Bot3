@@ -9,6 +9,7 @@ import time
 import logging
 import sys
 from datetime import datetime
+from typing import Any
 
 # Configure logging
 logging.basicConfig(
@@ -22,13 +23,13 @@ logging.basicConfig(
 
 
 class LiveTradeMonitor:
-    def __init__(self, api_url="http://localhost:8000"):
+    def __init__(self, api_url: str = "http://localhost:8000") -> None:
         self.api_url = api_url
         self.baseline_positions = self.get_current_positions()
         self.monitoring_start = datetime.now()
-        self.bot_trades_detected = []
+        self.bot_trades_detected: list[dict[str, Any]] = []
 
-    def get_current_positions(self):
+    def get_current_positions(self) -> dict[str, dict[str, Any]]:
         """Get baseline positions (test positions to exclude from monitoring)."""
         try:
             response = requests.get(f"{self.api_url}/api/positions", timeout=5)
@@ -46,7 +47,7 @@ class LiveTradeMonitor:
             logging.warning(f"Could not get baseline positions: {e}")
         return {}
 
-    def check_api_health(self):
+    def check_api_health(self) -> bool:
         """Check if API server is responding."""
         try:
             response = requests.get(f"{self.api_url}/api/status", timeout=5)
@@ -54,7 +55,7 @@ class LiveTradeMonitor:
         except (requests.RequestException, Exception):
             return False
 
-    def get_new_positions(self):
+    def get_new_positions(self) -> list[dict[str, Any]]:
         """Get positions that are new (not in baseline)."""
         try:
             response = requests.get(f"{self.api_url}/api/positions", timeout=5)
@@ -78,7 +79,7 @@ class LiveTradeMonitor:
             logging.warning(f"Could not check for new positions: {e}")
         return []
 
-    def get_market_activity(self):
+    def get_market_activity(self) -> dict[str, int]:
         """Get current market monitoring status."""
         try:
             response = requests.get(f"{self.api_url}/api/activity", timeout=5)
@@ -99,7 +100,7 @@ class LiveTradeMonitor:
 
         return {"market_count": 0, "active_strategies": 0}
 
-    def monitor_live_trades(self):
+    def monitor_live_trades(self) -> None:
         """Monitor for new bot-generated trades (excluding baseline test positions)."""
         logging.info("Starting live trade monitoring...")
         logging.info(f"Monitoring started at: {self.monitoring_start}")
@@ -177,7 +178,7 @@ class LiveTradeMonitor:
         # Final summary
         self.print_final_summary()
 
-    def analyze_new_trades(self, new_positions):
+    def analyze_new_trades(self, new_positions: list[dict[str, Any]]) -> None:
         """Analyze newly detected bot trades."""
         logging.info("Analyzing new bot-generated trades:")
 
@@ -203,7 +204,7 @@ class LiveTradeMonitor:
             else:
                 logging.warning("    Bracket Orders: MISSING - Safety concern!")
 
-    def print_final_summary(self):
+    def print_final_summary(self) -> None:
         """Print final monitoring summary."""
         duration = datetime.now() - self.monitoring_start
 
@@ -251,7 +252,7 @@ class LiveTradeMonitor:
         print("=" * 70)
 
 
-def main():
+def main() -> None:
     """Main monitoring function."""
     print("Live Trading Bot Trade Monitoring")
     print("Monitoring for first autonomous bot-generated trades...")

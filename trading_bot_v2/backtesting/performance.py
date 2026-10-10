@@ -15,9 +15,12 @@ Metrics:
 
 import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from datetime import datetime
 from loguru import logger
+
+if TYPE_CHECKING:
+    from .simulated_exchange import SimulatedPosition
 
 
 @dataclass
@@ -50,16 +53,16 @@ class BacktestResult:
     total_funding_paid: float = 0.0
 
     # Breakdowns
-    by_strategy: Dict = field(default_factory=dict)
-    by_regime: Dict = field(default_factory=dict)
+    by_strategy: Dict[str, Any] = field(default_factory=dict)
+    by_regime: Dict[str, Dict[str, Any]] = field(default_factory=dict)
 
     # Signal-funnel diagnostics (SignalFunnel.to_dict()). Empty when the
     # run was not instrumented, so existing callers are unaffected.
-    diagnostics: Dict = field(default_factory=dict)
+    diagnostics: Dict[str, Any] = field(default_factory=dict)
 
     # Raw data for report generation
-    equity_curve: List = field(default_factory=list)
-    trade_log: List = field(default_factory=list)
+    equity_curve: List[Dict[str, Any]] = field(default_factory=list)
+    trade_log: List[Dict[str, Any]] = field(default_factory=list)
 
     def print_summary(self) -> None:
         print(f"\n{'=' * 60}")
@@ -91,9 +94,11 @@ class BacktestResult:
 class PerformanceTracker:
     def __init__(self, initial_capital: float):
         self.initial_capital = initial_capital
-        self._snapshots: List[Dict] = []
+        self._snapshots: List[Dict[str, Any]] = []
 
-    def record_snapshot(self, timestamp: str, equity: float, positions: Dict) -> None:
+    def record_snapshot(
+        self, timestamp: str, equity: float, positions: Dict[str, "SimulatedPosition"]
+    ) -> None:
         self._snapshots.append(
             {
                 "timestamp": timestamp,
@@ -105,7 +110,7 @@ class PerformanceTracker:
     def finalise(
         self,
         final_equity: float,
-        trade_log: List[Dict],
+        trade_log: List[Dict[str, Any]],
         symbol: str,
         start: str,
         end: str,
@@ -162,7 +167,7 @@ class PerformanceTracker:
         # with hours_i. Equal spacing reduces exactly to mean/std * sqrt(N/y).
         # Preserve the historical conditional-downside Sortino convention.
         if len(equity_series) > 2:
-            intervals = []
+            intervals: List[Tuple[float, float]] = []
             for previous, current in zip(self._snapshots, self._snapshots[1:]):
                 hours = (
                     datetime.fromisoformat(current["timestamp"])
@@ -224,7 +229,7 @@ class PerformanceTracker:
 
         # Per-regime breakdown (P4): closed trades carry the regime that
         # was confirmed at position entry (tagged by SimulatedExchange).
-        by_regime: Dict[str, Dict] = {}
+        by_regime: Dict[str, Dict[str, Any]] = {}
         for t in closed_trades:
             regime = t.get("regime") or "unknown"
             cell = by_regime.setdefault(
@@ -243,8 +248,8 @@ class PerformanceTracker:
 
 
 def per_strategy_breakdown(
-    trade_log: List[Dict], closed_trades: List[Dict]
-) -> Dict[str, Dict]:
+    trade_log: List[Dict[str, Any]], closed_trades: List[Dict[str, Any]]
+) -> Dict[str, Dict[str, Any]]:
     """Aggregate fills and closed-trade outcomes per strategy.
 
     Args:
@@ -257,9 +262,9 @@ def per_strategy_breakdown(
         there were no losing trades (undefined, not infinite, so the
         value stays JSON-safe).
     """
-    cells: Dict[str, Dict] = {}
+    cells: Dict[str, Dict[str, Any]] = {}
 
-    def cell(name: str) -> Dict:
+    def cell(name: str) -> Dict[str, Any]:
         return cells.setdefault(
             name or "unknown",
             {

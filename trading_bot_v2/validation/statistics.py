@@ -26,7 +26,7 @@ References:
 
 import math
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy.stats import norm
@@ -88,7 +88,7 @@ class DSRResult:
 _ZERO_STD_REL_TOL = 1e-12
 
 
-def _moments(returns: Sequence[float]):
+def _moments(returns: Sequence[float]) -> Tuple[float, float, float, float]:
     """Return (mean, std, skew, kurt) population moments of a series.
 
     Kurtosis is non-excess (normal -> 3.0). Sums use math.fsum so the
@@ -483,7 +483,9 @@ def sample_adequacy(
     return n_observations >= required, required
 
 
-def closed_trade_returns(trade_log: List[dict], initial_capital: float) -> List[float]:
+def closed_trade_returns(
+    trade_log: List[Dict[str, Any]], initial_capital: float
+) -> List[float]:
     """Extract per-trade fractional returns from a backtest trade log.
 
     Closing fills carry pnl != 0 (opening fills have pnl == 0), the

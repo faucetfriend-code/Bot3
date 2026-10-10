@@ -42,7 +42,7 @@ from .run_optimize import main as run_optimize_cli
 try:
     from ..backtesting.optimization_adapter import OptimizationAdapter
 except ImportError:
-    OptimizationAdapter = None
+    OptimizationAdapter = None  # type: ignore[assignment, misc]  # optional dep
 
 __all__ = [
     "OptunaRunner",

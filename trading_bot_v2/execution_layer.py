@@ -28,7 +28,7 @@ SCOPE - THIS MODULE IS LIVE-ONLY:
     engine. ``test_execution_layer_no_hard_block`` pins this.
 """
 
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, cast
 from dataclasses import dataclass
 from loguru import logger
 
@@ -187,7 +187,7 @@ class ExecutionLayer:
         return signal
 
     def _build_context(
-        self, data_5m: Dict, data_1m: Dict, side: OrderSide
+        self, data_5m: Dict[str, Any], data_1m: Dict[str, Any], side: OrderSide
     ) -> ExecutionContext:
         """Build execution context from candle data."""
         context = ExecutionContext()
@@ -326,7 +326,9 @@ class ExecutionLayer:
             )
         )
 
-        return timing_good, ", ".join(reasons) if reasons else "neutral"
+        # timing_good can be a falsy non-bool ('' / None / 0.0) at runtime; the
+        # callers only truth-test it, so the declared bool is kept via cast.
+        return cast(bool, timing_good), ", ".join(reasons) if reasons else "neutral"
 
     def _detect_wick_rejection(
         self, open_price: float, high: float, low: float, close: float

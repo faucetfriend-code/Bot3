@@ -81,7 +81,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, TypedDict, Union, cast
 
 import pandas as pd
 import requests
@@ -115,6 +115,20 @@ FUNDING_INTERVAL_MINUTES = FUNDING_SOURCE_INTERVAL_HOURS * 60
 FUNDING_GRID_TOLERANCE_S = 60
 
 
+class EnsureSummary(TypedDict):
+    """Summary returned by ``CandleDownloadManager.ensure`` / ``ensure_funding``.
+
+    Attributes:
+        added: Rows added to the store.
+        requested_ranges: Missing (start, end) ranges that were requested.
+        unfilled_ranges: Requested ranges no source could fill.
+    """
+
+    added: int
+    requested_ranges: List[Tuple[datetime, datetime]]
+    unfilled_ranges: List[Tuple[datetime, datetime]]
+
+
 def _step_minutes(tf: str) -> int:
     """Grid step in minutes for a candle timeframe or the funding key."""
     if tf == FUNDING_KEY:
@@ -129,7 +143,7 @@ def _freq_rule(tf: str) -> str:
     return RESAMPLE_RULES[tf]
 
 
-def _parse_dt(value) -> datetime:
+def _parse_dt(value: Union[str, datetime]) -> datetime:
     """Parse a date/datetime string (or datetime) to a naive UTC datetime.
 
     Args:
@@ -311,7 +325,7 @@ class _ThrottledHttpSource:
         self.throttle_s = throttle_s
         self._session = requests.Session()
 
-    def _get_json(self, url: str, params: dict):
+    def _get_json(self, url: str, params: Dict[str, Union[str, int]]) -> Any:
         """GET with throttle and exponential backoff on 429/5xx."""
         last_err: Optional[Exception] = None
         for attempt in range(5):
@@ -407,7 +421,7 @@ class BinanceFundingSource(FundingSource):
         pair = self.pair_map[symbol]
         start_ms = int(start_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(end_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
-        rows: List[dict] = []
+        rows: List[Dict[str, Any]] = []
         cur = start_ms
         while cur <= end_ms:
             page = self._get_json(
@@ -473,10 +487,12 @@ class BinanceSource(CandleSource):
         super().__init__(throttle_s)
         self._url_idx = 0
 
-    def _get_page(self, params: dict) -> list:
+    def _get_page(self, params: Dict[str, Union[str, int]]) -> List[List[Any]]:
         """Fetch one klines page, failing over to the fallback URL."""
         try:
-            return self._get_json(self.urls[self._url_idx], params)
+            return cast(
+                List[List[Any]], self._get_json(self.urls[self._url_idx], params)
+            )
         except (RuntimeError, requests.RequestException) as e:
             alt = 1 - self._url_idx
             logger.warning(
@@ -484,7 +500,9 @@ class BinanceSource(CandleSource):
                 f"failing over to {self.urls[alt]}"
             )
             self._url_idx = alt
-            return self._get_json(self.urls[self._url_idx], params)
+            return cast(
+                List[List[Any]], self._get_json(self.urls[self._url_idx], params)
+            )
 
     def fetch(
         self, symbol: str, tf: str, start_dt: datetime, end_dt: datetime
@@ -493,7 +511,7 @@ class BinanceSource(CandleSource):
         pair = self.pair_map[symbol]
         start_ms = int(start_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
         end_ms = int(end_dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
-        rows: List[list] = []
+        rows: List[List[Any]] = []
         cur = start_ms
         while cur <= end_ms:
             page = self._get_page(
@@ -560,7 +578,7 @@ class BitstampSource(CandleSource):
         url = self.url_template.format(pair=pair)
         start_s = int(start_dt.replace(tzinfo=timezone.utc).timestamp())
         end_s = int(end_dt.replace(tzinfo=timezone.utc).timestamp())
-        records: List[dict] = []
+        records: List[Dict[str, Any]] = []
         cur = start_s
         while cur <= end_s:
             # NOTE: never pass "end" here - when both start and end are
@@ -638,7 +656,7 @@ class CoinbaseSource(CandleSource):
         window = self.page_limit * step
         start_s = int(start_dt.replace(tzinfo=timezone.utc).timestamp())
         end_s = int(end_dt.replace(tzinfo=timezone.utc).timestamp())
-        rows: List[list] = []
+        rows: List[List[Any]] = []
         cur = start_s
         while cur <= end_s:
             win_end = min(cur + window - step, end_s)
@@ -692,9 +710,15 @@ class CandleDownloadManager:
         throttle_s: float = 0.15,
         funding_sources: Optional[List[FundingSource]] = None,
     ):
+        # The cast only removes a checker artifact: getenv() with a str
+        # default can never return None, but mypy types the right side of
+        # ``or`` against the Optional left operand.
         self.data_dir = Path(
-            data_dir
-            or os.getenv("BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data")
+            cast(
+                str,
+                data_dir
+                or os.getenv("BACKTEST_DATA_DIR", "trading_bot_v2/backtesting/data"),
+            )
         )
         self.data_dir.mkdir(parents=True, exist_ok=True)
         if sources is None:
@@ -808,10 +832,10 @@ class CandleDownloadManager:
     def ensure_funding(
         self,
         symbol: str,
-        start,
-        end=None,
+        start: Union[str, datetime],
+        end: Optional[Union[str, datetime]] = None,
         include_internal_gaps: bool = True,
-    ) -> Dict[str, object]:
+    ) -> EnsureSummary:
         """Ensure the funding store covers [start, end].
 
         Mirrors :meth:`ensure` for candles: only missing ranges on the
@@ -842,7 +866,7 @@ class CandleDownloadManager:
             first = _parse_dt(df["timestamp"].iloc[0])
             last = _parse_dt(df["timestamp"].iloc[-1])
             ranges = [(a, b) for a, b in ranges if b < first or a > last]
-        summary: Dict[str, object] = {
+        summary: EnsureSummary = {
             "added": 0,
             "requested_ranges": [],
             "unfilled_ranges": [],
@@ -908,7 +932,9 @@ class CandleDownloadManager:
             )
         return max(added, 0)
 
-    def ingest_external_parquet(self, path, symbol: str, tf: str) -> int:
+    def ingest_external_parquet(
+        self, path: Union[str, Path], symbol: str, tf: str
+    ) -> int:
         """Ingest an external OHLCV parquet into the canonical store.
 
         Accepts the BTV2/G:/Candle Data layout (UTC DatetimeIndex,
@@ -1061,10 +1087,10 @@ class CandleDownloadManager:
         self,
         symbol: str,
         tf: str,
-        start,
-        end=None,
+        start: Union[str, datetime],
+        end: Optional[Union[str, datetime]] = None,
         include_internal_gaps: bool = True,
-    ) -> Dict[str, object]:
+    ) -> EnsureSummary:
         """Ensure the store covers [start, end], downloading what's missing.
 
         Only missing ranges (leading, trailing and - optionally -
@@ -1099,7 +1125,7 @@ class CandleDownloadManager:
             first = _parse_dt(df["timestamp"].iloc[0])
             last = _parse_dt(df["timestamp"].iloc[-1])
             ranges = [(a, b) for a, b in ranges if b < first or a > last]
-        summary: Dict[str, object] = {
+        summary: EnsureSummary = {
             "added": 0,
             "requested_ranges": [],
             "unfilled_ranges": [],
@@ -1220,7 +1246,7 @@ def _format_coverage_table(coverages: List[Coverage]) -> str:
         if cov.gaps:
             step = timedelta(minutes=_step_minutes(cov.timeframe))
 
-            def _gap_len(g):
+            def _gap_len(g: Tuple[str, str]) -> timedelta:
                 return _parse_dt(g[1]) - _parse_dt(g[0]) + step
 
             big = max(cov.gaps, key=_gap_len)

@@ -22,10 +22,10 @@ class ComponentRegistry:
     Components are registered by interface and can be retrieved by type or name.
     """
 
-    def __init__(self):
-        self._components: Dict[Type, Any] = {}
+    def __init__(self) -> None:
+        self._components: Dict[Type[Any], Any] = {}
         self._named_components: Dict[str, Any] = {}
-        self._interfaces: Dict[Type, List[Any]] = {}
+        self._interfaces: Dict[Type[Any], List[Any]] = {}
 
         logger.info("ComponentRegistry initialized")
 
@@ -33,7 +33,7 @@ class ComponentRegistry:
         self,
         component: Any,
         name: Optional[str] = None,
-        interfaces: Optional[List[Type]] = None,
+        interfaces: Optional[List[Type[Any]]] = None,
     ) -> None:
         """
         Register a component in the registry.
@@ -124,7 +124,7 @@ class ComponentRegistry:
         else:
             return None
 
-    def unregister(self, component_type: Type) -> bool:
+    def unregister(self, component_type: Type[Any]) -> bool:
         """
         Unregister a component by type.
 
@@ -165,7 +165,7 @@ class ComponentRegistry:
         Returns:
             Dictionary with component information
         """
-        result = {
+        result: Dict[str, Any] = {
             "by_type": {
                 t.__name__: c.__class__.__name__ for t, c in self._components.items()
             },
@@ -191,7 +191,7 @@ class ComponentRegistry:
         self._interfaces.clear()
         logger.info("Component registry cleared")
 
-    def is_registered(self, component_type: Type) -> bool:
+    def is_registered(self, component_type: Type[Any]) -> bool:
         """
         Check if a component type is registered.
 
@@ -210,7 +210,7 @@ class ComponentRegistry:
         Returns:
             Dictionary with validation results
         """
-        results = {"healthy": [], "unhealthy": [], "errors": []}
+        results: Dict[str, Any] = {"healthy": [], "unhealthy": [], "errors": []}
 
         for component_type, component in self._components.items():
             try:

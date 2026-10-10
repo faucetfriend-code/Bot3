@@ -89,11 +89,12 @@ class RiskManager:
 
         # Migrated position tracking (positions that moved from grid to trend-following)
         # Format: {symbol: [{side, qty, entry_price, migrated_at, original_grid_id, has_stop}]}
-        self.migrated_positions: Dict[str, list] = {}
+        self.migrated_positions: Dict[str, List[Dict[str, Any]]] = {}
 
         # AUTHORITATIVE APPROVAL SYSTEM - Phase 1 Enhancement
         self._approval_required = True  # All capital requests must be approved
-        self._pending_approvals: Dict[str, Dict] = {}  # Track pending approval requests
+        # Track pending approval requests
+        self._pending_approvals: Dict[str, Dict[str, Any]] = {}
 
         # Default risk multipliers by profile
         self.risk_profiles = risk_profiles or {
@@ -230,7 +231,7 @@ class RiskManager:
         notional_size = min(notional_size, available_exposure)
 
         # Convert notional to quantity using entry price
-        quantity = notional_size / signal.entry_price
+        quantity: float = notional_size / signal.entry_price
 
         # Regime-conditional scaling (applied after all other sizing math)
         regime_multiplier = self.get_regime_size_multiplier(regime)
@@ -350,7 +351,7 @@ class RiskManager:
 
         return True
 
-    def on_grid_emergency_exit(self, symbol: str):
+    def on_grid_emergency_exit(self, symbol: str) -> None:
         """Handle emergency grid exit - reset exposure tracking per Grid Trading Brief."""
         if hasattr(self, "grid_exposure") and symbol in self.grid_exposure:
             del self.grid_exposure[symbol]
@@ -595,7 +596,7 @@ class RiskManager:
         """
         return self._pending_approvals.get(approval_id)
 
-    def cleanup_expired_approvals(self, max_age_seconds: int = 3600):
+    def cleanup_expired_approvals(self, max_age_seconds: int = 3600) -> None:
         """
         Clean up expired approval requests.
 
@@ -803,7 +804,7 @@ class RiskManager:
         Returns:
             Dict with 'valid': bool, 'warnings': list, 'errors': list
         """
-        result = {"valid": True, "warnings": [], "errors": []}
+        result: Dict[str, Any] = {"valid": True, "warnings": [], "errors": []}
 
         # Check stop loss requirement (CRITICAL)
         if not position.get("has_stop", False):
@@ -1067,9 +1068,9 @@ class RiskManager:
 
     def _calculate_available_margin(self, margin_data: MarginData) -> float:
         """Calculate available margin for new positions."""
-        account_equity = margin_data.get("account_equity", 0.0)
-        total_margin_used = margin_data.get("total_margin_used", 0.0)
-        available_to_spend = margin_data.get("available_to_spend", 0.0)
+        account_equity: float = margin_data.get("account_equity", 0.0)
+        total_margin_used: float = margin_data.get("total_margin_used", 0.0)
+        available_to_spend: float = margin_data.get("available_to_spend", 0.0)
 
         max_margin_allowed = account_equity * self.max_margin_utilization_pct
         equity_based_available = max(0.0, max_margin_allowed - total_margin_used)
@@ -1117,7 +1118,7 @@ class RiskManager:
             "safe_for_new_positions": status != "critical",
         }
 
-    def emergency_stop_all(self):
+    def emergency_stop_all(self) -> None:
         """
         Emergency stop - revoke all allocations and reset exposure tracking.
 

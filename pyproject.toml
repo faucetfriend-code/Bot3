@@ -108,6 +108,33 @@ quote-style = "double"
 indent-style = "space"
 line-ending = "auto"
 
+[tool.mypy]
+# CI (.github/workflows/ci.yml, job "Type Check") runs `mypy --strict
+# trading_bot_v2/` against this configuration and is blocking. `strict = true`
+# here keeps a bare `mypy trading_bot_v2/` equivalent to the CI command.
+python_version = "3.11"
+strict = true
+warn_unreachable = false
+show_error_codes = true
+pretty = false
+# The test suite is owned by a separate workstream and is not held to the
+# strict contract: it leans on MagicMock, SimpleNamespace and untyped
+# fixtures by design. `mypy trading_bot_v2/` therefore skips it. Run
+# `mypy trading_bot_v2/tests/` explicitly to see its state.
+exclude = ["^trading_bot_v2/tests/"]
+
+# Third-party packages that ship neither inline types nor a stubs package.
+# `ignore_missing_imports` only silences the import line; the imported names
+# become Any and every use is still checked. Packages with stubs (pandas,
+# requests, psycopg2, psutil, scipy) are installed by CI instead.
+[[tool.mypy.overrides]]
+module = [
+    "hmmlearn.*",
+    "joblib",
+    "sklearn.*",
+]
+ignore_missing_imports = true
+
 # Bandit reads this via `bandit -c pyproject.toml` (CI and the pre-commit
 # hook). Tests are excluded: assert statements and hard-coded test fixtures
 # are the whole point there.

@@ -20,12 +20,15 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from loguru import logger
 
 from .config import config
 from .metrics import metrics
+
+if TYPE_CHECKING:
+    from .database import DatabaseManager
 
 _BACKUP_FILENAME_FMT = "trading_bot_%Y%m%d_%H%M%S.db"
 _BACKUP_GLOB_PATTERN = "trading_bot_*.db"
@@ -52,7 +55,7 @@ class BackupScheduler:
 
     def __init__(
         self,
-        db,
+        db: "DatabaseManager",
         backup_dir: Optional[str] = None,
         interval_hours: Optional[float] = None,
         retention_days: Optional[int] = None,

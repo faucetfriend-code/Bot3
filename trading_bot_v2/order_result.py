@@ -40,7 +40,7 @@ _OPEN_STATES = ("live", "open", "pending", "accepted", "new", "partially_filled"
 _DONE_STATES = ("filled", "closed", "done")
 
 
-def _first_float(data: Dict[str, Any], keys) -> Optional[float]:
+def _first_float(data: Dict[str, Any], keys: tuple[str, ...]) -> Optional[float]:
     """Return the first parseable float among ``keys`` in ``data``."""
     for key in keys:
         value = data.get(key)

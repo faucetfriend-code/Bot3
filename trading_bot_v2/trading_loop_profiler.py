@@ -391,10 +391,12 @@ class CPUProfiler:
 
         stats = pstats.Stats(self._profiler)
         return {
-            "total_calls": stats.total_calls,
-            "total_time": stats.total_tt,
+            "total_calls": stats.total_calls,  # type: ignore[attr-defined]  # no stub
+            "total_time": stats.total_tt,  # type: ignore[attr-defined]  # no stub
             "top_functions": sorted(
-                stats.stats.items(), key=lambda x: x[1][2], reverse=True
+                stats.stats.items(),  # type: ignore[attr-defined]  # no stub
+                key=lambda x: x[1][2],
+                reverse=True,
             )[:20],
         }
 
@@ -647,7 +649,7 @@ class TradingLoopProfiler:
             total_duration = sum(i.total_duration_ms for i in self._iterations)
 
         # Find bottlenecks
-        bottlenecks = []
+        bottlenecks: List[Dict[str, Any]] = []
         total_phase_time = sum(
             s.total_ms for s in self._phase_stats.values() if s.count > 0
         )
@@ -838,7 +840,9 @@ def get_profiler() -> TradingLoopProfiler:
 # ============================================================================
 
 
-def profile_phase(phase_name: str) -> Callable:
+def profile_phase(
+    phase_name: str,
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """
     Decorator to profile a function as a trading loop phase.
 
@@ -848,7 +852,7 @@ def profile_phase(phase_name: str) -> Callable:
             ...
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
         def wrapper(*args: Any, **kwargs: Any) -> Any:
             profiler = get_profiler()
             with profiler.phase(phase_name):

@@ -16,9 +16,12 @@ import math
 import os
 from pathlib import Path
 from datetime import timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 import pandas as pd
 from loguru import logger
+
+if TYPE_CHECKING:
+    from ..data_manager import CandleDownloadManager
 
 
 def _autodownload_enabled() -> bool:
@@ -31,7 +34,7 @@ def _autodownload_enabled() -> bool:
     )
 
 
-def _autodownload_timeframes() -> set:
+def _autodownload_timeframes() -> set[str]:
     """Timeframes the loader may auto-download (1m excluded by default).
 
     1m exists only for execution refinement and multi-year 1m pulls are
@@ -94,7 +97,7 @@ class BacktestDataLoader:
         self,
         symbol: str,
         data_dir: str = "backtesting/data",
-        download_manager=None,
+        download_manager: Optional["CandleDownloadManager"] = None,
         offline: bool = False,
         validate: bool = False,
     ):
@@ -120,7 +123,7 @@ class BacktestDataLoader:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._cache: Dict[str, pd.DataFrame] = {}
         self._download_manager = download_manager
-        self._ensure_attempted: set = set()
+        self._ensure_attempted: set[tuple[str, str, str]] = set()
         self.offline = offline
         self.validate = validate
         self.validations: Dict[str, Any] = {}
@@ -131,7 +134,7 @@ class BacktestDataLoader:
         start: str,
         end: str,
         warmup_candles: int = 0,
-    ) -> Dict[str, List]:
+    ) -> Dict[str, List[Any]]:
         """
         Returns candles in the same format as MultiTimeframeFetcher.
 

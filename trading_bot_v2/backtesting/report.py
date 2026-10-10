@@ -30,7 +30,7 @@ import json
 import math
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, cast
 
 from .performance import BacktestResult
 
@@ -162,21 +162,24 @@ def build_report(
     Returns:
         A dict ready for ``json.dumps``.
     """
-    return _json_safe(
-        {
-            "schema": SCHEMA,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "run": dict(run),
-            "data": {tf: v for tf, v in (validations or {}).items()},
-            "metrics": metrics_block(result),
-            "drawdown": drawdown_profile(result.equity_curve),
-            "by_strategy": result.by_strategy,
-            "by_regime": result.by_regime,
-            "adapters": {k: v for k, v in (adapters or {}).items()},
-            "trades": list(result.trade_log),
-            "equity_curve": list(result.equity_curve),
-            "diagnostics": result.diagnostics,
-        }
+    return cast(
+        Dict[str, Any],
+        _json_safe(
+            {
+                "schema": SCHEMA,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "run": dict(run),
+                "data": {tf: v for tf, v in (validations or {}).items()},
+                "metrics": metrics_block(result),
+                "drawdown": drawdown_profile(result.equity_curve),
+                "by_strategy": result.by_strategy,
+                "by_regime": result.by_regime,
+                "adapters": {k: v for k, v in (adapters or {}).items()},
+                "trades": list(result.trade_log),
+                "equity_curve": list(result.equity_curve),
+                "diagnostics": result.diagnostics,
+            }
+        ),
     )
 
 

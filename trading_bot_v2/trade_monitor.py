@@ -10,6 +10,7 @@ import logging
 from datetime import datetime
 import sys
 import os
+from typing import Any
 
 # Configure logging
 logging.basicConfig(
@@ -23,13 +24,13 @@ logging.basicConfig(
 
 
 class TradeMonitor:
-    def __init__(self, api_url="http://localhost:8000"):
+    def __init__(self, api_url: str = "http://localhost:8000") -> None:
         self.api_url = api_url
         self.initial_trade_count = 0
         self.monitoring_start = datetime.now()
-        self.trades_detected = []
+        self.trades_detected: list[dict[str, Any]] = []
 
-    def check_api_health(self):
+    def check_api_health(self) -> bool:
         """Check if API server is responding."""
         try:
             response = requests.get(f"{self.api_url}/api/status", timeout=5)
@@ -37,7 +38,7 @@ class TradeMonitor:
         except (requests.RequestException, Exception):
             return False
 
-    def get_current_trades(self):
+    def get_current_trades(self) -> int:
         """Get current trade count from database."""
         try:
             # Check via API if available
@@ -55,7 +56,7 @@ class TradeMonitor:
 
                 conn = sqlite3.connect(db_path)
                 cursor = conn.execute("SELECT COUNT(*) FROM trades")
-                count = cursor.fetchone()[0]
+                count: int = cursor.fetchone()[0]
                 conn.close()
                 return count
 
@@ -64,7 +65,7 @@ class TradeMonitor:
 
         return 0
 
-    def get_market_activity(self):
+    def get_market_activity(self) -> dict[str, int]:
         """Get current market monitoring status."""
         try:
             response = requests.get(f"{self.api_url}/api/activity", timeout=5)
@@ -85,7 +86,7 @@ class TradeMonitor:
 
         return {"market_count": 0, "active_strategies": 0}
 
-    def monitor_trades(self):
+    def monitor_trades(self) -> None:
         """Monitor for new trades until we see successful ones."""
         logging.info("Starting trade monitoring...")
         logging.info(f"Monitoring started at: {self.monitoring_start}")
@@ -168,7 +169,7 @@ class TradeMonitor:
         # Final summary
         self.print_final_summary()
 
-    def analyze_recent_trades(self):
+    def analyze_recent_trades(self) -> None:
         """Analyze the most recent trades for details."""
         try:
             # Get positions to see trade details
@@ -194,7 +195,7 @@ class TradeMonitor:
         except Exception as e:
             logging.warning(f"Could not analyze recent trades: {e}")
 
-    def print_final_summary(self):
+    def print_final_summary(self) -> None:
         """Print final monitoring summary."""
         duration = datetime.now() - self.monitoring_start
 
@@ -231,7 +232,7 @@ class TradeMonitor:
         print("=" * 60)
 
 
-def main():
+def main() -> None:
     """Main monitoring function."""
     print("Trading Bot Trade Monitoring")
     print("Waiting for first successful trades...")

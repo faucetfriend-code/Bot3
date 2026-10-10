@@ -118,7 +118,7 @@ class CalendarFlowStrategy:
         self._window_trades: Dict[str, bool] = {}
 
         # Symbols we already warned about missing timestamps (warn once)
-        self._warned_no_timestamp: set = set()
+        self._warned_no_timestamp: set[str] = set()
 
         # Simulated time injected by backtest engine (None = wall-clock)
         self._sim_time: Optional[datetime] = None
@@ -233,7 +233,7 @@ class CalendarFlowStrategy:
         symbol: str,
         multi_tf_data: Dict[str, Any],
         current_price: float,
-        **kwargs,
+        **kwargs: Any,
     ) -> List[Signal]:
         """
         Generate turn-of-the-month calendar flow signals.

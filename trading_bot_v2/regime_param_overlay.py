@@ -216,7 +216,7 @@ def resolve_strategy_key(name: str) -> Optional[str]:
     return DISPLAY_TO_STRATEGY_KEY.get(name)
 
 
-def get_param_whitelist(strategy_key: str) -> set:
+def get_param_whitelist(strategy_key: str) -> set[str]:
     """Return the set of settable parameter names for a strategy.
 
     The whitelist is derived from the strategy's Optuna search space so
@@ -341,7 +341,7 @@ def apply_params_to_strategy(
     return applied
 
 
-def _infeasible_reasons(strategy: Any, strategy_key: str) -> list:
+def _infeasible_reasons(strategy: Any, strategy_key: str) -> list[str]:
     """Return feasibility violations of the strategy's current params.
 
     Args:

@@ -64,7 +64,7 @@ import subprocess
 import sys
 from argparse import Namespace
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, cast
 
 #: Set in the child process so the re-exec happens exactly once.
 CHILD_ENV_FLAG = "BACKFILL_MEDIAN_ARM_CHILD"
@@ -119,7 +119,7 @@ def _reexec_in_child(strategy: str, argv: List[str]) -> int:
     return subprocess.run(cmd, env=env).returncode
 
 
-def _fold_winner_params(fold: Dict[str, Any], state: str) -> Optional[Dict]:
+def _fold_winner_params(fold: Dict[str, Any], state: str) -> Optional[Dict[str, Any]]:
     """The stored winner vector for one state on one fold, if any."""
     cell = fold.get("states", {}).get(state) or {}
     params = cell.get("params")
@@ -312,9 +312,9 @@ def median_geometry(report: Dict[str, Any], space: Dict[str, Any]) -> Dict[str, 
             "full_report_median": median,
             "median_within_winner_range": in_range,
             "nearest_winner_distance": round(min(dists), 4),
-            "mean_distance_to_winners": round(_mean(dists), 4),
-            "mean_pairwise_winner_distance": round(_mean(pairwise), 4),
-            "unlike_any_winner": min(dists) >= _mean(pairwise),
+            "mean_distance_to_winners": round(cast(float, _mean(dists)), 4),
+            "mean_pairwise_winner_distance": round(cast(float, _mean(pairwise)), 4),
+            "unlike_any_winner": min(dists) >= cast(float, _mean(pairwise)),
         }
     return out
 
@@ -333,7 +333,7 @@ def _normalised_distance(
         if span == 0:
             continue
         total += ((a[k] - b[k]) / span) ** 2
-    return total**0.5
+    return cast(float, total**0.5)
 
 
 def run_cross_symbol(

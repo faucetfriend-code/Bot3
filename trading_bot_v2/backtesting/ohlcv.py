@@ -28,7 +28,7 @@ import math
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 import pandas as pd
 from loguru import logger
@@ -257,7 +257,10 @@ def _check_values(df: pd.DataFrame) -> pd.Series:
         | (df["close"] < df["low"])
     )
     negative_volume = df["volume"] < 0
-    return non_finite | non_positive | inverted | outside | negative_volume
+    return cast(
+        "pd.Series[Any]",
+        non_finite | non_positive | inverted | outside | negative_volume,
+    )
 
 
 def _count_gaps(
@@ -348,7 +351,10 @@ def _check_grid_and_gaps(
     frame: pd.DataFrame, report: CandleValidation, step: timedelta
 ) -> None:
     """Count off-grid stamps and, on an ordered series, missing bars."""
-    on_grid = ((frame["timestamp"] - datetime(1970, 1, 1)) % step) == timedelta(0)
+    # pandas-stubs has no `Series[Timedelta] % timedelta`; pandas supports it.
+    on_grid = (
+        cast(Any, frame["timestamp"] - datetime(1970, 1, 1)) % step
+    ) == timedelta(0)
     report.off_grid = int((~on_grid).sum())
     ordered = frame["timestamp"].is_monotonic_increasing and not (
         frame["timestamp"].duplicated().any()

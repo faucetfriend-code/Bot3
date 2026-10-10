@@ -53,7 +53,7 @@ CLI:
 import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union, cast
 
 from loguru import logger
 
@@ -133,7 +133,7 @@ class WalkForwardReport:
 
 
 class WalkForwardAnalyzer:
-    def __init__(self, engine: BacktestEngine, config=None):
+    def __init__(self, engine: BacktestEngine, config: Any = None):
         self.engine = engine
         self.cfg = config or engine.cfg
 
@@ -150,7 +150,7 @@ class WalkForwardAnalyzer:
         train_months: Optional[int] = None,
         test_months: Optional[int] = None,
         optuna_db_path: Optional[str] = None,
-    ):
+    ) -> Union[List[BacktestResult], WalkForwardReport]:
         """Run walk-forward analysis.
 
         Args:
@@ -200,7 +200,7 @@ class WalkForwardAnalyzer:
                 optuna_db_path=optuna_db_path,
             )
 
-        results = []
+        results: List[BacktestResult] = []
         for i, (train_start, train_end, test_start, test_end) in enumerate(windows):
             logger.info(
                 f"Window {i + 1}/{len(windows)}: test {test_start} -> {test_end}"
@@ -240,7 +240,7 @@ class WalkForwardAnalyzer:
 
     def _run_optimized(
         self,
-        windows: List,
+        windows: List[Tuple[str, str, str, str]],
         strategy: str,
         symbol: str,
         start: str,
@@ -527,8 +527,8 @@ class WalkForwardAnalyzer:
         end: str,
         train_months: int,
         test_months: int,
-    ) -> List:
-        windows = []
+    ) -> List[Tuple[str, str, str, str]]:
+        windows: List[Tuple[str, str, str, str]] = []
         dt_start = datetime.fromisoformat(start)
         dt_end = datetime.fromisoformat(end)
 
@@ -756,7 +756,9 @@ def run_chunked_walk_forward(
 
     if windows:
         sweep_symbols = list(symbols)
-        series = [tuple(w) for w in windows]
+        # tuple(w) of a 2-tuple is a 2-tuple; the cast only restores the
+        # fixed length that tuple() erases for the checker.
+        series = [cast(Tuple[str, str], tuple(w)) for w in windows]
     else:
         from ..validation.runner import resolve_chunk_windows
 

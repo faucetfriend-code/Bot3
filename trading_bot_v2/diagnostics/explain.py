@@ -15,9 +15,12 @@ Usage:
 
 import argparse
 import sys
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from .report import print_funnel_report
+
+if TYPE_CHECKING:
+    import optuna
 
 #: user_attr keys written by OptunaRunner._score_trial.
 FUNNEL_ATTRS = (
@@ -77,7 +80,7 @@ def rank_trials(trials: List[Any]) -> List[Any]:
         A new, ordered list.
     """
 
-    def key(trial: Any):
+    def key(trial: Any) -> Tuple[int, float, float]:
         attrs = getattr(trial, "user_attrs", None) or {}
         traded = 1 if attrs.get("outcome") == "traded" else 0
         try:
@@ -107,7 +110,7 @@ def summarise(trials: List[Any]) -> Dict[str, int]:
     return counts
 
 
-def _load_study(study_name: str, db_path: Optional[str]):
+def _load_study(study_name: str, db_path: Optional[str]) -> "optuna.Study":
     """Load an Optuna study from the optimizer's storage.
 
     Args:

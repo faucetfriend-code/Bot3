@@ -14,7 +14,7 @@ so downstream code does not care which implementation is active.
 """
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import numpy as np
 from loguru import logger
@@ -28,6 +28,9 @@ from .gmm_regime import (
     assign_cluster_labels,
 )
 from .model_manager import ModelManager
+
+if TYPE_CHECKING:
+    from ..market_regime import MarketRegimeDetector
 
 
 # ---------------------------------------------------------------------------
@@ -101,8 +104,8 @@ class HMMRegimeDetector:
             latest_marker=self.LATEST_MARKER,
         )
 
-        # Lazily loaded trained model
-        self._hmm_model = None
+        # Lazily loaded trained model (hmmlearn GaussianHMM, untyped)
+        self._hmm_model: Any = None
         self._state_to_latent: Dict[int, _LatentRegime] = {}
         self._model_version: Optional[str] = None
         self._feature_means: Optional[np.ndarray] = None
@@ -110,7 +113,7 @@ class HMMRegimeDetector:
         self._load_attempted = False
 
         # ADX fallback detector (imported lazily to avoid circular deps)
-        self._adx_detector = None
+        self._adx_detector: Optional["MarketRegimeDetector"] = None
 
         logger.info(
             f"HMMRegimeDetector initialised: n_states={self.config.n_states}, "

@@ -11,7 +11,7 @@ from .models import Signal, OrderSide
 from .config import StrategyType, AssetClass, TradeQuality, MarketState
 
 
-def example_basic_usage():
+def example_basic_usage() -> None:
     """Basic usage example with a trading signal."""
     print("=" * 80)
     print("EXAMPLE 1: Basic Kelly Position Sizing")
@@ -54,7 +54,7 @@ def example_basic_usage():
     print()
 
 
-def example_different_strategies():
+def example_different_strategies() -> None:
     """Compare position sizing across different strategies."""
     print("=" * 80)
     print("EXAMPLE 2: Position Sizing Across Different Strategies")
@@ -96,7 +96,7 @@ def example_different_strategies():
         print()
 
 
-def example_kelly_fraction_adjustment():
+def example_kelly_fraction_adjustment() -> None:
     """Demonstrate dynamic Kelly fraction adjustment based on performance."""
     print("=" * 80)
     print("EXAMPLE 3: Dynamic Kelly Fraction Adjustment")
@@ -139,7 +139,7 @@ def example_kelly_fraction_adjustment():
         print()
 
 
-def example_strategy_performance_review():
+def example_strategy_performance_review() -> None:
     """Review strategy performance and get recommendations."""
     print("=" * 80)
     print("EXAMPLE 4: Strategy Performance Review")
@@ -193,7 +193,7 @@ def example_strategy_performance_review():
         print()
 
 
-def example_integration_with_trading_bot():
+def example_integration_with_trading_bot() -> None:
     """Example of integrating Kelly sizer into trading bot workflow."""
     print("=" * 80)
     print("EXAMPLE 5: Integration with Trading Bot")
