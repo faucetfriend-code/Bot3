@@ -28,7 +28,9 @@ from dataclasses import dataclass
 from .config import config
 from .exit_sizing import (
     ClosePlan,
+    _extract_position,
     normalize_position_side,
+    normalize_symbol,
     plan_close_quantity,
     remaining_exchange_quantity,
 )
@@ -311,6 +313,161 @@ class GridLifecycleManager:
         if grid is None:
             return None
         return grid.get("order_ids")
+
+    # =========================
+    # ENTRY ORDER CANCELLATION (circuit breaker)
+    # =========================
+
+    @staticmethod
+    def _resting_order_side(order: Dict[str, Any]) -> Optional[str]:
+        """Return "buy" / "sell" for an open-order row (None if unknown)."""
+        side = str(order.get("side") or "").strip().lower()
+        if side in ("buy", "bid"):
+            return "buy"
+        if side in ("sell", "ask"):
+            return "sell"
+        return None
+
+    @staticmethod
+    def _resting_order_value(order: Dict[str, Any], keys: tuple) -> float:
+        """Return the first parseable positive number under ``keys`` (else 0)."""
+        for key in keys:
+            try:
+                value = float(order.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if value > 0:
+                return value
+        return 0.0
+
+    def _net_positions(self) -> Dict[str, float]:
+        """Return signed exchange position per symbol (long positive)."""
+        net: Dict[str, float] = {}
+        for pos in self.client.get_positions() or []:
+            symbol, side, quantity = _extract_position(pos)
+            if not symbol or side is None or quantity <= 0:
+                continue
+            signed = quantity if side == "long" else -quantity
+            net[symbol] = net.get(symbol, 0.0) + signed
+        return net
+
+    def _select_entry_orders(
+        self, orders: List[Dict[str, Any]], net: Dict[str, float]
+    ) -> tuple:
+        """Split resting orders into entries to cancel and orders to keep.
+
+        Protective rows (TP/SL, stop types, reduce-only) and rows without
+        an id or a readable side are never selected.  For each symbol the
+        orders on the side that reduces the exchange position are kept,
+        nearest price first, while their summed size fits inside that
+        position: they only close inventory.  Everything else would open
+        or add exposure if it filled.
+
+        Args:
+            orders: Open-order rows from ``client.get_orders()``.
+            net: Signed exchange position per normalized symbol.
+
+        Returns:
+            Tuple ``(entries, kept)``: order rows to cancel, and the count
+            of inventory-closing orders left resting.
+        """
+        closing: Dict[str, List[Dict[str, Any]]] = {}
+        entries: List[Dict[str, Any]] = []
+        for order in orders:
+            side = self._resting_order_side(order)
+            if is_protective_order(order) or side is None:
+                continue
+            if not self._extract_order_id_from_order(order):
+                continue
+            symbol = normalize_symbol(order.get("symbol"))
+            position = net.get(symbol, 0.0)
+            reduces = (position > 0 and side == "sell") or (
+                position < 0 and side == "buy"
+            )
+            (closing.setdefault(symbol, []) if reduces else entries).append(order)
+        kept = 0
+        for symbol, rows in closing.items():
+            room = abs(net.get(symbol, 0.0))
+            rows.sort(
+                key=lambda o: self._resting_order_value(o, ("price",)),
+                reverse=net.get(symbol, 0.0) < 0,
+            )
+            for order in rows:
+                size = self._resting_order_value(
+                    order, ("quantity", "amount", "size", "initial_amount")
+                )
+                # An unreadable size is kept (closing side) but uses up
+                # the remaining room, so nothing behind it is kept blind.
+                if room > 1e-9 and size <= room + 1e-9:
+                    room = room - size if size > 0 else 0.0
+                    kept += 1
+                else:
+                    entries.append(order)
+        return entries, kept
+
+    def _cancel_entry_order(self, order: Dict[str, Any]) -> bool:
+        """Cancel one resting order and drop it from the grid's tracked ids.
+
+        Args:
+            order: Open-order row selected by ``_select_entry_orders``.
+
+        Returns:
+            True when the venue accepted the cancel, False when it
+            rejected it or the call raised (logged; the caller retries).
+        """
+        symbol = str(order.get("symbol") or "")
+        order_id = self._extract_order_id_from_order(order)
+        try:
+            ack = self.client.cancel_order(symbol, order_id)
+        except Exception as exc:  # noqa: BLE001 - one failure must not stop the rest
+            logger.error(f"Entry order cancel RAISED for {symbol} {order_id}: {exc}")
+            return False
+        if isinstance(ack, dict) and ack.get("success") is False:
+            logger.error(
+                f"Entry order cancel REJECTED for {symbol} {order_id}: "
+                f"{ack.get('error')}"
+            )
+            return False
+        for grid_symbol, grid in self._grids.items():
+            tracked = grid.get("order_ids")
+            if tracked is not None and normalize_symbol(grid_symbol) == (
+                normalize_symbol(symbol)
+            ):
+                tracked.discard(str(order_id))
+        logger.warning(
+            f"Cancelled resting entry order {order_id} for {symbol} "
+            f"({order.get('side')} @ {order.get('price')})"
+        )
+        return True
+
+    def cancel_entry_orders(self) -> Dict[str, int]:
+        """Cancel every resting order that would open or add exposure.
+
+        Called by the circuit breaker.  Each order is attempted even if
+        another cancel fails; nothing raises.  When the order book or the
+        positions cannot be read nothing is cancelled (the classification
+        needs both) and the sweep is reported as failing so it is retried.
+
+        Returns:
+            Dict with ``cancelled`` (accepted cancels), ``failed`` (cancels
+            or reads that failed and need a retry) and ``kept`` (orders
+            left resting because they only close held inventory).
+        """
+        result = {"cancelled": 0, "failed": 0, "kept": 0}
+        try:
+            orders = self.client.get_orders() or []
+            entries, kept = self._select_entry_orders(orders, self._net_positions())
+        except Exception as exc:  # noqa: BLE001 - never raise into the breaker
+            logger.error(f"Entry order sweep could not read the venue: {exc}")
+            result["failed"] = 1
+            return result
+        result["kept"] = kept
+        for order in entries:
+            if self._cancel_entry_order(order):
+                result["cancelled"] += 1
+            else:
+                result["failed"] += 1
+        return result
 
     # =========================
     # ORPHAN DETECTION & REPAIR
