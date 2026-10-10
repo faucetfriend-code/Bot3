@@ -80,13 +80,19 @@ def _breaker_bot(balance: float, unrealized_pnl: float) -> SimpleNamespace:
         hub_publish_func=None,
         event_bus=MagicMock(),
         _circuit_breaker_triggered=False,
+        _circuit_breaker_tripped_at=None,
+        _circuit_breaker_reason=None,
         _circuit_breaker_loss_pct=0.10,
         stop=MagicMock(),
         _get_account_balance=lambda: balance,
         _get_current_exposure=lambda: 0.0,
     )
     return _bind(
-        bot, "_monitor_risk", "_monitor_risk_coordinated", "_position_unrealized_pnl"
+        bot,
+        "_monitor_risk",
+        "_monitor_risk_coordinated",
+        "_position_unrealized_pnl",
+        "_trip_circuit_breaker",
     )
 
 
@@ -97,7 +103,9 @@ class TestCircuitBreaker:
         bot = _breaker_bot(balance=10_000.0, unrealized_pnl=-1_200.0)
         bot._monitor_risk_coordinated()
         assert bot._circuit_breaker_triggered is True
-        bot.stop.assert_called_once()
+        # A trip blocks new entries; it must not stop the loop that
+        # enforces local stops (see test_circuit_breaker_trip.py).
+        bot.stop.assert_not_called()
 
     def test_breaker_trips_at_threshold(self):
         bot = _breaker_bot(balance=10_000.0, unrealized_pnl=-1_000.0)
@@ -214,7 +222,12 @@ class TestPacificaSideSpelling:
 
 
 class TestBreakerStopFromLoopThread:
-    """The breaker runs inside the loop thread; stop() must not join itself."""
+    """stop() called from inside the loop thread must not join itself.
+
+    The breaker no longer calls stop() (a trip only blocks new entries),
+    so the join guard is exercised directly and the trip is checked to
+    publish its event while leaving the loop running.
+    """
 
     def test_stop_from_loop_thread_publishes_breaker_event(self):
         bot = _raw_bot([PACIFICA_LONG], last_price=850.0, balance=1_000.0)
@@ -225,11 +238,14 @@ class TestBreakerStopFromLoopThread:
         events = []
         bot.hub_publish_func = events.append
         errors = []
+        running_after_trip = []
 
         def run():
             bot.thread = threading.current_thread()
             try:
                 bot._monitor_risk()
+                running_after_trip.append(bot.is_running)
+                bot.stop()
             except Exception as exc:  # noqa: BLE001 - surfaced by the assert
                 errors.append(exc)
 
@@ -238,6 +254,7 @@ class TestBreakerStopFromLoopThread:
         worker.join(timeout=5)
         assert errors == []
         assert bot._circuit_breaker_triggered is True
+        assert running_after_trip == [True]
         assert bot.is_running is False
         assert [e["type"] for e in events] == ["circuit_breaker"]
 
