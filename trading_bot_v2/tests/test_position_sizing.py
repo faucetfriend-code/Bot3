@@ -26,6 +26,7 @@ from trading_bot_v2.exit_sizing import (
     plan_close_quantity,
     remaining_exchange_quantity,
 )
+from trading_bot_v2.history import current_network
 from trading_bot_v2.kelly_position_sizer import KellyPositionSizer
 from trading_bot_v2.models import OrderSide, Position
 from order_risk_fakes import position
@@ -163,10 +164,12 @@ class TestKellySizing:
         sizer = kelly()
         sizer.calculate_position_size(sig(), BALANCE, account_id="acct-9")
         query = sizer.trade_store.queries[0]
+        # ``network`` keeps testnet and mainnet history apart.
         assert query == {
             "strategy": "ma_crossover",
             "account_id": "acct-9",
             "limit": 50,
+            "network": current_network(),
         }
 
     def test_strategy_stats(self) -> None:

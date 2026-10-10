@@ -266,8 +266,13 @@ Key variables:
   Kelly fraction, a missing stop or any error, the RiskManager size is used. The Kelly
   fraction (0.5) and minimum history (50) are constructor defaults in
   `kelly_position_sizer.py`; `KELLY_FRACTION` / `KELLY_MIN_TRADES` are not read from the
-  environment. Nothing in the live path writes closed trades to the `trades` table yet,
-  so until something does the flag changes no order size.
+  environment. Closed trades are written to the `trades` table by
+  `history.record_closed_trade` (the single writer; one row per closed quantity, tagged
+  with the `StrategyType` value such as `mean_reversion`, idempotent on `close_key`), so
+  once a strategy has 50 closed rows on the current network the flag can reduce its
+  sizes. Positions with no known owner are tagged `unknown` / `migrated` and never count
+  toward a strategy. Most exit prices are estimates (`exit_price_source`); grid round
+  trips are not recorded.
 - `ENABLE_SIGNAL_PIPELINE=false` - When true, `signal_phases` Phase 1 (without its regime
   map, which contradicts `StrategyManager`) and Phase 3 run as an extra reject-only gate
   on standard entries. See `entry_gates.py`.

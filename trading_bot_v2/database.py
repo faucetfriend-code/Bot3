@@ -1144,6 +1144,7 @@ def _init_postgres_database() -> None:
     with get_db_connection() as conn:
         _init_postgres_schema(conn)
         _ensure_position_stop_columns(conn)
+        _ensure_closed_trade_schema(conn)
         conn.commit()
     logger.info("PostgreSQL database initialized successfully")
 
@@ -1215,6 +1216,110 @@ def _ensure_position_stop_columns(conn: Any) -> List[str]:
                 logger.warning(f"Failed to add positions.{name}: {exc}")
     if added:
         logger.info(f"positions table upgraded with stop columns: {added}")
+    return added
+
+
+#: Closed-trade record columns on ``trades`` (name, sqlite type).  ``regime``
+#: and ``exchange`` are listed too: the SQLite init adds them through its
+#: ALTER list, but the Postgres schema file never had them.
+TRADE_CLOSE_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("regime", "TEXT"),
+    ("exchange", "TEXT"),
+    ("funding_pnl", "REAL"),
+    ("close_reason", "TEXT"),
+    ("exit_price_source", "TEXT"),
+    ("network", "TEXT"),
+    ("close_key", "TEXT"),
+)
+#: Owner columns on ``positions``: the strategy that opened the position
+#: and the regime at entry, read back when the position closes.
+POSITION_OWNER_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("strategy", "TEXT"),
+    ("entry_regime", "TEXT"),
+)
+
+
+def _add_missing_columns(
+    conn: Any, table: str, columns: Tuple[Tuple[str, str], ...]
+) -> List[str]:
+    """Add the nullable ``columns`` that ``table`` does not have yet.
+
+    Additive only: nothing is dropped, rewritten or given a default, so
+    existing rows simply read NULL for a new column.
+
+    Args:
+        conn: Open connection wrapper.
+        table: Table to upgrade.
+        columns: (name, sqlite type) pairs; REAL maps to DOUBLE PRECISION
+            on Postgres.
+
+    Returns:
+        Names of the columns that were added.
+    """
+    try:
+        existing = _existing_columns(conn, table)
+    except Exception as exc:  # noqa: BLE001 - fall back to the ALTER guard
+        logger.warning(f"Could not read {table} columns: {exc}")
+        existing = set()
+    postgres = _active_backend == "postgres"
+    guard = "IF NOT EXISTS " if postgres else ""
+    added: List[str] = []
+    for name, sqlite_type in columns:
+        if name in existing:
+            continue
+        col_type = sqlite_type
+        if postgres and sqlite_type == "REAL":
+            col_type = "DOUBLE PRECISION"
+        try:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {guard}{name} {col_type}")
+            added.append(name)
+        except Exception as exc:  # noqa: BLE001 - duplicate is benign
+            err = str(exc).lower()
+            if "duplicate column name" not in err and "already exists" not in err:
+                logger.warning(f"Failed to add {table}.{name}: {exc}")
+    return added
+
+
+def _ensure_closed_trade_schema(conn: Any) -> List[str]:
+    """Upgrade ``trades`` / ``positions`` for closed-trade recording.
+
+    Migration-safe on an existing database (SQLite and Postgres): only
+    absent nullable columns are added and the index is created with
+    IF NOT EXISTS.  On SQLite the ``close_key`` index is UNIQUE (partial,
+    so legacy NULL rows are untouched).  On Postgres ``trades`` is a
+    hypertable partitioned by entry_time, which cannot carry a unique
+    index on close_key alone, so the index is plain and uniqueness is
+    enforced by ``DatabaseManager.save_closed_trade``.
+
+    Args:
+        conn: Open connection wrapper.
+
+    Returns:
+        Names of the columns that were added (``table.column``).
+    """
+    added = [
+        f"trades.{name}"
+        for name in _add_missing_columns(conn, "trades", TRADE_CLOSE_COLUMNS)
+    ]
+    added += [
+        f"positions.{name}"
+        for name in _add_missing_columns(conn, "positions", POSITION_OWNER_COLUMNS)
+    ]
+    if _active_backend == "postgres":
+        index_sql = (
+            "CREATE INDEX IF NOT EXISTS idx_trades_close_key ON trades (close_key)"
+        )
+    else:
+        index_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_trades_close_key "
+            "ON trades(close_key) WHERE close_key IS NOT NULL"
+        )
+    try:
+        conn.execute(index_sql)
+    except Exception as exc:  # noqa: BLE001 - the insert check still dedupes
+        logger.warning(f"Failed to create idx_trades_close_key: {exc}")
+    if added:
+        logger.info(f"Schema upgraded for closed-trade recording: {added}")
     return added
 
 
@@ -1542,6 +1647,9 @@ def _init_sqlite_database() -> None:
         # Venue-stop protection columns (guarded by a column check)
         _ensure_position_stop_columns(conn)
 
+        # Closed-trade record columns + position owner tag (additive)
+        _ensure_closed_trade_schema(conn)
+
         # Create indexes for account_id columns
         account_indexes = [
             "CREATE INDEX IF NOT EXISTS idx_trades_account_symbol ON trades(account_id, symbol)",
@@ -1644,6 +1752,30 @@ def summarize_regime_shadow(
 # the top of this module from .overlay_quality and re-exported here, so the
 # WRITE guard in save_regime_param_overlay and the APPLY guard in
 # regime_param_overlay.py share exactly one copy of the rules.
+
+
+#: Keys of a closed-trade row, in insert order (see
+#: ``history.closed_trades``).
+_CLOSED_TRADE_ROW_KEYS: Tuple[str, ...] = (
+    "symbol",
+    "side",
+    "quantity",
+    "entry_price",
+    "exit_price",
+    "entry_time",
+    "exit_time",
+    "pnl",
+    "commission",
+    "funding_pnl",
+    "strategy",
+    "regime",
+    "exchange",
+    "network",
+    "close_reason",
+    "exit_price_source",
+    "close_key",
+)
+_closed_trade_lock = threading.Lock()
 
 
 class DatabaseManager:
@@ -1848,6 +1980,85 @@ class DatabaseManager:
                 values.append(trade_id)
                 conn.execute(query, tuple(values))
                 conn.commit()
+
+    def save_closed_trade(
+        self, row: Dict[str, Any], account_id: str = "sub_1"
+    ) -> Optional[int]:
+        """Insert one closed-trade row unless its ``close_key`` exists.
+
+        Persistence primitive of ``history.record_closed_trade`` (the
+        single writer); call that, not this.  The existence check and
+        the insert run under one process-wide lock on one connection.
+
+        Args:
+            row: Row built by ``record_closed_trade`` (must carry
+                ``close_key``).
+            account_id: Owning account id.
+
+        Returns:
+            Row id (0 when the backend reports none) of the inserted
+            row, or None when a row with the same key already exists.
+        """
+        columns = ("account_id", "asset_class", "status") + _CLOSED_TRADE_ROW_KEYS
+        values = (account_id, row.get("asset_class", "perpetual"), "closed") + tuple(
+            row.get(key) for key in _CLOSED_TRADE_ROW_KEYS
+        )
+        marks = ", ".join("?" for _ in columns)
+        with _closed_trade_lock, get_db_connection() as conn:
+            found = conn.execute(
+                "SELECT 1 FROM trades WHERE close_key = ? LIMIT 1",
+                (row["close_key"],),
+            ).fetchone()
+            if found is not None:
+                return None
+            try:
+                cursor = conn.execute(
+                    f"INSERT INTO trades ({', '.join(columns)}) VALUES ({marks})",
+                    values,
+                )
+            except Exception as exc:
+                if "unique" in str(exc).lower():
+                    return None  # lost a race to the same key
+                raise
+            conn.commit()
+            row_id = cursor.lastrowid
+        for name in ("recent", "all", "closed"):
+            for size in (10, 20):
+                _data_cache.invalidate(f"trades_{name}_{size}")
+                _data_cache.invalidate(f"trades_{name}_{size}_{account_id}")
+        return int(row_id or 0)
+
+    def tag_position_owner(
+        self, symbol: str, side: str, strategy: str, regime: Optional[str] = None
+    ) -> bool:
+        """Stamp the owning strategy (and entry regime) on a positions row.
+
+        The tag is read back by ``history.record_closed_trade`` when the
+        position closes, so the owner survives a restart.  A row already
+        owned by a DIFFERENT strategy becomes 'unknown': the venue nets
+        both entries into one position and the result cannot be split.
+
+        Args:
+            symbol: Trading symbol.
+            side: Position side as stored ("LONG"/"SHORT").
+            strategy: Canonical strategy tag.
+            regime: Regime at entry, kept only if none is stored yet.
+
+        Returns:
+            True when a row was updated.
+        """
+        with get_db_connection() as conn:
+            cursor = conn.execute(
+                "UPDATE positions SET strategy = CASE WHEN strategy IS NULL "
+                "OR strategy = ? THEN ? ELSE 'unknown' END, "
+                "entry_regime = COALESCE(entry_regime, ?), "
+                "updated_at = CURRENT_TIMESTAMP WHERE symbol = ? AND side = ?",
+                (strategy, strategy, regime, symbol, side),
+            )
+            conn.commit()
+            updated = cursor.rowcount
+        _data_cache.invalidate("positions_all")
+        return updated > 0
 
     def save_regime_transition(
         self,
