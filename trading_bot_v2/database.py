@@ -1285,15 +1285,22 @@ def _parse_open_time(value: Any) -> Optional[datetime]:
 def normalize_opened_at(value: Any = None, now: Optional[datetime] = None) -> str:
     """Return the ``positions.opened_at`` value to store for a NEW row.
 
-    A readable open time supplied by the caller (the venue's own
-    timestamp, or the fill time) is kept.  Anything else - missing, the
-    literal ``now``, garbage, implausibly old, or in the future - becomes
-    the current time, i.e. the moment the bot first saw the position.
-    First-seen time is never earlier than the real entry, so a max-hold
-    exit measured from it can be late but not early.
+    Called without a value it returns the current time, i.e. the moment
+    the bot first saw or recorded the position.  That is what the
+    position syncs store: a timestamp from the venue's position payload
+    is never used as the entry time (its meaning for a reopened or
+    added-to position is not verified, and an older time could close a
+    position early).  First-seen time is never earlier than the real
+    entry, so a max-hold exit measured from it can be late but not early.
+
+    A value is accepted only so that a time the bot itself recorded (a
+    restored backup row) is kept.  It must be readable, not in the
+    future and plausible; anything else - missing, the literal ``now``,
+    garbage - becomes the current time.
 
     Args:
-        value: Candidate open time (datetime, epoch s/ms, ISO string).
+        value: A time recorded by the bot (datetime, epoch s/ms, ISO
+            string).  Do not pass a venue-supplied time.
         now: Clock override for tests.
 
     Returns:

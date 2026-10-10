@@ -978,11 +978,9 @@ class TradingBot:
                         "leverage": float(pos.get("leverage", 1)),
                         "asset_class": "perpetual",
                         # Used only when this call creates the row: the
-                        # venue's own open time when the payload has one,
-                        # else the time the bot first saw the position.
-                        "opened_at": normalize_opened_at(
-                            pos.get("opened_at") or pos.get("created_at")
-                        ),
+                        # time the bot first saw the position.  The venue
+                        # payload's own created_at / opened_at is ignored.
+                        "opened_at": normalize_opened_at(),
                         "funding_pnl": float(pos.get("funding_pnl", 0)),
                     }
                 )

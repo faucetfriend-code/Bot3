@@ -1,9 +1,11 @@
 """Entry time on the positions row, and the max holds the backtest honours.
 
 Change A: every writer of ``positions.opened_at`` stores a timezone-aware
-UTC ISO-8601 time, set once when the row is created.  The loop sync used to
-store the literal ``now`` when the venue payload had no timestamp, which
-left the max-hold time exit inactive for that row.
+UTC ISO-8601 time, set once when the row is created: the time the bot first
+saw or recorded the position.  A timestamp in the venue's position payload
+is ignored.  The loop sync used to store the venue's value, or the literal
+``now`` when the payload had none, which left the max-hold time exit
+inactive for that row.
 
 Change B: the live time exit enforces the max hold of every strategy whose
 signals carry ``indicators["time_exit_hours"]`` (the only max hold the
@@ -322,25 +324,28 @@ class TestEveryWriterStoresUtc:
         sent = database.save_position.call_args.args[0]["opened_at"]
         assert sent != "now" and is_recent(parse_utc(sent))
 
-    def test_loop_sync_prefers_the_venue_open_time(self, dbm: Any) -> None:
-        opened = datetime.now(timezone.utc) - timedelta(hours=7)
-        millis = int(opened.timestamp() * 1000)
-        bot = loop_sync_bot(dbm, [venue_position(created_at=millis)])
-
-        bot._update_positions()
-
-        stored = self._stored(dbm)
-        assert abs((stored - opened).total_seconds()) < 0.002
-
-    def test_loop_sync_ignores_a_future_venue_time(self, dbm: Any) -> None:
-        future = datetime.now(timezone.utc) + timedelta(days=1)
-        bot = loop_sync_bot(
-            dbm, [venue_position(created_at=int(future.timestamp() * 1000))]
-        )
+    @pytest.mark.parametrize("key", ["created_at", "opened_at"])
+    @pytest.mark.parametrize("hours", [7.0, -24.0], ids=["past", "future"])
+    def test_loop_sync_ignores_the_venue_open_time(
+        self, dbm: Any, key: str, hours: float
+    ) -> None:
+        venue_time = datetime.now(timezone.utc) - timedelta(hours=hours)
+        millis = int(venue_time.timestamp() * 1000)
+        bot = loop_sync_bot(dbm, [venue_position(**{key: millis})])
 
         bot._update_positions()
 
         assert is_recent(self._stored(dbm))
+
+    def test_loop_sync_ignores_the_venue_time_even_with_a_mock_database(self) -> None:
+        database = MagicMock()
+        database.get_positions.return_value = []
+        old = "2026-01-01T00:00:00+00:00"
+
+        loop_sync_bot(database, [venue_position(created_at=old)])._update_positions()
+
+        sent = database.save_position.call_args.args[0]["opened_at"]
+        assert is_recent(parse_utc(sent))
 
     def test_reconciler_adoption(self, dbm: Any) -> None:
         report = PositionReconciler(dbm, EventBus()).reconcile(
@@ -362,11 +367,16 @@ class TestEveryWriterStoresUtc:
         assert result["errors"] == [] and result["synced_count"] == 1
         assert is_recent(self._stored(dbm))
 
-    def test_api_positions_sync_with_a_venue_epoch(self, dbm: Any) -> None:
-        opened = datetime.now(timezone.utc) - timedelta(hours=3)
+    @pytest.mark.parametrize(
+        "key", ["created_at", "opened_at", "timestamp", "open_time"]
+    )
+    def test_api_positions_sync_ignores_the_venue_open_time(
+        self, dbm: Any, key: str
+    ) -> None:
+        venue_time = datetime.now(timezone.utc) - timedelta(hours=3)
         client = create_autospec(PacificaClient, instance=True)
         client.get_positions.return_value = [
-            venue_position(created_at=int(opened.timestamp() * 1000))
+            venue_position(**{key: int(venue_time.timestamp() * 1000)})
         ]
         integration = api_server.BotIntegration()
         integration.database = dbm
@@ -374,7 +384,17 @@ class TestEveryWriterStoresUtc:
 
         asyncio.run(integration.sync_positions())
 
-        assert abs((self._stored(dbm) - opened).total_seconds()) < 0.002
+        assert is_recent(self._stored(dbm))
+
+    def test_sync_created_orb_row_is_not_closed_on_a_venue_time(self, dbm: Any) -> None:
+        """A venue time older than the max hold must not make the row due."""
+        rig = Rig(dbm)
+        old = int((real_time.time() - 100 * HOUR) * 1000)
+        loop_sync_bot(dbm, [venue_position(created_at=old)])._update_positions()
+        enter(rig, hand_signal(StrategyType.SESSION_RANGE_BREAKOUT, 4.0))
+
+        assert rig.manage()["positions_closed"] == 0
+        assert rig.untouched()
 
     def test_json_backup_restore_of_a_legacy_value(self, dbm: Any) -> None:
         """The restore path calls save_position with whatever the backup holds."""
@@ -393,9 +413,9 @@ class TestEveryWriterStoresUtc:
 
 class TestUpdateNeverMovesOpenedAt:
     def test_every_update_path_leaves_it_alone(self, dbm: Any) -> None:
+        loop_sync_bot(dbm, [venue_position()])._update_positions()
         original = "2026-10-01T00:00:00+00:00"
-        loop_sync_bot(dbm, [venue_position(created_at=original)])._update_positions()
-        assert dbm.get_position(SYMBOL, "LONG")["opened_at"] == original
+        set_position_column(SYMBOL, "LONG", "opened_at", original)
 
         # Loop sync again: a different venue time, then none at all.
         loop_sync_bot(
