@@ -373,14 +373,15 @@ class TestRiskManagerPositionSizing:
         rm = self._rm()
         sig = make_signal(entry_price=100.0, stop_loss=0.0)
         qty = rm.get_position_size(sig, account_balance=10000, current_exposure=0)
-        # stop_loss=0 triggers conservative minimum path
-        assert qty >= 1.0
+        # stop_loss=0 triggers the conservative minimum path:
+        # notional = 500 * 0.1 = 50, qty = 50/100 = 0.5 (no contract floor)
+        assert qty == pytest.approx(0.5, rel=0.01)
 
-    def test_invalid_entry_price_minimum(self, make_signal):
+    def test_invalid_entry_price_requests_nothing(self, make_signal):
         rm = self._rm()
         sig = make_signal(entry_price=0.0, stop_loss=0.0)
         qty = rm.get_position_size(sig, account_balance=10000, current_exposure=0)
-        assert qty == 1.0
+        assert qty == 0.0
 
     def test_validate_exceeds_risk(self):
         rm = self._rm()
@@ -416,13 +417,14 @@ class TestRiskManagerPositionSizing:
             is True
         )
 
-    def test_minimum_quantity_enforced(self, make_signal):
+    def test_no_contract_floor_on_small_account(self, make_signal):
         rm = self._rm()
         sig = make_signal(entry_price=100.0, stop_loss=99.999)
-        # Very tight stop but enormous exposure cap might yield < 1
-        # With almost-zero stop distance, notional will be huge, then capped by exposure
+        # Almost-zero stop distance makes the notional huge; the exposure
+        # cap (10 * 0.15 = 1.5) wins and qty = 1.5/100 = 0.015.  A whole
+        # contract here would be 10x the account.
         qty = rm.get_position_size(sig, account_balance=10, current_exposure=0)
-        assert qty >= 1.0
+        assert qty == pytest.approx(0.015, rel=0.01)
 
 
 # ============================================================

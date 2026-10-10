@@ -96,17 +96,20 @@ class TestRegimeSizeMultipliers:
         rm = RiskManager()
         assert rm.get_regime_size_multiplier(MarketRegime.RANGING_CALM) == 0.85
 
-    def test_minimum_quantity_floor_still_enforced(self):
+    def test_regime_multiplier_applies_below_one_contract(self):
         rm = RiskManager()
-        # Tiny balance keeps quantities below the 1.0 floor
+        # Tiny balance keeps quantities well below one contract; the
+        # multiplier must still scale them (no 1.0 floor to hide behind).
         sig = _make_sizing_signal(entry_price=100.0, stop_loss=95.0)
+        base = rm.get_position_size(sig, account_balance=10.0, current_exposure=0.0)
         qty = rm.get_position_size(
             sig,
             account_balance=10.0,
             current_exposure=0.0,
             regime=MarketRegime.INDECISIVE,
         )
-        assert qty >= 1.0
+        assert 0.0 < qty < 1.0
+        assert qty == pytest.approx(base * 0.4)
 
 
 # ============================================================

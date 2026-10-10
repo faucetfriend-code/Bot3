@@ -51,3 +51,26 @@ def isolate_test_database(tmp_path_factory):
         os.environ.pop("DATABASE_PATH", None)
     else:
         os.environ["DATABASE_PATH"] = previous_env
+
+
+@pytest.fixture(autouse=True)
+def isolate_supervisor_state(tmp_path, monkeypatch):
+    """Point the supervisor pause / circuit breaker state at a temp file.
+
+    A tripped circuit breaker is persisted in that file and restored by
+    ``TradingBot.__init__``; without this a test that trips the breaker
+    would write the project-root file the live bot reads, and leak a trip
+    into every later test.
+
+    Args:
+        tmp_path: pytest's per-test temp directory.
+        monkeypatch: pytest's monkeypatch fixture (restores on teardown).
+
+    Returns:
+        The temporary state file path (not created until first write).
+    """
+    import trading_bot_v2.supervisor_control as supervisor_mod
+
+    path = tmp_path / "supervisor_pause.json"
+    monkeypatch.setattr(supervisor_mod, "_PAUSE_FILE", path)
+    return path

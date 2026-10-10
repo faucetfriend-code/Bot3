@@ -4,7 +4,9 @@ Scope note. This file used to assert a TradingBot API that no longer
 exists (``bot.positions``, ``bot.trades``, a ``_monitor_risk`` that logged
 warnings, a ``get_status`` returning ``positions_count``). Those
 attributes and behaviours were removed when TradingBot became a pure
-coordinator; ``_monitor_risk`` is now an explicit no-op placeholder. What
+coordinator. ``_monitor_risk`` is the live portfolio circuit breaker (the
+loop calls it through ``_monitor_risk_coordinated``); it is covered by
+tests/test_logic_audit_a3.py and tests/test_circuit_breaker_trip.py. What
 survives here is the coverage that still describes live behaviour:
 
 * how ``__init__`` wires injected collaborators, including the
