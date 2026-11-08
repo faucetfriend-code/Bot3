@@ -3,6 +3,7 @@ REM Trading Bot Launcher for Windows
 REM Sets PYTHONPATH to project root for absolute imports
 
 set "SCRIPT_DIR=%~dp0"
+cd /d "%SCRIPT_DIR%" || exit /b 1
 set "PYTHONPATH=%SCRIPT_DIR%"
 
 echo Starting trading bot with PYTHONPATH=%PYTHONPATH%
