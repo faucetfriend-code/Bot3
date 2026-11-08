@@ -1603,8 +1603,9 @@ class GridLifecycleManager:
         HARD EXIT:
         - Cancel all orders
         - Close all positions (reduce-only, sized from the exchange)
-        - Clear RiskManager exposure and remove grid state ONLY when every
-          position is confirmed flat; otherwise keep the grid state and
+        - Clear RiskManager exposure and remove grid state ONLY when order
+          cancellation succeeds and every position is confirmed flat;
+          otherwise keep the grid state and
           record a pending-flatten marker that monitor_grids retries.
 
         Returns:
@@ -1620,8 +1621,13 @@ class GridLifecycleManager:
             "errors": [],
         }
         try:
-            self.client.cancel_all_orders(symbol)
-            logger.info(f"All orders cancelled for {symbol} ({reason})")
+            cancel_ack = self.client.cancel_all_orders(symbol)
+            if isinstance(cancel_ack, dict) and cancel_ack.get("success") is False:
+                error = cancel_ack.get("error") or "exchange rejected cancellation"
+                logger.error(f"Order cancel rejected for {symbol}: {error}")
+                result["errors"].append(f"Order cancel rejected: {error}")
+            else:
+                logger.info(f"All orders cancelled for {symbol} ({reason})")
         except Exception as e:
             logger.error(f"Order cancel failed for {symbol}: {e}")
             result["errors"].append(f"Order cancel failed: {e}")
@@ -1902,7 +1908,12 @@ class GridLifecycleManager:
 
         # ALWAYS cancel all open orders first (pending orders are neutral, don't keep them)
         try:
-            self.client.cancel_all_orders(symbol)
+            cancel_ack = self.client.cancel_all_orders(symbol)
+            if isinstance(cancel_ack, dict) and cancel_ack.get("success") is False:
+                error = cancel_ack.get("error") or "exchange rejected cancellation"
+                logger.error(f"Order cancel rejected for {symbol}: {error}")
+                result["errors"].append(f"Order cancel rejected: {error}")
+                return result
             logger.info(f"All grid orders cancelled for {symbol} ({reason})")
         except Exception as e:
             logger.error(f"Order cancel failed for {symbol}: {e}")
