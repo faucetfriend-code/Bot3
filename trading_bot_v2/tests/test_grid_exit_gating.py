@@ -187,6 +187,43 @@ class TestCloseEscalatedEvent:
 
 
 class TestForceExitGating:
+    def test_rejected_partial_exit_cancel_preserves_tracked_orders(self):
+        client = FakeExchange([_pos("long", 1.0)])
+        client.cancel_all_orders = MagicMock(
+            return_value={"success": False, "error": "cancel batch rejected"}
+        )
+        manager = _manager(client)
+        manager._grids[SYMBOL]["order_ids"] = {"resting-entry"}
+
+        result = manager._partial_exit(SYMBOL, "REGIME_CHANGE", "up")
+
+        assert result["success"] is False
+        assert result["errors"]
+        assert manager._grids[SYMBOL]["order_ids"] == {"resting-entry"}
+        assert client.orders == []
+        assert SYMBOL in manager._grids
+
+    @pytest.mark.parametrize("positions", [[], [_pos("long", 1.0)]])
+    def test_rejected_cancel_retains_grid_until_retry(self, positions):
+        client = FakeExchange(positions)
+        client.cancel_all_orders = MagicMock(
+            side_effect=[
+                {"success": False, "error": "cancel batch rejected"},
+                {"success": True},
+            ]
+        )
+        manager = _manager(client)
+
+        result = manager._force_exit(SYMBOL, "EMERGENCY_STOP")
+
+        assert result["flat"] is False
+        assert any("cancel batch rejected" in error for error in result["errors"])
+        assert client.book == []  # Cancellation failure must not prevent flattening.
+        assert _grid_retained(manager)
+        assert manager.retry_pending_flattens() == 1
+        assert client.cancel_all_orders.call_count == 2
+        assert _grid_cleared(manager)
+
     def test_second_position_rejected_keeps_grid_and_marks_pending(self):
         client = FakeExchange(
             [_pos("long", 1.0), _pos("short", 2.0), _pos("long", 3.0)],
