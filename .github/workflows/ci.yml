@@ -26,11 +26,10 @@ on:
 permissions:
   contents: read
 
-# A new push to a pull request cancels the run it supersedes. Pushes to main
-# are never cancelled so every main commit keeps a complete result.
+# A newer push to the same ref cancels the run it supersedes (PRs and main).
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 env:
   PYTHON_VERSION: "3.11"
@@ -66,6 +65,7 @@ jobs:
   type-check:
     name: Type Check
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
