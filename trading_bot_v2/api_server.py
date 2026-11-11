@@ -14,11 +14,6 @@ from typing import TYPE_CHECKING, Dict, Any, List, Optional, Tuple, cast
 from datetime import datetime, timezone
 from pathlib import Path
 
-# Add path for shared modules (needed for core_logic imports like models, indicators base)
-sys.path.insert(
-    0, os.path.join(os.path.dirname(__file__), "..", "Example files", "core_logic")
-)
-
 from fastapi import (
     Depends,
     FastAPI,
